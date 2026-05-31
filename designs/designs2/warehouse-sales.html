@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Warehouse Sales</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .topbar-right { display: flex; align-items: center; gap: 8px; }
+
+  /* PENDING BANNER */
+  .pending-banner {
+    background: var(--accent2-bg); border-bottom: 1px solid #fcd34d;
+    padding: 10px 28px; display: flex; align-items: center; gap: 10px;
+    font-size: 13px; color: var(--accent2);
+  }
+
+  /* KPI row */
+  .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; }
+  .kpi-label { font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .kpi-value { font-size: 24px; font-weight: 600; letter-spacing: -1px; line-height: 1; margin-bottom: 4px; }
+  .kpi-sub { font-size: 12px; color: var(--text3); }
+
+  /* Two col */
+  .two-col { display: grid; grid-template-columns: 1fr 380px; gap: 20px; align-items: start; }
+
+  /* TABS */
+  .tabs { display: flex; gap: 2px; padding: 0 28px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .tab { padding: 12px 16px; font-size: 13px; font-weight: 500; color: var(--text3); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.1s; display: flex; align-items: center; gap: 7px; }
+  .tab:hover { color: var(--text2); }
+  .tab.active { color: var(--text); border-bottom-color: var(--text); }
+  .tab-count { font-size: 11px; font-family: 'IBM Plex Mono', monospace; background: var(--surface2); color: var(--text2); padding: 1px 6px; border-radius: 100px; }
+  .tab.active .tab-count { background: var(--text); color: #fff; }
+
+  /* ── Form ───────────────────────────────────────────────── */
+  .sale-form { padding: 18px; }
+  .form-label {
+    font-size: 11px; color: var(--text3); margin-bottom: 5px; display: block;
+    font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.5px;
+    font-weight: 500;
+  }
+  .form-input {
+    width: 100%; padding: 9px 12px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 13px; font-family: 'IBM Plex Sans', sans-serif;
+    color: var(--text); outline: none; background: var(--surface);
+    transition: border-color 0.15s;
+  }
+  .form-input:focus { border-color: var(--text); box-shadow: 0 0 0 3px rgba(26,25,22,0.05); }
+  select.form-input {
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='none' stroke='%239B9890' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5l5 5 5-5'/></svg>");
+    background-repeat: no-repeat; background-position: right 12px center;
+    padding-right: 32px;
+  }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+  .form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+  .form-group { margin-bottom: 14px; }
+  .form-input.num {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+    text-align: right;
+  }
+  .section-divider {
+    height: 1px; background: var(--border); margin: 16px 0;
+  }
+  .section-title {
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px;
+    margin-bottom: 9px;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .section-title .step {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--text); color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600;
+  }
+
+  /* ── Searchable buyer dropdown ──────────────────────────── */
+  .combo {
+    position: relative;
+  }
+  .combo .combo-input {
+    width: 100%; padding: 9px 12px; padding-right: 32px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 13px; background: var(--surface); outline: none;
+    transition: border-color 0.15s;
+  }
+  .combo .combo-input:focus { border-color: var(--text); box-shadow: 0 0 0 3px rgba(26,25,22,0.05); }
+  .combo .combo-caret {
+    position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+    color: var(--text3); pointer-events: none;
+  }
+  .combo .combo-list {
+    position: absolute; top: 100%; left: 0; right: 0;
+    margin-top: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+    max-height: 260px; overflow-y: auto;
+    z-index: 20;
+    display: none;
+  }
+  .combo.open .combo-list { display: block; }
+  .combo-item {
+    padding: 9px 12px; cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 9px;
+    font-size: 13px;
+  }
+  .combo-item:last-child { border-bottom: none; }
+  .combo-item:hover, .combo-item.hl { background: var(--surface2); }
+  .combo-item.add-new {
+    color: var(--accent); font-weight: 500;
+    border-top: 2px solid var(--border); position: sticky; bottom: 0;
+    background: var(--surface);
+  }
+  .combo-item .ci-avatar {
+    width: 26px; height: 26px; border-radius: 6px;
+    background: var(--surface2); color: var(--text2);
+    border: 1px solid var(--border);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; flex-shrink: 0;
+  }
+  .combo-item .ci-body { flex: 1; min-width: 0; }
+  .combo-item .ci-name { font-weight: 500; }
+  .combo-item .ci-meta {
+    font-size: 11px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  /* ── Mode toggle: packed / by kg ────────────────────────── */
+  .mode-toggle {
+    display: flex; gap: 0;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 3px;
+    margin-bottom: 4px;
+  }
+  .mode-opt {
+    flex: 1; padding: 9px 14px; border-radius: 6px;
+    font-size: 13px; font-weight: 500; cursor: pointer;
+    color: var(--text2); transition: all 0.1s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    text-align: center;
+  }
+  .mode-opt:hover { color: var(--text); }
+  .mode-opt.active {
+    background: var(--text); color: #fff; font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+  .mode-opt i { font-size: 16px; }
+
+  /* ── Packed bag lines ──────────────────────────────────── */
+  .packed-line {
+    display: grid;
+    grid-template-columns: 1.4fr 80px 100px 90px 32px;
+    gap: 8px; align-items: end;
+    margin-bottom: 8px;
+  }
+  .packed-line .lbl-mini {
+    font-size: 9.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+    margin-bottom: 3px;
+  }
+  .packed-line:not(:first-child) .lbl-mini { display: none; }
+  .packed-line select, .packed-line input {
+    width: 100%; height: 38px; padding: 0 10px;
+    border: 1px solid var(--border); border-radius: 6px;
+    font-size: 13px; background: var(--surface); outline: none;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .packed-line input.num {
+    font-family: 'IBM Plex Mono', monospace; text-align: right;
+    font-weight: 600; font-size: 15px;
+  }
+  .packed-line .del-btn {
+    height: 38px; width: 32px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); color: var(--text3);
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .packed-line .del-btn:hover { background: var(--red-bg); color: var(--red); border-color: #f5c8c4; }
+  .packed-line select {
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='none' stroke='%239B9890' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/></svg>");
+    background-repeat: no-repeat; background-position: right 10px center;
+    padding-right: 26px;
+  }
+
+  .btn-add-line {
+    margin-top: 4px; padding: 8px 12px;
+    background: transparent; border: 1.5px dashed var(--border2);
+    border-radius: var(--radius); color: var(--text2);
+    font-size: 12.5px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: 'IBM Plex Sans', sans-serif; font-weight: 500;
+  }
+  .btn-add-line:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+
+  /* ── By-kg block ───────────────────────────────────────── */
+  .kg-block {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px;
+  }
+  .kg-block .kg-spec {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 12px;
+  }
+  .kg-block .kg-price {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;
+  }
+
+  /* total preview */
+  .total-preview {
+    background: var(--accent-bg); border: 1px solid #a7f3d0;
+    border-radius: var(--radius); padding: 12px 14px;
+    margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center;
+  }
+  .tp-label { font-size: 12px; color: var(--accent); }
+  .tp-breakdown { font-size: 11px; color: var(--accent); opacity: 0.7; margin-top: 2px; font-family: 'IBM Plex Mono', monospace; }
+  .tp-value { font-size: 20px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; letter-spacing: -0.5px; color: var(--accent); }
+
+  /* currency split (received) */
+  .currency-split { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 12px; }
+  .cs-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .cs-row:last-child { border-bottom: none; }
+  .cs-label { font-size: 12px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; min-width: 40px; }
+  .cs-input { flex: 1; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 14px; font-family: 'IBM Plex Mono', monospace; outline: none; background: var(--surface); text-align: right; }
+  .cs-input:focus { border-color: var(--text); }
+  .cs-curr { font-size: 12px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; min-width: 28px; }
+  .cs-eq { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; text-align: right; min-width: 80px; }
+
+  .recv-bar { border-radius: var(--radius); padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .recv-bar.ok { background: var(--accent-bg); border: 1px solid #a7f3d0; color: var(--accent); }
+  .recv-bar.short { background: var(--accent2-bg); border: 1px solid #fcd34d; color: var(--accent2); }
+  .recv-bar.none { background: var(--surface2); border: 1px solid var(--border); color: var(--text3); }
+  .recv-val { font-family: 'IBM Plex Mono', monospace; font-weight: 700; font-size: 15px; }
+
+  .submit-btn {
+    width: 100%; padding: 13px;
+    background: var(--accent); color: #fff;
+    border: none; border-radius: var(--radius);
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    transition: background 0.15s;
+  }
+  .submit-btn:hover { background: #155237; }
+  .submit-btn:disabled { background: var(--border); color: var(--text3); cursor: not-allowed; }
+
+  /* Cash box (right) */
+  .cash-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; position: sticky; top: 76px; }
+  .cb-head { padding: 13px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); display: flex; align-items: center; justify-content: space-between; }
+  .cb-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+  .cb-row { display: flex; justify-content: space-between; align-items: baseline; padding: 9px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .cb-row:last-child { border-bottom: none; }
+  .cb-label { color: var(--text2); }
+  .cb-val { font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+  .cb-val.green { color: var(--accent); }
+  .cb-val.amber { color: var(--accent2); }
+  .cb-total { padding: 13px 16px; background: var(--surface2); display: flex; justify-content: space-between; align-items: center; }
+  .cb-total-label { font-size: 13px; font-weight: 600; }
+  .cb-total-val { font-size: 20px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; letter-spacing: -0.5px; }
+
+  /* date group label */
+  .date-group-label { font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; padding: 10px 18px 6px; border-bottom: 1px solid var(--border); background: var(--surface2); display: flex; align-items: center; justify-content: space-between; }
+  .date-group-total { font-weight: 600; color: var(--text2); }
+  .unverified { background: var(--accent2-bg); color: var(--accent2); font-size: 10px; font-family: 'IBM Plex Mono', monospace; padding: 1px 6px; border-radius: 100px; }
+
+  /* toast */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: #fff;
+    padding: 11px 18px; border-radius: var(--radius);
+    font-size: 13px; display: flex; align-items: center; gap: 8px;
+    opacity: 0; pointer-events: none; transition: all 0.25s;
+    z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast i { color: #6ee7b7; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="warehouse-sales"></aside>
+
+<div class="main">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="page-title">Warehouse sales</span>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-sub">walk-in &amp; counter sales · cash + digital</span>
+    </div>
+    <div class="topbar-right">
+      <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">Rate: 89,550 LL/$</span>
+      <button class="btn"><i class="ti ti-history" style="font-size:15px"></i> Full history</button>
+    </div>
+  </header>
+
+  <div class="pending-banner">
+    <i class="ti ti-alert-circle" style="font-size:16px;flex-shrink:0"></i>
+    <span><strong>7 unverified sales</strong> from the last 3 days — worker's paper log waiting to be entered</span>
+    <button class="btn" style="margin-left:auto;font-size:12px;padding:5px 10px" onclick="showTab('log',document.querySelector('.tab:last-child'))">View log →</button>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('entry',this)"><i class="ti ti-plus" style="font-size:14px"></i> Enter sale</div>
+    <div class="tab" onclick="showTab('log',this)"><i class="ti ti-list" style="font-size:14px"></i> Sales log <span class="tab-count">24</span></div>
+  </div>
+
+  <div class="content">
+
+    <div class="kpi-row">
+      <div class="kpi"><div class="kpi-label">Sales today</div><div class="kpi-value">$284</div><div class="kpi-sub">6 transactions</div></div>
+      <div class="kpi"><div class="kpi-label">This week</div><div class="kpi-value">$1,840</div><div class="kpi-sub">38 transactions</div></div>
+      <div class="kpi"><div class="kpi-label">Cash in warehouse</div><div class="kpi-value" style="color:var(--accent)">$284</div><div class="kpi-sub">since last handover</div></div>
+      <div class="kpi"><div class="kpi-label">Unverified</div><div class="kpi-value" style="color:var(--accent2)">7</div><div class="kpi-sub">sales not yet entered</div></div>
+    </div>
+
+    <!-- ENTRY TAB -->
+    <div id="tab-entry">
+      <div class="two-col">
+        <div>
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title"><i class="ti ti-plus"></i> Enter a sale</div>
+              <span style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">packed bags or sold by kg</span>
+            </div>
+            <div class="sale-form">
+
+              <!-- ── Step 1: Buyer + date ─────────────────────── -->
+              <div class="section-title"><span class="step">1</span> Buyer</div>
+              <div class="form-row">
+                <div>
+                  <label class="form-label">Buyer</label>
+                  <div class="combo" id="buyerCombo">
+                    <input class="combo-input" id="buyerInput" placeholder="Search clients or type new name…" autocomplete="off">
+                    <i class="ti ti-chevron-down combo-caret" style="font-size:14px"></i>
+                    <div class="combo-list" id="buyerList"></div>
+                  </div>
+                </div>
+                <div>
+                  <label class="form-label">Sale date</label>
+                  <input class="form-input" type="date" id="saleDate">
+                </div>
+              </div>
+
+              <div class="section-divider"></div>
+
+              <!-- ── Step 2: Sale type ────────────────────────── -->
+              <div class="section-title"><span class="step">2</span> How is it sold?</div>
+              <div class="mode-toggle">
+                <div class="mode-opt active" data-mode="packed" onclick="setMode('packed')">
+                  <i class="ti ti-package"></i> Packed bags
+                </div>
+                <div class="mode-opt" data-mode="kg" onclick="setMode('kg')">
+                  <i class="ti ti-weight"></i> By kilogram
+                </div>
+              </div>
+              <p style="font-size:11.5px;color:var(--text3);margin:8px 0 14px;font-family:'IBM Plex Mono',monospace">
+                <span id="modeHint">Packed: each bag size has its own price &amp; currency</span>
+              </p>
+
+              <!-- ── Step 3a: PACKED ──────────────────────────── -->
+              <div id="packedSection">
+                <div class="section-title"><span class="step">3</span> Bags sold</div>
+                <div id="packedLines"></div>
+                <button class="btn-add-line" onclick="addPackedLine()">
+                  <i class="ti ti-plus" style="font-size:13px"></i> Add another bag size
+                </button>
+              </div>
+
+              <!-- ── Step 3b: BY KG ────────────────────────────── -->
+              <div id="kgSection" style="display:none">
+                <div class="section-title"><span class="step">3</span> Charcoal sold by kg</div>
+                <div class="kg-block">
+                  <div style="margin-bottom:12px">
+                    <label class="form-label" style="font-size:10.5px">Charcoal lot — type · supplier · grade</label>
+                    <select class="form-input" id="kgLot" onchange="calcTotal()"></select>
+                  </div>
+                  <div class="kg-price">
+                    <div>
+                      <label class="form-label" style="font-size:10.5px">Weight (kg)</label>
+                      <input class="form-input num" type="number" id="kgWeight" min="0" step="0.1" placeholder="0" oninput="calcTotal()">
+                    </div>
+                    <div>
+                      <label class="form-label" style="font-size:10.5px">Price / kg</label>
+                      <input class="form-input num" type="number" id="kgPrice" min="0" step="0.01" placeholder="0.00" oninput="calcTotal()">
+                    </div>
+                    <div>
+                      <label class="form-label" style="font-size:10.5px">Currency</label>
+                      <select class="form-input" id="kgCurr" onchange="calcTotal()">
+                        <option>USD</option>
+                        <option>LBP</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Total preview -->
+              <div class="total-preview" id="totalPreview" style="margin-top:14px">
+                <div>
+                  <div class="tp-label" style="font-weight:600">Sale total</div>
+                  <div class="tp-breakdown" id="totalBreakdown">Enter quantities and price</div>
+                </div>
+                <div class="tp-value" id="totalVal">$0.00</div>
+              </div>
+
+              <div class="section-divider"></div>
+
+              <!-- ── Step 4: Amount received ──────────────────── -->
+              <div class="section-title"><span class="step">4</span> Amount received</div>
+              <label class="form-label" style="margin-bottom:5px">USD + LBP split (can be both)</label>
+              <div class="currency-split">
+                <div class="cs-row">
+                  <span class="cs-label">USD</span>
+                  <input class="cs-input" type="number" placeholder="0.00" id="rcvUsd" oninput="calcReceived()">
+                  <span class="cs-curr">$</span>
+                  <span class="cs-eq" id="usdEq"></span>
+                </div>
+                <div class="cs-row">
+                  <span class="cs-label">LBP</span>
+                  <input class="cs-input" type="number" placeholder="0" id="rcvLbp" oninput="calcReceived()">
+                  <span class="cs-curr">LL</span>
+                  <span class="cs-eq" id="lbpEq"></span>
+                </div>
+              </div>
+              <div class="recv-bar none" id="recvBar">
+                <span id="recvLabel">Enter amount received above</span>
+                <span class="recv-val" id="recvVal">—</span>
+              </div>
+
+              <!-- Payment method + receiver -->
+              <div class="form-row">
+                <div>
+                  <label class="form-label">Payment method</label>
+                  <select class="form-input" id="payMethod">
+                    <option>Cash</option>
+                    <option>Whish</option>
+                    <option>OMT</option>
+                    <option>Bank transfer</option>
+                    <option>On account</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label">Received by</label>
+                  <select class="form-input" id="receiver">
+                    <option>Joseph Nasr (driver)</option>
+                    <option>Mohammed Khalil (driver)</option>
+                    <option>Hasan Moussa (worker)</option>
+                    <option>Ali Saadeh (worker)</option>
+                    <option>Rita Salameh (sales)</option>
+                    <option>Khalil Abi Nader (owner)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Notes (optional)</label>
+                <input class="form-input" type="text" id="notes" placeholder="any observations…">
+              </div>
+
+              <button class="submit-btn" id="submitBtn" onclick="submitSale()">
+                <i class="ti ti-check"></i> Record this sale
+              </button>
+
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: Cash box + Today log -->
+        <div>
+          <div class="cash-box">
+            <div class="cb-head">
+              <div class="cb-title"><i class="ti ti-safe" style="font-size:14px;color:var(--text2)"></i> Warehouse cash box</div>
+              <span style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">since handover</span>
+            </div>
+            <div class="cb-row"><span class="cb-label">Cash collected</span><span class="cb-val green" id="cbCash">$284.00</span></div>
+            <div class="cb-row"><span class="cb-label">Whish received</span><span class="cb-val">$40.00</span></div>
+            <div class="cb-row"><span class="cb-label">OMT received</span><span class="cb-val">$0.00</span></div>
+            <div class="cb-row"><span class="cb-label">On account</span><span class="cb-val amber">$120.00</span></div>
+            <div class="cb-total">
+              <span class="cb-total-label">Total received</span>
+              <span class="cb-total-val" id="cbTotal">$444.00</span>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <div class="card-head">
+              <div class="card-title"><i class="ti ti-list"></i> Today's sales</div>
+              <span class="badge badge-gray" id="todayCount">5 sales</span>
+            </div>
+            <div id="todayLog"></div>
+            <div style="padding:10px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:space-between">
+              <span style="font-size:12px;color:var(--text3)">Total today</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-weight:600" id="todayTotal">$155.40</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOG TAB -->
+    <div id="tab-log" style="display:none">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-list"></i> All warehouse sales</div>
+          <div style="display:flex;gap:8px">
+            <select style="padding:5px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:12px;outline:none;background:var(--surface);color:var(--text2)">
+              <option>All dates</option><option>Today</option><option>This week</option><option>This month</option>
+            </select>
+            <button class="btn" style="font-size:12px"><i class="ti ti-download" style="font-size:13px"></i> Export</button>
+          </div>
+        </div>
+        <div class="date-group-label"><span>Thursday 21 May 2026</span><span class="date-group-total">$155.40 · 5 sales</span></div>
+        <table class="data-table">
+          <tbody>
+            <tr><td><strong>Walk-in</strong> · 09:14</td><td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">3×2kg BBQ A · Al-Amin</span></td><td class="mono">packed</td><td class="num mono" style="font-weight:600">$8.40</td><td><span class="badge badge-gray">Cash</span></td><td>Hasan</td><td><span class="badge badge-green">Verified</span></td></tr>
+            <tr><td><strong>Georges Khoury</strong> · 10:02</td><td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">10×5kg Shisha B · Al-Amin</span></td><td class="mono">packed</td><td class="num mono" style="font-weight:600">$45.00</td><td><span class="badge badge-gray">Cash</span></td><td>Hasan</td><td><span class="badge badge-green">Verified</span></td></tr>
+            <tr><td><strong>Ali Hamdan</strong> · 12:15</td><td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">42 kg BBQ A · Sahara</span></td><td class="mono">by kg</td><td class="num mono" style="font-weight:600">$58.80</td><td><span class="badge badge-gray">Cash</span></td><td>Khalil</td><td><span class="badge badge-green">Verified</span></td></tr>
+          </tbody>
+        </table>
+        <div class="date-group-label"><span>Wednesday 20 May 2026</span><span class="date-group-total" style="color:var(--accent2)">⚠ 4 unverified</span></div>
+        <table class="data-table">
+          <tbody>
+            <tr style="opacity:0.7"><td><strong>Walk-in</strong> · ~morning</td><td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">5×2kg BBQ A · Al-Amin</span></td><td class="mono">packed</td><td class="num mono" style="color:var(--text3)">—</td><td><span class="badge badge-gray">Cash</span></td><td>Hasan</td><td><span class="unverified">Not entered</span></td></tr>
+            <tr style="opacity:0.7"><td><strong>Hassan Moussa</strong> · ~afternoon</td><td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">~30 kg Restaurant A · Sahara</span></td><td class="mono">by kg</td><td class="num mono" style="color:var(--text3)">—</td><td><span class="badge badge-gray">Cash</span></td><td>Ali</td><td><span class="unverified">Not entered</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"><i class="ti ti-check-circle"></i><span id="toastMsg">Saved</span></div>
+
+<script>
+  // ── Data ─────────────────────────────────────────────────
+  const RATE = 89550;
+  const BAG_NOMINAL = { '2 kg':2, '1.9 kg':1.9, '5 kg':5, '10 kg':10, '20 kg':20 };
+  const BAG_SIZES = ['1.9 kg','2 kg','5 kg','10 kg','20 kg'];
+  const CHAR_TYPES = ['BBQ Hardwood','Shisha','Restaurant Grade','Coconut'];
+  const SUPPLIERS  = ['Al-Amin Trading','Sahara Export','Cedar Charcoal Co.'];
+  const GRADES     = ['Grade A','Grade B','Grade C'];
+
+  // charcoal lots — type · supplier · grade combined into ONE searchable dropdown
+  const LOTS = [
+    { id: 'L-0041', type: 'BBQ Hardwood',     supplier: 'Al-Amin Trading',    grade: 'Grade A' },
+    { id: 'L-0044', type: 'BBQ Hardwood',     supplier: 'Sahara Export',      grade: 'Grade B' },
+    { id: 'L-0042', type: 'Shisha',           supplier: 'Al-Amin Trading',    grade: 'Grade B' },
+    { id: 'L-0045', type: 'Shisha',           supplier: 'Al-Amin Trading',    grade: 'Grade A' },
+    { id: 'L-0043', type: 'Restaurant Grade', supplier: 'Sahara Export',      grade: 'Grade A' },
+    { id: 'L-0046', type: 'Coconut',          supplier: 'Cedar Charcoal Co.', grade: 'Grade A' },
+    { id: 'L-0047', type: 'BBQ Hardwood',     supplier: 'Cedar Charcoal Co.', grade: 'Grade C' },
+  ];
+
+  // sample client roster for searchable buyer dropdown
+  const CLIENTS = [
+    { id: 'walk',  name: 'Walk-in customer', type: 'walk-in',   initials: 'W',  meta: 'no account · cash only' },
+    { id: 'c001', name: 'Al Rawda Restaurant',  type: 'client',  initials: 'AR', meta: 'restaurant · Hamra · Net 15' },
+    { id: 'c002', name: 'Chez Michel',          type: 'client',  initials: 'CM', meta: 'restaurant · Achrafieh' },
+    { id: 'c003', name: 'Gulf Charcoal',        type: 'client',  initials: 'GC', meta: 'export · Dubai' },
+    { id: 'c004', name: 'Georges Khoury',       type: 'retail',  initials: 'GK', meta: 'individual · cash' },
+    { id: 'c005', name: 'Ali Hamdan',           type: 'retail',  initials: 'AH', meta: 'individual · cash' },
+    { id: 'c006', name: 'Lina Boutique BBQ',    type: 'client',  initials: 'LB', meta: 'cafe · Saifi' },
+    { id: 'c007', name: 'Al Sahha Catering',    type: 'fill',    initials: 'SH', meta: 'fill client · Verdun' },
+    { id: 'c008', name: 'Mountain Grill House', type: 'client',  initials: 'MG', meta: 'restaurant · Broumana' },
+    { id: 'c009', name: 'Nadim Saadeh',         type: 'retail',  initials: 'NS', meta: 'individual · cash' },
+    { id: 'c010', name: 'Beit el Naar',         type: 'client',  initials: 'BN', meta: 'restaurant · Mar Mikhael' },
+  ];
+
+  const $ = id => document.getElementById(id);
+  function showToast(msg) {
+    const t = $('toast');
+    $('toastMsg').textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.remove('show'), 2400);
+  }
+
+  // ── Buyer combobox ──────────────────────────────────────
+  let selectedBuyer = null;
+  function renderBuyerList(filter) {
+    const q = (filter || '').toLowerCase().trim();
+    const matches = q
+      ? CLIENTS.filter(c => c.name.toLowerCase().includes(q) || c.meta.toLowerCase().includes(q))
+      : CLIENTS;
+    const list = matches.map(c => `
+      <div class="combo-item" data-id="${c.id}" onclick="pickBuyer('${c.id}')">
+        <div class="ci-avatar">${c.initials}</div>
+        <div class="ci-body">
+          <div class="ci-name">${c.name}</div>
+          <div class="ci-meta">${c.meta}</div>
+        </div>
+        <span class="badge ${c.type === 'walk-in' ? 'badge-gray' : c.type === 'fill' ? 'badge-green' : c.type === 'retail' ? 'badge-amber' : 'badge-blue'}">${c.type}</span>
+      </div>
+    `).join('');
+    const addNew = q && !CLIENTS.some(c => c.name.toLowerCase() === q)
+      ? `<div class="combo-item add-new" onclick="pickNewBuyer()">
+          <i class="ti ti-plus" style="font-size:15px;color:var(--accent)"></i>
+          <span>Add "<strong>${filter}</strong>" as new buyer</span>
+         </div>`
+      : '';
+    const empty = matches.length === 0 && !addNew
+      ? `<div style="padding:14px;text-align:center;color:var(--text3);font-size:12px">No matches</div>`
+      : '';
+    $('buyerList').innerHTML = list + addNew + empty;
+    if (window.lucide) lucide.createIcons();
+  }
+  function pickBuyer(id) {
+    const c = CLIENTS.find(x => x.id === id);
+    if (!c) return;
+    selectedBuyer = c;
+    $('buyerInput').value = c.name;
+    $('buyerCombo').classList.remove('open');
+  }
+  function pickNewBuyer() {
+    const name = $('buyerInput').value.trim();
+    if (!name) return;
+    selectedBuyer = { id: 'new', name, type: 'walk-in', initials: name.slice(0,2).toUpperCase(), meta: 'new buyer' };
+    $('buyerCombo').classList.remove('open');
+    showToast(`"${name}" will be added on save`);
+  }
+  $('buyerInput').addEventListener('input', e => {
+    renderBuyerList(e.target.value);
+    $('buyerCombo').classList.add('open');
+    selectedBuyer = null;
+  });
+  $('buyerInput').addEventListener('focus', e => {
+    renderBuyerList(e.target.value);
+    $('buyerCombo').classList.add('open');
+  });
+  document.addEventListener('click', e => {
+    if (!$('buyerCombo').contains(e.target)) $('buyerCombo').classList.remove('open');
+  });
+
+  // ── Mode toggle ─────────────────────────────────────────
+  let mode = 'packed';
+  function setMode(m) {
+    mode = m;
+    document.querySelectorAll('.mode-opt').forEach(el => el.classList.toggle('active', el.dataset.mode === m));
+    $('packedSection').style.display = m === 'packed' ? '' : 'none';
+    $('kgSection').style.display = m === 'kg' ? '' : 'none';
+    $('modeHint').textContent = m === 'packed'
+      ? 'Packed: each bag size has its own price & currency'
+      : 'By kg: pick the charcoal lot (type · supplier · grade) then enter weight × price/kg';
+    calcTotal();
+  }
+
+  function renderLotSelect() {
+    $('kgLot').innerHTML = LOTS.map(l =>
+      `<option value="${l.id}">${l.type} · ${l.supplier} · ${l.grade}</option>`
+    ).join('');
+  }
+
+  // ── Packed lines ────────────────────────────────────────
+  let packedLines = [];
+  function packedLineHtml(idx) {
+    const ln = packedLines[idx];
+    return `
+      <div class="packed-line">
+        <div>
+          <div class="lbl-mini">Bag size</div>
+          <select onchange="packedLines[${idx}].size=this.value;calcTotal()">
+            ${BAG_SIZES.map(s => `<option ${s===ln.size?'selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <div class="lbl-mini">Qty</div>
+          <input class="num" type="number" min="0" placeholder="0" value="${ln.qty || ''}" oninput="packedLines[${idx}].qty=parseInt(this.value)||0;calcTotal()">
+        </div>
+        <div>
+          <div class="lbl-mini">Price / bag</div>
+          <input class="num" type="number" min="0" step="0.01" placeholder="0.00" value="${ln.price || ''}" oninput="packedLines[${idx}].price=parseFloat(this.value)||0;calcTotal()">
+        </div>
+        <div>
+          <div class="lbl-mini">Currency</div>
+          <select onchange="packedLines[${idx}].curr=this.value;calcTotal()">
+            <option ${ln.curr==='USD'?'selected':''}>USD</option>
+            <option ${ln.curr==='LBP'?'selected':''}>LBP</option>
+          </select>
+        </div>
+        <button class="del-btn" onclick="removePackedLine(${idx})" ${packedLines.length===1?'disabled':''}><i class="ti ti-x" style="font-size:13px"></i></button>
+      </div>
+    `;
+  }
+  function renderPacked() {
+    $('packedLines').innerHTML = packedLines.map((_, i) => packedLineHtml(i)).join('');
+    if (window.lucide) lucide.createIcons();
+  }
+  function addPackedLine() {
+    packedLines.push({ size: '2 kg', qty: 0, price: 0, curr: 'USD' });
+    renderPacked();
+  }
+  function removePackedLine(i) {
+    if (packedLines.length === 1) return;
+    packedLines.splice(i, 1);
+    renderPacked();
+    calcTotal();
+  }
+
+  // ── Total preview ───────────────────────────────────────
+  function lineTotalUSD(ln) {
+    const sub = (ln.qty || 0) * (ln.price || 0);
+    return ln.curr === 'LBP' ? sub / RATE : sub;
+  }
+  function calcTotal() {
+    let totalUSD = 0, breakdown = '';
+    if (mode === 'packed') {
+      const parts = [];
+      packedLines.forEach(ln => {
+        const sub = (ln.qty || 0) * (ln.price || 0);
+        if (sub > 0) parts.push(`${ln.qty}×${ln.size} @ ${ln.curr==='USD'?'$':''}${ln.price}${ln.curr==='LBP'?' LL':''}`);
+        totalUSD += lineTotalUSD(ln);
+      });
+      breakdown = parts.length ? parts.join(' · ') : 'Add bag, qty and price';
+    } else {
+      const w = parseFloat($('kgWeight').value) || 0;
+      const p = parseFloat($('kgPrice').value) || 0;
+      const cur = $('kgCurr').value;
+      const sub = w * p;
+      totalUSD = cur === 'LBP' ? sub / RATE : sub;
+      breakdown = w > 0 && p > 0
+        ? `${w} kg × ${cur==='USD'?'$':''}${p}${cur==='LBP'?' LL':''}/kg · ${(LOTS.find(l => l.id === $('kgLot').value) || {}).type || ''}`
+        : 'Pick a lot, enter weight and price';
+    }
+    $('totalBreakdown').textContent = breakdown;
+    $('totalVal').textContent = '$' + totalUSD.toFixed(2);
+    $('totalVal').dataset.usd = totalUSD;
+    calcReceived();
+  }
+
+  // ── Received ────────────────────────────────────────────
+  function calcReceived() {
+    const usd = parseFloat($('rcvUsd').value) || 0;
+    const lbp = parseFloat($('rcvLbp').value) || 0;
+    const lbpEq = lbp / RATE;
+    const total = usd + lbpEq;
+    $('usdEq').textContent = usd > 0 ? '= $' + usd.toFixed(2) : '';
+    $('lbpEq').textContent = lbp > 0 ? '≈ $' + lbpEq.toFixed(2) : '';
+
+    const expected = parseFloat($('totalVal').dataset.usd) || 0;
+    const bar = $('recvBar');
+
+    if (total === 0) {
+      bar.className = 'recv-bar none';
+      $('recvLabel').textContent = 'Enter amount received above';
+      $('recvVal').textContent = '—';
+      return;
+    }
+    $('recvVal').textContent = '$' + total.toFixed(2);
+
+    if (expected === 0) {
+      bar.className = 'recv-bar ok';
+      $('recvLabel').textContent = 'Received';
+      return;
+    }
+    const diff = total - expected;
+    if (Math.abs(diff) < 0.01) {
+      bar.className = 'recv-bar ok';
+      $('recvLabel').textContent = 'Matches total ✓';
+    } else if (diff < 0) {
+      bar.className = 'recv-bar short';
+      $('recvLabel').textContent = `Short $${Math.abs(diff).toFixed(2)} — goes on account`;
+    } else {
+      bar.className = 'recv-bar ok';
+      $('recvLabel').textContent = `Over by $${diff.toFixed(2)}`;
+    }
+  }
+
+  // ── Submit ──────────────────────────────────────────────
+  function submitSale() {
+    if (!selectedBuyer && !$('buyerInput').value.trim()) {
+      showToast('Pick or type a buyer');
+      $('buyerInput').focus();
+      return;
+    }
+    const buyer = selectedBuyer ? selectedBuyer.name : $('buyerInput').value.trim();
+
+    let descLines = [], totalUSD = 0;
+    if (mode === 'packed') {
+      packedLines.forEach(ln => {
+        if (ln.qty > 0 && ln.price > 0) {
+          descLines.push(`${ln.qty}×${ln.size}`);
+          totalUSD += lineTotalUSD(ln);
+        }
+      });
+      if (descLines.length === 0) { showToast('Add at least one bag with qty + price'); return; }
+    } else {
+      const w = parseFloat($('kgWeight').value) || 0;
+      const p = parseFloat($('kgPrice').value) || 0;
+      if (w <= 0 || p <= 0) { showToast('Enter weight and price/kg'); return; }
+      const sub = w * p;
+      totalUSD = $('kgCurr').value === 'LBP' ? sub / RATE : sub;
+      const lot = LOTS.find(l => l.id === $('kgLot').value);
+      descLines.push(`${w} kg ${lot ? lot.type + ' · ' + lot.supplier + ' · ' + lot.grade : ''}`);
+    }
+
+    const time = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const method = $('payMethod').value;
+    const receiver = $('receiver').value.replace(/\s*\(.+\)$/, '');
+
+    const log = $('todayLog');
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:9px 18px;border-bottom:1px solid var(--border);font-size:12px';
+    div.innerHTML = `
+      <div style="min-width:0">
+        <div style="font-weight:500">${buyer}</div>
+        <div style="color:var(--text3);font-family:'IBM Plex Mono',monospace;font-size:11px">${descLines.join(' · ')} · ${mode}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-family:'IBM Plex Mono',monospace;font-weight:600">$${totalUSD.toFixed(2)}</div>
+        <div style="font-size:11px;color:var(--text3)">${method.toLowerCase()} · ${time} · ${receiver}</div>
+      </div>
+    `;
+    log.appendChild(div);
+
+    // bump cash box if cash
+    if (method === 'Cash') {
+      const el = $('cbCash');
+      const cur = parseFloat(el.textContent.replace(/[^0-9.]/g,'')) || 0;
+      el.textContent = '$' + (cur + totalUSD).toFixed(2);
+    }
+
+    showToast(`Sale recorded · $${totalUSD.toFixed(2)} from ${buyer}`);
+
+    // reset
+    $('buyerInput').value = '';
+    selectedBuyer = null;
+    $('rcvUsd').value = ''; $('rcvLbp').value = '';
+    $('kgWeight').value = ''; $('kgPrice').value = '';
+    packedLines = [{ size: '2 kg', qty: 0, price: 0, curr: 'USD' }];
+    renderPacked();
+    calcTotal();
+  }
+
+  // ── TABS ────────────────────────────────────────────────
+  function showTab(name, el) {
+    $('tab-entry').style.display = name === 'entry' ? 'block' : 'none';
+    $('tab-log').style.display = name === 'log' ? 'block' : 'none';
+    document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+    if (el) el.classList.add('active');
+  }
+
+  // ── Init ────────────────────────────────────────────────
+  $('saleDate').value = new Date().toISOString().slice(0, 10);
+  packedLines = [{ size: '2 kg', qty: 0, price: 0, curr: 'USD' }];
+  renderPacked();
+  renderLotSelect();
+  calcTotal();
+  // seed today log
+  $('todayLog').innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 18px;border-bottom:1px solid var(--border);font-size:12px">
+      <div><div style="font-weight:500">Walk-in</div><div style="color:var(--text3);font-family:'IBM Plex Mono',monospace;font-size:11px">3×2kg BBQ A · packed</div></div>
+      <div style="text-align:right"><div style="font-family:'IBM Plex Mono',monospace;font-weight:600">$8.40</div><div style="font-size:11px;color:var(--text3)">cash · 09:14 · Hasan</div></div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 18px;border-bottom:1px solid var(--border);font-size:12px">
+      <div><div style="font-weight:500">Georges Khoury</div><div style="color:var(--text3);font-family:'IBM Plex Mono',monospace;font-size:11px">10×5kg Shisha B · packed</div></div>
+      <div style="text-align:right"><div style="font-family:'IBM Plex Mono',monospace;font-weight:600">$45.00</div><div style="font-size:11px;color:var(--text3)">cash · 10:02 · Hasan</div></div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 18px;border-bottom:1px solid var(--border);font-size:12px">
+      <div><div style="font-weight:500">Ali Hamdan</div><div style="color:var(--text3);font-family:'IBM Plex Mono',monospace;font-size:11px">42 kg BBQ A · by kg</div></div>
+      <div style="text-align:right"><div style="font-family:'IBM Plex Mono',monospace;font-weight:600">$58.80</div><div style="font-size:11px;color:var(--text3)">cash · 12:15 · Khalil</div></div>
+    </div>
+  `;
+</script>
+</body>
+</html>

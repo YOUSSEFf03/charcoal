@@ -1,0 +1,1750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Al Sahha Catering</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .ar { font-family: 'Noto Sans Arabic', 'IBM Plex Sans', sans-serif; }
+
+  /* ─── Hero ──────────────────────────────────────────────── */
+  .fc-hero { display: flex; align-items: flex-start; gap: 18px; }
+  .fc-mono {
+    width: 56px; height: 56px; border-radius: 12px;
+    background: var(--accent-bg); color: var(--accent);
+    border: 1px solid #a7f3d0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 600;
+  }
+  .fc-hero h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.5px; }
+
+  .kpi-strip {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
+    min-width: 720px;
+  }
+
+  /* ─── Bag spec cards ───────────────────────────────────── */
+  .bags-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1px; background: var(--border);
+  }
+  .bag-card {
+    background: var(--surface); padding: 14px;
+    display: flex; flex-direction: column; gap: 8px;
+    position: relative;
+  }
+  .bag-size {
+    font-size: 22px; font-weight: 700; letter-spacing: -0.5px; line-height: 1;
+  }
+  .bag-size small {
+    font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace;
+    font-weight: 500; margin-left: 4px;
+  }
+  .bag-charcoal {
+    font-size: 11.5px; color: var(--text2); line-height: 1.3;
+  }
+  .bag-charcoal .grade {
+    font-family: 'IBM Plex Mono', monospace;
+    background: var(--surface2); padding: 1px 6px; border-radius: 4px;
+    border: 1px solid var(--border); margin-left: 3px;
+    font-size: 10.5px; color: var(--text2);
+  }
+  .bag-prices {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+    margin-top: 2px;
+  }
+  .bag-prices .col {
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .bag-prices .lbl {
+    font-size: 9.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .bag-prices .val {
+    font-family: 'IBM Plex Mono', monospace; font-size: 14px;
+    font-weight: 600; color: var(--text); letter-spacing: -0.2px;
+  }
+  .bag-prices .val.worker { color: var(--accent2); }
+  .bag-supply {
+    margin-top: 4px; padding: 6px 9px;
+    border-radius: 6px; font-size: 11px;
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .bag-supply.theirs {
+    background: var(--surface2); color: var(--text3);
+    border: 1px solid var(--border);
+  }
+  .bag-supply.ours {
+    background: var(--accent2-bg); color: var(--accent2);
+    border: 1px solid #fcd34d; font-weight: 600;
+  }
+  .bag-stock {
+    margin-top: 4px; padding-top: 8px;
+    border-top: 1px dashed var(--border);
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .bag-stock .lbl {
+    font-size: 10px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .bag-stock .val {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 700;
+    font-size: 17px; color: var(--accent); letter-spacing: -0.4px;
+  }
+  .bag-stock .val.zero { color: var(--text3); }
+  .bag-stock .val small {
+    font-size: 11px; color: var(--text3); font-weight: 500; margin-left: 4px;
+  }
+
+  /* ─── Generic ──────────────────────────────────────────── */
+  .num { font-family: 'IBM Plex Mono', monospace; text-align: right; font-weight: 500; }
+  .num.green { color: var(--accent); }
+  .num.amber { color: var(--accent2); }
+  .num.red { color: var(--red); }
+  .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+  .icon-btn {
+    width: 28px; height: 28px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface);
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text2); transition: all 0.1s; text-decoration: none;
+  }
+  .icon-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--text3); }
+  .icon-btn.danger:hover { background: var(--red-bg); color: var(--red); border-color: #f5c8c4; }
+  .icon-btn i { font-size: 14px; }
+
+  /* ─── Fill jobs / pickups rows ────────────────────────── */
+  .job-row {
+    display: grid; gap: 12px; align-items: center;
+    padding: 12px 18px; border-bottom: 1px solid var(--border);
+    font-size: 13px; cursor: pointer;
+  }
+  .job-row:hover { background: #FAFAF8; }
+  .job-row:last-child { border-bottom: none; }
+  .job-row.head {
+    cursor: default; background: var(--surface2);
+    padding: 8px 18px;
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .job-row.head:hover { background: var(--surface2); }
+  .job-row.head .right { text-align: right; }
+  .job-date {
+    font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text2);
+  }
+  .job-date .id { display: block; font-size: 11px; color: var(--text3); margin-top: 2px; }
+  .job-bags-cell { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .job-bags-row { display: flex; gap: 4px; flex-wrap: wrap; }
+  .bag-tag {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 2px 7px; color: var(--text2);
+  }
+  .bag-tag.waste {
+    background: var(--accent2-bg); border-color: #fcd34d; color: var(--accent2);
+  }
+
+  /* fill jobs grid */
+  .row-fill { grid-template-columns: 100px 1.4fr 70px 1fr 80px 90px 70px; }
+  /* pickup grid */
+  .row-pickup { grid-template-columns: 100px 1.3fr 80px 90px 90px 90px 100px 70px; }
+
+  /* profit cell */
+  .profit-cell {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 700;
+    text-align: right; font-size: 14px;
+  }
+  .profit-pos { color: var(--accent); }
+  .profit-neg { color: var(--red); }
+  .profit-cell small {
+    display: block; font-size: 10.5px; color: var(--text3);
+    font-weight: 400; margin-top: 1px; letter-spacing: 0.3px;
+  }
+
+  /* pay KPIs */
+  .pay-kpis {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    border-top: 1px solid var(--border);
+  }
+  .pay-kpi { padding: 12px 18px; border-right: 1px solid var(--border); }
+  .pay-kpi:last-child { border-right: none; }
+  .pay-kpi .lbl { font-size: 10px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
+  .pay-kpi .val { font-size: 17px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; letter-spacing: -0.3px; }
+  .pay-kpi .val.green { color: var(--accent); }
+  .pay-kpi .val.amber { color: var(--accent2); }
+
+  /* contact + drop rows */
+  .contact-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 18px; border-bottom: 1px solid var(--border);
+  }
+  .contact-row:last-child { border-bottom: none; }
+  .contact-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  .contact-name { font-size: 13px; font-weight: 500; }
+  .contact-meta { font-size: 11px; color: var(--text3); }
+  .contact-phone { margin-left: auto; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text2); }
+
+  /* activity */
+  .act-row { padding: 10px 18px; display: flex; gap: 11px; border-bottom: 1px solid var(--border); }
+  .act-row:last-child { border-bottom: none; }
+  .act-icon {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: var(--surface2); color: var(--text2);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .act-icon i { font-size: 13px; }
+  .act-icon.green { background: var(--accent-bg); color: var(--accent); }
+  .act-icon.amber { background: var(--accent2-bg); color: var(--accent2); }
+  .act-icon.blue { background: var(--blue-bg); color: var(--blue); }
+  .act-icon.red { background: var(--red-bg); color: var(--red); }
+  .act-text { font-size: 13px; line-height: 1.45; }
+  .act-text strong { font-weight: 500; }
+  .act-time { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-top: 2px; }
+
+  /* ─── Modal ────────────────────────────────────────────── */
+  .modal-shade {
+    position: fixed; inset: 0; background: rgba(26,25,22,0.45);
+    display: none; align-items: center; justify-content: center;
+    z-index: 100; padding: 24px; backdrop-filter: blur(2px);
+  }
+  .modal-shade.show { display: flex; }
+  .modal {
+    background: var(--surface); border-radius: var(--radius-lg);
+    width: 100%; max-width: 820px;
+    max-height: 92vh; overflow: hidden;
+    display: flex; flex-direction: column;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.25);
+  }
+  .modal-head {
+    padding: 16px 22px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .modal-title {
+    font-size: 16px; font-weight: 600; letter-spacing: -0.2px;
+    display: flex; align-items: center; gap: 9px;
+  }
+  .modal-title i { color: var(--text2); font-size: 18px; }
+  .modal-sub { font-size: 11.5px; color: var(--text3);
+    margin-top: 2px; font-family: 'IBM Plex Mono', monospace; }
+  .modal-body { padding: 18px 22px; overflow-y: auto; flex: 1; }
+  .modal-foot {
+    padding: 12px 22px; border-top: 1px solid var(--border);
+    background: var(--surface2);
+    display: flex; gap: 8px; justify-content: space-between; align-items: center;
+  }
+  .modal-foot .hint {
+    font-size: 11.5px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  /* bag editor table */
+  .bag-editor {
+    width: 100%; border-collapse: collapse;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+  }
+  .bag-editor th, .bag-editor td {
+    padding: 7px 8px; border-top: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  .bag-editor th {
+    background: var(--surface2); border-top: none;
+    text-align: left; font-size: 10.5px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+    font-weight: 400;
+  }
+  .bag-editor th.right { text-align: right; }
+  .bag-editor input, .bag-editor select {
+    width: 100%; height: 32px; padding: 0 8px;
+    border: 1px solid var(--border); border-radius: 6px;
+    font-size: 13px; background: var(--surface); outline: none;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .bag-editor input.num {
+    font-family: 'IBM Plex Mono', monospace; text-align: right;
+    font-weight: 500;
+  }
+  .bag-editor input:focus, .bag-editor select:focus {
+    border-color: var(--text); box-shadow: 0 0 0 2px rgba(26,25,22,0.05);
+  }
+  .toggle {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 10px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface2); cursor: pointer;
+    font-size: 12.5px; color: var(--text2);
+    font-family: 'IBM Plex Sans', sans-serif;
+    transition: all 0.1s;
+    white-space: nowrap;
+  }
+  .toggle .dot {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--border2);
+    transition: background 0.1s;
+  }
+  .toggle.on {
+    background: var(--accent2-bg); color: var(--accent2);
+    border-color: #fcd34d; font-weight: 600;
+  }
+  .toggle.on .dot { background: var(--accent2); }
+
+  .btn-add-bag {
+    margin-top: 10px; padding: 8px 14px;
+    background: transparent; border: 1.5px dashed var(--border2);
+    border-radius: var(--radius); color: var(--text2);
+    font-size: 13px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: 'IBM Plex Sans', sans-serif; font-weight: 500;
+  }
+  .btn-add-bag:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+
+  /* pickup form */
+  .pickup-row {
+    display: grid;
+    grid-template-columns: 1.4fr 50px 1fr 1fr 1fr 100px;
+    gap: 8px; align-items: end; padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .pickup-row:last-of-type { border-bottom: none; }
+  .pickup-row .bag-name {
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .pickup-row .bag-name .sz {
+    font-size: 14px; font-weight: 600;
+  }
+  .pickup-row .bag-name .ch {
+    font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace;
+  }
+  .pickup-row .stock-tag {
+    text-align: center; padding: 5px 8px;
+    background: var(--accent-bg); color: var(--accent);
+    font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+    font-size: 12px; border-radius: 6px;
+  }
+  .pickup-row .stock-tag.zero { background: var(--surface2); color: var(--text3); }
+  .pickup-row .lbl-mini {
+    font-size: 9.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+    margin-bottom: 3px;
+  }
+  .pickup-row input {
+    width: 100%; height: 36px; padding: 0 10px;
+    border: 1px solid var(--border); border-radius: 6px;
+    font-family: 'IBM Plex Mono', monospace; text-align: right;
+    font-size: 14px; font-weight: 600; background: var(--surface);
+    outline: none;
+  }
+  .pickup-row input.good:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(29,107,74,0.1); }
+  .pickup-row input.waste { border-color: var(--accent2-bg); }
+  .pickup-row input.waste:focus { border-color: var(--accent2); box-shadow: 0 0 0 2px rgba(180,83,9,0.1); }
+  .pickup-row .subtotal {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+    text-align: right; font-size: 15px;
+    padding: 0 4px; color: var(--accent);
+  }
+
+  .pickup-summary {
+    margin-top: 16px; padding: 14px 16px;
+    background: var(--surface2); border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 0;
+  }
+  .ps-cell {
+    padding: 0 14px; border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .ps-cell:first-child { padding-left: 0; }
+  .ps-cell:last-child { border-right: none; padding-right: 0; }
+  .ps-cell .lbl {
+    font-size: 10px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .ps-cell .val {
+    font-family: 'IBM Plex Mono', monospace; font-size: 18px;
+    font-weight: 700; letter-spacing: -0.4px;
+  }
+  .ps-cell.profit .val { color: var(--accent); font-size: 20px; }
+  .ps-cell.profit .val.neg { color: var(--red); }
+  .ps-cell.waste .val { color: var(--accent2); }
+  .ps-cell .sub { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+
+  .btn-full-load {
+    padding: 9px 16px; background: var(--text); color: #fff;
+    border: 1px solid var(--text); border-radius: var(--radius);
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    transition: background 0.1s;
+  }
+  .btn-full-load:hover { background: #2d2b28; }
+
+  /* fill job form */
+  .fillform-line {
+    display: grid; grid-template-columns: 1fr 100px 36px;
+    gap: 8px; align-items: end; margin-bottom: 8px;
+  }
+  .fillform-line select, .fillform-line input {
+    height: 38px; padding: 0 10px;
+    border: 1px solid var(--border); border-radius: 6px;
+    font-size: 13px; background: var(--surface); outline: none;
+    font-family: 'IBM Plex Sans', sans-serif; width: 100%;
+  }
+  .fillform-line input.num {
+    font-family: 'IBM Plex Mono', monospace; text-align: right;
+    font-weight: 600; font-size: 16px;
+  }
+  .fillform-line select {
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='none' stroke='%239B9890' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/></svg>");
+    background-repeat: no-repeat; background-position: right 10px center;
+    padding-right: 26px;
+  }
+
+  /* row-pickup grid: add slot for actions (view button) */
+  .row-pickup { grid-template-columns: 100px 1.3fr 80px 90px 90px 90px 100px 80px; }
+
+  /* ── Driver source toggle in pickup modal ─────────────── */
+  .driver-source {
+    display: flex; gap: 0;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 3px;
+    width: fit-content;
+  }
+  .ds-opt {
+    padding: 7px 14px; border-radius: 6px;
+    font-size: 12.5px; font-weight: 500; cursor: pointer;
+    color: var(--text2); transition: all 0.1s;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .ds-opt:hover { color: var(--text); }
+  .ds-opt.active {
+    background: var(--surface); color: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    font-weight: 600;
+  }
+  .ds-opt i { font-size: 14px; }
+
+  /* ── Export bar in card head ──────────────────────────── */
+  .export-bar {
+    display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;
+  }
+  .export-bar .lbl {
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+    margin-right: 2px;
+  }
+  .date-mini {
+    height: 30px; padding: 0 8px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); color: var(--text);
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px; outline: none;
+  }
+  .date-mini:focus { border-color: var(--text); }
+  .export-bar .arrow { font-size: 11px; color: var(--text3); }
+  .btn-export {
+    height: 30px; padding: 0 11px;
+    background: var(--accent); color: #fff;
+    border: 1px solid var(--accent); border-radius: 6px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    font-family: 'IBM Plex Sans', sans-serif;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .btn-export:hover { background: #155237; border-color: #155237; }
+  .btn-export.preset {
+    background: transparent; color: var(--text2);
+    border-color: var(--border); font-weight: 500;
+  }
+  .btn-export.preset:hover { background: var(--surface2); color: var(--text); }
+  .card-head { flex-wrap: wrap; gap: 10px; row-gap: 8px; }
+
+  /* ── Pickup detail modal ───────────────────────────── */
+  .pd-kpis {
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin-bottom: 14px;
+  }
+  .pd-kpi {
+    padding: 14px 16px; border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .pd-kpi:last-child { border-right: none; }
+  .pd-kpi .lbl {
+    font-size: 10px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .pd-kpi .val {
+    font-family: 'IBM Plex Mono', monospace; font-size: 19px;
+    font-weight: 700; letter-spacing: -0.4px;
+  }
+  .pd-kpi .sub {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--text3);
+  }
+  .pd-kpi.profit .val { color: var(--accent); }
+  .pd-kpi.profit .val.neg { color: var(--red); }
+  .pd-kpi.cost .val { color: var(--accent2); }
+  .pd-kpi.waste .val { color: var(--accent2); }
+
+  .pd-table {
+    width: 100%; border-collapse: collapse;
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    overflow: hidden; background: var(--surface);
+  }
+  .pd-table th, .pd-table td {
+    padding: 9px 12px; border-top: 1px solid var(--border);
+    vertical-align: middle; font-size: 12.5px;
+  }
+  .pd-table th {
+    background: var(--surface2); border-top: none;
+    text-align: left; font-size: 10.5px;
+    font-family: 'IBM Plex Mono', monospace; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 0.5px; font-weight: 400;
+  }
+  .pd-table th.right { text-align: right; }
+  .pd-table td.num {
+    font-family: 'IBM Plex Mono', monospace;
+    text-align: right; font-weight: 500;
+  }
+  .pd-table tfoot td {
+    background: var(--surface2); font-weight: 700;
+  }
+
+  /* toast */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: #fff;
+    padding: 11px 18px; border-radius: var(--radius);
+    font-size: 13px; display: flex; align-items: center; gap: 8px;
+    opacity: 0; pointer-events: none; transition: all 0.25s;
+    z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast i { color: #6ee7b7; }
+
+  /* form grid for modals */
+  .form-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    margin-bottom: 14px;
+  }
+  .form-grid .full { grid-column: 1 / -1; }
+  .form-grid .field-label {
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+    margin-bottom: 4px; display: block;
+  }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="fill-clients"></aside>
+
+<div class="main">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="back-link" href="fill-clients.html"><i class="ti ti-chevron-left"></i> All fill clients</a>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-title" id="topName">Al Sahha Catering</span>
+    </div>
+    <div class="topbar-right">
+      <a class="btn" href="invoice.html" target="_blank" style="text-decoration:none"><i class="ti ti-printer" style="font-size:15px"></i> Print balance</a>
+      <button class="btn" onclick="openPay()"><i class="ti ti-cash" style="font-size:15px"></i> Log payment</button>
+      <button class="btn" onclick="openPickup()"><i class="ti ti-truck-loading" style="font-size:15px"></i> Pickup goods</button>
+      <button class="btn primary" onclick="openFillJob()"><i class="ti ti-plus" style="font-size:15px"></i> New fill job</button>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- HERO -->
+    <div class="page-header">
+      <div class="fc-hero">
+        <div class="fc-mono">SH</div>
+        <div>
+          <h1>Al Sahha Catering</h1>
+          <div class="ar" style="font-size:14px;color:var(--text2);margin-top:2px" dir="rtl">الصحة للتموين</div>
+          <div class="page-header-meta">
+            <span class="badge badge-green">corporate · catering</span>
+            <span class="badge badge-gray">USD · Net 15</span>
+            <span class="meta-row"><i class="ti ti-map-pin"></i> Verdun, Beirut</span>
+            <span class="meta-row"><i class="ti ti-calendar"></i> client since Mar 2024</span>
+            <span class="meta-row"><i class="ti ti-stack-2"></i> <span id="totalStock">512</span> bags in warehouse</span>
+          </div>
+        </div>
+      </div>
+      <div class="kpi-strip">
+        <div class="kpi-tile amber">
+          <div class="kpi-tile-label">Balance</div>
+          <div class="kpi-tile-value">$320</div>
+          <div class="kpi-tile-sub">1 unpaid</div>
+        </div>
+        <div class="kpi-tile">
+          <div class="kpi-tile-label">Bags YTD</div>
+          <div class="kpi-tile-value">1,240</div>
+          <div class="kpi-tile-sub">18 fill jobs</div>
+        </div>
+        <div class="kpi-tile">
+          <div class="kpi-tile-label">In warehouse</div>
+          <div class="kpi-tile-value" id="kpiStock">512</div>
+          <div class="kpi-tile-sub">awaiting pickup</div>
+        </div>
+        <div class="kpi-tile amber">
+          <div class="kpi-tile-label">Waste YTD</div>
+          <div class="kpi-tile-value">38<span style="font-size:13px;color:var(--text3);font-weight:400">&nbsp;bags</span></div>
+          <div class="kpi-tile-sub">3.1% · $76 lost</div>
+        </div>
+        <div class="kpi-tile green">
+          <div class="kpi-tile-label">Profit YTD</div>
+          <div class="kpi-tile-value">$386</div>
+          <div class="kpi-tile-sub">20.7% margin</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.65fr 1fr;gap:14px">
+
+      <div class="stack">
+
+        <!-- BAGS & PRICING CARD -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">
+              <i class="ti ti-package"></i> Bags &amp; pricing
+              <span style="font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace">per-bag rates · charcoal spec · stock on hand</span>
+            </div>
+            <button class="card-action" onclick="openBagEditor()"><i class="ti ti-edit" style="font-size:13px"></i> Edit bags</button>
+          </div>
+          <div class="bags-grid" id="bagsGrid"></div>
+        </div>
+
+        <!-- PICKUP / LOADS — Profit per load -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">
+              <i class="ti ti-truck"></i> Pickups &amp; profit per load
+              <span style="font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace" id="pickupsCount">14 pickups</span>
+            </div>
+            <div class="export-bar">
+              <span class="lbl">Export</span>
+              <input class="date-mini" type="date" id="puFrom">
+              <span class="arrow">→</span>
+              <input class="date-mini" type="date" id="puTo">
+              <button class="btn-export preset" onclick="setPuPreset('30d')" title="Last 30 days">30d</button>
+              <button class="btn-export preset" onclick="setPuPreset('ytd')" title="Year to date">YTD</button>
+              <button class="btn-export" onclick="exportPickups()"><i class="ti ti-table-export"></i> Excel</button>
+              <span style="width:6px"></span>
+              <button class="card-action" onclick="openPickup()" style="height:30px"><i class="ti ti-plus" style="font-size:13px"></i> New pickup</button>
+            </div>
+          </div>
+          <div class="job-row row-pickup head">
+            <span>Date</span>
+            <span>Bags picked up</span>
+            <span class="right">Total</span>
+            <span class="right">Revenue</span>
+            <span class="right">Costs</span>
+            <span class="right">Waste loss</span>
+            <span class="right">Profit</span>
+            <span class="right">Actions</span>
+          </div>
+          <div id="pickupsBody"></div>
+          <div class="more-foot" style="padding:10px 18px;background:var(--surface2);border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text2);font-family:'IBM Plex Mono',monospace" id="pickupSummary"></div>
+        </div>
+
+        <!-- FILL JOBS -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">
+              <i class="ti ti-list"></i> Fill jobs
+              <span style="font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace" id="jobsCount">18 jobs</span>
+            </div>
+            <button class="card-action" onclick="openFillJob()"><i class="ti ti-plus" style="font-size:13px"></i> New fill job</button>
+          </div>
+          <div class="job-row row-fill head">
+            <span>Date</span>
+            <span>Bags filled</span>
+            <span class="right">Total</span>
+            <span>Charcoal used</span>
+            <span class="right">Kg in</span>
+            <span class="right">Waste</span>
+            <span></span>
+          </div>
+          <div id="jobsBody"></div>
+        </div>
+
+        <!-- PAYMENT HISTORY (unchanged) -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-cash"></i> Payment history</div>
+            <button class="card-action" onclick="openPay()"><i class="ti ti-plus" style="font-size:13px"></i> Log payment</button>
+          </div>
+          <div class="pay-kpis">
+            <div class="pay-kpi"><div class="lbl">Total billed</div><div class="val">$1,860.00</div></div>
+            <div class="pay-kpi"><div class="lbl">Total paid</div><div class="val green">$1,540.00</div></div>
+            <div class="pay-kpi"><div class="lbl">Outstanding</div><div class="val amber">$320.00</div></div>
+          </div>
+          <table class="data-table">
+            <thead>
+              <tr><th>Date</th><th>Method</th><th>Reference</th><th>Logged by</th><th class="right">Amount</th></tr>
+            </thead>
+            <tbody id="paymentsBody"></tbody>
+          </table>
+        </div>
+
+      </div>
+
+      <div class="stack">
+
+        <!-- ACTIVITY -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-activity"></i> Activity log</div>
+          </div>
+          <div id="activityBody" style="max-height:480px;overflow-y:auto"></div>
+        </div>
+
+        <!-- CONTACTS -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-phone"></i> Contacts</div>
+            <button class="card-action"><i class="ti ti-plus" style="font-size:13px"></i> Add</button>
+          </div>
+          <div class="contact-row">
+            <div class="contact-dot"></div>
+            <div>
+              <div class="contact-name">Bassam Younes</div>
+              <div class="contact-meta">operations manager</div>
+            </div>
+            <div class="contact-phone">+961 70 412 998</div>
+          </div>
+          <div class="contact-row">
+            <div class="contact-dot"></div>
+            <div>
+              <div class="contact-name">Lina Khoury</div>
+              <div class="contact-meta">accounts</div>
+            </div>
+            <div class="contact-phone">+961 1 745 322</div>
+          </div>
+        </div>
+
+        <!-- NOTES -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-notes"></i> Notes</div>
+            <button class="card-action">Edit</button>
+          </div>
+          <div style="padding:14px 18px;font-size:13px;line-height:1.55">
+            <div class="ar" dir="rtl" style="font-size:13.5px">يجلبون أكياسهم الخاصة للنوع 2 كغ. يحبون فحم النوع A فقط. يفضلون التسليم صباحاً.</div>
+            <div style="color:var(--text3);font-style:italic;margin-top:4px;font-size:12.5px">Bring their own bags for 2kg. Only Grade A. Prefer morning pickup.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ════════════ MODAL · BAG EDITOR ════════════ -->
+<div class="modal-shade" id="bagModal" onclick="if (event.target === this) closeModal('bagModal')">
+  <div class="modal" style="max-width:1020px">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title"><i class="ti ti-edit"></i> Edit bags &amp; pricing</div>
+        <div class="modal-sub">add any custom size · charcoal spec · client price · worker pay · supply</div>
+      </div>
+      <button class="icon-btn" onclick="closeModal('bagModal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <table class="bag-editor">
+        <thead>
+          <tr>
+            <th style="width:90px">Size (kg)</th>
+            <th>Charcoal spec</th>
+            <th style="width:130px" class="right">Fill price ($)</th>
+            <th style="width:120px" class="right">Worker pay ($)</th>
+            <th style="width:130px">Bag supply</th>
+            <th style="width:110px" class="right">Bag cost ($)</th>
+            <th style="width:36px"></th>
+          </tr>
+        </thead>
+        <tbody id="bagEditorBody"></tbody>
+      </table>
+      <button class="btn-add-bag" onclick="addBagSpec()">
+        <i class="ti ti-plus" style="font-size:14px"></i> Add another bag size
+      </button>
+      <div style="margin-top:14px;padding:11px 14px;background:var(--accent-bg);border-radius:8px;font-size:12.5px;color:var(--accent);line-height:1.5">
+        <i class="ti ti-info-circle" style="font-size:14px;vertical-align:-2px"></i>
+        <strong>Fill price</strong> is what the client pays you per bag.
+        <strong>Worker pay</strong> is what you pay the worker per filled bag.
+        <strong>Bag supply</strong> = "ours" means we provide the bag and add its cost.
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint">existing pickups keep their original prices</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeModal('bagModal')">Cancel</button>
+        <button class="btn green" onclick="saveBags()"><i class="ti ti-check" style="font-size:15px"></i> Save bags</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ MODAL · PICKUP GOODS ════════════ -->
+<div class="modal-shade" id="pickupModal" onclick="if (event.target === this) closeModal('pickupModal')">
+  <div class="modal" style="max-width:960px">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title"><i class="ti ti-truck-loading"></i> Pickup goods</div>
+        <div class="modal-sub">enter what's going out · waste comes out of stock too</div>
+      </div>
+      <button class="icon-btn" onclick="closeModal('pickupModal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:14px">
+        <span class="field-label">Driver source</span>
+        <div class="driver-source" id="driverSource">
+          <div class="ds-opt active" data-src="mine" onclick="setDriverSource('mine')">
+            <i class="ti ti-user-check"></i> My drivers
+          </div>
+          <div class="ds-opt" data-src="theirs" onclick="setDriverSource('theirs')">
+            <i class="ti ti-users"></i> Their drivers
+          </div>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <div>
+          <span class="field-label">Pickup date</span>
+          <input class="input" type="date" id="puDate">
+        </div>
+        <div>
+          <span class="field-label" id="puDriverLabel">Picked up by</span>
+          <select class="select" id="puDriver"></select>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <span class="field-label" style="margin:0">Bags to pick up</span>
+        <button class="btn-full-load" onclick="fillFullLoad()">
+          <i class="ti ti-arrow-down-to-arc" style="font-size:15px"></i> Full load (everything in stock)
+        </button>
+      </div>
+
+      <div style="padding:9px 0 5px;font-size:10px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;display:grid;grid-template-columns:1.4fr 50px 1fr 1fr 1fr 100px;gap:8px">
+        <span>Bag</span>
+        <span style="text-align:center">Stock</span>
+        <span style="text-align:right">Picked up</span>
+        <span style="text-align:right">Wasted</span>
+        <span style="text-align:right">Unit $</span>
+        <span style="text-align:right">Subtotal</span>
+      </div>
+      <div id="pickupRows"></div>
+
+      <!-- Live summary -->
+      <div class="pickup-summary">
+        <div class="ps-cell">
+          <span class="lbl">Total bags</span>
+          <span class="val" id="puBags">0</span>
+          <span class="sub" id="puBagsSub">picked up</span>
+        </div>
+        <div class="ps-cell">
+          <span class="lbl">Revenue</span>
+          <span class="val" id="puRevenue" style="color:var(--text)">$0.00</span>
+          <span class="sub">client charge</span>
+        </div>
+        <div class="ps-cell">
+          <span class="lbl">Costs</span>
+          <span class="val" id="puCost" style="color:var(--accent2)">$0.00</span>
+          <span class="sub" id="puCostSub">worker + bag</span>
+        </div>
+        <div class="ps-cell waste">
+          <span class="lbl">Waste loss</span>
+          <span class="val" id="puWasteLoss">$0.00</span>
+          <span class="sub" id="puWasteSub">0 bags wasted</span>
+        </div>
+        <div class="ps-cell profit">
+          <span class="lbl">Profit</span>
+          <span class="val" id="puProfit">$0.00</span>
+          <span class="sub" id="puMargin">0% margin</span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint" id="puHint">PU-0035 (next number)</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeModal('pickupModal')">Cancel</button>
+        <button class="btn green" onclick="savePickup()"><i class="ti ti-check" style="font-size:15px"></i> Confirm pickup</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ MODAL · NEW FILL JOB ════════════ -->
+<div class="modal-shade" id="fillJobModal" onclick="if (event.target === this) closeModal('fillJobModal')">
+  <div class="modal" style="max-width:760px">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title"><i class="ti ti-tools"></i> New fill job</div>
+        <div class="modal-sub">log what was filled today · pick bag type · qty · charcoal sources</div>
+      </div>
+      <button class="icon-btn" onclick="closeModal('fillJobModal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div>
+          <span class="field-label">Job date</span>
+          <input class="input" type="date" id="fjDate">
+        </div>
+        <div>
+          <span class="field-label">Worker</span>
+          <select class="select" id="fjWorker">
+            <option>Hasan Moussa</option>
+            <option>Ali Saadeh</option>
+            <option>Bassam Younes</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-bottom:6px"><span class="field-label">Bags filled</span></div>
+      <div id="fjBagsBody"></div>
+      <button class="btn-add-bag" onclick="addFillJobBagRow()" style="margin-top:6px">
+        <i class="ti ti-plus" style="font-size:13px"></i> Add another bag type
+      </button>
+
+      <div style="margin:18px 0 6px"><span class="field-label">Charcoal used (what fed the bags)</span></div>
+      <div id="fjCharBody"></div>
+      <button class="btn-add-bag" onclick="addFillJobCharRow()" style="margin-top:6px">
+        <i class="ti ti-plus" style="font-size:13px"></i> Add another charcoal source
+      </button>
+
+      <!-- summary -->
+      <div class="pickup-summary" style="grid-template-columns:repeat(4,1fr);margin-top:16px">
+        <div class="ps-cell"><span class="lbl">Total bags</span><span class="val" id="fjBags">0</span></div>
+        <div class="ps-cell"><span class="lbl">Bag weight</span><span class="val" id="fjBagW">0 kg</span></div>
+        <div class="ps-cell"><span class="lbl">Charcoal in</span><span class="val" id="fjCharIn">0 kg</span></div>
+        <div class="ps-cell waste"><span class="lbl">Waste</span><span class="val" id="fjWaste">0 kg</span><span class="sub" id="fjWasteSub">0%</span></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint" id="fjHint">FJ-0095 (next number) · stock will increase on save</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeModal('fillJobModal')">Cancel</button>
+        <button class="btn green" onclick="saveFillJob()"><i class="ti ti-check" style="font-size:15px"></i> Save fill job</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ MODAL · PAYMENT ════════════ -->
+<div class="modal-shade" id="payModal" onclick="if (event.target === this) closeModal('payModal')">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-head">
+      <div><div class="modal-title"><i class="ti ti-receipt"></i> Log payment</div></div>
+      <button class="icon-btn" onclick="closeModal('payModal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div>
+          <span class="field-label">Date</span>
+          <input class="input" type="date" id="payDate">
+        </div>
+        <div>
+          <span class="field-label">Method</span>
+          <select class="select" id="payMethod">
+            <option>cash</option><option>whish</option><option>omt</option><option>bank transfer</option>
+          </select>
+        </div>
+        <div>
+          <span class="field-label">Amount (USD)</span>
+          <input class="input num" type="number" id="payAmt" placeholder="0.00">
+        </div>
+        <div>
+          <span class="field-label">Received by</span>
+          <select class="select" id="payBy">
+            <option>Joseph Nasr (driver)</option>
+            <option>Rita Salameh (sales)</option>
+            <option>Khalil Abi Nader (owner)</option>
+          </select>
+        </div>
+        <div class="full">
+          <span class="field-label">Reference / pickup</span>
+          <input class="input" id="payRef" placeholder="e.g. PU-0035, whish ref">
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint">deducts from outstanding $320.00</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeModal('payModal')">Cancel</button>
+        <button class="btn green" onclick="savePay()"><i class="ti ti-check" style="font-size:15px"></i> Log payment</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ MODAL · PICKUP DETAIL ════════════ -->
+<div class="modal-shade" id="pdModal" onclick="if (event.target === this) closeModal('pdModal')">
+  <div class="modal" style="max-width:880px">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title"><i class="ti ti-truck"></i> <span id="pdTitle">Pickup detail</span></div>
+        <div class="modal-sub" id="pdSub">— · — · —</div>
+      </div>
+      <button class="icon-btn" onclick="closeModal('pdModal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <!-- KPI strip -->
+      <div class="pd-kpis" id="pdKpis"></div>
+
+      <!-- per-bag breakdown -->
+      <table class="pd-table">
+        <thead>
+          <tr>
+            <th>Bag</th>
+            <th>Charcoal</th>
+            <th class="right">Qty</th>
+            <th class="right">Wasted</th>
+            <th class="right">Unit $</th>
+            <th class="right">Revenue</th>
+            <th class="right">Worker</th>
+            <th class="right">Bag cost</th>
+            <th class="right">Profit</th>
+          </tr>
+        </thead>
+        <tbody id="pdRows"></tbody>
+        <tfoot id="pdFoot"></tfoot>
+      </table>
+
+      <div style="margin-top:14px;display:flex;gap:10px;align-items:center;font-size:12.5px;color:var(--text2);font-family:'IBM Plex Mono',monospace">
+        <i class="ti ti-info-circle" style="color:var(--accent2)"></i>
+        Worker is paid for both picked-up and wasted bags · Bag cost only applied when we supply the bag
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint" id="pdHint">driver: —</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeModal('pdModal')">Close</button>
+        <a class="btn" href="invoice.html" target="_blank" style="text-decoration:none"><i class="ti ti-printer" style="font-size:15px"></i> Print invoice</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><i class="ti ti-check-circle"></i><span id="toastMsg">Saved</span></div>
+
+<script>
+  // ── CLIENT DATA ────────────────────────────────────────────
+  const client = {
+    name: 'Al Sahha Catering',
+    // bags = per-bag spec
+    bags: [
+      { id: 'b2',    size: 2,     charcoal: 'BBQ Hardwood · Grade A', fill: 2.00,  worker: 0.20, ours: false, bag_cost: 0,    stock: 250 },
+      { id: 'b19',   size: 1.9,   charcoal: 'BBQ Hardwood · Grade A', fill: 1.80,  worker: 0.20, ours: false, bag_cost: 0,    stock: 80  },
+      { id: 'b5',    size: 5,     charcoal: 'BBQ Hardwood · Grade A', fill: 4.80,  worker: 0.30, ours: true,  bag_cost: 0.40, stock: 120 },
+      { id: 'b54',   size: 5.4,   charcoal: 'Restaurant Grade · A',   fill: 5.40,  worker: 0.35, ours: true,  bag_cost: 0.45, stock: 42  },
+      { id: 'b10',   size: 10,    charcoal: 'BBQ Hardwood · Grade A', fill: 9.20,  worker: 0.50, ours: false, bag_cost: 0,    stock: 18  },
+      { id: 'b1899', size: 1.899, charcoal: 'Shisha · Grade B',       fill: 2.10,  worker: 0.22, ours: true,  bag_cost: 0.35, stock: 2   },
+    ],
+  };
+
+  // ── HISTORY ────────────────────────────────────────────────
+  const pickups = [
+    { id: 'PU-0034', date: '20 May 2026', driver: 'Bassam Younes',
+      items: [{ id: 'b2', qty: 120, wasted: 2 }, { id: 'b5', qty: 30, wasted: 0 }],
+      paid: false },
+    { id: 'PU-0033', date: '02 May 2026', driver: 'Bassam Younes',
+      items: [{ id: 'b2', qty: 200, wasted: 4 }, { id: 'b5', qty: 60, wasted: 1 }, { id: 'b10', qty: 10, wasted: 0 }],
+      paid: true },
+    { id: 'PU-0032', date: '18 Apr 2026', driver: 'Joseph Nasr',
+      items: [{ id: 'b2', qty: 160, wasted: 3 }, { id: 'b5', qty: 40, wasted: 1 }],
+      paid: true },
+    { id: 'PU-0031', date: '02 Apr 2026', driver: 'Bassam Younes',
+      items: [{ id: 'b54', qty: 80, wasted: 2 }, { id: 'b5', qty: 40, wasted: 0 }],
+      paid: true },
+    { id: 'PU-0030', date: '14 Mar 2026', driver: 'Hasan Moussa',
+      items: [{ id: 'b2', qty: 180, wasted: 5 }, { id: 'b5', qty: 60, wasted: 1 }],
+      paid: true },
+    { id: 'PU-0029', date: '27 Feb 2026', driver: 'Joseph Nasr',
+      items: [{ id: 'b5', qty: 180, wasted: 4 }],
+      paid: true },
+  ];
+
+  const jobs = [
+    { id: 'FJ-0094', date: '22 May 2026', worker: 'Hasan',
+      bags: [{ id: 'b2', qty: 142 }],
+      charcoal: [{ type: 'BBQ Hardwood · A', kg: 292 }],
+      waste_kg: 8 },
+    { id: 'FJ-0091', date: '02 May 2026', worker: 'Hasan',
+      bags: [{ id: 'b2', qty: 200 }, { id: 'b5', qty: 60 }, { id: 'b10', qty: 10 }],
+      charcoal: [{ type: 'BBQ Hardwood · A', kg: 812 }],
+      waste_kg: 12 },
+    { id: 'FJ-0088', date: '18 Apr 2026', worker: 'Hasan',
+      bags: [{ id: 'b2', qty: 160 }, { id: 'b5', qty: 40 }],
+      charcoal: [{ type: 'BBQ Hardwood · A', kg: 528 }],
+      waste_kg: 8 },
+    { id: 'FJ-0083', date: '02 Apr 2026', worker: 'Hasan',
+      bags: [{ id: 'b54', qty: 80 }, { id: 'b5', qty: 40 }],
+      charcoal: [{ type: 'Restaurant Grade · A', kg: 632 }],
+      waste_kg: 8 },
+    { id: 'FJ-0079', date: '14 Mar 2026', worker: 'Hasan',
+      bags: [{ id: 'b2', qty: 180 }, { id: 'b5', qty: 60 }],
+      charcoal: [{ type: 'BBQ Hardwood · A', kg: 672 }],
+      waste_kg: 12 },
+    { id: 'FJ-0074', date: '27 Feb 2026', worker: 'Ali',
+      bags: [{ id: 'b5', qty: 180 }],
+      charcoal: [{ type: 'Shisha · B', kg: 912 }],
+      waste_kg: 12 },
+  ];
+
+  const payments = [
+    { date: '22 Apr 2026', method: 'cash',  ref: 'PU-0032', by: 'Khalil', role: 'owner',  amount: 300 },
+    { date: '08 Apr 2026', method: 'whish', ref: 'PU-0031', by: 'Rita',   role: 'sales',  amount: 432 },
+    { date: '22 Mar 2026', method: 'cash',  ref: 'PU-0030', by: 'Joseph', role: 'driver', amount: 648 },
+    { date: '05 Mar 2026', method: 'omt',   ref: 'PU-0029', by: 'Khalil', role: 'owner',  amount: 864 },
+  ];
+
+  const activity = [
+    { kind: 'blue',  ic: 'ti-tools',     text: '<strong>Fill job FJ-0094</strong> in progress — 142 bags',     when: 'today · 09:14 · Hasan' },
+    { kind: 'green', ic: 'ti-truck',     text: '<strong>Pickup PU-0034</strong> dispatched — 150 bags out',     when: '20 May · 11:08' },
+    { kind: 'green', ic: 'ti-cash',      text: 'Payment <strong>$300 cash</strong> received',                   when: '22 Apr · 11:08 · Khalil' },
+    { kind: 'amber', ic: 'ti-edit',      text: 'Bag pricing updated — <strong>5.4kg added · $5.40</strong>',    when: '01 Jan 2026 · Khalil' },
+    { kind: '',      ic: 'ti-plus-circle', text: 'Fill client account created',                                 when: '12 Mar 2024 · Khalil' },
+  ];
+
+  // ── HELPERS ────────────────────────────────────────────────
+  function $(id) { return document.getElementById(id); }
+  function fmt(n) { const v = +n || 0; return '$' + v.toFixed(2); }
+  function getBag(id) { return client.bags.find(b => b.id === id); }
+  function showToast(msg) {
+    const t = $('toast');
+    $('toastMsg').textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.remove('show'), 2400);
+  }
+  function bagLabel(b) {
+    // 1.9 → "1.9 kg", 1.899 → "1.899 kg"
+    return (b.size % 1 === 0 ? b.size : b.size) + ' kg';
+  }
+
+  // pickup economics for a given pickup
+  function calcPickup(p) {
+    let bags = 0, wasted = 0, revenue = 0, costWorker = 0, costBag = 0, wasteLoss = 0;
+    p.items.forEach(it => {
+      const b = getBag(it.id); if (!b) return;
+      bags += it.qty;
+      wasted += it.wasted || 0;
+      revenue += it.qty * b.fill;
+      costWorker += (it.qty + (it.wasted || 0)) * b.worker;  // worker paid for wasted too
+      if (b.ours) costBag += (it.qty + (it.wasted || 0)) * b.bag_cost;
+      wasteLoss += (it.wasted || 0) * (b.fill - b.worker - (b.ours ? b.bag_cost : 0));  // forgone profit per wasted
+    });
+    const cost = costWorker + costBag;
+    const profit = revenue - cost;
+    const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
+    return { bags, wasted, revenue, costWorker, costBag, cost, wasteLoss, profit, margin };
+  }
+
+  // ── RENDER · BAGS GRID ─────────────────────────────────────
+  function renderBagsGrid() {
+    $('bagsGrid').innerHTML = client.bags.map(b => {
+      const perKg = (b.fill / b.size).toFixed(2);
+      return `
+        <div class="bag-card">
+          <div class="bag-size">${b.size}<small>kg</small></div>
+          <div class="bag-charcoal">${b.charcoal}</div>
+          <div class="bag-prices">
+            <div class="col">
+              <span class="lbl">Fill price</span>
+              <span class="val">$${b.fill.toFixed(2)}<small style="font-size:10px;color:var(--text3);font-weight:400;margin-left:3px">/ bag</small></span>
+              <span class="lbl" style="opacity:0.6">$${perKg}/kg</span>
+            </div>
+            <div class="col">
+              <span class="lbl">Worker pay</span>
+              <span class="val worker">$${b.worker.toFixed(2)}<small style="font-size:10px;color:var(--text3);font-weight:400;margin-left:3px">/ bag</small></span>
+            </div>
+          </div>
+          <div class="bag-supply ${b.ours ? 'ours' : 'theirs'}">
+            <span>${b.ours ? '✓ Our bag supplied' : 'Their own bag'}</span>
+            <span>${b.ours ? '+ $' + b.bag_cost.toFixed(2) : '—'}</span>
+          </div>
+          <div class="bag-stock">
+            <span class="lbl">In warehouse</span>
+            <span class="val ${b.stock === 0 ? 'zero' : ''}">${b.stock}<small>bags</small></span>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // total stock
+    const total = client.bags.reduce((s, b) => s + b.stock, 0);
+    $('totalStock').textContent = total.toLocaleString();
+    $('kpiStock').textContent = total.toLocaleString();
+  }
+
+  // ── RENDER · PICKUPS ───────────────────────────────────────
+  function renderPickups() {
+    $('pickupsBody').innerHTML = pickups.map((p, idx) => {
+      const c = calcPickup(p);
+      const chips = p.items.map(it => {
+        const b = getBag(it.id);
+        const tag = b ? `${it.qty} × ${bagLabel(b)}` : `${it.qty} ×?`;
+        const waste = it.wasted > 0 ? `<span class="bag-tag waste">${it.wasted} waste</span>` : '';
+        return `<span class="bag-tag">${tag}</span>${waste}`;
+      }).join('');
+      return `
+        <div class="job-row row-pickup" onclick="openPickupDetail(${idx})">
+          <div class="job-date">${p.date.replace(/ \d{4}$/, '')}<span class="id">${p.id}</span></div>
+          <div class="job-bags-cell">
+            <div class="job-bags-row">${chips}</div>
+            <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">picked up by ${p.driver}</div>
+          </div>
+          <div class="num">${c.bags}</div>
+          <div class="num" style="font-weight:600">${fmt(c.revenue)}</div>
+          <div class="num amber">${fmt(c.cost)}</div>
+          <div class="num" style="color:${c.wasted > 0 ? 'var(--accent2)' : 'var(--text3)'}">${c.wasted > 0 ? c.wasted + ' bags' : '—'}</div>
+          <div class="profit-cell ${c.profit >= 0 ? 'profit-pos' : 'profit-neg'}">
+            ${fmt(c.profit)}
+            <small>${c.margin.toFixed(1)}% margin</small>
+          </div>
+          <div class="row-actions" onclick="event.stopPropagation()">
+            <button class="icon-btn" onclick="openPickupDetail(${idx})" title="View details"><i class="ti ti-eye"></i></button>
+            <a class="icon-btn" href="invoice.html" target="_blank" title="Print"><i class="ti ti-printer"></i></a>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // summary
+    const totals = pickups.map(calcPickup);
+    const tBags = totals.reduce((s, c) => s + c.bags, 0);
+    const tRev = totals.reduce((s, c) => s + c.revenue, 0);
+    const tCost = totals.reduce((s, c) => s + c.cost, 0);
+    const tProfit = tRev - tCost;
+    const tWasted = totals.reduce((s, c) => s + c.wasted, 0);
+    $('pickupSummary').innerHTML = `
+      <span>${pickups.length} pickups · ${tBags} bags · ${tWasted} wasted</span>
+      <span>revenue <strong style="color:var(--text);font-family:'IBM Plex Sans',sans-serif">${fmt(tRev)}</strong>  ·  cost <strong style="color:var(--accent2);font-family:'IBM Plex Sans',sans-serif">${fmt(tCost)}</strong>  ·  profit <strong style="color:var(--accent);font-family:'IBM Plex Sans',sans-serif;font-weight:700">${fmt(tProfit)}</strong></span>
+    `;
+    $('pickupsCount').textContent = `${pickups.length} pickups · ${fmt(tProfit)} profit`;
+  }
+
+  // ── RENDER · JOBS ──────────────────────────────────────────
+  function renderJobs() {
+    $('jobsBody').innerHTML = jobs.map(j => {
+      const bagsTotal = j.bags.reduce((s, x) => s + x.qty, 0);
+      const bagWeight = j.bags.reduce((s, x) => s + x.qty * (getBag(x.id)?.size || 0), 0);
+      const charIn = j.charcoal.reduce((s, c) => s + c.kg, 0);
+      const chips = j.bags.map(x => {
+        const b = getBag(x.id);
+        return `<span class="bag-tag">${x.qty} × ${b ? bagLabel(b) : '?'}</span>`;
+      }).join('');
+      const charTags = j.charcoal.map(c => `<span class="bag-tag">${c.kg} kg · ${c.type}</span>`).join('');
+      return `
+        <div class="job-row row-fill">
+          <div class="job-date">${j.date.replace(/ \d{4}$/, '')}<span class="id">${j.id}</span></div>
+          <div class="job-bags-cell">
+            <div class="job-bags-row">${chips}</div>
+            <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">by ${j.worker}</div>
+          </div>
+          <div class="num">${bagsTotal}</div>
+          <div class="job-bags-cell"><div class="job-bags-row">${charTags}</div></div>
+          <div class="num">${charIn} kg</div>
+          <div class="num amber">${j.waste_kg} kg</div>
+          <div class="row-actions">
+            <a class="icon-btn" href="invoice.html" target="_blank" title="Print"><i class="ti ti-printer"></i></a>
+          </div>
+        </div>
+      `;
+    }).join('');
+    $('jobsCount').textContent = `${jobs.length} fill jobs`;
+  }
+
+  // ── RENDER · PAYMENTS ──────────────────────────────────────
+  function renderPayments() {
+    $('paymentsBody').innerHTML = payments.map(p => `
+      <tr>
+        <td class="mono">${p.date}</td>
+        <td><span class="badge badge-gray">${p.method}</span></td>
+        <td class="mono"><a href="invoice.html" target="_blank" style="color:var(--accent);text-decoration:none">${p.ref}</a></td>
+        <td>${p.by} <span style="font-size:11px;color:var(--text3)">${p.role}</span></td>
+        <td class="right num" style="font-weight:600;color:var(--accent)">+${fmt(p.amount)}</td>
+      </tr>
+    `).join('');
+  }
+
+  function renderActivity() {
+    $('activityBody').innerHTML = activity.map(a => `
+      <div class="act-row">
+        <div class="act-icon ${a.kind}"><i class="ti ${a.ic}"></i></div>
+        <div>
+          <div class="act-text">${a.text}</div>
+          <div class="act-time">${a.when}</div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // ── BAG EDITOR MODAL ───────────────────────────────────────
+  let editorBags = [];
+  function openBagEditor() {
+    editorBags = client.bags.map(b => ({ ...b }));
+    renderBagEditor();
+    $('bagModal').classList.add('show');
+    if (window.lucide) lucide.createIcons();
+  }
+  function renderBagEditor() {
+    $('bagEditorBody').innerHTML = editorBags.map((b, i) => `
+      <tr>
+        <td><input type="number" class="num" step="0.001" value="${b.size}" oninput="editorBags[${i}].size=parseFloat(this.value)||0"></td>
+        <td><input type="text" value="${b.charcoal}" placeholder="e.g. BBQ Hardwood · Grade A" oninput="editorBags[${i}].charcoal=this.value"></td>
+        <td><input type="number" class="num" step="0.01" value="${b.fill}" oninput="editorBags[${i}].fill=parseFloat(this.value)||0"></td>
+        <td><input type="number" class="num" step="0.01" value="${b.worker}" oninput="editorBags[${i}].worker=parseFloat(this.value)||0"></td>
+        <td>
+          <button class="toggle ${b.ours ? 'on' : ''}" onclick="toggleOurs(${i})">
+            <span class="dot"></span>
+            ${b.ours ? 'Our bag' : 'Their bag'}
+          </button>
+        </td>
+        <td><input type="number" class="num" step="0.01" value="${b.bag_cost}" ${b.ours ? '' : 'disabled style="opacity:0.4"'} oninput="editorBags[${i}].bag_cost=parseFloat(this.value)||0"></td>
+        <td><button class="icon-btn danger" onclick="removeBagSpec(${i})" ${editorBags.length === 1 ? 'disabled' : ''}><i class="ti ti-trash"></i></button></td>
+      </tr>
+    `).join('');
+    if (window.lucide) lucide.createIcons();
+  }
+  function toggleOurs(i) {
+    editorBags[i].ours = !editorBags[i].ours;
+    if (!editorBags[i].ours) editorBags[i].bag_cost = 0;
+    renderBagEditor();
+  }
+  function addBagSpec() {
+    editorBags.push({
+      id: 'b' + Date.now(),
+      size: 2, charcoal: 'BBQ Hardwood · A',
+      fill: 2.00, worker: 0.20, ours: false, bag_cost: 0, stock: 0,
+    });
+    renderBagEditor();
+  }
+  function removeBagSpec(i) {
+    if (editorBags.length === 1) return;
+    editorBags.splice(i, 1);
+    renderBagEditor();
+  }
+  function saveBags() {
+    // preserve stock from existing matching bags
+    editorBags.forEach(nb => {
+      const old = client.bags.find(ob => ob.id === nb.id);
+      if (old) nb.stock = old.stock;
+      else nb.stock = 0;
+    });
+    client.bags = editorBags;
+    closeModal('bagModal');
+    renderBagsGrid();
+    renderPickups();
+    renderJobs();
+    activity.unshift({ kind: 'amber', ic: 'ti-edit', text: 'Bag spec updated — <strong>' + client.bags.length + ' bag types</strong>', when: 'just now · you' });
+    renderActivity();
+    showToast(`Saved ${client.bags.length} bag types`);
+  }
+
+  // ── PICKUP MODAL ───────────────────────────────────────────
+  let pickupRows = [];
+  function openPickup() {
+    $('puDate').value = new Date().toISOString().slice(0, 10);
+    pickupRows = client.bags.map(b => ({ id: b.id, qty: 0, wasted: 0 }));
+    $('puHint').textContent = `PU-${String(34 + pickups.length).padStart(4, '0')} (next number)`;
+    setDriverSource(driverSource);
+    renderPickupRows();
+    $('pickupModal').classList.add('show');
+    if (window.lucide) lucide.createIcons();
+  }
+  function renderPickupRows() {
+    $('pickupRows').innerHTML = pickupRows.map((r, i) => {
+      const b = getBag(r.id);
+      if (!b) return '';
+      const sub = r.qty * b.fill;
+      return `
+        <div class="pickup-row">
+          <div class="bag-name">
+            <span class="sz">${bagLabel(b)}</span>
+            <span class="ch">${b.charcoal}${b.ours ? ' · our bag' : ''}</span>
+          </div>
+          <div class="stock-tag ${b.stock === 0 ? 'zero' : ''}">${b.stock}</div>
+          <div>
+            <div class="lbl-mini">Picked up</div>
+            <input class="good" type="number" min="0" max="${b.stock}" value="${r.qty || ''}" placeholder="0" oninput="setPickup(${i},'qty',this.value)">
+          </div>
+          <div>
+            <div class="lbl-mini">Wasted</div>
+            <input class="waste" type="number" min="0" value="${r.wasted || ''}" placeholder="0" oninput="setPickup(${i},'wasted',this.value)">
+          </div>
+          <div>
+            <div class="lbl-mini">Unit $</div>
+            <input type="number" value="${b.fill.toFixed(2)}" disabled style="opacity:0.6">
+          </div>
+          <div>
+            <div class="lbl-mini">Subtotal</div>
+            <div class="subtotal">${fmt(sub)}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    updatePickupSummary();
+    if (window.lucide) lucide.createIcons();
+  }
+  function setPickup(i, key, v) {
+    pickupRows[i][key] = parseInt(v) || 0;
+    // cap at stock
+    if (key === 'qty') {
+      const b = getBag(pickupRows[i].id);
+      if (b && pickupRows[i].qty > b.stock) pickupRows[i].qty = b.stock;
+    }
+    renderPickupRows();
+  }
+  function fillFullLoad() {
+    pickupRows.forEach(r => {
+      const b = getBag(r.id);
+      if (b) { r.qty = b.stock; r.wasted = 0; }
+    });
+    renderPickupRows();
+    showToast('Full load — all stock added');
+  }
+  function updatePickupSummary() {
+    const p = { items: pickupRows.filter(r => r.qty > 0 || r.wasted > 0) };
+    const c = calcPickup(p);
+    $('puBags').textContent = c.bags.toLocaleString();
+    $('puBagsSub').textContent = c.bags === 0 ? 'pick something' : `picked up · ${c.wasted} wasted`;
+    $('puRevenue').textContent = fmt(c.revenue);
+    $('puCost').textContent = fmt(c.cost);
+    $('puCostSub').textContent = `worker ${fmt(c.costWorker)} · bag ${fmt(c.costBag)}`;
+    $('puWasteLoss').textContent = fmt(c.wasteLoss);
+    $('puWasteSub').textContent = `${c.wasted} bag${c.wasted === 1 ? '' : 's'} wasted`;
+    $('puProfit').textContent = fmt(c.profit);
+    $('puProfit').classList.toggle('neg', c.profit < 0);
+    $('puMargin').textContent = c.margin.toFixed(1) + '% margin';
+  }
+  function savePickup() {
+    const items = pickupRows.filter(r => r.qty > 0 || r.wasted > 0)
+      .map(r => ({ id: r.id, qty: r.qty, wasted: r.wasted }));
+    if (items.length === 0) { showToast('Add at least one bag'); return; }
+    // deduct from stock (good + wasted both removed)
+    items.forEach(it => {
+      const b = getBag(it.id);
+      if (b) b.stock = Math.max(0, b.stock - it.qty - it.wasted);
+    });
+    const newP = {
+      id: `PU-${String(34 + pickups.length).padStart(4, '0')}`,
+      date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+      driver: $('puDriver').value,
+      items, paid: false,
+    };
+    pickups.unshift(newP);
+    const c = calcPickup(newP);
+    activity.unshift({ kind: 'green', ic: 'ti-truck', text: `Pickup <strong>${newP.id}</strong> — ${c.bags} bags · profit ${fmt(c.profit)}`, when: 'just now · you' });
+    renderBagsGrid();
+    renderPickups();
+    renderActivity();
+    closeModal('pickupModal');
+    showToast(`${newP.id} saved · ${c.bags} bags · profit ${fmt(c.profit)}`);
+  }
+
+  // ── FILL JOB MODAL ─────────────────────────────────────────
+  let fjBags = [];
+  let fjChar = [];
+  function openFillJob() {
+    $('fjDate').value = new Date().toISOString().slice(0, 10);
+    fjBags = [{ id: client.bags[0].id, qty: 0 }];
+    fjChar = [{ type: 'BBQ Hardwood · Grade A', kg: 0 }];
+    $('fjHint').textContent = `FJ-${String(95 + jobs.length - 6).padStart(4, '0')} (next number) · stock will increase on save`;
+    renderFillJobRows();
+    $('fillJobModal').classList.add('show');
+    if (window.lucide) lucide.createIcons();
+  }
+  function renderFillJobRows() {
+    $('fjBagsBody').innerHTML = fjBags.map((row, i) => {
+      const options = client.bags.map(b =>
+        `<option value="${b.id}" ${b.id === row.id ? 'selected' : ''}>${bagLabel(b)} · ${b.charcoal}</option>`
+      ).join('');
+      return `
+        <div class="fillform-line">
+          <select onchange="fjBags[${i}].id=this.value;renderFillJobRows()">${options}</select>
+          <input class="num" type="number" min="0" placeholder="0 bags" value="${row.qty || ''}" oninput="fjBags[${i}].qty=parseInt(this.value)||0;updateFillJobSummary()">
+          <button class="icon-btn danger" onclick="fjBags.splice(${i},1);renderFillJobRows()" ${fjBags.length === 1 ? 'disabled' : ''}><i class="ti ti-x"></i></button>
+        </div>
+      `;
+    }).join('');
+
+    const CHARS = ['BBQ Hardwood · Grade A','BBQ Hardwood · Grade B','Shisha · Grade A','Shisha · Grade B','Restaurant Grade · A'];
+    $('fjCharBody').innerHTML = fjChar.map((row, i) => `
+      <div class="fillform-line">
+        <select onchange="fjChar[${i}].type=this.value">${CHARS.map(c => `<option ${c === row.type ? 'selected' : ''}>${c}</option>`).join('')}</select>
+        <input class="num" type="number" min="0" placeholder="0 kg" value="${row.kg || ''}" oninput="fjChar[${i}].kg=parseFloat(this.value)||0;updateFillJobSummary()">
+        <button class="icon-btn danger" onclick="fjChar.splice(${i},1);renderFillJobRows()" ${fjChar.length === 1 ? 'disabled' : ''}><i class="ti ti-x"></i></button>
+      </div>
+    `).join('');
+
+    updateFillJobSummary();
+    if (window.lucide) lucide.createIcons();
+  }
+  function addFillJobBagRow() { fjBags.push({ id: client.bags[0].id, qty: 0 }); renderFillJobRows(); }
+  function addFillJobCharRow() { fjChar.push({ type: 'BBQ Hardwood · Grade A', kg: 0 }); renderFillJobRows(); }
+  function updateFillJobSummary() {
+    const totalBags = fjBags.reduce((s, x) => s + (x.qty || 0), 0);
+    const bagWeight = fjBags.reduce((s, x) => s + (x.qty || 0) * (getBag(x.id)?.size || 0), 0);
+    const charIn = fjChar.reduce((s, x) => s + (x.kg || 0), 0);
+    const waste = charIn - bagWeight;
+    const pct = charIn > 0 ? (waste / charIn) * 100 : 0;
+    $('fjBags').textContent = totalBags;
+    $('fjBagW').textContent = bagWeight.toFixed(1) + ' kg';
+    $('fjCharIn').textContent = charIn.toFixed(1) + ' kg';
+    $('fjWaste').textContent = waste.toFixed(1) + ' kg';
+    $('fjWasteSub').textContent = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
+  }
+  function saveFillJob() {
+    const totalBags = fjBags.reduce((s, x) => s + (x.qty || 0), 0);
+    if (totalBags === 0) { showToast('Add bag quantity'); return; }
+    const validBags = fjBags.filter(x => x.qty > 0);
+    const validChar = fjChar.filter(x => x.kg > 0);
+    const bagWeight = validBags.reduce((s, x) => s + x.qty * (getBag(x.id)?.size || 0), 0);
+    const charIn = validChar.reduce((s, x) => s + x.kg, 0);
+    const waste = Math.max(0, charIn - bagWeight);
+
+    // add to stock
+    validBags.forEach(x => { const b = getBag(x.id); if (b) b.stock += x.qty; });
+
+    const newJ = {
+      id: `FJ-${String(95 + jobs.length - 6).padStart(4, '0')}`,
+      date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+      worker: $('fjWorker').value,
+      bags: validBags, charcoal: validChar, waste_kg: waste,
+    };
+    jobs.unshift(newJ);
+    activity.unshift({ kind: 'blue', ic: 'ti-tools', text: `Fill job <strong>${newJ.id}</strong> — ${totalBags} bags filled · ${waste.toFixed(1)} kg waste`, when: 'just now · ' + newJ.worker });
+    renderBagsGrid();
+    renderJobs();
+    renderActivity();
+    closeModal('fillJobModal');
+    showToast(`${newJ.id} saved · stock updated`);
+  }
+
+  // ── PAYMENT MODAL ──────────────────────────────────────────
+  function openPay() {
+    $('payDate').value = new Date().toISOString().slice(0, 10);
+    $('payAmt').value = ''; $('payRef').value = '';
+    $('payModal').classList.add('show');
+    if (window.lucide) lucide.createIcons();
+  }
+  function savePay() {
+    const amt = parseFloat($('payAmt').value);
+    if (!amt || amt <= 0) { showToast('Enter an amount'); return; }
+    const by = $('payBy').value;
+    const byName = by.replace(/\s*\(.+\)$/, '');
+    const role = (by.match(/\((.+)\)/) || [, ''])[1];
+    payments.unshift({
+      date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+      method: $('payMethod').value, ref: $('payRef').value || '—', by: byName, role, amount: amt,
+    });
+    activity.unshift({ kind: 'green', ic: 'ti-cash', text: `Payment <strong>${fmt(amt)} ${$('payMethod').value}</strong> received`, when: 'just now · ' + byName });
+    renderPayments(); renderActivity();
+    closeModal('payModal');
+    showToast(`Payment ${fmt(amt)} logged`);
+  }
+
+  // ── MODAL CTL ──────────────────────────────────────────────
+  function closeModal(id) { $(id).classList.remove('show'); }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') document.querySelectorAll('.modal-shade.show').forEach(m => m.classList.remove('show'));
+  });
+
+  // ── DRIVER SOURCE TOGGLE ───────────────────────────────────
+  const MY_DRIVERS = ['Joseph Nasr', 'Mohammed Khalil', 'Hasan Moussa'];
+  const THEIR_DRIVERS = ['Bassam Younes (ops)', 'Lina Khoury (accounts)', 'External driver — name on receipt'];
+  let driverSource = 'mine';
+  function setDriverSource(src) {
+    driverSource = src;
+    document.querySelectorAll('.ds-opt').forEach(el => {
+      el.classList.toggle('active', el.dataset.src === src);
+    });
+    const list = src === 'mine' ? MY_DRIVERS : THEIR_DRIVERS;
+    $('puDriver').innerHTML = list.map(d => `<option>${d}</option>`).join('');
+    $('puDriverLabel').textContent = src === 'mine' ? 'My driver (picking up)' : 'Their driver (picking up)';
+  }
+
+  // ── PICKUP DETAIL MODAL ────────────────────────────────────
+  function openPickupDetail(idx) {
+    const p = pickups[idx];
+    const c = calcPickup(p);
+    $('pdTitle').textContent = `${p.id} · ${p.date}`;
+    $('pdSub').textContent = `${c.bags} bag${c.bags === 1 ? '' : 's'} · ${c.wasted} wasted · ${p.driver}`;
+    $('pdHint').textContent = `driver: ${p.driver} · ${p.paid ? 'paid' : 'unpaid'}`;
+
+    // KPIs
+    $('pdKpis').innerHTML = `
+      <div class="pd-kpi">
+        <span class="lbl">Total bags</span>
+        <span class="val">${c.bags}</span>
+        <span class="sub">${p.items.length} type${p.items.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="pd-kpi">
+        <span class="lbl">Revenue</span>
+        <span class="val">${fmt(c.revenue)}</span>
+        <span class="sub">client charge</span>
+      </div>
+      <div class="pd-kpi cost">
+        <span class="lbl">Total cost</span>
+        <span class="val">${fmt(c.cost)}</span>
+        <span class="sub">worker ${fmt(c.costWorker)} · bag ${fmt(c.costBag)}</span>
+      </div>
+      <div class="pd-kpi waste">
+        <span class="lbl">Waste loss</span>
+        <span class="val">${fmt(c.wasteLoss)}</span>
+        <span class="sub">${c.wasted} bag${c.wasted === 1 ? '' : 's'}</span>
+      </div>
+      <div class="pd-kpi profit">
+        <span class="lbl">Profit</span>
+        <span class="val ${c.profit < 0 ? 'neg' : ''}">${fmt(c.profit)}</span>
+        <span class="sub">${c.margin.toFixed(1)}% margin</span>
+      </div>
+    `;
+
+    // per-bag rows
+    $('pdRows').innerHTML = p.items.map(it => {
+      const b = getBag(it.id); if (!b) return '';
+      const rev = it.qty * b.fill;
+      const wrk = (it.qty + (it.wasted || 0)) * b.worker;
+      const bgc = b.ours ? (it.qty + (it.wasted || 0)) * b.bag_cost : 0;
+      const prof = rev - wrk - bgc;
+      return `
+        <tr>
+          <td><strong>${bagLabel(b)}</strong>${b.ours ? ' <span class="bag-tag" style="background:var(--accent2-bg);border-color:#fcd34d;color:var(--accent2);font-size:10px">our bag</span>' : ''}</td>
+          <td style="color:var(--text2)">${b.charcoal}</td>
+          <td class="num">${it.qty}</td>
+          <td class="num" style="color:${it.wasted > 0 ? 'var(--accent2)' : 'var(--text3)'}">${it.wasted || 0}</td>
+          <td class="num">${fmt(b.fill)}</td>
+          <td class="num" style="color:var(--text);font-weight:600">${fmt(rev)}</td>
+          <td class="num" style="color:var(--accent2)">${fmt(wrk)}</td>
+          <td class="num" style="color:${b.ours ? 'var(--accent2)' : 'var(--text3)'}">${b.ours ? fmt(bgc) : '—'}</td>
+          <td class="num" style="color:${prof >= 0 ? 'var(--accent)' : 'var(--red)'};font-weight:700">${fmt(prof)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    $('pdFoot').innerHTML = `
+      <tr>
+        <td colspan="2" style="color:var(--text2)">TOTAL</td>
+        <td class="num">${c.bags}</td>
+        <td class="num" style="color:${c.wasted > 0 ? 'var(--accent2)' : 'var(--text3)'}">${c.wasted}</td>
+        <td></td>
+        <td class="num">${fmt(c.revenue)}</td>
+        <td class="num" style="color:var(--accent2)">${fmt(c.costWorker)}</td>
+        <td class="num" style="color:${c.costBag > 0 ? 'var(--accent2)' : 'var(--text3)'}">${c.costBag > 0 ? fmt(c.costBag) : '—'}</td>
+        <td class="num" style="color:${c.profit >= 0 ? 'var(--accent)' : 'var(--red)'};font-size:14px">${fmt(c.profit)}</td>
+      </tr>
+    `;
+
+    $('pdModal').classList.add('show');
+    if (window.lucide) lucide.createIcons();
+  }
+
+  // ── EXPORT PICKUPS TO EXCEL (no profit/cost columns) ───────
+  const MONTH_IDX = { Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11 };
+  function parseRowDate(s) {
+    const m = s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
+    return m ? new Date(parseInt(m[3]), MONTH_IDX[m[2]], parseInt(m[1])) : null;
+  }
+  function isoToDate(s) { return s ? new Date(s + 'T00:00:00') : null; }
+
+  function setPuPreset(kind) {
+    const today = new Date();
+    let from;
+    if (kind === '30d') { from = new Date(); from.setDate(today.getDate() - 30); }
+    else { from = new Date(today.getFullYear(), 0, 1); }
+    $('puFrom').value = from.toISOString().slice(0, 10);
+    $('puTo').value = today.toISOString().slice(0, 10);
+  }
+
+  function exportPickups() {
+    if (typeof XLSX === 'undefined') { showToast('Excel library still loading'); return; }
+    const fromDate = isoToDate($('puFrom').value);
+    const toDate = isoToDate($('puTo').value);
+    if (!fromDate && !toDate) { showToast('Pick a date range first (or use 30d / YTD)'); return; }
+    if (fromDate && toDate && fromDate > toDate) { showToast('"From" must be before "To"'); return; }
+
+    const filtered = pickups.filter(p => {
+      const d = parseRowDate(p.date); if (!d) return false;
+      if (fromDate && d < fromDate) return false;
+      if (toDate && d > toDate) return false;
+      return true;
+    });
+    if (filtered.length === 0) { showToast('No pickups in that range'); return; }
+
+    // build rows — NO PROFIT/COST columns, only what client should see
+    let aoa = [];
+    aoa.push(['Date','Pickup #','Driver','Bag size','Charcoal','Picked up','Wasted','Unit $','Subtotal']);
+    let totalQty = 0, totalRev = 0, totalWasted = 0;
+    filtered.forEach(p => {
+      p.items.forEach((it, idx) => {
+        const b = getBag(it.id); if (!b) return;
+        const sub = it.qty * b.fill;
+        totalQty += it.qty; totalWasted += it.wasted || 0; totalRev += sub;
+        aoa.push([
+          idx === 0 ? p.date : '',
+          idx === 0 ? p.id : '',
+          idx === 0 ? p.driver : '',
+          bagLabel(b),
+          b.charcoal,
+          it.qty,
+          it.wasted || 0,
+          b.fill,
+          sub,
+        ]);
+      });
+    });
+    aoa.push(['','','','','TOTAL', totalQty, totalWasted, '', totalRev]);
+
+    const fromStr = fromDate ? fromDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'beginning';
+    const toStr = toDate ? toDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'today';
+    const meta = [
+      [`${client.name} — Pickups export`],
+      [`Range: ${fromStr}  →  ${toStr}`],
+      [`Generated: ${new Date().toLocaleString('en-GB')}`],
+      [`${filtered.length} pickups · ${totalQty} bags · ${totalWasted} wasted · ${fmt(totalRev)} billed`],
+      [],
+    ];
+    aoa = meta.concat(aoa);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{wch:12},{wch:11},{wch:18},{wch:12},{wch:24},{wch:11},{wch:9},{wch:9},{wch:11}];
+    ws['!merges'] = [0,1,2,3].map(r => ({ s: {r, c: 0}, e: {r, c: 8} }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Pickups');
+    const slug = client.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const stamp = new Date().toISOString().slice(0, 10);
+    const fname = `${slug}-pickups-${stamp}.xlsx`;
+    XLSX.writeFile(wb, fname);
+    showToast(`Exported ${filtered.length} pickups · ${fname}`);
+  }
+
+  // ── INIT ───────────────────────────────────────────────────
+  renderBagsGrid();
+  renderPickups();
+  renderJobs();
+  renderPayments();
+  renderActivity();
+  setPuPreset('ytd');
+</script>
+</body>
+</html>

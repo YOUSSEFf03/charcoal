@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Orders & Delivery</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:#F5F4F0; --surface:#FFFFFF; --surface2:#F0EEE9;
+    --border:#E4E1D9; --border2:#D4D0C8;
+    --text:#1A1916; --text2:#6B6860; --text3:#9B9890;
+    --accent:#1D6B4A; --accent-bg:#EAF5EF;
+    --accent2:#B45309; --accent2-bg:#FEF3C7;
+    --red:#C0392B; --red-bg:#FEF2F2;
+    --blue:#1D4ED8; --blue-bg:#EFF6FF;
+    --sidebar-w:220px; --radius:8px; --radius-lg:12px;
+  }
+  body { font-family:'IBM Plex Sans',sans-serif; background:var(--bg); color:var(--text); font-size:14px; line-height:1.5; min-height:100vh; display:flex; }
+
+  /* SIDEBAR */
+  .sidebar { width:var(--sidebar-w); min-height:100vh; background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; position:fixed; top:0; left:0; bottom:0; z-index:10; }
+  .sidebar-logo { padding:20px 18px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+  .logo-mark { width:30px; height:30px; background:var(--text); border-radius:7px; display:flex; align-items:center; justify-content:center; }
+  .logo-mark i { color:#fff; font-size:16px; }
+  .logo-text { font-size:15px; font-weight:600; letter-spacing:-0.3px; }
+  .logo-sub { font-size:10px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+  .sidebar-section { padding:16px 10px 4px; }
+  .sidebar-section-label { font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:1px; padding:0 8px; margin-bottom:4px; }
+  .nav-item { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; color:var(--text2); font-size:13.5px; font-weight:400; transition:background 0.1s,color 0.1s; text-decoration:none; }
+  .nav-item:hover { background:var(--surface2); color:var(--text); }
+  .nav-item.active { background:var(--text); color:#fff; }
+  .nav-item.active i { color:#fff; }
+  .nav-item i { font-size:16px; color:var(--text3); }
+  .nav-item:hover i { color:var(--text); }
+  .nav-badge { margin-left:auto; font-size:10px; font-family:'IBM Plex Mono',monospace; background:var(--red); color:#fff; border-radius:100px; padding:1px 6px; font-weight:500; }
+  .nav-badge.amber { background:var(--accent2); }
+  .sidebar-bottom { margin-top:auto; padding:12px 10px; border-top:1px solid var(--border); }
+  .user-row { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; }
+  .user-row:hover { background:var(--surface2); }
+  .avatar-sm { width:28px; height:28px; border-radius:50%; background:var(--text); color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; flex-shrink:0; }
+  .user-name { font-size:13px; font-weight:500; }
+  .user-role { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+
+  /* MAIN */
+  .main { margin-left:var(--sidebar-w); flex:1; display:flex; flex-direction:column; min-height:100vh; }
+  .topbar { background:var(--surface); border-bottom:1px solid var(--border); padding:0 28px; height:56px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; position:sticky; top:0; z-index:5; }
+  .page-title { font-size:15px; font-weight:600; letter-spacing:-0.2px; }
+  .topbar-right { display:flex; align-items:center; gap:8px; }
+  .btn { display:flex; align-items:center; gap:6px; padding:7px 12px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text2); transition:all 0.1s; }
+  .btn:hover { background:var(--surface2); color:var(--text); }
+  .btn.primary { background:var(--text); color:#fff; border-color:var(--text); }
+  .btn.primary:hover { background:#2d2b28; }
+  .btn.green { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .btn.green:hover { background:#155237; }
+  .btn.red { background:var(--red-bg); color:var(--red); border-color:#fca5a5; }
+
+  /* TABS */
+  .tabs { display:flex; gap:2px; padding:0 28px; background:var(--surface); border-bottom:1px solid var(--border); }
+  .tab { padding:12px 16px; font-size:13px; font-weight:500; color:var(--text3); cursor:pointer; border-bottom:2px solid transparent; transition:all 0.1s; display:flex; align-items:center; gap:7px; }
+  .tab:hover { color:var(--text2); }
+  .tab.active { color:var(--text); border-bottom-color:var(--text); }
+  .tab-count { font-size:11px; font-family:'IBM Plex Mono',monospace; background:var(--surface2); color:var(--text2); padding:1px 6px; border-radius:100px; }
+  .tab.active .tab-count { background:var(--text); color:#fff; }
+  .tab-count.blue { background:var(--blue-bg); color:var(--blue); }
+  .tab.active .tab-count.blue { background:var(--blue); color:#fff; }
+
+  .content { padding:24px 28px; flex:1; }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  .fade-up { animation:fadeUp 0.3s ease both; }
+
+  /* BADGES */
+  .badge { font-size:11px; font-family:'IBM Plex Mono',monospace; padding:2px 8px; border-radius:100px; font-weight:500; white-space:nowrap; }
+  .badge-green  { background:var(--accent-bg); color:var(--accent); }
+  .badge-amber  { background:var(--accent2-bg); color:var(--accent2); }
+  .badge-red    { background:var(--red-bg); color:var(--red); }
+  .badge-blue   { background:var(--blue-bg); color:var(--blue); }
+  .badge-gray   { background:var(--surface2); color:var(--text2); }
+  .badge-purple { background:#EDE9FE; color:#5B21B6; }
+
+  /* FILTERS */
+  .filters { display:flex; align-items:center; gap:8px; margin-bottom:16px; }
+  .filter-input { display:flex; align-items:center; gap:7px; padding:7px 12px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); font-size:13px; color:var(--text2); flex:1; max-width:280px; }
+  .filter-input i { color:var(--text3); font-size:15px; }
+  .filter-input input { border:none; outline:none; background:transparent; font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text); width:100%; }
+  .filter-input input::placeholder { color:var(--text3); }
+  .filter-select { padding:7px 12px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text2); cursor:pointer; outline:none; }
+  .filter-sep { flex:1; }
+
+  /* ORDER CARDS */
+  .order-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:10px; cursor:pointer; transition:border-color 0.15s,box-shadow 0.15s; }
+  .order-card:hover { border-color:var(--border2); box-shadow:0 2px 8px rgba(0,0,0,0.06); }
+  .order-card-inner { display:flex; align-items:stretch; }
+  .order-stripe { width:4px; flex-shrink:0; }
+  .order-body { flex:1; padding:14px 16px; }
+  .order-head { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:8px; }
+  .order-client { font-size:15px; font-weight:600; letter-spacing:-0.2px; }
+  .order-id { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; margin-top:2px; }
+  .order-meta { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--text2); margin-bottom:8px; }
+  .order-meta i { font-size:13px; color:var(--text3); margin-right:3px; }
+  .order-shipments { display:flex; gap:6px; flex-wrap:wrap; }
+  .ship-chip { font-size:11px; display:flex; align-items:center; gap:5px; background:var(--surface2); border:1px solid var(--border); border-radius:5px; padding:3px 8px; }
+  .order-right { padding:14px 16px; display:flex; flex-direction:column; align-items:flex-end; justify-content:space-between; border-left:1px solid var(--border); min-width:160px; }
+  .order-total { text-align:right; }
+  .order-total-val { font-size:18px; font-weight:600; letter-spacing:-0.5px; font-family:'IBM Plex Mono',monospace; }
+  .order-total-lbl { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+
+  /* CARD */
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:14px; }
+  .card-head { padding:13px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .card-title { font-size:13px; font-weight:600; display:flex; align-items:center; gap:7px; }
+  .card-title i { font-size:15px; color:var(--text2); }
+
+  /* TABLE */
+  .data-table { width:100%; border-collapse:collapse; }
+  .data-table th { text-align:left; padding:8px 18px; font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:0.6px; border-bottom:1px solid var(--border); font-weight:400; background:var(--surface2); }
+  .data-table td { padding:11px 18px; border-bottom:1px solid var(--border); font-size:13px; vertical-align:middle; }
+  .data-table tr:last-child td { border-bottom:none; }
+  .data-table tbody tr { cursor:pointer; transition:background 0.1s; }
+  .data-table tbody tr:hover { background:#FAFAF8; }
+
+  /* ORDER DETAIL PANEL */
+  .order-panel { display:none; position:fixed; right:0; top:0; bottom:0; width:520px; background:var(--surface); border-left:1px solid var(--border); z-index:20; flex-direction:column; box-shadow:-4px 0 24px rgba(0,0,0,0.1); }
+  .order-panel.open { display:flex; animation:slideIn 0.2s ease; }
+  @keyframes slideIn { from{transform:translateX(20px);opacity:0} to{transform:translateX(0);opacity:1} }
+  .panel-head { padding:18px 20px 14px; border-bottom:1px solid var(--border); }
+  .panel-close-btn { float:right; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; color:var(--text2); }
+  .panel-body { flex:1; overflow-y:auto; }
+  .panel-section { padding:16px 20px; border-bottom:1px solid var(--border); }
+  .panel-section-label { font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; }
+  .panel-footer { padding:14px 20px; display:flex; gap:8px; border-top:1px solid var(--border); }
+  .panel-btn { flex:1; padding:9px; border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Sans',sans-serif; cursor:pointer; font-weight:500; transition:all 0.1s; border:1px solid; display:flex; align-items:center; justify-content:center; gap:6px; }
+  .pbtn-ghost { background:var(--surface); border-color:var(--border); color:var(--text2); }
+  .pbtn-ghost:hover { background:var(--surface2); }
+  .pbtn-primary { background:var(--text); border-color:var(--text); color:#fff; }
+  .pbtn-primary:hover { background:#2d2b28; }
+  .pbtn-green { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .pbtn-green:hover { background:#155237; }
+
+  /* SHIPMENT CARDS */
+  .shipment-card { border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:10px; }
+  .ship-head { padding:12px 14px; background:var(--surface2); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .ship-num { font-size:12px; font-weight:600; font-family:'IBM Plex Mono',monospace; color:var(--text2); }
+  .ship-addr { font-size:13px; font-weight:500; margin-bottom:4px; }
+  .ship-body { padding:12px 14px; }
+  .ship-bags { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .ship-bag-pill { font-size:12px; font-family:'IBM Plex Mono',monospace; background:var(--surface2); border:1px solid var(--border); border-radius:5px; padding:3px 9px; }
+  .ship-weights { display:flex; gap:16px; font-size:12px; }
+  .ship-weight-item { display:flex; flex-direction:column; gap:2px; }
+  .ship-weight-label { color:var(--text3); font-size:11px; }
+  .ship-weight-val { font-family:'IBM Plex Mono',monospace; font-weight:500; }
+  .ship-weight-actual { color:var(--accent); }
+
+  /* NEW ORDER MODAL */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:40; align-items:flex-start; justify-content:center; padding-top:40px; }
+  .modal-overlay.open { display:flex; }
+  .modal { background:var(--surface); border-radius:var(--radius-lg); border:1px solid var(--border); width:580px; max-height:85vh; overflow-y:auto; box-shadow:0 8px 40px rgba(0,0,0,0.12); animation:fadeUp 0.2s ease; }
+  .modal-head { padding:18px 20px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--surface); z-index:2; display:flex; align-items:center; justify-content:space-between; }
+  .modal-title { font-size:15px; font-weight:600; }
+  .modal-body { padding:20px; }
+  .modal-footer { padding:14px 20px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; position:sticky; bottom:0; background:var(--surface); }
+  .form-group { margin-bottom:14px; }
+  .form-label { font-size:12px; font-weight:500; color:var(--text2); margin-bottom:5px; display:block; }
+  .form-input { width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text); outline:none; background:var(--surface); transition:border-color 0.15s; }
+  .form-input:focus { border-color:var(--text); }
+  .form-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .form-row-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+  .divider { height:1px; background:var(--border); margin:16px 0; }
+
+  /* SHIPMENT BUILDER */
+  .ship-builder { border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:10px; }
+  .sb-head { padding:10px 14px; background:var(--surface2); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .sb-num { font-size:12px; font-weight:600; color:var(--text2); font-family:'IBM Plex Mono',monospace; }
+  .sb-body { padding:12px 14px; display:flex; flex-direction:column; gap:8px; }
+  .sb-del-btn { width:24px; height:24px; border-radius:5px; border:1px solid var(--border); background:transparent; cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--text3); transition:all 0.1s; }
+  .sb-del-btn:hover { background:var(--red-bg); border-color:#fca5a5; color:var(--red); }
+
+  /* BAG COUNTER */
+  .bag-counter-row { display:flex; align-items:center; gap:10px; }
+  .bag-counter-label { font-size:13px; flex:1; }
+  .mini-counter { display:flex; align-items:center; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+  .mc-btn { width:32px; height:32px; border:none; background:var(--surface2); cursor:pointer; font-size:16px; color:var(--text2); display:flex; align-items:center; justify-content:center; transition:background 0.1s; }
+  .mc-btn:hover { background:var(--border); }
+  .mc-val { width:50px; height:32px; border:none; outline:none; font-size:13px; font-family:'IBM Plex Mono',monospace; text-align:center; background:var(--surface); font-weight:600; border-left:1px solid var(--border); border-right:1px solid var(--border); }
+
+  /* TRIP VIEW */
+  .trip-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:10px; cursor:pointer; transition:border-color 0.15s,box-shadow 0.15s; }
+  .trip-card:hover { border-color:var(--border2); box-shadow:0 2px 8px rgba(0,0,0,0.06); }
+  .trip-head { padding:14px 18px; display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--border); }
+  .driver-badge { width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; flex-shrink:0; }
+  .trip-info { flex:1; }
+  .trip-driver { font-size:14px; font-weight:600; }
+  .trip-meta { font-size:12px; color:var(--text2); margin-top:2px; }
+  .trip-stops { padding:0 18px 14px; }
+  .stop-row { display:flex; align-items:flex-start; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); position:relative; }
+  .stop-row:last-child { border-bottom:none; }
+  .stop-line { position:absolute; left:11px; top:32px; bottom:-10px; width:1px; background:var(--border); }
+  .stop-row:last-child .stop-line { display:none; }
+  .stop-dot { width:22px; height:22px; border-radius:50%; border:2px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:600; flex-shrink:0; margin-top:2px; background:var(--surface); z-index:1; }
+  .stop-dot.done { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .stop-dot.active { background:var(--blue); border-color:var(--blue); color:#fff; }
+  .stop-info { flex:1; }
+  .stop-client { font-size:13px; font-weight:500; }
+  .stop-addr { font-size:11px; color:var(--text3); margin-top:1px; }
+  .stop-bags { font-size:12px; color:var(--text2); margin-top:4px; display:flex; gap:8px; flex-wrap:wrap; }
+  .stop-right { display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
+  .stop-kg { font-size:12px; font-family:'IBM Plex Mono',monospace; }
+  .stop-actions { display:flex; gap:6px; }
+  .stop-btn { font-size:11px; padding:3px 8px; border-radius:5px; border:1px solid var(--border); background:transparent; cursor:pointer; font-family:'IBM Plex Sans',sans-serif; color:var(--text2); transition:all 0.1s; }
+  .stop-btn:hover { background:var(--surface2); }
+  .stop-btn.confirm-stop { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .stop-btn.confirm-stop:hover { background:#155237; }
+
+  /* RECEIPT MODAL */
+  .receipt { background:#fff; font-family:'IBM Plex Mono',monospace; font-size:12px; line-height:1.6; padding:20px; border:1px dashed var(--border); border-radius:var(--radius); max-width:280px; margin:0 auto; }
+  .receipt-title { font-size:14px; font-weight:600; text-align:center; margin-bottom:4px; }
+  .receipt-sub { font-size:11px; color:var(--text3); text-align:center; margin-bottom:12px; }
+  .receipt-divider { border:none; border-top:1px dashed var(--border2); margin:8px 0; }
+  .receipt-row { display:flex; justify-content:space-between; font-size:11px; padding:1px 0; }
+  .receipt-row.total { font-weight:600; font-size:12px; border-top:1px dashed var(--border2); padding-top:6px; margin-top:4px; }
+  .receipt-row.paid { color:var(--accent); font-weight:600; }
+  .receipt-sig { margin-top:16px; font-size:11px; color:var(--text3); }
+  .receipt-sig-line { border-top:1px solid var(--text3); margin-top:20px; padding-top:3px; }
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark"><i class="ti ti-flame"></i></div>
+    <div><div class="logo-text">Ember</div><div class="logo-sub">charcoal system</div></div>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Overview</div>
+    <a class="nav-item"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
+    <a class="nav-item"><i class="ti ti-chart-bar"></i> Reports</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Stock</div>
+    <a class="nav-item"><i class="ti ti-ship"></i> Containers</a>
+    <a class="nav-item"><i class="ti ti-building-warehouse"></i> Warehouse</a>
+    <a class="nav-item"><i class="ti ti-tools"></i> Packing</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Sales</div>
+    <a class="nav-item"><i class="ti ti-users"></i> Clients <span class="nav-badge amber">3</span></a>
+    <a class="nav-item active"><i class="ti ti-file-invoice"></i> Orders</a>
+    <a class="nav-item"><i class="ti ti-truck"></i> Delivery <span class="nav-badge">2</span></a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Finance</div>
+    <a class="nav-item"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item"><i class="ti ti-cash"></i> Payments</a>
+    <a class="nav-item"><i class="ti ti-calculator"></i> Cash handover</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item"><i class="ti ti-settings"></i> Settings</a>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="user-row">
+      <div class="avatar-sm">KA</div>
+      <div><div class="user-name">Khalil Abi Nader</div><div class="user-role">owner</div></div>
+    </div>
+  </div>
+</aside>
+
+<div class="main">
+  <header class="topbar">
+    <span class="page-title">Orders & Delivery</span>
+    <div class="topbar-right">
+      <button class="btn"><i class="ti ti-filter" style="font-size:15px"></i> Filter</button>
+      <button class="btn primary" onclick="openNewOrder()"><i class="ti ti-plus" style="font-size:15px"></i> New order</button>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('orders',this)">
+      <i class="ti ti-file-invoice" style="font-size:14px"></i> Orders
+      <span class="tab-count">18</span>
+    </div>
+    <div class="tab" onclick="showTab('trips',this)">
+      <i class="ti ti-truck" style="font-size:14px"></i> Driver trips
+      <span class="tab-count blue">3</span>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- ORDERS TAB -->
+    <div id="tab-orders" class="fade-up">
+      <div class="filters">
+        <div class="filter-input">
+          <i class="ti ti-search"></i>
+          <input type="text" placeholder="Search client, order ID…">
+        </div>
+        <select class="filter-select">
+          <option>All statuses</option>
+          <option>Draft</option>
+          <option>Confirmed</option>
+          <option>Partially delivered</option>
+          <option>Delivered</option>
+          <option>Invoiced</option>
+          <option>Paid</option>
+        </select>
+        <select class="filter-select">
+          <option>All types</option>
+          <option>Restaurant</option>
+          <option>Wholesale</option>
+          <option>Walk-in</option>
+          <option>Export</option>
+        </select>
+        <div class="filter-sep"></div>
+        <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">18 orders</span>
+      </div>
+
+      <!-- ORDER CARDS -->
+      <div class="order-card" onclick="openOrderPanel()">
+        <div class="order-card-inner">
+          <div class="order-stripe" style="background:var(--blue)"></div>
+          <div class="order-body">
+            <div class="order-head">
+              <div>
+                <div class="order-client">Al Rawda Restaurant</div>
+                <div class="order-id">ORD-0284 · created today 08:30</div>
+              </div>
+              <span class="badge badge-blue">In delivery</span>
+            </div>
+            <div class="order-meta">
+              <span><i class="ti ti-flame"></i>BBQ Hardwood · Grade A</span>
+              <span><i class="ti ti-weight"></i>300 kg requested</span>
+              <span><i class="ti ti-truck"></i>3 shipments</span>
+            </div>
+            <div class="order-shipments">
+              <div class="ship-chip"><i class="ti ti-check" style="color:var(--accent);font-size:11px"></i> Hamra — delivered</div>
+              <div class="ship-chip"><i class="ti ti-loader" style="color:var(--blue);font-size:11px"></i> Achrafieh — in transit</div>
+              <div class="ship-chip"><i class="ti ti-clock" style="color:var(--text3);font-size:11px"></i> Jdeideh — pending</div>
+            </div>
+          </div>
+          <div class="order-right">
+            <div class="order-total">
+              <div class="order-total-val">$840</div>
+              <div class="order-total-lbl">USD · $2.80/bag</div>
+            </div>
+            <span class="badge badge-blue">partial</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="order-card" onclick="openOrderPanel()">
+        <div class="order-card-inner">
+          <div class="order-stripe" style="background:var(--accent2)"></div>
+          <div class="order-body">
+            <div class="order-head">
+              <div>
+                <div class="order-client">Byblos BBQ Supply</div>
+                <div class="order-id">ORD-0283 · created 20 May</div>
+              </div>
+              <span class="badge badge-amber">Confirmed</span>
+            </div>
+            <div class="order-meta">
+              <span><i class="ti ti-flame"></i>BBQ Hardwood · Grade A + B</span>
+              <span><i class="ti ti-weight"></i>500 kg requested</span>
+              <span><i class="ti ti-truck"></i>2 shipments</span>
+            </div>
+            <div class="order-shipments">
+              <div class="ship-chip"><i class="ti ti-clock" style="color:var(--text3);font-size:11px"></i> Byblos warehouse — pending</div>
+              <div class="ship-chip"><i class="ti ti-clock" style="color:var(--text3);font-size:11px"></i> Jounieh depot — pending</div>
+            </div>
+          </div>
+          <div class="order-right">
+            <div class="order-total">
+              <div class="order-total-val">$1,750</div>
+              <div class="order-total-lbl">USD · $3.50/bag</div>
+            </div>
+            <span class="badge badge-gray">not dispatched</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="order-card" onclick="openOrderPanel()">
+        <div class="order-card-inner">
+          <div class="order-stripe" style="background:var(--accent)"></div>
+          <div class="order-body">
+            <div class="order-head">
+              <div>
+                <div class="order-client">Cedar Grill House</div>
+                <div class="order-id">ORD-0282 · created 19 May</div>
+              </div>
+              <span class="badge badge-green">Delivered</span>
+            </div>
+            <div class="order-meta">
+              <span><i class="ti ti-flame"></i>Restaurant Grade · A</span>
+              <span><i class="ti ti-weight"></i>240 kg delivered</span>
+              <span><i class="ti ti-truck"></i>1 shipment</span>
+            </div>
+            <div class="order-shipments">
+              <div class="ship-chip"><i class="ti ti-check" style="color:var(--accent);font-size:11px"></i> Verdun — delivered 19 May</div>
+            </div>
+          </div>
+          <div class="order-right">
+            <div class="order-total">
+              <div class="order-total-val">$480</div>
+              <div class="order-total-lbl">USD · $2.00/bag</div>
+            </div>
+            <span class="badge badge-amber">invoice pending</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="order-card" onclick="openOrderPanel()">
+        <div class="order-card-inner">
+          <div class="order-stripe" style="background:var(--accent)"></div>
+          <div class="order-body">
+            <div class="order-head">
+              <div>
+                <div class="order-client">Gulf Charcoal Exports</div>
+                <div class="order-id">ORD-0280 · created 18 May</div>
+              </div>
+              <span class="badge badge-green">Paid</span>
+            </div>
+            <div class="order-meta">
+              <span><i class="ti ti-flame"></i>BBQ Hardwood · Grade A</span>
+              <span><i class="ti ti-weight"></i>2,000 kg delivered</span>
+              <span><i class="ti ti-truck"></i>4 shipments</span>
+            </div>
+            <div class="order-shipments">
+              <div class="ship-chip"><i class="ti ti-check" style="color:var(--accent);font-size:11px"></i> All 4 deliveries complete</div>
+            </div>
+          </div>
+          <div class="order-right">
+            <div class="order-total">
+              <div class="order-total-val" style="color:var(--accent)">$5,400</div>
+              <div class="order-total-lbl">USD · paid ✓</div>
+            </div>
+            <span class="badge badge-green">fully paid</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TRIPS TAB -->
+    <div id="tab-trips" style="display:none" class="fade-up">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div style="font-size:13px;color:var(--text2)">Today's active trips — Thursday 21 May 2026</div>
+        <button class="btn primary"><i class="ti ti-plus" style="font-size:14px"></i> New trip</button>
+      </div>
+
+      <!-- TRIP 1 — IN PROGRESS -->
+      <div class="trip-card">
+        <div class="trip-head" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+          <div class="driver-badge" style="background:var(--blue-bg);color:var(--blue)">MK</div>
+          <div class="trip-info">
+            <div class="trip-driver">Mohammed Khalil</div>
+            <div class="trip-meta">Trip #TRP-0091 · 3 stops · started 08:00</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="badge badge-blue">In progress</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text2)">890 kg</span>
+          </div>
+        </div>
+        <div class="trip-stops">
+          <!-- Stop 1 — done -->
+          <div class="stop-row">
+            <div class="stop-line"></div>
+            <div class="stop-dot done"><i class="ti ti-check" style="font-size:10px"></i></div>
+            <div class="stop-info">
+              <div class="stop-client">Al Rawda Restaurant</div>
+              <div class="stop-addr">Hamra, Beirut · INV-0338</div>
+              <div class="stop-bags">
+                <span>80 × 2kg bag</span>
+                <span>20 × 5kg bag</span>
+              </div>
+            </div>
+            <div class="stop-right">
+              <span class="badge badge-green">Delivered</span>
+              <span class="stop-kg">260 kg · paid $840</span>
+            </div>
+          </div>
+          <!-- Stop 2 — active -->
+          <div class="stop-row">
+            <div class="stop-line"></div>
+            <div class="stop-dot active">2</div>
+            <div class="stop-info">
+              <div class="stop-client">Chez Michel</div>
+              <div class="stop-addr">Achrafieh, Beirut · INV-0339</div>
+              <div class="stop-bags">
+                <span>50 × 2kg bag</span>
+                <span>10 × 5kg bag</span>
+              </div>
+            </div>
+            <div class="stop-right">
+              <span class="badge badge-blue">In transit</span>
+              <span class="stop-kg">150 kg</span>
+              <div class="stop-actions">
+                <button class="stop-btn confirm-stop" onclick="openReceiptModal()">Confirm delivery</button>
+              </div>
+            </div>
+          </div>
+          <!-- Stop 3 — pending -->
+          <div class="stop-row">
+            <div class="stop-dot" style="border-color:var(--border)">3</div>
+            <div class="stop-info">
+              <div class="stop-client">Cedar Grill House</div>
+              <div class="stop-addr">Jdeideh · INV-0340</div>
+              <div class="stop-bags">
+                <span>120 × 2kg bag</span>
+              </div>
+            </div>
+            <div class="stop-right">
+              <span class="badge badge-gray">Pending</span>
+              <span class="stop-kg">240 kg</span>
+            </div>
+          </div>
+        </div>
+        <div style="padding:10px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:12px;color:var(--text3)">Actual weights logged: 262kg / 148kg / pending</div>
+          <button class="btn" style="font-size:12px"><i class="ti ti-gas-station" style="font-size:13px"></i> Log expenses</button>
+        </div>
+      </div>
+
+      <!-- TRIP 2 — PLANNED -->
+      <div class="trip-card">
+        <div class="trip-head">
+          <div class="driver-badge" style="background:var(--accent2-bg);color:var(--accent2)">AH</div>
+          <div class="trip-info">
+            <div class="trip-driver">Ahmad Hassan</div>
+            <div class="trip-meta">Trip #TRP-0092 · 2 stops · planned 13:00</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="badge badge-gray">Planned</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text2)">620 kg</span>
+          </div>
+        </div>
+        <div class="trip-stops">
+          <div class="stop-row">
+            <div class="stop-line"></div>
+            <div class="stop-dot">1</div>
+            <div class="stop-info">
+              <div class="stop-client">Byblos BBQ Supply</div>
+              <div class="stop-addr">Byblos warehouse</div>
+              <div class="stop-bags"><span>100 × 5kg bag</span><span>50 × 10kg bag</span></div>
+            </div>
+            <div class="stop-right">
+              <span class="badge badge-gray">Pending</span>
+              <span class="stop-kg">1,000 kg nom.</span>
+            </div>
+          </div>
+          <div class="stop-row">
+            <div class="stop-dot">2</div>
+            <div class="stop-info">
+              <div class="stop-client">Hamra Supermarket</div>
+              <div class="stop-addr">Hamra, Beirut</div>
+              <div class="stop-bags"><span>80 × 2kg bag</span></div>
+            </div>
+            <div class="stop-right">
+              <span class="badge badge-gray">Pending</span>
+              <span class="stop-kg">160 kg nom.</span>
+            </div>
+          </div>
+        </div>
+        <div style="padding:10px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:12px;color:var(--text3)">Not yet dispatched</div>
+          <button class="btn green" style="font-size:12px"><i class="ti ti-player-play" style="font-size:13px"></i> Start trip</button>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<!-- ORDER DETAIL PANEL -->
+<div class="order-panel" id="orderPanel">
+  <div class="panel-head">
+    <button class="panel-close-btn" onclick="closeOrderPanel()">✕ Close</button>
+    <div style="margin-top:10px">
+      <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);margin-bottom:3px">ORD-0284 · 21 May 2026</div>
+      <div style="font-size:17px;font-weight:600;letter-spacing:-0.3px">Al Rawda Restaurant</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+        <span class="badge badge-blue">In delivery</span>
+        <span style="font-size:12px;color:var(--text2)">BBQ Hardwood · Grade A · 300kg</span>
+      </div>
+    </div>
+
+    <!-- Order summary stats -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:14px">
+      <div style="background:var(--surface2);border-radius:var(--radius);padding:9px 11px">
+        <div style="font-size:10px;color:var(--text3);font-family:'IBM Plex Mono',monospace;margin-bottom:3px">ORDER TOTAL</div>
+        <div style="font-size:16px;font-weight:600;letter-spacing:-0.5px">$840</div>
+        <div style="font-size:10px;color:var(--text3)">$2.80/bag · USD</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:var(--radius);padding:9px 11px">
+        <div style="font-size:10px;color:var(--text3);font-family:'IBM Plex Mono',monospace;margin-bottom:3px">KG DELIVERED</div>
+        <div style="font-size:16px;font-weight:600;letter-spacing:-0.5px">100<span style="font-size:12px;font-weight:400"> / 300</span></div>
+        <div style="font-size:10px;color:var(--text3)">1 of 3 shipments</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:var(--radius);padding:9px 11px">
+        <div style="font-size:10px;color:var(--text3);font-family:'IBM Plex Mono',monospace;margin-bottom:3px">PAID</div>
+        <div style="font-size:16px;font-weight:600;letter-spacing:-0.5px;color:var(--accent)">$840</div>
+        <div style="font-size:10px;color:var(--text3)">on delivery</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-body">
+    <div class="panel-section">
+      <div class="panel-section-label">Shipments</div>
+
+      <div class="shipment-card">
+        <div class="ship-head">
+          <span class="ship-num">Shipment 1</span>
+          <span class="badge badge-green">Delivered</span>
+        </div>
+        <div class="ship-body">
+          <div class="ship-addr">Hamra, Beirut</div>
+          <div class="ship-bags">
+            <span class="ship-bag-pill">80 × 2kg bag</span>
+            <span class="ship-bag-pill">20 × 5kg bag</span>
+          </div>
+          <div class="ship-weights">
+            <div class="ship-weight-item"><div class="ship-weight-label">Nominal</div><div class="ship-weight-val">260 kg</div></div>
+            <div class="ship-weight-item"><div class="ship-weight-label">Actual (driver)</div><div class="ship-weight-val ship-weight-actual">262 kg</div></div>
+            <div class="ship-weight-item"><div class="ship-weight-label">Paid</div><div class="ship-weight-val" style="color:var(--accent)">$840 cash</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="shipment-card">
+        <div class="ship-head">
+          <span class="ship-num">Shipment 2</span>
+          <span class="badge badge-blue">In transit</span>
+        </div>
+        <div class="ship-body">
+          <div class="ship-addr">Achrafieh, Beirut</div>
+          <div class="ship-bags">
+            <span class="ship-bag-pill">50 × 2kg bag</span>
+            <span class="ship-bag-pill">10 × 5kg bag</span>
+          </div>
+          <div class="ship-weights">
+            <div class="ship-weight-item"><div class="ship-weight-label">Nominal</div><div class="ship-weight-val">150 kg</div></div>
+            <div class="ship-weight-item"><div class="ship-weight-label">Actual (driver)</div><div class="ship-weight-val ship-weight-actual">148 kg</div></div>
+            <div class="ship-weight-item"><div class="ship-weight-label">Collected</div><div class="ship-weight-val" style="color:var(--text3)">pending</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="shipment-card">
+        <div class="ship-head">
+          <span class="ship-num">Shipment 3</span>
+          <span class="badge badge-gray">Pending</span>
+        </div>
+        <div class="ship-body">
+          <div class="ship-addr">Jdeideh</div>
+          <div class="ship-bags">
+            <span class="ship-bag-pill">120 × 2kg bag</span>
+          </div>
+          <div class="ship-weights">
+            <div class="ship-weight-item"><div class="ship-weight-label">Nominal</div><div class="ship-weight-val">240 kg</div></div>
+            <div class="ship-weight-item"><div class="ship-weight-label">Actual</div><div class="ship-weight-val" style="color:var(--text3)">—</div></div>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn" style="width:100%;justify-content:center;margin-top:8px"><i class="ti ti-plus" style="font-size:14px"></i> Add shipment</button>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-label">Order details</div>
+      <div style="display:flex;flex-direction:column;gap:4px;font-size:13px">
+        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text2)">Client</span><span style="font-weight:500">Al Rawda Restaurant</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text2)">Charcoal type</span><span>BBQ Hardwood · Grade A</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text2)">Bag type</span><span>2kg bag + 5kg bag</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text2)">Price per bag</span><span style="font-family:'IBM Plex Mono',monospace">$2.80</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text2)">Currency</span><span>USD</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:var(--text2)">Created by</span><span style="color:var(--text2)">Sales rep · 08:30</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-footer">
+    <button class="panel-btn pbtn-ghost"><i class="ti ti-file-invoice" style="font-size:13px"></i> Generate invoice</button>
+    <button class="panel-btn pbtn-green"><i class="ti ti-truck" style="font-size:13px"></i> Assign to trip</button>
+  </div>
+</div>
+
+<!-- NEW ORDER MODAL -->
+<div class="modal-overlay" id="newOrderModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">New order</div>
+      <button class="panel-close-btn" onclick="closeNewOrder()">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- Client -->
+      <div class="form-group">
+        <label class="form-label">Client</label>
+        <select class="form-input">
+          <option>Select client…</option>
+          <option>Al Rawda Restaurant</option>
+          <option>Chez Michel</option>
+          <option>Byblos BBQ Supply</option>
+          <option>Cedar Grill House</option>
+          <option>Gulf Charcoal Exports</option>
+          <option>+ Walk-in buyer (no account)</option>
+        </select>
+      </div>
+
+      <!-- Charcoal spec -->
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Charcoal type</label>
+          <select class="form-input">
+            <option>BBQ Hardwood</option>
+            <option>Shisha</option>
+            <option>Restaurant Grade</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Grade</label>
+          <select class="form-input">
+            <option>Grade A</option>
+            <option>Grade B</option>
+            <option>Grade C</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Price + Currency -->
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Price per bag</label>
+          <input class="form-input" type="number" placeholder="0.00" step="0.01">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Currency</label>
+          <select class="form-input">
+            <option>USD</option>
+            <option>LBP</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Shipments -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:600">Shipments</div>
+        <button class="btn" style="font-size:12px" onclick="addShipment()"><i class="ti ti-plus" style="font-size:13px"></i> Add shipment</button>
+      </div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:12px">Split the order into delivery stops. Each shipment goes to one address.</div>
+
+      <div id="shipmentBuilders">
+        <!-- Shipment 1 -->
+        <div class="ship-builder">
+          <div class="sb-head">
+            <span class="sb-num">Shipment 1</span>
+            <button class="sb-del-btn"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="sb-body">
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Delivery address</label>
+              <input class="form-input" type="text" placeholder="Street, area, city… (Arabic supported)">
+            </div>
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Bags — by size</label>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+                <div class="bag-counter-row">
+                  <span class="bag-counter-label">2 kg bag</span>
+                  <div class="mini-counter">
+                    <button class="mc-btn" onclick="adj(this,-1)">−</button>
+                    <input class="mc-val" type="number" value="0" min="0">
+                    <button class="mc-btn" onclick="adj(this,1)">+</button>
+                  </div>
+                </div>
+                <div class="bag-counter-row">
+                  <span class="bag-counter-label">5 kg bag</span>
+                  <div class="mini-counter">
+                    <button class="mc-btn" onclick="adj(this,-1)">−</button>
+                    <input class="mc-val" type="number" value="0" min="0">
+                    <button class="mc-btn" onclick="adj(this,1)">+</button>
+                  </div>
+                </div>
+                <div class="bag-counter-row">
+                  <span class="bag-counter-label">10 kg bag</span>
+                  <div class="mini-counter">
+                    <button class="mc-btn" onclick="adj(this,-1)">−</button>
+                    <input class="mc-val" type="number" value="0" min="0">
+                    <button class="mc-btn" onclick="adj(this,1)">+</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Notes (optional)</label>
+        <input class="form-input" type="text" placeholder="Any special instructions…">
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeNewOrder()">Cancel</button>
+      <button class="btn primary"><i class="ti ti-check" style="font-size:14px"></i> Create order</button>
+    </div>
+  </div>
+</div>
+
+<!-- DELIVERY CONFIRMATION + RECEIPT MODAL -->
+<div class="modal-overlay" id="receiptModal">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-head">
+      <div class="modal-title">Confirm delivery — Stop 2</div>
+      <div style="font-size:12px;color:var(--text3);margin-top:2px">Chez Michel · Achrafieh, Beirut</div>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+        <div class="form-group" style="margin:0">
+          <label class="form-label">Actual weight delivered (kg)</label>
+          <input class="form-input" type="number" id="actualKg" value="148" placeholder="0">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label class="form-label">Amount collected ($)</label>
+          <input class="form-input" type="number" id="collectedAmt" placeholder="0.00" oninput="updateReceipt()">
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px">
+        <label class="form-label">Payment method</label>
+        <div style="display:flex;gap:8px">
+          <div class="stop-btn" style="flex:1;text-align:center;cursor:pointer" onclick="selectPayMethod(this)" id="pm-cash">Cash</div>
+          <div class="stop-btn" style="flex:1;text-align:center;cursor:pointer" onclick="selectPayMethod(this)" id="pm-whish">Whish</div>
+          <div class="stop-btn" style="flex:1;text-align:center;cursor:pointer" onclick="selectPayMethod(this)" id="pm-omt">OMT</div>
+          <div class="stop-btn" style="flex:1;text-align:center;cursor:pointer;background:var(--surface2)" onclick="selectPayMethod(this)" id="pm-account">On account</div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:8px">Receipt preview</div>
+
+      <div class="receipt" id="receiptPreview">
+        <div class="receipt-title">EMBER CHARCOAL CO.</div>
+        <div class="receipt-sub">Delivery receipt</div>
+        <hr class="receipt-divider">
+        <div class="receipt-row"><span>Date</span><span>21 May 2026</span></div>
+        <div class="receipt-row"><span>Receipt #</span><span>INV-0339</span></div>
+        <div class="receipt-row"><span>Client</span><span>Chez Michel</span></div>
+        <div class="receipt-row"><span>Driver</span><span>Mohammed Khalil</span></div>
+        <hr class="receipt-divider">
+        <div class="receipt-row"><span>50 × 2kg bag</span><span>$140.00</span></div>
+        <div class="receipt-row"><span>10 × 5kg bag</span><span>$140.00</span></div>
+        <hr class="receipt-divider">
+        <div class="receipt-row total"><span>TOTAL</span><span>$280.00</span></div>
+        <div class="receipt-row paid" id="receipt-paid-row"><span>PAID</span><span id="receipt-paid-val">—</span></div>
+        <div class="receipt-row" id="receipt-balance-row" style="color:var(--accent2)"><span>BALANCE</span><span id="receipt-balance-val">—</span></div>
+        <div class="receipt-sig">
+          <div class="receipt-sig-line">Client signature</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeReceiptModal()">Cancel</button>
+      <button class="btn primary"><i class="ti ti-printer" style="font-size:14px"></i> Print &amp; confirm delivery</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function showTab(name, el) {
+    ['orders','trips'].forEach(t => {
+      const tab = document.getElementById('tab-'+t);
+      if (tab) tab.style.display = t === name ? 'block' : 'none';
+    });
+    document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+    if (el) el.classList.add('active');
+  }
+
+  function openOrderPanel() {
+    document.getElementById('orderPanel').classList.add('open');
+  }
+
+  function closeOrderPanel() {
+    document.getElementById('orderPanel').classList.remove('open');
+  }
+
+  function openNewOrder() {
+    document.getElementById('newOrderModal').classList.add('open');
+  }
+
+  function closeNewOrder() {
+    document.getElementById('newOrderModal').classList.remove('open');
+  }
+
+  function openReceiptModal() {
+    document.getElementById('receiptModal').classList.add('open');
+  }
+
+  function closeReceiptModal() {
+    document.getElementById('receiptModal').classList.remove('open');
+  }
+
+  function adj(btn, delta) {
+    const counter = btn.closest('.mini-counter');
+    const input = counter.querySelector('.mc-val');
+    input.value = Math.max(0, (parseInt(input.value) || 0) + delta);
+  }
+
+  let shipCount = 1;
+  function addShipment() {
+    shipCount++;
+    const container = document.getElementById('shipmentBuilders');
+    const div = document.createElement('div');
+    div.className = 'ship-builder';
+    div.innerHTML = `
+      <div class="sb-head">
+        <span class="sb-num">Shipment ${shipCount}</span>
+        <button class="sb-del-btn" onclick="this.closest('.ship-builder').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+      </div>
+      <div class="sb-body">
+        <div class="form-group" style="margin:0">
+          <label class="form-label">Delivery address</label>
+          <input class="form-input" type="text" placeholder="Street, area, city… (Arabic supported)">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label class="form-label">Bags — by size</label>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+            <div class="bag-counter-row"><span class="bag-counter-label">2 kg bag</span><div class="mini-counter"><button class="mc-btn" onclick="adj(this,-1)">−</button><input class="mc-val" type="number" value="0" min="0"><button class="mc-btn" onclick="adj(this,1)">+</button></div></div>
+            <div class="bag-counter-row"><span class="bag-counter-label">5 kg bag</span><div class="mini-counter"><button class="mc-btn" onclick="adj(this,-1)">−</button><input class="mc-val" type="number" value="0" min="0"><button class="mc-btn" onclick="adj(this,1)">+</button></div></div>
+            <div class="bag-counter-row"><span class="bag-counter-label">10 kg bag</span><div class="mini-counter"><button class="mc-btn" onclick="adj(this,-1)">−</button><input class="mc-val" type="number" value="0" min="0"><button class="mc-btn" onclick="adj(this,1)">+</button></div></div>
+          </div>
+        </div>
+      </div>
+    `;
+    container.appendChild(div);
+    div.scrollIntoView({ behavior:'smooth' });
+  }
+
+  function selectPayMethod(el) {
+    ['pm-cash','pm-whish','pm-omt','pm-account'].forEach(id => {
+      const e = document.getElementById(id);
+      if (e) { e.style.background='transparent'; e.style.color='var(--text2)'; e.style.borderColor='var(--border)'; }
+    });
+    el.style.background = 'var(--text)';
+    el.style.color = '#fff';
+    el.style.borderColor = 'var(--text)';
+    updateReceipt();
+  }
+
+  function updateReceipt() {
+    const paid = parseFloat(document.getElementById('collectedAmt').value) || 0;
+    const total = 280;
+    const balance = total - paid;
+    const paidEl = document.getElementById('receipt-paid-val');
+    const balEl  = document.getElementById('receipt-balance-val');
+    const balRow = document.getElementById('receipt-balance-row');
+
+    if (paid > 0) {
+      paidEl.textContent = '$' + paid.toFixed(2) + ' cash';
+      if (balance > 0) {
+        balEl.textContent = '$' + balance.toFixed(2) + ' on account';
+        balRow.style.display = 'flex';
+      } else {
+        balRow.style.display = 'none';
+      }
+    } else {
+      paidEl.textContent = 'On account';
+      balEl.textContent = '$280.00';
+      balRow.style.display = 'flex';
+    }
+  }
+
+  // Close modals on overlay click
+  ['newOrderModal','receiptModal'].forEach(id => {
+    document.getElementById(id).addEventListener('click', function(e) {
+      if (e.target === this) this.classList.remove('open');
+    });
+  });
+</script>
+</body>
+</html>

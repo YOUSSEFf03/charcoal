@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Invoice INV-0341</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --paper:   #FFFFFF;
+    --bg:      #E9E7E2;
+    --text:    #1A1916;
+    --text2:   #4B4843;
+    --text3:   #8A877F;
+    --line:    #C8C5BD;
+    --line2:   #E4E1D9;
+    --accent:  #1D6B4A;
+    --red:     #C0392B;
+    --amber:   #B45309;
+  }
+  body {
+    font-family: 'IBM Plex Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+  .ar { font-family: 'Noto Sans Arabic', 'IBM Plex Sans', sans-serif; }
+
+  /* TOOLBAR — non-printing */
+  .toolbar {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(245,244,240,0.95);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(8px);
+    padding: 14px 24px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .toolbar-left { display: flex; align-items: center; gap: 12px; }
+  .toolbar-title { font-size: 14px; font-weight: 600; letter-spacing: -0.2px; }
+  .toolbar-sub { font-size: 12px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+  .toolbar-spacer { flex: 1; }
+  .tb-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 12px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--paper);
+    cursor: pointer; font-size: 13px; font-family: inherit;
+    color: var(--text2); transition: all 0.1s;
+  }
+  .tb-btn:hover { background: #F5F4F0; color: var(--text); }
+  .tb-btn.primary { background: var(--text); color: #fff; border-color: var(--text); }
+  .tb-btn.primary:hover { background: #2d2b28; }
+  .back-link {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; color: var(--text3); text-decoration: none;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .back-link:hover { color: var(--text2); }
+
+  /* A4 paper */
+  .paper-wrap { padding: 32px; display: flex; justify-content: center; }
+  .paper {
+    background: var(--paper);
+    width: 210mm; min-height: 297mm;
+    padding: 22mm 20mm 26mm;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+    position: relative;
+    display: flex; flex-direction: column;
+  }
+
+  /* HEADER */
+  .inv-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding-bottom: 14mm; border-bottom: 1.5px solid var(--text);
+    margin-bottom: 10mm;
+  }
+  .company-block { display: flex; gap: 14px; align-items: center; }
+  .company-logo {
+    width: 52px; height: 52px; background: var(--text);
+    border-radius: 12px; display: flex; align-items: center; justify-content: center;
+  }
+  .company-logo i { color: #fff; font-size: 26px; }
+  .company-name { font-size: 22px; font-weight: 700; letter-spacing: -0.6px; }
+  .company-tag {
+    font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase; letter-spacing: 1px; margin-top: 2px;
+  }
+  .company-addr {
+    font-size: 11px; color: var(--text2); margin-top: 8px; line-height: 1.5;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .doc-title {
+    text-align: right;
+  }
+  .doc-title h1 {
+    font-size: 28px; font-weight: 600; letter-spacing: -1px;
+    text-transform: uppercase;
+  }
+  .doc-num {
+    font-size: 12px; color: var(--text2); margin-top: 2px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .doc-issued {
+    margin-top: 14px;
+    display: grid; grid-template-columns: auto auto; gap: 4px 18px;
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    text-align: left; justify-content: end;
+  }
+  .doc-issued .lbl { color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px; }
+  .doc-issued .val { font-weight: 600; }
+
+  /* PARTIES */
+  .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 10mm; }
+  .party-label {
+    font-size: 10px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 6px;
+  }
+  .party-name { font-size: 15px; font-weight: 600; }
+  .party-name-ar { font-size: 13px; color: var(--text2); margin-top: 2px; }
+  .party-meta {
+    font-size: 11.5px; color: var(--text2);
+    font-family: 'IBM Plex Mono', monospace;
+    margin-top: 6px; line-height: 1.65;
+  }
+
+  /* ITEMS TABLE */
+  .items-table { width: 100%; border-collapse: collapse; margin-bottom: 6mm; }
+  .items-table th {
+    background: #F0EEE9;
+    text-align: left; padding: 9px 12px;
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text2); text-transform: uppercase; letter-spacing: 0.6px;
+    font-weight: 500;
+    border-bottom: 1.5px solid var(--text);
+  }
+  .items-table th.right { text-align: right; }
+  .items-table td {
+    padding: 11px 12px; border-bottom: 1px solid var(--line2);
+    font-size: 13px; vertical-align: top;
+  }
+  .items-table td.right { text-align: right; font-family: 'IBM Plex Mono', monospace; }
+  .items-table .desc-main { font-weight: 500; }
+  .items-table .desc-sub { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+  /* TOTALS */
+  .totals { display: flex; justify-content: flex-end; margin-bottom: 8mm; }
+  .totals-box { width: 280px; }
+  .total-row {
+    display: flex; justify-content: space-between;
+    padding: 6px 0; font-size: 13px;
+  }
+  .total-row .lbl { color: var(--text2); }
+  .total-row .val { font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
+  .total-row.grand {
+    border-top: 1.5px solid var(--text);
+    padding-top: 9px; margin-top: 6px;
+    font-size: 17px; font-weight: 700;
+  }
+  .total-row.grand .val { font-weight: 700; }
+  .total-row.paid .val { color: var(--accent); }
+  .total-row.outstanding {
+    background: #FFF8EC;
+    border: 1px solid #FACC15;
+    padding: 9px 12px;
+    border-radius: 6px;
+    margin-top: 8px;
+    font-weight: 600;
+  }
+  .total-row.outstanding .val { color: var(--amber); font-weight: 700; }
+
+  /* TERMS */
+  .terms {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 28px;
+    padding-top: 8mm; border-top: 1px solid var(--line2);
+    font-size: 11px; color: var(--text2);
+    line-height: 1.7; font-family: 'IBM Plex Mono', monospace;
+  }
+  .terms-title {
+    font-size: 10px; color: var(--text3); text-transform: uppercase;
+    letter-spacing: 1px; margin-bottom: 6px;
+  }
+
+  /* SIGNATURE */
+  .signatures {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 28px;
+    margin-top: auto; padding-top: 12mm;
+  }
+  .sig-block { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+  .sig-line { border-top: 1px solid var(--text); margin-bottom: 6px; padding-top: 0; height: 28px; }
+  .sig-label { text-transform: uppercase; letter-spacing: 0.8px; }
+
+  /* FOOTER */
+  .inv-foot {
+    margin-top: 8mm;
+    padding-top: 6mm;
+    border-top: 1px solid var(--line2);
+    text-align: center;
+    font-size: 10px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace;
+    letter-spacing: 0.5px;
+  }
+
+  /* WATERMARK */
+  .watermark {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%) rotate(-22deg);
+    font-size: 120px; font-weight: 700;
+    color: rgba(192,57,43,0.06);
+    letter-spacing: 8px;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  /* PRINT */
+  @page { size: A4; margin: 0; }
+  @media print {
+    body { background: #fff; }
+    .toolbar { display: none; }
+    .paper-wrap { padding: 0; }
+    .paper { box-shadow: none; width: 210mm; }
+  }
+</style>
+</head>
+<body>
+
+<!-- TOOLBAR (non-printing) -->
+<div class="toolbar">
+  <a class="back-link" href="invoices.html"><i class="ti ti-chevron-left"></i> Invoices</a>
+  <span style="color:var(--text3)">·</span>
+  <div>
+    <div class="toolbar-title">INV-0341 — Al Rawda Restaurant</div>
+    <div class="toolbar-sub">issued 25 Apr 2026 · USD · partially paid</div>
+  </div>
+  <div class="toolbar-spacer"></div>
+  <button class="tb-btn"><i class="ti ti-download" style="font-size:14px"></i> Download PDF</button>
+  <button class="tb-btn"><i class="ti ti-send" style="font-size:14px"></i> Email to client</button>
+  <button class="tb-btn primary" onclick="window.print()"><i class="ti ti-printer" style="font-size:14px"></i> Print</button>
+</div>
+
+<!-- A4 PAPER -->
+<div class="paper-wrap">
+  <div class="paper">
+
+    <div class="watermark">PARTIAL</div>
+
+    <!-- HEADER -->
+    <div class="inv-head">
+      <div class="company-block">
+        <div class="company-logo"><i class="ti ti-flame"></i></div>
+        <div>
+          <div class="company-name">Ember Charcoal Co.</div>
+          <div class="company-tag">charcoal import &amp; distribution</div>
+          <div class="company-addr">
+            Hamra · Beirut · Lebanon<br>
+            +961 1 234 567 · <a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="b1d8dfd7def1d4dcd3d4c3d2d9d0c3d2ded0dd9fd2dedc">[email&#160;protected]</a><br>
+            VAT 1234567-001
+          </div>
+        </div>
+      </div>
+      <div class="doc-title">
+        <h1>Invoice</h1>
+        <div class="doc-num">INV-0341</div>
+        <div class="doc-issued">
+          <span class="lbl">Issued</span>     <span class="val">25 Apr 2026</span>
+          <span class="lbl">Due</span>        <span class="val">10 May 2026</span>
+          <span class="lbl">Order</span>      <span class="val">ORD-0341</span>
+          <span class="lbl">Currency</span>   <span class="val">USD</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PARTIES -->
+    <div class="parties">
+      <div>
+        <div class="party-label">Bill to</div>
+        <div class="party-name">Al Rawda Restaurant</div>
+        <div class="party-name-ar ar" dir="rtl">مطعم الروضة</div>
+        <div class="party-meta">
+          Hamra, Beirut<br>
+          Attn: Hussein Mneimneh<br>
+          +961 71 234 567<br>
+          Terms: Net 15 days
+        </div>
+      </div>
+      <div>
+        <div class="party-label">Delivered to</div>
+        <div class="party-name">Al Rawda — Hamra branch</div>
+        <div class="party-meta">
+          Rue Bliss, Hamra<br>
+          Delivered 25 Apr 2026 · 09:18<br>
+          Driver: Joseph Nasr<br>
+          Trip: TRP-0091
+        </div>
+      </div>
+    </div>
+
+    <!-- ITEMS -->
+    <table class="items-table">
+      <thead>
+        <tr>
+          <th style="width:50%">Description</th>
+          <th class="right" style="width:80px">Qty</th>
+          <th class="right" style="width:80px">Nom. kg</th>
+          <th class="right" style="width:110px">Price/bag</th>
+          <th class="right" style="width:120px">Amount (USD)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <div class="desc-main">2 kg bag — BBQ Hardwood</div>
+            <div class="desc-sub">Grade A · supplier Sahara Export · lot LOT-2026-014a</div>
+          </td>
+          <td class="right">120</td>
+          <td class="right" style="color:var(--text3)">240</td>
+          <td class="right">$2.20</td>
+          <td class="right" style="font-weight:600">$264.00</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="desc-main">5 kg bag — BBQ Hardwood</div>
+            <div class="desc-sub">Grade A · supplier Sahara Export · lot LOT-2026-014a</div>
+          </td>
+          <td class="right">30</td>
+          <td class="right" style="color:var(--text3)">150</td>
+          <td class="right">$5.20</td>
+          <td class="right" style="font-weight:600">$156.00</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- TOTALS -->
+    <div class="totals">
+      <div class="totals-box">
+        <div class="total-row">
+          <span class="lbl">Subtotal — 150 bags · 390 kg</span>
+          <span class="val">$420.00</span>
+        </div>
+        <div class="total-row">
+          <span class="lbl">Discount</span>
+          <span class="val">$0.00</span>
+        </div>
+        <div class="total-row grand">
+          <span class="lbl">Total due</span>
+          <span class="val">$420.00</span>
+        </div>
+        <div class="total-row paid">
+          <span class="lbl">Paid 28 Apr · cash</span>
+          <span class="val">− $280.00</span>
+        </div>
+        <div class="total-row outstanding">
+          <span class="lbl">Outstanding</span>
+          <span class="val">$140.00</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- TERMS -->
+    <div class="terms">
+      <div>
+        <div class="terms-title">Payment terms</div>
+        Net 15 days from invoice date. Cash, Whish, or OMT accepted.
+        Partial payments allowed.
+      </div>
+      <div>
+        <div class="terms-title">Bank details</div>
+        Bank of Beirut · Hamra branch<br>
+        Acct: 0123-4567-8910<br>
+        IBAN: LB12 0011 0000 0123 4567 8910 0001
+      </div>
+    </div>
+
+    <!-- SIGNATURES -->
+    <div class="signatures">
+      <div class="sig-block">
+        <div class="sig-line"></div>
+        <div class="sig-label">Authorised by — Ember Charcoal Co.</div>
+      </div>
+      <div class="sig-block">
+        <div class="sig-line"></div>
+        <div class="sig-label">Received by — Al Rawda Restaurant</div>
+      </div>
+    </div>
+
+    <!-- FOOTER -->
+    <div class="inv-foot">
+      Generated by Ember system on 25 Apr 2026 09:24 · INV-0341 · page 1 of 1
+    </div>
+
+  </div>
+</div>
+
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script></body>
+</html>

@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Container Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:#F5F4F0; --surface:#FFFFFF; --surface2:#F0EEE9;
+    --border:#E4E1D9; --border2:#D4D0C8;
+    --text:#1A1916; --text2:#6B6860; --text3:#9B9890;
+    --accent:#1D6B4A; --accent-bg:#EAF5EF;
+    --accent2:#B45309; --accent2-bg:#FEF3C7;
+    --red:#C0392B; --red-bg:#FEF2F2;
+    --blue:#1D4ED8; --blue-bg:#EFF6FF;
+    --sidebar-w:220px; --radius:8px; --radius-lg:12px;
+  }
+  body { font-family:'IBM Plex Sans',sans-serif; background:var(--bg); color:var(--text); font-size:14px; line-height:1.5; min-height:100vh; display:flex; }
+
+  /* SIDEBAR */
+  .sidebar { width:var(--sidebar-w); min-height:100vh; background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; position:fixed; top:0; left:0; bottom:0; z-index:10; }
+  .sidebar-logo { padding:20px 18px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+  .logo-mark { width:30px; height:30px; background:var(--text); border-radius:7px; display:flex; align-items:center; justify-content:center; }
+  .logo-mark i { color:#fff; font-size:16px; }
+  .logo-text { font-size:15px; font-weight:600; letter-spacing:-0.3px; }
+  .logo-sub { font-size:10px; color:var(--text3); font-family:'IBM Plex Mono',monospace; letter-spacing:0.5px; }
+  .sidebar-section { padding:16px 10px 4px; }
+  .sidebar-section-label { font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:1px; padding:0 8px; margin-bottom:4px; }
+  .nav-item { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; color:var(--text2); font-size:13.5px; font-weight:400; transition:background 0.1s,color 0.1s; text-decoration:none; }
+  .nav-item:hover { background:var(--surface2); color:var(--text); }
+  .nav-item.active { background:var(--text); color:#fff; }
+  .nav-item.active i { color:#fff; }
+  .nav-item i { font-size:16px; color:var(--text3); transition:color 0.1s; }
+  .nav-item:hover i { color:var(--text); }
+  .nav-badge { margin-left:auto; font-size:10px; font-family:'IBM Plex Mono',monospace; background:var(--red); color:#fff; border-radius:100px; padding:1px 6px; font-weight:500; }
+  .nav-badge.amber { background:var(--accent2); }
+  .sidebar-bottom { margin-top:auto; padding:12px 10px; border-top:1px solid var(--border); }
+  .user-row { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; }
+  .user-row:hover { background:var(--surface2); }
+  .avatar-sm { width:28px; height:28px; border-radius:50%; background:var(--text); color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; flex-shrink:0; }
+  .user-name { font-size:13px; font-weight:500; }
+  .user-role { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+
+  /* MAIN */
+  .main { margin-left:var(--sidebar-w); flex:1; display:flex; flex-direction:column; min-height:100vh; }
+  .topbar { background:var(--surface); border-bottom:1px solid var(--border); padding:0 28px; height:56px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; position:sticky; top:0; z-index:5; }
+  .page-title { font-size:15px; font-weight:600; letter-spacing:-0.2px; }
+  .topbar-right { display:flex; align-items:center; gap:8px; }
+  .btn { display:flex; align-items:center; gap:6px; padding:7px 12px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text2); transition:all 0.1s; }
+  .btn:hover { background:var(--surface2); color:var(--text); }
+  .btn.primary { background:var(--text); color:#fff; border-color:var(--text); }
+  .btn.primary:hover { background:#2d2b28; }
+
+  /* CONTAINER LIST VIEW */
+  .content { padding:24px 28px; flex:1; }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  .fade-up { animation:fadeUp 0.3s ease both; }
+
+  /* STATUS TABS */
+  .status-tabs { display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; }
+  .status-tab { padding:6px 14px; border-radius:100px; font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text2); transition:all 0.1s; display:flex; align-items:center; gap:6px; }
+  .status-tab:hover { background:var(--surface2); }
+  .status-tab.active { background:var(--text); color:#fff; border-color:var(--text); }
+  .status-tab .dot { width:7px; height:7px; border-radius:50%; }
+
+  /* CONTAINER CARDS LIST */
+  .container-list { display:flex; flex-direction:column; gap:10px; }
+  .ctr-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; cursor:pointer; transition:border-color 0.15s,box-shadow 0.15s; }
+  .ctr-card:hover { border-color:var(--border2); box-shadow:0 2px 8px rgba(0,0,0,0.06); }
+  .ctr-card-inner { display:flex; align-items:stretch; }
+  .ctr-status-stripe { width:4px; flex-shrink:0; }
+  .ctr-body { flex:1; padding:14px 16px; }
+  .ctr-head { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:8px; }
+  .ctr-number { font-size:15px; font-weight:600; letter-spacing:-0.2px; }
+  .ctr-supplier { font-size:12px; color:var(--text2); margin-top:1px; }
+  .ctr-meta { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--text2); margin-bottom:8px; }
+  .ctr-meta i { font-size:13px; color:var(--text3); margin-right:3px; }
+  .ctr-products { display:flex; gap:6px; flex-wrap:wrap; }
+  .ctr-tag { font-size:11px; font-family:'IBM Plex Mono',monospace; background:var(--surface2); border:1px solid var(--border); border-radius:5px; padding:2px 8px; color:var(--text2); }
+  .ctr-right { padding:14px 16px; display:flex; flex-direction:column; align-items:flex-end; justify-content:space-between; border-left:1px solid var(--border); min-width:140px; }
+  .ctr-cost { text-align:right; }
+  .ctr-cost-val { font-size:18px; font-weight:600; letter-spacing:-0.5px; font-family:'IBM Plex Mono',monospace; }
+  .ctr-cost-lbl { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+
+  /* BADGES */
+  .badge { font-size:11px; font-family:'IBM Plex Mono',monospace; padding:2px 8px; border-radius:100px; font-weight:500; white-space:nowrap; }
+  .badge-green  { background:var(--accent-bg); color:var(--accent); }
+  .badge-amber  { background:var(--accent2-bg); color:var(--accent2); }
+  .badge-red    { background:var(--red-bg); color:var(--red); }
+  .badge-blue   { background:var(--blue-bg); color:var(--blue); }
+  .badge-gray   { background:var(--surface2); color:var(--text2); }
+
+  /* ── CONTAINER DETAIL VIEW ── */
+  .detail-view { display:none; }
+  .detail-header { background:var(--surface); border-bottom:1px solid var(--border); padding:16px 28px; display:flex; align-items:center; gap:14px; }
+  .back-btn { display:flex; align-items:center; gap:6px; padding:7px 12px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:13px; color:var(--text2); transition:all 0.1s; }
+  .back-btn:hover { background:var(--surface2); }
+  .detail-title { font-size:17px; font-weight:600; letter-spacing:-0.3px; }
+  .detail-sub { font-size:12px; color:var(--text2); margin-top:2px; }
+  .detail-actions { margin-left:auto; display:flex; gap:8px; }
+
+  /* DETAIL LAYOUT: two columns */
+  .detail-body { padding:24px 28px; display:grid; grid-template-columns:1fr 340px; gap:20px; align-items:start; }
+
+  /* LEFT COLUMN */
+  .detail-left { display:flex; flex-direction:column; gap:16px; }
+
+  /* SECTION CARD */
+  .sec { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; }
+  .sec-head { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .sec-title { font-size:13px; font-weight:600; display:flex; align-items:center; gap:7px; }
+  .sec-title i { font-size:15px; color:var(--text2); }
+  .sec-action { font-size:12px; color:var(--accent); cursor:pointer; background:none; border:none; font-family:'IBM Plex Sans',sans-serif; padding:3px 8px; border-radius:5px; transition:background 0.1s; }
+  .sec-action:hover { background:var(--accent-bg); }
+
+  /* PRODUCT LINE ROW */
+  .product-row { padding:14px 16px; border-bottom:1px solid var(--border); display:grid; grid-template-columns:1.8fr 1fr 1fr 1fr 1fr auto; gap:10px; align-items:center; }
+  .product-row:last-child { border-bottom:none; }
+  .product-row.header { background:var(--surface2); padding:8px 16px; }
+  .product-row.header span { font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:0.5px; }
+  .pr-name { font-size:13px; font-weight:500; }
+  .pr-grade { font-size:11px; color:var(--text3); margin-top:1px; }
+  .pr-val { font-family:'IBM Plex Mono',monospace; font-size:13px; }
+  .pr-cost { font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:600; color:var(--accent); }
+  .pr-del { width:28px; height:28px; border-radius:6px; border:1px solid var(--border); background:transparent; cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--text3); transition:all 0.1s; }
+  .pr-del:hover { background:var(--red-bg); border-color:#fca5a5; color:var(--red); }
+
+  /* ADD PRODUCT FORM */
+  .add-product-form { padding:14px 16px; background:var(--surface2); border-top:1px solid var(--border); display:none; }
+  .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px; }
+  .form-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:10px; }
+  .form-group-sm label { font-size:11px; color:var(--text2); font-weight:500; display:block; margin-bottom:4px; }
+  .form-inp { width:100%; padding:7px 10px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text); outline:none; background:var(--surface); transition:border-color 0.15s; }
+  .form-inp:focus { border-color:var(--text); }
+
+  /* EXPENSE ROWS */
+  .exp-row { padding:10px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+  .exp-row:last-child { border-bottom:none; }
+  .exp-desc { flex:1; font-size:13px; }
+  .exp-desc input { width:100%; border:none; outline:none; font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text); background:transparent; }
+  .exp-desc input::placeholder { color:var(--text3); }
+  .exp-amount { display:flex; align-items:center; gap:6px; }
+  .exp-amount-val { font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:500; }
+  .exp-amount input { width:90px; padding:5px 8px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Mono',monospace; text-align:right; outline:none; background:var(--surface); }
+  .exp-amount input:focus { border-color:var(--text); }
+
+  /* DISCOUNT ROW */
+  .discount-row { padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .discount-input-wrap { display:flex; align-items:center; gap:8px; }
+  .discount-input-wrap input { width:110px; padding:7px 10px; border:1px solid var(--border); border-radius:var(--radius); font-size:14px; font-family:'IBM Plex Mono',monospace; text-align:right; outline:none; background:var(--surface); }
+  .discount-input-wrap input:focus { border-color:var(--text); }
+
+  /* STATUS STEPPER */
+  .status-stepper { padding:14px 16px; display:flex; align-items:center; gap:0; }
+  .status-step { display:flex; flex-direction:column; align-items:center; gap:4px; flex:1; }
+  .status-step-dot { width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; cursor:pointer; transition:all 0.15s; }
+  .ss-done  { background:var(--accent); color:#fff; }
+  .ss-active { background:var(--text); color:#fff; }
+  .ss-pending { background:var(--surface2); color:var(--text3); border:1.5px solid var(--border); }
+  .status-step-label { font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:0.5px; }
+  .status-step-label.active { color:var(--text); font-weight:600; }
+  .status-connector { flex:1; height:2px; background:var(--border); margin-bottom:14px; }
+  .status-connector.done { background:var(--accent); }
+
+  /* RIGHT COLUMN — COST REPORT */
+  .cost-report { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; position:sticky; top:80px; }
+  .cr-head { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; background:var(--surface2); }
+  .cr-title { font-size:13px; font-weight:600; display:flex; align-items:center; gap:7px; }
+  .live-pill { font-size:10px; font-family:'IBM Plex Mono',monospace; background:var(--accent-bg); color:var(--accent); border:1px solid #a7f3d0; border-radius:100px; padding:2px 8px; animation:pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+
+  /* PER PRODUCT COST CARD */
+  .cr-product { border-bottom:1px solid var(--border); }
+  .cr-product:last-of-type { border-bottom:none; }
+  .cr-prod-head { padding:10px 14px; background:var(--surface2); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .cr-prod-name { font-size:12px; font-weight:600; }
+  .cr-prod-cost { font-size:18px; font-weight:600; letter-spacing:-0.5px; font-family:'IBM Plex Mono',monospace; color:var(--accent); }
+  .cr-prod-costkg { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+  .cr-row { display:flex; justify-content:space-between; align-items:baseline; padding:5px 14px; font-size:12px; }
+  .cr-row-label { color:var(--text2); }
+  .cr-row-val { font-family:'IBM Plex Mono',monospace; font-weight:500; font-size:12px; }
+  .cr-row-val.green { color:var(--accent); }
+  .cr-row-val.red { color:var(--red); }
+  .cr-row-val.amber { color:var(--accent2); }
+
+  /* TOTALS */
+  .cr-totals { background:var(--surface2); border-top:1px solid var(--border); padding:12px 14px; }
+  .cr-total-row { display:flex; justify-content:space-between; align-items:baseline; padding:4px 0; font-size:12px; }
+  .cr-total-row.big { padding-top:8px; margin-top:4px; border-top:1px solid var(--border); }
+  .cr-total-label { color:var(--text2); font-weight:500; }
+  .cr-total-val { font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:13px; }
+
+  /* ARRIVE BUTTON */
+  .arrive-btn { width:100%; padding:12px; background:var(--accent); color:#fff; border:none; border-radius:var(--radius); font-size:14px; font-weight:600; font-family:'IBM Plex Sans',sans-serif; cursor:pointer; transition:background 0.15s; display:flex; align-items:center; justify-content:center; gap:7px; margin-top:12px; }
+  .arrive-btn:hover { background:#155237; }
+
+  /* ARRIVAL CONFIRM MODAL */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:40; align-items:center; justify-content:center; }
+  .modal-overlay.open { display:flex; }
+  .modal { background:var(--surface); border-radius:var(--radius-lg); border:1px solid var(--border); width:440px; box-shadow:0 8px 40px rgba(0,0,0,0.12); animation:fadeUp 0.2s ease; }
+  .modal-head { padding:18px 20px; border-bottom:1px solid var(--border); }
+  .modal-title { font-size:15px; font-weight:600; }
+  .modal-sub { font-size:12px; color:var(--text3); margin-top:2px; }
+  .modal-body { padding:20px; }
+  .modal-footer { padding:14px 20px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; }
+  .lot-preview { background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; margin-bottom:10px; }
+  .lot-preview:last-child { margin-bottom:0; }
+  .lp-name { font-size:13px; font-weight:500; margin-bottom:4px; }
+  .lp-row { display:flex; justify-content:space-between; font-size:12px; color:var(--text2); padding:1px 0; }
+  .lp-val { font-family:'IBM Plex Mono',monospace; font-weight:500; color:var(--text); }
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark"><i class="ti ti-flame"></i></div>
+    <div><div class="logo-text">Ember</div><div class="logo-sub">charcoal system</div></div>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Overview</div>
+    <a class="nav-item" href="dashboard.html"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
+    <a class="nav-item" href="reports.html"><i class="ti ti-chart-bar"></i> Reports</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Stock</div>
+    <a class="nav-item active" href="containers.html"><i class="ti ti-ship"></i> Containers</a>
+    <a class="nav-item" href="warehouse.html"><i class="ti ti-building-warehouse"></i> Warehouse</a>
+    <a class="nav-item" href="packing.html"><i class="ti ti-tools"></i> Packing</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Sales</div>
+    <a class="nav-item" href="clients.html"><i class="ti ti-users"></i> Clients <span class="nav-badge amber">3</span></a>
+    <a class="nav-item" href="orders.html"><i class="ti ti-file-invoice"></i> Orders</a>
+    <a class="nav-item" href="driver-mobile.html"><i class="ti ti-truck"></i> Delivery <span class="nav-badge">2</span></a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Finance</div>
+    <a class="nav-item" href="balances.html"><i class="ti ti-credit-card"></i> Balances <span class="nav-badge amber"><a class="nav-item" href="invoices.html"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-cash"></i> Payments</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item" href="suppliers.html"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item" href="settings.html"><i class="ti ti-settings"></i> Settings</a>
+    <a class="nav-item" href="fill-clients.html"><i class="ti ti-stack-2"></i> Fill clients</a>6k</span></a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-cash"></i> Payments</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item" href="suppliers.html"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item" href="settings.html"><i class="ti ti-settings"></i> Settings</a>
+    <a class="nav-item" href="fill-clients.html"><i class="ti ti-stack-2"></i> Fill clients</a>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="user-row">
+      <div class="avatar-sm">KA</div>
+      <div><div class="user-name">Khalil Abi Nader</div><div class="user-role">owner</div></div>
+    </div>
+  </div>
+</aside>
+
+<div class="main">
+
+  <!-- LIST TOPBAR -->
+  <header class="topbar" id="listTopbar">
+    <span class="page-title">Containers</span>
+    <div class="topbar-right">
+      <button class="btn"><i class="ti ti-filter" style="font-size:15px"></i> Filter</button>
+      <button class="btn primary" onclick="openDetail()"><i class="ti ti-plus" style="font-size:15px"></i> New container</button>
+    </div>
+  </header>
+
+  <!-- LIST VIEW -->
+  <div class="content fade-up" id="listView">
+
+    <div class="status-tabs">
+      <div class="status-tab active" onclick="filterStatus('all',this)">All <span style="margin-left:4px;font-family:'IBM Plex Mono',monospace;font-size:11px;opacity:0.7">6</span></div>
+      <div class="status-tab" onclick="filterStatus('port',this)"><span class="dot" style="background:#F59E0B"></span> At port <span style="margin-left:4px;font-family:'IBM Plex Mono',monospace;font-size:11px;opacity:0.7">2</span></div>
+      <div class="status-tab" onclick="filterStatus('transit',this)"><span class="dot" style="background:#3B82F6"></span> In transit <span style="margin-left:4px;font-family:'IBM Plex Mono',monospace;font-size:11px;opacity:0.7">1</span></div>
+      <div class="status-tab" onclick="filterStatus('arrived',this)"><span class="dot" style="background:#1D6B4A"></span> Arrived <span style="margin-left:4px;font-family:'IBM Plex Mono',monospace;font-size:11px;opacity:0.7">3</span></div>
+    </div>
+
+    <div class="container-list">
+
+      <div class="ctr-card" onclick="openDetail()">
+        <div class="ctr-card-inner">
+          <div class="ctr-status-stripe" style="background:#F59E0B"></div>
+          <div class="ctr-body">
+            <div class="ctr-head">
+              <div>
+                <div class="ctr-number">CONT-2026-015</div>
+                <div class="ctr-supplier">Al-Amin Trading · Syria</div>
+              </div>
+              <span class="badge badge-amber">At port</span>
+            </div>
+            <div class="ctr-meta">
+              <span><i class="ti ti-calendar"></i>Added 20 May 2026</span>
+              <span><i class="ti ti-weight"></i>20.1 t estimated</span>
+              <span><i class="ti ti-receipt"></i>$9,200 expenses</span>
+            </div>
+            <div class="ctr-products">
+              <span class="ctr-tag">BBQ Hardwood · A</span>
+              <span class="ctr-tag">Shisha · B</span>
+            </div>
+          </div>
+          <div class="ctr-right">
+            <div class="ctr-cost">
+              <div class="ctr-cost-val">$0.864</div>
+              <div class="ctr-cost-lbl">avg cost/kg</div>
+            </div>
+            <span class="badge badge-amber" style="font-size:10px">pending arrival</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="ctr-card" onclick="openDetail()">
+        <div class="ctr-card-inner">
+          <div class="ctr-status-stripe" style="background:#F59E0B"></div>
+          <div class="ctr-body">
+            <div class="ctr-head">
+              <div>
+                <div class="ctr-number">CONT-2026-014</div>
+                <div class="ctr-supplier">Sahara Export · Egypt</div>
+              </div>
+              <span class="badge badge-amber">At port</span>
+            </div>
+            <div class="ctr-meta">
+              <span><i class="ti ti-calendar"></i>Added 15 May 2026</span>
+              <span><i class="ti ti-weight"></i>14.4 t estimated</span>
+              <span><i class="ti ti-receipt"></i>$7,100 expenses</span>
+            </div>
+            <div class="ctr-products">
+              <span class="ctr-tag">Restaurant Grade · A</span>
+            </div>
+          </div>
+          <div class="ctr-right">
+            <div class="ctr-cost">
+              <div class="ctr-cost-val">$0.910</div>
+              <div class="ctr-cost-lbl">avg cost/kg</div>
+            </div>
+            <span class="badge badge-amber" style="font-size:10px">pending arrival</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="ctr-card" onclick="openDetail()">
+        <div class="ctr-card-inner">
+          <div class="ctr-status-stripe" style="background:#3B82F6"></div>
+          <div class="ctr-body">
+            <div class="ctr-head">
+              <div>
+                <div class="ctr-number">CONT-2026-013</div>
+                <div class="ctr-supplier">Al-Amin Trading · Syria</div>
+              </div>
+              <span class="badge badge-blue">In transit</span>
+            </div>
+            <div class="ctr-meta">
+              <span><i class="ti ti-calendar"></i>Departed 10 May 2026</span>
+              <span><i class="ti ti-weight"></i>30.1 t estimated</span>
+              <span><i class="ti ti-receipt"></i>$14,200 expenses</span>
+            </div>
+            <div class="ctr-products">
+              <span class="ctr-tag">BBQ Hardwood · A</span>
+              <span class="ctr-tag">BBQ Hardwood · B</span>
+              <span class="ctr-tag">Shisha · A</span>
+            </div>
+          </div>
+          <div class="ctr-right">
+            <div class="ctr-cost">
+              <div class="ctr-cost-val">$0.798</div>
+              <div class="ctr-cost-lbl">avg cost/kg</div>
+            </div>
+            <span class="badge badge-blue" style="font-size:10px">in transit</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="ctr-card" onclick="openDetail()">
+        <div class="ctr-card-inner">
+          <div class="ctr-status-stripe" style="background:var(--accent)"></div>
+          <div class="ctr-body">
+            <div class="ctr-head">
+              <div>
+                <div class="ctr-number">CONT-2026-012</div>
+                <div class="ctr-supplier">Al-Amin Trading · Syria</div>
+              </div>
+              <span class="badge badge-green">Arrived</span>
+            </div>
+            <div class="ctr-meta">
+              <span><i class="ti ti-calendar"></i>Arrived 19 May 2026</span>
+              <span><i class="ti ti-weight"></i>20.12 t received</span>
+              <span><i class="ti ti-stack-2"></i>2 lots created</span>
+            </div>
+            <div class="ctr-products">
+              <span class="ctr-tag">BBQ Hardwood · A</span>
+              <span class="ctr-tag">Shisha · B</span>
+            </div>
+          </div>
+          <div class="ctr-right">
+            <div class="ctr-cost">
+              <div class="ctr-cost-val">$0.812</div>
+              <div class="ctr-cost-lbl">avg cost/kg</div>
+            </div>
+            <span class="badge badge-green" style="font-size:10px">lots created</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── DETAIL VIEW ── -->
+  <div class="detail-view" id="detailView">
+
+    <!-- Detail header -->
+    <div class="detail-header">
+      <button class="back-btn" onclick="closeDetail()"><i class="ti ti-arrow-left" style="font-size:14px"></i> All containers</button>
+      <div>
+        <div class="detail-title">CONT-2026-015</div>
+        <div class="detail-sub">Al-Amin Trading · Syria · Added 20 May 2026</div>
+      </div>
+      <div class="detail-actions">
+        <span class="badge badge-amber" style="padding:4px 12px;font-size:12px">At port</span>
+        <button class="btn"><i class="ti ti-dots" style="font-size:15px"></i></button>
+      </div>
+    </div>
+
+    <!-- Status stepper -->
+    <div style="background:var(--surface);border-bottom:1px solid var(--border);padding:14px 28px">
+      <div style="display:flex;align-items:center;max-width:400px">
+        <div class="status-step">
+          <div class="status-step-dot ss-done" onclick="setStatus(1)"><i class="ti ti-check" style="font-size:12px"></i></div>
+          <div class="status-step-label">Created</div>
+        </div>
+        <div class="status-connector done"></div>
+        <div class="status-step">
+          <div class="status-step-dot ss-active" onclick="setStatus(2)"><i class="ti ti-anchor" style="font-size:13px"></i></div>
+          <div class="status-step-label active">At port</div>
+        </div>
+        <div class="status-connector"></div>
+        <div class="status-step">
+          <div class="status-step-dot ss-pending" onclick="setStatus(3)"><i class="ti ti-ship" style="font-size:13px"></i></div>
+          <div class="status-step-label">In transit</div>
+        </div>
+        <div class="status-connector"></div>
+        <div class="status-step">
+          <div class="status-step-dot ss-pending" onclick="openArriveModal()"><i class="ti ti-building-warehouse" style="font-size:13px"></i></div>
+          <div class="status-step-label">Arrived</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail-body">
+
+      <!-- LEFT COLUMN -->
+      <div class="detail-left">
+
+        <!-- PRODUCTS -->
+        <div class="sec">
+          <div class="sec-head">
+            <div class="sec-title"><i class="ti ti-package"></i> Products <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;background:var(--surface2);padding:1px 7px;border-radius:100px;color:var(--text2);margin-left:4px">2/5</span></div>
+            <button class="sec-action" onclick="toggleAddProduct()"><i class="ti ti-plus" style="font-size:12px"></i> Add product</button>
+          </div>
+
+          <div class="product-row header">
+            <span>Product type</span><span>Paid bags</span><span>kg/bag</span><span>$/ton</span><span>Cost/ton (all-in)</span><span></span>
+          </div>
+
+          <div class="product-row" id="pr-bbq">
+            <div>
+              <div class="pr-name">BBQ Hardwood</div>
+              <div class="pr-grade">Grade A · Al-Amin</div>
+            </div>
+            <div class="pr-val" contenteditable="true" oninput="recalc()" style="outline:none;border-bottom:1px dashed var(--border)">250</div>
+            <div class="pr-val" contenteditable="true" oninput="recalc()" style="outline:none;border-bottom:1px dashed var(--border)">20</div>
+            <div class="pr-val" contenteditable="true" oninput="recalc()" style="outline:none;border-bottom:1px dashed var(--border)">320</div>
+            <div>
+              <div class="pr-cost" id="pr-bbq-cost">$774.77/t</div>
+              <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace" id="pr-bbq-costkg">$0.7748/kg</div>
+            </div>
+            <button class="pr-del"><i class="ti ti-x" style="font-size:12px"></i></button>
+          </div>
+
+          <div class="product-row" id="pr-shisha">
+            <div>
+              <div class="pr-name">Shisha</div>
+              <div class="pr-grade">Grade B · Al-Amin</div>
+            </div>
+            <div class="pr-val" contenteditable="true" oninput="recalc()" style="outline:none;border-bottom:1px dashed var(--border)">1498</div>
+            <div class="pr-val" contenteditable="true" oninput="recalc()" style="outline:none;border-bottom:1px dashed var(--border)">10</div>
+            <div class="pr-val" contenteditable="true" oninput="recalc()" style="outline:none;border-bottom:1px dashed var(--border)">435</div>
+            <div>
+              <div class="pr-cost" id="pr-shisha-cost">$889.77/t</div>
+              <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace" id="pr-shisha-costkg">$0.8898/kg</div>
+            </div>
+            <button class="pr-del"><i class="ti ti-x" style="font-size:12px"></i></button>
+          </div>
+
+          <!-- ADD PRODUCT FORM -->
+          <div class="add-product-form" id="addProductForm">
+            <div class="form-grid">
+              <div class="form-group-sm"><label>Charcoal type</label><input class="form-inp" placeholder="e.g. BBQ Hardwood"></div>
+              <div class="form-group-sm"><label>Grade</label><input class="form-inp" placeholder="A / B / C"></div>
+            </div>
+            <div class="form-grid-3">
+              <div class="form-group-sm"><label>Paid bags</label><input class="form-inp" type="number" placeholder="0"></div>
+              <div class="form-group-sm"><label>Gift bags</label><input class="form-inp" type="number" placeholder="0"></div>
+              <div class="form-group-sm"><label>kg / bag (ref)</label><input class="form-inp" type="number" placeholder="20"></div>
+            </div>
+            <div class="form-grid">
+              <div class="form-group-sm"><label>Price / ton ($)</label><input class="form-inp" type="number" placeholder="0.00"></div>
+              <div class="form-group-sm"><label>Supplier</label>
+                <select class="form-inp"><option>Al-Amin Trading</option><option>Sahara Export</option></select>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:4px">
+              <button class="btn primary" style="flex:1" onclick="toggleAddProduct()"><i class="ti ti-check" style="font-size:13px"></i> Add product type</button>
+              <button class="btn" onclick="toggleAddProduct()">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- EXPENSES -->
+        <div class="sec">
+          <div class="sec-head">
+            <div class="sec-title"><i class="ti ti-receipt"></i> Expenses <span style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace;margin-left:6px" id="exp-total-lbl">$9,500 total</span></div>
+            <button class="sec-action" onclick="addExpense()"><i class="ti ti-plus" style="font-size:12px"></i> Add expense</button>
+          </div>
+
+          <div id="expenseList">
+            <div class="exp-row">
+              <div class="exp-desc"><input value="truck" oninput="recalc()"></div>
+              <div class="exp-amount"><input type="number" value="1200" oninput="recalc()"><span style="font-size:12px;color:var(--text3)">$</span></div>
+              <button class="pr-del" onclick="this.closest('.exp-row').remove();recalc()"><i class="ti ti-x" style="font-size:12px"></i></button>
+            </div>
+            <div class="exp-row">
+              <div class="exp-desc"><input value="agent, port, paper" oninput="recalc()"></div>
+              <div class="exp-amount"><input type="number" value="1200" oninput="recalc()"><span style="font-size:12px;color:var(--text3)">$</span></div>
+              <button class="pr-del" onclick="this.closest('.exp-row').remove();recalc()"><i class="ti ti-x" style="font-size:12px"></i></button>
+            </div>
+            <div class="exp-row">
+              <div class="exp-desc"><input value="freight" oninput="recalc()"></div>
+              <div class="exp-amount"><input type="number" value="1200" oninput="recalc()"><span style="font-size:12px;color:var(--text3)">$</span></div>
+              <button class="pr-del" onclick="this.closest('.exp-row').remove();recalc()"><i class="ti ti-x" style="font-size:12px"></i></button>
+            </div>
+            <div class="exp-row">
+              <div class="exp-desc"><input value="worker" oninput="recalc()"></div>
+              <div class="exp-amount"><input type="number" value="100" oninput="recalc()"><span style="font-size:12px;color:var(--text3)">$</span></div>
+              <button class="pr-del" onclick="this.closest('.exp-row').remove();recalc()"><i class="ti ti-x" style="font-size:12px"></i></button>
+            </div>
+            <div class="exp-row">
+              <div class="exp-desc"><input value="beirut port expenses" oninput="recalc()"></div>
+              <div class="exp-amount"><input type="number" value="4200" oninput="recalc()"><span style="font-size:12px;color:var(--text3)">$</span></div>
+              <button class="pr-del" onclick="this.closest('.exp-row').remove();recalc()"><i class="ti ti-x" style="font-size:12px"></i></button>
+            </div>
+            <div class="exp-row">
+              <div class="exp-desc"><input value="additional fees" oninput="recalc()"></div>
+              <div class="exp-amount"><input type="number" value="600" oninput="recalc()"><span style="font-size:12px;color:var(--text3)">$</span></div>
+              <button class="pr-del" onclick="this.closest('.exp-row').remove();recalc()"><i class="ti ti-x" style="font-size:12px"></i></button>
+            </div>
+          </div>
+          <div style="padding:8px 16px;background:var(--surface2);border-top:1px solid var(--border);font-size:12px;color:var(--text3)">
+            Expenses can be added anytime — even after the container arrives. Costs recalculate automatically.
+          </div>
+        </div>
+
+        <!-- DISCOUNT -->
+        <div class="sec">
+          <div class="sec-head">
+            <div class="sec-title"><i class="ti ti-discount"></i> Supplier discount</div>
+          </div>
+          <div class="discount-row">
+            <div>
+              <div style="font-size:13px;font-weight:500">Discount amount</div>
+              <div style="font-size:12px;color:var(--text3);margin-top:2px">Applied to entire container · split by tonnage across product lines</div>
+            </div>
+            <div class="discount-input-wrap">
+              <span style="font-size:13px;color:var(--text3)">−$</span>
+              <input type="number" id="discountInput" value="350" oninput="recalc()">
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- RIGHT COLUMN — LIVE COST REPORT -->
+      <div class="cost-report">
+        <div class="cr-head">
+          <div class="cr-title"><i class="ti ti-chart-pie" style="font-size:14px;color:var(--text2)"></i> Cost report</div>
+          <span class="live-pill">● Live</span>
+        </div>
+
+        <!-- BBQ Product -->
+        <div class="cr-product">
+          <div class="cr-prod-head">
+            <div>
+              <div class="cr-prod-name">BBQ Hardwood · Grade A</div>
+              <div class="cr-prod-costkg" id="cr-bbq-kg">$0.7748 / kg</div>
+            </div>
+            <div style="text-align:right">
+              <div class="cr-prod-cost" id="cr-bbq-ton">$774.77</div>
+              <div class="cr-prod-costkg">per ton</div>
+            </div>
+          </div>
+          <div class="cr-row"><span class="cr-row-label">Paid bags × price/ton</span><span class="cr-row-val" id="cr-bbq-base">$1,644.80</span></div>
+          <div class="cr-row"><span class="cr-row-label">+ Expenses share</span><span class="cr-row-val amber" id="cr-bbq-exp">+$454.77/t</span></div>
+          <div class="cr-row"><span class="cr-row-label">− Discount share</span><span class="cr-row-val green" id="cr-bbq-disc">−$17.40/t</span></div>
+        </div>
+
+        <!-- Shisha Product -->
+        <div class="cr-product">
+          <div class="cr-prod-head">
+            <div>
+              <div class="cr-prod-name">Shisha · Grade B</div>
+              <div class="cr-prod-costkg" id="cr-shisha-kg">$0.8898 / kg</div>
+            </div>
+            <div style="text-align:right">
+              <div class="cr-prod-cost" id="cr-shisha-ton">$889.77</div>
+              <div class="cr-prod-costkg">per ton</div>
+            </div>
+          </div>
+          <div class="cr-row"><span class="cr-row-label">Paid bags × price/ton</span><span class="cr-row-val" id="cr-shisha-base">$6,516.30</span></div>
+          <div class="cr-row"><span class="cr-row-label">+ Expenses share</span><span class="cr-row-val amber" id="cr-shisha-exp">+$454.77/t</span></div>
+          <div class="cr-row"><span class="cr-row-label">− Discount share</span><span class="cr-row-val green" id="cr-shisha-disc">−$17.40/t</span></div>
+        </div>
+
+        <!-- Totals -->
+        <div class="cr-totals">
+          <div class="cr-total-row"><span class="cr-total-label">Total weight</span><span class="cr-total-val" id="cr-total-weight">20.12 t</span></div>
+          <div class="cr-total-row"><span class="cr-total-label">Product cost</span><span class="cr-total-val" id="cr-prod-cost">$8,161.10</span></div>
+          <div class="cr-total-row"><span class="cr-total-label">Expenses</span><span class="cr-total-val" id="cr-exp-total">$9,500.00</span></div>
+          <div class="cr-total-row"><span class="cr-total-label" style="color:var(--accent)">Discount</span><span class="cr-total-val" style="color:var(--accent)" id="cr-disc-total">−$350.00</span></div>
+          <div class="cr-total-row big">
+            <span class="cr-total-label">Avg cost / ton</span>
+            <span class="cr-total-val" id="cr-avg-ton">$860.39</span>
+          </div>
+          <div class="cr-total-row">
+            <span class="cr-total-label" style="font-size:13px">Avg cost / kg</span>
+            <span class="cr-total-val" style="font-size:16px;color:var(--accent)" id="cr-avg-kg">$0.8604</span>
+          </div>
+        </div>
+
+        <div style="padding:12px 14px">
+          <button class="arrive-btn" onclick="openArriveModal()">
+            <i class="ti ti-building-warehouse"></i> Mark as arrived → create stock lots
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<!-- ARRIVAL CONFIRMATION MODAL -->
+<div class="modal-overlay" id="arriveModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">Mark CONT-2026-015 as arrived</div>
+      <div class="modal-sub">This will create stock lots in the warehouse with the current cost/kg locked in.</div>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Stock lots to be created</div>
+
+      <div class="lot-preview">
+        <div class="lp-name">BBQ Hardwood · Grade A · Al-Amin Trading</div>
+        <div class="lp-row"><span>kg received</span><span class="lp-val">5,000 kg</span></div>
+        <div class="lp-row"><span>Cost per kg (locked)</span><span class="lp-val" style="color:var(--accent)">$0.7748</span></div>
+        <div class="lp-row"><span>Source</span><span class="lp-val">Container · CONT-2026-015</span></div>
+      </div>
+
+      <div class="lot-preview">
+        <div class="lp-name">Shisha · Grade B · Al-Amin Trading</div>
+        <div class="lp-row"><span>kg received</span><span class="lp-val">14,980 kg</span></div>
+        <div class="lp-row"><span>Cost per kg (locked)</span><span class="lp-val" style="color:var(--accent)">$0.8898</span></div>
+        <div class="lp-row"><span>Source</span><span class="lp-val">Container · CONT-2026-015</span></div>
+      </div>
+
+      <div style="margin-top:14px">
+        <label style="font-size:12px;font-weight:500;color:var(--text2);display:block;margin-bottom:5px">Arrival date</label>
+        <input type="date" value="2026-05-21" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;outline:none;font-family:'IBM Plex Sans',sans-serif">
+      </div>
+
+      <div style="background:var(--accent2-bg);border:1px solid #fcd34d;border-radius:var(--radius);padding:10px 14px;margin-top:12px;font-size:12px;color:var(--accent2);display:flex;gap:8px;align-items:flex-start">
+        <i class="ti ti-info-circle" style="font-size:15px;flex-shrink:0;margin-top:1px"></i>
+        <span>If you add expenses after arrival, the cost/kg on these lots will update automatically.</span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeArriveModal()">Cancel</button>
+      <button class="btn primary" onclick="confirmArrival()"><i class="ti ti-building-warehouse" style="font-size:14px"></i> Confirm arrival &amp; create lots</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── VIEW SWITCHING ──
+  function openDetail() {
+    document.getElementById('listView').style.display = 'none';
+    document.getElementById('listTopbar').style.display = 'none';
+    document.getElementById('detailView').style.display = 'block';
+    recalc();
+  }
+
+  function closeDetail() {
+    document.getElementById('detailView').style.display = 'none';
+    document.getElementById('listView').style.display = 'block';
+    document.getElementById('listTopbar').style.display = 'flex';
+  }
+
+  function filterStatus(status, el) {
+    document.querySelectorAll('.status-tab').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  function toggleAddProduct() {
+    const f = document.getElementById('addProductForm');
+    f.style.display = f.style.display === 'block' ? 'none' : 'block';
+  }
+
+  function addExpense() {
+    const list = document.getElementById('expenseList');
+    const row = document.createElement('div');
+    row.className = 'exp-row';
+    row.innerHTML = `
+      <div class="exp-desc"><input placeholder="Description (freight, customs…)" oninput="recalc()"></div>
+      <div class="exp-amount"><input type="number" placeholder="0" oninput="recalc()"><span style="font-size:12px;color:var(--text3)">$</span></div>
+      <button class="pr-del" onclick="this.closest('.exp-row').remove();recalc()"><i class="ti ti-x" style="font-size:12px"></i></button>
+    `;
+    list.appendChild(row);
+    row.querySelector('input').focus();
+  }
+
+  // ── LIVE COST CALCULATION ──
+  function recalc() {
+    // Read product rows
+    const bbqRow = document.getElementById('pr-bbq');
+    const shishaRow = document.getElementById('pr-shisha');
+
+    function getVals(row) {
+      const cells = row.querySelectorAll('[contenteditable]');
+      return {
+        paidBags: parseFloat(cells[0].textContent) || 0,
+        kgPerBag: parseFloat(cells[1].textContent) || 0,
+        pricePerTon: parseFloat(cells[2].textContent) || 0
+      };
+    }
+
+    const bbq = getVals(bbqRow);
+    const shisha = getVals(shishaRow);
+
+    // Tonnage
+    const bbqTon = (bbq.paidBags * bbq.kgPerBag) / 1000;
+    const shishaTon = (shisha.paidBags * shisha.kgPerBag) / 1000;
+    const totalTon = bbqTon + shishaTon;
+
+    // Total expenses
+    let totalExp = 0;
+    document.querySelectorAll('#expenseList .exp-amount input').forEach(i => {
+      totalExp += parseFloat(i.value) || 0;
+    });
+
+    // Discount
+    const discount = parseFloat(document.getElementById('discountInput').value) || 0;
+
+    // Per-line expense and discount per ton
+    const bbqExpPerTon  = totalTon > 0 ? (totalExp  * (bbqTon / totalTon)) / bbqTon : 0;
+    const bbqDiscPerTon = totalTon > 0 ? (discount  * (bbqTon / totalTon)) / bbqTon : 0;
+    const shishaExpPerTon  = totalTon > 0 ? (totalExp  * (shishaTon / totalTon)) / shishaTon : 0;
+    const shishaDiscPerTon = totalTon > 0 ? (discount  * (shishaTon / totalTon)) / shishaTon : 0;
+
+    // All-in cost
+    const bbqAllInPerTon    = bbq.pricePerTon + bbqExpPerTon - bbqDiscPerTon;
+    const bbqAllInPerKg     = bbqAllInPerTon / 1000;
+    const shishaAllInPerTon = shisha.pricePerTon + shishaExpPerTon - shishaDiscPerTon;
+    const shishaAllInPerKg  = shishaAllInPerTon / 1000;
+
+    // Base costs
+    const bbqBase   = bbq.paidBags * (bbq.pricePerTon / 1000 * bbq.kgPerBag);
+    const shishaBase= shisha.paidBags * (shisha.pricePerTon / 1000 * shisha.kgPerBag);
+    const totalBase = bbqBase + shishaBase;
+
+    // Avg
+    const totalAllIn = bbqAllInPerTon * bbqTon + shishaAllInPerTon * shishaTon;
+    const avgPerTon  = totalTon > 0 ? totalAllIn / totalTon : 0;
+    const avgPerKg   = avgPerTon / 1000;
+
+    // Update product row displays
+    document.getElementById('pr-bbq-cost').textContent    = '$' + bbqAllInPerTon.toFixed(2) + '/t';
+    document.getElementById('pr-bbq-costkg').textContent  = '$' + bbqAllInPerKg.toFixed(4) + '/kg';
+    document.getElementById('pr-shisha-cost').textContent = '$' + shishaAllInPerTon.toFixed(2) + '/t';
+    document.getElementById('pr-shisha-costkg').textContent= '$' + shishaAllInPerKg.toFixed(4) + '/kg';
+
+    // Update right panel
+    document.getElementById('cr-bbq-ton').textContent   = '$' + bbqAllInPerTon.toFixed(2);
+    document.getElementById('cr-bbq-kg').textContent    = '$' + bbqAllInPerKg.toFixed(4) + ' / kg';
+    document.getElementById('cr-bbq-base').textContent  = '$' + bbqBase.toFixed(2);
+    document.getElementById('cr-bbq-exp').textContent   = '+$' + bbqExpPerTon.toFixed(2) + '/t';
+    document.getElementById('cr-bbq-disc').textContent  = '−$' + bbqDiscPerTon.toFixed(2) + '/t';
+
+    document.getElementById('cr-shisha-ton').textContent  = '$' + shishaAllInPerTon.toFixed(2);
+    document.getElementById('cr-shisha-kg').textContent   = '$' + shishaAllInPerKg.toFixed(4) + ' / kg';
+    document.getElementById('cr-shisha-base').textContent = '$' + shishaBase.toFixed(2);
+    document.getElementById('cr-shisha-exp').textContent  = '+$' + shishaExpPerTon.toFixed(2) + '/t';
+    document.getElementById('cr-shisha-disc').textContent = '−$' + shishaDiscPerTon.toFixed(2) + '/t';
+
+    document.getElementById('cr-total-weight').textContent = totalTon.toFixed(2) + ' t';
+    document.getElementById('cr-prod-cost').textContent    = '$' + totalBase.toFixed(2);
+    document.getElementById('cr-exp-total').textContent    = '$' + totalExp.toFixed(2);
+    document.getElementById('cr-disc-total').textContent   = '−$' + discount.toFixed(2);
+    document.getElementById('cr-avg-ton').textContent      = '$' + avgPerTon.toFixed(2);
+    document.getElementById('cr-avg-kg').textContent       = '$' + avgPerKg.toFixed(4);
+    document.getElementById('exp-total-lbl').textContent   = '$' + totalExp.toLocaleString() + ' total';
+  }
+
+  function setStatus(step) {
+    // Visual feedback only in mockup
+    const dots = document.querySelectorAll('.status-step-dot');
+    const labels = document.querySelectorAll('.status-step-label');
+    const connectors = document.querySelectorAll('.status-connector');
+    dots.forEach((d, i) => {
+      d.className = 'status-step-dot ' + (i < step ? 'ss-done' : i === step ? 'ss-active' : 'ss-pending');
+      if (i < step) d.innerHTML = '<i class="ti ti-check" style="font-size:12px"></i>';
+    });
+    connectors.forEach((c, i) => {
+      c.className = 'status-connector' + (i < step ? ' done' : '');
+    });
+    labels.forEach((l, i) => {
+      l.className = 'status-step-label' + (i === step ? ' active' : '');
+    });
+  }
+
+  function openArriveModal() {
+    document.getElementById('arriveModal').classList.add('open');
+  }
+  function closeArriveModal() {
+    document.getElementById('arriveModal').classList.remove('open');
+  }
+  function confirmArrival() {
+    closeArriveModal();
+    setStatus(3);
+    // Update badge
+    document.querySelector('.detail-actions .badge').textContent = 'Arrived';
+    document.querySelector('.detail-actions .badge').className = 'badge badge-green';
+    alert('Stock lots created in warehouse.\n\nLOT-0045: BBQ Hardwood Grade A · 5,000 kg · $0.7748/kg\nLOT-0046: Shisha Grade B · 14,980 kg · $0.8898/kg');
+  }
+
+  document.getElementById('arriveModal').addEventListener('click', function(e) {
+    if (e.target === this) closeArriveModal();
+  });
+
+  // Initial calc
+  setTimeout(recalc, 100);
+</script>
+</body>
+</html>

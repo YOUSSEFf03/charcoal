@@ -1,0 +1,508 @@
+// Charcoal Business Accounting System — Prisma Schema
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  owner
+  accountant
+  sales_rep
+  worker
+  driver
+}
+
+enum ContainerStatus {
+  port
+  transit
+  arrived
+}
+
+enum StockSource {
+  container
+  direct
+}
+
+enum PackingMode {
+  stock
+  order
+}
+
+enum ClientType {
+  restaurant
+  shop
+  wholesale
+  walk_in
+  corporate
+  export
+}
+
+enum Currency {
+  USD
+  LBP
+}
+
+enum OrderStatus {
+  draft
+  confirmed
+  partially_delivered
+  delivered
+  invoiced
+  paid
+}
+
+enum ShipmentStatus {
+  pending
+  loaded
+  delivered
+  returned
+}
+
+enum TripStatus {
+  planned
+  in_progress
+  completed
+}
+
+enum ExitType {
+  order
+  walk_in
+  sample
+  gift
+  internal
+  client_bags_fill
+}
+
+enum InvoiceStatus {
+  draft
+  issued
+  partially_paid
+  paid
+  cancelled
+}
+
+enum PaymentMethod {
+  cash
+  whish
+  omt
+}
+
+enum AdjustmentType {
+  lot
+  packed_stock
+}
+
+model User {
+  id        String   @id @default(uuid())
+  clerkId   String   @unique
+  email     String   @unique
+  name      String
+  role      Role
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  containersCreated         Container[]        @relation("ContainerCreatedBy")
+  expensesAdded             ContainerExpense[] @relation("ExpenseAddedBy")
+  packingSessions           PackingSession[]   @relation("SessionWorker")
+  stockAdjustmentsMade      StockAdjustment[]  @relation("AdjustmentCountedBy")
+  stockAdjustmentsApproved  StockAdjustment[]  @relation("AdjustmentApprovedBy")
+  ordersCreated             ClientOrder[]      @relation("OrderCreatedBy")
+  stockExitsLogged          StockExit[]        @relation("ExitLoggedBy")
+  paymentsLogged            Payment[]          @relation("PaymentLoggedBy")
+  bagPurchasesAdded         BagPurchase[]      @relation("BagPurchaseAddedBy")
+  driverTrips               DriverTrip[]       @relation("TripDriver")
+  @@map("users")
+}
+
+model Supplier {
+  id             String   @id @default(uuid())
+  name           String
+  country        String
+  contactPersons Json     @default("[]")
+  charcoalTypes  Json     @default("[]")
+  bankDetails    Json?
+  paymentTerms   String?
+  leadTimeDays   Int?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  containers   Container[]
+  stockLots    StockLot[]
+  productLines ContainerProductLine[]
+  @@map("suppliers")
+}
+
+model Container {
+  id          String          @id @default(uuid())
+  number      String
+  supplierId  String
+  supplier    Supplier        @relation(fields: [supplierId], references: [id])
+  status      ContainerStatus @default(port)
+  arrivalDate DateTime?
+  notes       String?
+  createdById String
+  createdBy   User            @relation("ContainerCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  productLines ContainerProductLine[]
+  expenses     ContainerExpense[]
+  discount     ContainerDiscount?
+  stockLots    StockLot[]
+  @@index([status])
+  @@map("containers")
+}
+
+model ContainerProductLine {
+  id           String    @id @default(uuid())
+  containerId  String
+  container    Container @relation(fields: [containerId], references: [id])
+  charcoalType String
+  grade        String
+  supplierId   String
+  supplier     Supplier  @relation(fields: [supplierId], references: [id])
+  paidBags     Int
+  giftBags     Int       @default(0)
+  kgPerBag     Decimal   @db.Decimal(10, 3)
+  pricePerTon  Decimal   @db.Decimal(10, 2)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  @@map("container_product_lines")
+}
+
+model ContainerExpense {
+  id          String    @id @default(uuid())
+  containerId String
+  container   Container @relation(fields: [containerId], references: [id])
+  description String
+  amount      Decimal   @db.Decimal(10, 2)
+  addedById   String
+  addedBy     User      @relation("ExpenseAddedBy", fields: [addedById], references: [id])
+  addedAt     DateTime  @default(now())
+  @@map("container_expenses")
+}
+
+model ContainerDiscount {
+  id          String    @id @default(uuid())
+  containerId String    @unique
+  container   Container @relation(fields: [containerId], references: [id])
+  amount      Decimal   @db.Decimal(10, 2)
+  @@map("container_discounts")
+}
+
+model StockLot {
+  id           String      @id @default(uuid())
+  charcoalType String
+  grade        String
+  supplierId   String
+  supplier     Supplier    @relation(fields: [supplierId], references: [id])
+  kgReceived   Decimal     @db.Decimal(10, 3)
+  kgRemaining  Decimal     @db.Decimal(10, 3)
+  costPerKg    Decimal     @db.Decimal(10, 4)
+  source       StockSource
+  containerId  String?
+  container    Container?  @relation(fields: [containerId], references: [id])
+  dateReceived DateTime    @db.Date
+  notes        String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  packingSessions  PackingSession[]
+  packedStocks     PackedStock[]
+  stockAdjustments StockAdjustment[]
+  @@index([charcoalType, grade])
+  @@index([supplierId])
+  @@index([kgRemaining])
+  @@map("stock_lots")
+}
+
+model BagType {
+  id           String   @id @default(uuid())
+  name         String
+  nominalKg    Decimal  @db.Decimal(10, 3)
+  costPerBag   Decimal  @db.Decimal(10, 4)
+  workerRate   Decimal  @db.Decimal(10, 4)
+  note         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  bagPurchases   BagPurchase[]
+  packedStocks   PackedStock[]
+  orderBagLines  OrderBagLine[]
+  shipmentBags   ShipmentBag[]
+  stockExits     StockExit[]
+  clientOrders   ClientOrder[]
+  @@map("bag_types")
+}
+
+model BagPurchase {
+  id         String   @id @default(uuid())
+  bagTypeId  String
+  bagType    BagType  @relation(fields: [bagTypeId], references: [id])
+  quantity   Int
+  unitCost   Decimal  @db.Decimal(10, 4)
+  totalCost  Decimal  @db.Decimal(10, 2)
+  date       DateTime @db.Date
+  addedById  String
+  addedBy    User     @relation("BagPurchaseAddedBy", fields: [addedById], references: [id])
+  notes      String?
+  @@map("bag_purchases")
+}
+
+model PackedStock {
+  id         String         @id @default(uuid())
+  lotId      String
+  lot        StockLot       @relation(fields: [lotId], references: [id])
+  bagTypeId  String
+  bagType    BagType        @relation(fields: [bagTypeId], references: [id])
+  quantity   Int
+  sessionId  String
+  session    PackingSession @relation(fields: [sessionId], references: [id])
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  stockExits  StockExit[]
+  adjustments StockAdjustment[]
+  @@index([bagTypeId])
+  @@index([lotId])
+  @@map("packed_stocks")
+}
+
+model PackingSession {
+  id              String      @id @default(uuid())
+  lotId           String
+  lot             StockLot    @relation(fields: [lotId], references: [id])
+  workerId        String
+  worker          User        @relation("SessionWorker", fields: [workerId], references: [id])
+  mode            PackingMode
+  orderId         String?
+  order           ClientOrder? @relation(fields: [orderId], references: [id])
+  kgConsumed      Decimal     @db.Decimal(10, 3)
+  bagsOutput      Json        @default("[]")
+  kgOutputTotal   Decimal     @db.Decimal(10, 3)
+  varianceKg      Decimal     @db.Decimal(10, 3)
+  varianceNote    String?
+  sessionEarnings Decimal     @db.Decimal(10, 2)
+  date            DateTime    @db.Date
+  startedAt       DateTime    @default(now())
+  completedAt     DateTime?
+  notes           String?
+  packedStocks    PackedStock[]
+  @@index([workerId])
+  @@index([date])
+  @@map("packing_sessions")
+}
+
+model StockAdjustment {
+  id             String         @id @default(uuid())
+  adjustmentType AdjustmentType
+  lotId          String?
+  lot            StockLot?      @relation(fields: [lotId], references: [id])
+  packedStockId  String?
+  packedStock    PackedStock?   @relation(fields: [packedStockId], references: [id])
+  qtyBefore      Decimal        @db.Decimal(10, 3)
+  qtyAfter       Decimal        @db.Decimal(10, 3)
+  difference     Decimal        @db.Decimal(10, 3)
+  reason         String
+  countedById    String
+  countedBy      User           @relation("AdjustmentCountedBy", fields: [countedById], references: [id])
+  approvedById   String
+  approvedBy     User           @relation("AdjustmentApprovedBy", fields: [approvedById], references: [id])
+  date           DateTime       @db.Date
+  createdAt      DateTime       @default(now())
+  @@map("stock_adjustments")
+}
+
+model Client {
+  id             String     @id @default(uuid())
+  name           String
+  type           ClientType
+  currency       Currency
+  phones         Json       @default("[]")
+  preferredTypes Json       @default("[]")
+  avgOrderDays   Decimal?   @db.Decimal(10, 2)
+  lastOrderDate  DateTime?  @db.Date
+  paymentTerms   String?
+  notes          String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  orders   ClientOrder[]
+  invoices Invoice[]
+  payments Payment[]
+  @@map("clients")
+}
+
+model ClientOrder {
+  id               String      @id @default(uuid())
+  clientId         String
+  client           Client      @relation(fields: [clientId], references: [id])
+  charcoalType     String
+  grade            String
+  totalKgRequested Decimal     @db.Decimal(10, 3)
+  bagTypeId        String?
+  bagType          BagType?    @relation(fields: [bagTypeId], references: [id])
+  pricePerBag      Decimal     @db.Decimal(10, 2)
+  currency         Currency
+  status           OrderStatus @default(draft)
+  createdById      String
+  createdBy        User        @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  notes            String?
+  shipments       Shipment[]
+  packingSessions PackingSession[]
+  stockExits      StockExit[]
+  invoices        Invoice[]
+  orderBagLines   OrderBagLine[]
+  @@index([clientId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("client_orders")
+}
+
+model OrderBagLine {
+  id        String      @id @default(uuid())
+  orderId   String
+  order     ClientOrder @relation(fields: [orderId], references: [id])
+  bagTypeId String
+  bagType   BagType     @relation(fields: [bagTypeId], references: [id])
+  quantity  Int
+  @@map("order_bag_lines")
+}
+
+model Shipment {
+  id          String         @id @default(uuid())
+  orderId     String
+  order       ClientOrder    @relation(fields: [orderId], references: [id])
+  tripId      String?
+  trip        DriverTrip?    @relation(fields: [tripId], references: [id])
+  address     String
+  nominalKg   Decimal        @db.Decimal(10, 3)
+  actualKg    Decimal?       @db.Decimal(10, 3)
+  status      ShipmentStatus @default(pending)
+  deliveredAt DateTime?
+  notes       String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  bags ShipmentBag[]
+  @@index([tripId])
+  @@index([status])
+  @@map("shipments")
+}
+
+model ShipmentBag {
+  id         String   @id @default(uuid())
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id])
+  bagTypeId  String
+  bagType    BagType  @relation(fields: [bagTypeId], references: [id])
+  quantity   Int
+  @@map("shipment_bags")
+}
+
+model DriverTrip {
+  id            String     @id @default(uuid())
+  driverId      String
+  driver        User       @relation("TripDriver", fields: [driverId], references: [id])
+  status        TripStatus @default(planned)
+  fuelCost      Decimal?   @db.Decimal(10, 2)
+  otherExpenses Json       @default("[]")
+  startedAt     DateTime?
+  completedAt   DateTime?
+  notes         String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  shipments Shipment[]
+  @@index([driverId])
+  @@index([status])
+  @@map("driver_trips")
+}
+
+model StockExit {
+  id            String      @id @default(uuid())
+  packedStockId String
+  packedStock   PackedStock @relation(fields: [packedStockId], references: [id])
+  bagTypeId     String
+  bagType       BagType     @relation(fields: [bagTypeId], references: [id])
+  quantity      Int
+  exitType      ExitType
+  reason        String?
+  recipient     String?
+  orderId       String?
+  order         ClientOrder? @relation(fields: [orderId], references: [id])
+  loggedById    String
+  loggedBy      User        @relation("ExitLoggedBy", fields: [loggedById], references: [id])
+  date          DateTime    @db.Date
+  createdAt     DateTime    @default(now())
+  @@index([date])
+  @@index([exitType])
+  @@map("stock_exits")
+}
+
+model Invoice {
+  id         String        @id @default(uuid())
+  orderId    String?
+  order      ClientOrder?  @relation(fields: [orderId], references: [id])
+  clientId   String
+  client     Client        @relation(fields: [clientId], references: [id])
+  lines      Json          @default("[]")
+  subtotal   Decimal       @db.Decimal(10, 2)
+  total      Decimal       @db.Decimal(10, 2)
+  currency   Currency
+  status     InvoiceStatus @default(draft)
+  paidAmount Decimal       @db.Decimal(10, 2) @default(0)
+  issuedAt   DateTime?
+  dueDate    DateTime?     @db.Date
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  payments Payment[]
+  @@index([clientId])
+  @@index([status])
+  @@index([issuedAt])
+  @@map("invoices")
+}
+
+model Payment {
+  id         String        @id @default(uuid())
+  clientId   String
+  client     Client        @relation(fields: [clientId], references: [id])
+  invoiceId  String?
+  invoice    Invoice?      @relation(fields: [invoiceId], references: [id])
+  amount     Decimal       @db.Decimal(10, 2)
+  currency   Currency
+  method     PaymentMethod
+  date       DateTime      @db.Date
+  loggedById String
+  loggedBy   User          @relation("PaymentLoggedBy", fields: [loggedById], references: [id])
+  notes      String?
+  createdAt  DateTime      @default(now())
+  @@index([clientId])
+  @@index([date])
+  @@map("payments")
+}
+
+model Worker {
+  id              String   @id @default(uuid())
+  name            String
+  phone           String?
+  ratesPerBagType Json     @default("[]")
+  totalBagsPacked Json     @default("[]")
+  totalEarned     Decimal  @db.Decimal(10, 2) @default(0)
+  totalPaid       Decimal  @db.Decimal(10, 2) @default(0)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  payments WorkerPayment[]
+  @@map("workers")
+}
+
+model WorkerPayment {
+  id        String   @id @default(uuid())
+  workerId  String
+  worker    Worker   @relation(fields: [workerId], references: [id])
+  amount    Decimal  @db.Decimal(10, 2)
+  date      DateTime @db.Date
+  notes     String?
+  createdAt DateTime @default(now())
+  @@map("worker_payments")
+}

@@ -1,0 +1,1 @@
+ALTER TABLE "packing_sessions" ADD COLUMN "lotInputs" JSONB NOT NULL DEFAULT '[]'::jsonb;

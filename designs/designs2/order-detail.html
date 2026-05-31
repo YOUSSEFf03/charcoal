@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — ORD-0341</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .ar { font-family: 'Noto Sans Arabic', 'IBM Plex Sans', sans-serif; }
+
+  /* Order item rows */
+  .item-row {
+    display: grid;
+    grid-template-columns: 1fr 120px 110px 110px 110px;
+    gap: 12px; align-items: center;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .item-row:last-child { border-bottom: none; }
+  .item-row .meta { font-size: 11px; color: var(--text3); }
+  .item-row .num { font-family: 'IBM Plex Mono', monospace; text-align: right; }
+  .item-row .num.bold { font-weight: 600; }
+
+  /* Shipment card */
+  .ship-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .ship-head {
+    padding: 12px 16px;
+    display: flex; align-items: center; gap: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .ship-num {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--surface2); border: 1px solid var(--border);
+    font-size: 11px; font-weight: 600; color: var(--text2);
+    font-family: 'IBM Plex Mono', monospace;
+    flex-shrink: 0;
+  }
+  .ship-num.done { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ship-num.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .ship-info { flex: 1; }
+  .ship-addr { font-size: 13.5px; font-weight: 500; }
+  .ship-meta { font-size: 11.5px; color: var(--text3); margin-top: 2px; font-family: 'IBM Plex Mono', monospace; }
+  .ship-body { padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+  .bag-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+  .bag-pill { font-size: 11px; font-family: 'IBM Plex Mono', monospace; padding: 2px 8px; border-radius: 5px; background: var(--surface2); border: 1px solid var(--border); color: var(--text2); }
+  .ship-weights { display: flex; gap: 18px; font-size: 12px; font-family: 'IBM Plex Mono', monospace; }
+  .ship-weights .lbl { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .ship-weights .val { font-weight: 600; }
+
+  /* Timeline */
+  .tl-list { position: relative; padding-left: 22px; }
+  .tl-list::before {
+    content: ""; position: absolute; top: 18px; bottom: 18px; left: 9px;
+    width: 1px; background: var(--border);
+  }
+  .tl-item {
+    position: relative;
+    padding: 10px 0;
+    font-size: 13px;
+  }
+  .tl-item::before {
+    content: ""; position: absolute; left: -19px; top: 16px;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--surface); border: 2px solid var(--text3);
+  }
+  .tl-item.done::before { border-color: var(--accent); background: var(--accent); }
+  .tl-item.current::before { border-color: var(--blue); background: var(--blue); box-shadow: 0 0 0 3px var(--blue-bg); }
+  .tl-text { font-weight: 500; }
+  .tl-when { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="orders"></aside>
+
+<div class="main">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="back-link" href="orders.html"><i class="ti ti-chevron-left"></i> Orders</a>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-title">ORD-0341</span>
+      <span class="badge badge-amber" style="margin-left:4px">Partially delivered</span>
+    </div>
+    <div class="topbar-right">
+      <a class="btn" href="invoice.html" target="_blank" style="text-decoration:none"><i class="ti ti-printer" style="font-size:15px"></i> Print invoice</a>
+      <button class="btn"><i class="ti ti-edit" style="font-size:15px"></i> Edit</button>
+      <button class="btn primary"><i class="ti ti-truck" style="font-size:15px"></i> Assign trip</button>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- HEADER -->
+    <div class="page-header">
+      <div>
+        <h1>ORD-0341 · Al Rawda Restaurant</h1>
+        <div class="page-header-meta">
+          <span class="meta-row"><i class="ti ti-users"></i> <a href="client-detail.html" style="color:inherit">Al Rawda Restaurant</a></span>
+          <span class="meta-row"><i class="ti ti-calendar"></i> created 22 May 2026 · Rita Salameh</span>
+          <span class="meta-row"><i class="ti ti-currency-dollar"></i> USD</span>
+          <span class="meta-row"><i class="ti ti-package"></i> BBQ Hardwood · Grade A</span>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;min-width:340px">
+        <div class="kpi-tile">
+          <div class="kpi-tile-label">Total weight</div>
+          <div class="kpi-tile-value">390<span style="font-size:14px;color:var(--text3);font-weight:400">&nbsp;kg</span></div>
+          <div class="kpi-tile-sub">120 × 2kg + 30 × 5kg</div>
+        </div>
+        <div class="kpi-tile green">
+          <div class="kpi-tile-label">Total</div>
+          <div class="kpi-tile-value">$420.00</div>
+          <div class="kpi-tile-sub">2 shipments</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:14px">
+
+      <div class="stack">
+
+        <!-- LINE ITEMS -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-list"></i> Line items</div>
+            <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">price set at time of sale</span>
+          </div>
+          <div style="background:var(--surface2);display:grid;grid-template-columns:1fr 120px 110px 110px 110px;gap:12px;padding:7px 18px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;border-bottom:1px solid var(--border)">
+            <span>Bag type</span>
+            <span style="text-align:right">Qty</span>
+            <span style="text-align:right">Nominal kg</span>
+            <span style="text-align:right">Price/bag</span>
+            <span style="text-align:right">Line total</span>
+          </div>
+          <div class="item-row">
+            <div>
+              <div style="font-weight:500">2 kg bag</div>
+              <div class="meta">from packed stock · BBQ Hardwood A</div>
+            </div>
+            <div class="num">120</div>
+            <div class="num" style="color:var(--text3)">240.0</div>
+            <div class="num">$2.20</div>
+            <div class="num bold">$264.00</div>
+          </div>
+          <div class="item-row">
+            <div>
+              <div style="font-weight:500">5 kg bag</div>
+              <div class="meta">from packed stock · BBQ Hardwood A</div>
+            </div>
+            <div class="num">30</div>
+            <div class="num" style="color:var(--text3)">150.0</div>
+            <div class="num">$5.20</div>
+            <div class="num bold">$156.00</div>
+          </div>
+          <div style="background:var(--surface2);padding:11px 18px;display:flex;justify-content:space-between;align-items:center;font-weight:600">
+            <span>Total · 150 bags · 390 kg</span>
+            <span class="num" style="font-family:'IBM Plex Mono',monospace;font-size:15px">$420.00</span>
+          </div>
+        </div>
+
+        <!-- SHIPMENTS -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-truck"></i> Shipments</div>
+            <button class="card-action"><i class="ti ti-plus" style="font-size:13px"></i> Split</button>
+          </div>
+
+          <div style="padding:12px 18px 4px">
+
+            <div class="ship-card">
+              <div class="ship-head">
+                <div class="ship-num done"><i class="ti ti-check" style="font-size:12px"></i></div>
+                <div class="ship-info">
+                  <div class="ship-addr">Al Rawda — Hamra branch</div>
+                  <div class="ship-meta">SHP-0851 · Hamra, Beirut · TRP-0091 · Joseph Nasr</div>
+                </div>
+                <span class="badge badge-green">Delivered</span>
+              </div>
+              <div class="ship-body">
+                <div class="bag-pills">
+                  <span class="bag-pill">80 × 2kg</span>
+                  <span class="bag-pill">20 × 5kg</span>
+                </div>
+                <div class="ship-weights">
+                  <div>
+                    <div class="lbl">Nominal</div>
+                    <div class="val">260 kg</div>
+                  </div>
+                  <div>
+                    <div class="lbl">Actual</div>
+                    <div class="val" style="color:var(--accent)">262 kg</div>
+                  </div>
+                  <div>
+                    <div class="lbl">Variance</div>
+                    <div class="val" style="color:var(--text3)">+0.8%</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="ship-card">
+              <div class="ship-head">
+                <div class="ship-num active">2</div>
+                <div class="ship-info">
+                  <div class="ship-addr">Al Rawda — Verdun branch</div>
+                  <div class="ship-meta">SHP-0852 · Verdun, Beirut · awaiting trip assignment</div>
+                </div>
+                <span class="badge badge-blue">Loaded</span>
+              </div>
+              <div class="ship-body">
+                <div class="bag-pills">
+                  <span class="bag-pill">40 × 2kg</span>
+                  <span class="bag-pill">10 × 5kg</span>
+                </div>
+                <div class="ship-weights">
+                  <div>
+                    <div class="lbl">Nominal</div>
+                    <div class="val">130 kg</div>
+                  </div>
+                  <div>
+                    <div class="lbl">Actual</div>
+                    <div class="val" style="color:var(--text3)">— kg</div>
+                  </div>
+                  <div>
+                    <div class="lbl">Driver</div>
+                    <div class="val" style="color:var(--text3)">unassigned</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+
+      <div class="stack">
+
+        <!-- TIMELINE -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-history"></i> Timeline</div>
+          </div>
+          <div style="padding: 8px 18px 14px">
+            <div class="tl-list">
+              <div class="tl-item current">
+                <div class="tl-text">Awaiting trip for shipment 2</div>
+                <div class="tl-when">today · 14:02</div>
+              </div>
+              <div class="tl-item done">
+                <div class="tl-text">Shipment 1 delivered — 100 bags</div>
+                <div class="tl-when">today · 09:18 · Joseph Nasr</div>
+              </div>
+              <div class="tl-item done">
+                <div class="tl-text">Shipment 1 loaded — 262 kg actual</div>
+                <div class="tl-when">today · 07:45 · Joseph Nasr</div>
+              </div>
+              <div class="tl-item done">
+                <div class="tl-text">Order split into 2 shipments</div>
+                <div class="tl-when">yesterday · 16:30 · Rita Salameh</div>
+              </div>
+              <div class="tl-item done">
+                <div class="tl-text">Order confirmed — 150 bags @ price</div>
+                <div class="tl-when">yesterday · 11:14 · Rita Salameh</div>
+              </div>
+              <div class="tl-item done">
+                <div class="tl-text">Order draft created from WhatsApp</div>
+                <div class="tl-when">yesterday · 10:42 · Rita Salameh</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- INVOICE STATUS -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-receipt"></i> Invoice &amp; payment</div>
+            <a class="card-action" href="invoice.html" target="_blank" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px"><i class="ti ti-arrow-up-right" style="font-size:12px"></i> View invoice</a>
+          </div>
+          <div style="padding:14px 18px;display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;justify-content:space-between;font-size:13px">
+              <span style="color:var(--text2)">Status</span>
+              <span><span class="badge badge-amber">Partially paid</span></span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:13px">
+              <span style="color:var(--text2)">Invoice #</span>
+              <span class="mono">INV-0341</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:13px">
+              <span style="color:var(--text2)">Total</span>
+              <span class="mono" style="font-weight:600">$420.00</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:13px">
+              <span style="color:var(--text2)">Paid (cash · Joseph)</span>
+              <span class="mono" style="color:var(--accent);font-weight:600">+$280.00</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;padding-top:8px;border-top:1px solid var(--border)">
+              <span style="font-weight:500">Outstanding</span>
+              <span class="mono" style="color:var(--accent2);font-weight:600">$140.00</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- NOTES -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-notes"></i> Order notes</div>
+          </div>
+          <div style="padding:14px 18px;font-size:13px;line-height:1.55;color:var(--text2)">
+            <div class="ar" dir="rtl" style="margin-bottom:4px">يجب التوصيل قبل الساعة 11 صباحاً</div>
+            <div style="font-style:italic;color:var(--text3);font-size:12.5px">Must deliver before 11am.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

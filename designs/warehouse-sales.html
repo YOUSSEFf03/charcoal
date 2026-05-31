@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Warehouse Sales</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:#F5F4F0; --surface:#FFFFFF; --surface2:#F0EEE9;
+    --border:#E4E1D9; --border2:#D4D0C8;
+    --text:#1A1916; --text2:#6B6860; --text3:#9B9890;
+    --accent:#1D6B4A; --accent-bg:#EAF5EF;
+    --accent2:#B45309; --accent2-bg:#FEF3C7;
+    --red:#C0392B; --red-bg:#FEF2F2;
+    --blue:#1D4ED8; --blue-bg:#EFF6FF;
+    --sidebar-w:220px; --radius:8px; --radius-lg:12px;
+  }
+  body { font-family:'IBM Plex Sans',sans-serif; background:var(--bg); color:var(--text); font-size:14px; line-height:1.5; min-height:100vh; display:flex; }
+
+  /* SIDEBAR */
+  .sidebar { width:var(--sidebar-w); min-height:100vh; background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; position:fixed; top:0; left:0; bottom:0; z-index:10; }
+  .sidebar-logo { padding:20px 18px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+  .logo-mark { width:30px; height:30px; background:var(--text); border-radius:7px; display:flex; align-items:center; justify-content:center; }
+  .logo-mark i { color:#fff; font-size:16px; }
+  .logo-text { font-size:15px; font-weight:600; letter-spacing:-0.3px; }
+  .logo-sub { font-size:10px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+  .sidebar-section { padding:16px 10px 4px; }
+  .sidebar-section-label { font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:1px; padding:0 8px; margin-bottom:4px; }
+  .nav-item { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; color:var(--text2); font-size:13.5px; font-weight:400; transition:background 0.1s,color 0.1s; text-decoration:none; }
+  .nav-item:hover { background:var(--surface2); color:var(--text); }
+  .nav-item.active { background:var(--text); color:#fff; }
+  .nav-item.active i { color:#fff; }
+  .nav-item i { font-size:16px; color:var(--text3); }
+  .nav-item:hover i { color:var(--text); }
+  .nav-badge { margin-left:auto; font-size:10px; font-family:'IBM Plex Mono',monospace; background:var(--red); color:#fff; border-radius:100px; padding:1px 6px; font-weight:500; }
+  .nav-badge.amber { background:var(--accent2); }
+  .nav-badge.green { background:var(--accent); }
+  .sidebar-bottom { margin-top:auto; padding:12px 10px; border-top:1px solid var(--border); }
+  .user-row { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; }
+  .user-row:hover { background:var(--surface2); }
+  .avatar-sm { width:28px; height:28px; border-radius:50%; background:var(--text); color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; flex-shrink:0; }
+  .user-name { font-size:13px; font-weight:500; }
+  .user-role { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+
+  /* MAIN */
+  .main { margin-left:var(--sidebar-w); flex:1; display:flex; flex-direction:column; min-height:100vh; }
+  .topbar { background:var(--surface); border-bottom:1px solid var(--border); padding:0 28px; height:56px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; position:sticky; top:0; z-index:5; }
+  .page-title { font-size:15px; font-weight:600; letter-spacing:-0.2px; }
+  .topbar-right { display:flex; align-items:center; gap:8px; }
+  .btn { display:flex; align-items:center; gap:6px; padding:7px 12px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text2); transition:all 0.1s; }
+  .btn:hover { background:var(--surface2); color:var(--text); }
+  .btn.primary { background:var(--text); color:#fff; border-color:var(--text); }
+  .btn.primary:hover { background:#2d2b28; }
+  .btn.green { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .btn.green:hover { background:#155237; }
+
+  /* PENDING BANNER */
+  .pending-banner {
+    background:var(--accent2-bg); border-bottom:1px solid #fcd34d;
+    padding:10px 28px; display:flex; align-items:center; gap:10px;
+    font-size:13px; color:var(--accent2);
+  }
+  .pending-banner strong { font-weight:600; }
+
+  /* CONTENT */
+  .content { padding:24px 28px; flex:1; }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+
+  /* KPI ROW */
+  .kpi-row { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px; animation:fadeUp 0.3s ease; }
+  .kpi { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px 18px; }
+  .kpi-label { font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+  .kpi-value { font-size:24px; font-weight:600; letter-spacing:-1px; line-height:1; margin-bottom:4px; }
+  .kpi-sub { font-size:12px; color:var(--text3); }
+
+  /* TWO COLUMN */
+  .two-col { display:grid; grid-template-columns:1fr 380px; gap:20px; align-items:start; }
+
+  /* BADGE */
+  .badge { font-size:11px; font-family:'IBM Plex Mono',monospace; padding:2px 8px; border-radius:100px; font-weight:500; white-space:nowrap; }
+  .badge-green  { background:var(--accent-bg); color:var(--accent); }
+  .badge-amber  { background:var(--accent2-bg); color:var(--accent2); }
+  .badge-red    { background:var(--red-bg); color:var(--red); }
+  .badge-blue   { background:var(--blue-bg); color:var(--blue); }
+  .badge-gray   { background:var(--surface2); color:var(--text2); }
+
+  /* CARD */
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:14px; animation:fadeUp 0.35s ease; }
+  .card-head { padding:13px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .card-title { font-size:13px; font-weight:600; display:flex; align-items:center; gap:7px; }
+  .card-title i { font-size:15px; color:var(--text2); }
+
+  /* SALE ENTRY FORM */
+  .sale-form { padding:18px; }
+  .form-label { font-size:12px; font-weight:500; color:var(--text2); margin-bottom:5px; display:block; }
+  .form-input { width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text); outline:none; background:var(--surface); transition:border-color 0.15s; }
+  .form-input:focus { border-color:var(--text); }
+  .form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px; }
+  .form-row-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px; }
+  .form-group { margin-bottom:14px; }
+
+  /* BAG LINES */
+  .bag-lines { margin-bottom:14px; }
+  .bag-line { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .bag-line-select { flex:1.5; padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text); outline:none; background:var(--surface); }
+  .bag-line-select:focus { border-color:var(--text); }
+  .bag-line-qty { width:80px; padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Mono',monospace; text-align:center; outline:none; background:var(--surface); }
+  .bag-line-qty:focus { border-color:var(--text); }
+  .bag-line-del { width:30px; height:36px; border-radius:6px; border:1px solid var(--border); background:transparent; cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--text3); transition:all 0.1s; flex-shrink:0; }
+  .bag-line-del:hover { background:var(--red-bg); border-color:#fca5a5; color:var(--red); }
+  .add-bag-line { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--accent); cursor:pointer; background:none; border:none; font-family:'IBM Plex Sans',sans-serif; padding:3px 0; }
+  .add-bag-line:hover { opacity:0.7; }
+
+  /* TOTAL PREVIEW */
+  .total-preview { background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; }
+  .tp-label { font-size:12px; color:var(--text2); }
+  .tp-value { font-size:16px; font-weight:600; font-family:'IBM Plex Mono',monospace; letter-spacing:-0.5px; }
+
+  /* CURRENCY SPLIT */
+  .currency-split { border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-bottom:14px; }
+  .cs-row { display:flex; align-items:center; gap:10px; padding:10px 12px; border-bottom:1px solid var(--border); }
+  .cs-row:last-child { border-bottom:none; }
+  .cs-label { font-size:12px; font-weight:600; font-family:'IBM Plex Mono',monospace; min-width:40px; }
+  .cs-input { flex:1; padding:7px 10px; border:1px solid var(--border); border-radius:var(--radius); font-size:14px; font-family:'IBM Plex Mono',monospace; outline:none; background:var(--surface); text-align:right; }
+  .cs-input:focus { border-color:var(--text); }
+  .cs-curr { font-size:12px; color:var(--text3); font-family:'IBM Plex Mono',monospace; min-width:28px; }
+  .cs-eq { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; text-align:right; min-width:80px; }
+
+  /* TOTAL RECEIVED BAR */
+  .recv-bar { border-radius:var(--radius); padding:10px 14px; display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+  .recv-bar.ok { background:var(--accent-bg); border:1px solid #a7f3d0; }
+  .recv-bar.short { background:var(--accent2-bg); border:1px solid #fcd34d; }
+  .recv-bar.none { background:var(--surface2); border:1px solid var(--border); }
+  .recv-label { font-size:12px; }
+  .recv-val { font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:15px; }
+
+  /* SUBMIT BTN */
+  .submit-btn { width:100%; padding:13px; background:var(--text); color:#fff; border:none; border-radius:var(--radius); font-size:14px; font-weight:600; font-family:'IBM Plex Sans',sans-serif; cursor:pointer; transition:background 0.15s; display:flex; align-items:center; justify-content:center; gap:7px; }
+  .submit-btn:hover { background:#2d2b28; }
+  .submit-btn.green { background:var(--accent); }
+  .submit-btn.green:hover { background:#155237; }
+  .submit-btn:disabled { background:var(--border); color:var(--text3); cursor:not-allowed; }
+
+  /* SALES LOG TABLE */
+  .data-table { width:100%; border-collapse:collapse; }
+  .data-table th { text-align:left; padding:8px 18px; font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:0.6px; border-bottom:1px solid var(--border); font-weight:400; background:var(--surface2); }
+  .data-table td { padding:10px 18px; border-bottom:1px solid var(--border); font-size:13px; vertical-align:middle; }
+  .data-table tr:last-child td { border-bottom:none; }
+  .data-table tbody tr { transition:background 0.1s; }
+  .data-table tbody tr:hover { background:#FAFAF8; }
+
+  /* DATE GROUP */
+  .date-group-label { font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:1px; padding:10px 18px 6px; border-bottom:1px solid var(--border); background:var(--surface2); display:flex; align-items:center; justify-content:space-between; }
+  .date-group-total { font-weight:600; color:var(--text2); }
+
+  /* PENDING BADGE in table */
+  .unverified { background:var(--accent2-bg); color:var(--accent2); font-size:10px; font-family:'IBM Plex Mono',monospace; padding:1px 6px; border-radius:100px; }
+
+  /* CASH BOX */
+  .cash-box { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; position:sticky; top:76px; animation:fadeUp 0.4s ease; }
+  .cb-head { padding:13px 16px; border-bottom:1px solid var(--border); background:var(--surface2); display:flex; align-items:center; justify-content:space-between; }
+  .cb-title { font-size:13px; font-weight:600; display:flex; align-items:center; gap:7px; }
+  .cb-row { display:flex; justify-content:space-between; align-items:baseline; padding:9px 16px; border-bottom:1px solid var(--border); font-size:13px; }
+  .cb-row:last-child { border-bottom:none; }
+  .cb-label { color:var(--text2); }
+  .cb-val { font-family:'IBM Plex Mono',monospace; font-weight:600; }
+  .cb-val.green { color:var(--accent); }
+  .cb-val.amber { color:var(--accent2); }
+  .cb-total { padding:13px 16px; background:var(--surface2); display:flex; justify-content:space-between; align-items:center; }
+  .cb-total-label { font-size:13px; font-weight:600; }
+  .cb-total-val { font-size:20px; font-weight:600; font-family:'IBM Plex Mono',monospace; letter-spacing:-0.5px; }
+
+  /* HANDOVER TO ACCOUNTING */
+  .handover-section { padding:14px 16px; border-top:1px solid var(--border); }
+  .handover-inp { width:100%; padding:9px 12px; border:1.5px solid var(--border); border-radius:var(--radius); font-size:18px; font-family:'IBM Plex Mono',monospace; font-weight:600; text-align:right; outline:none; background:var(--surface); margin-bottom:8px; transition:border-color 0.15s; }
+  .handover-inp:focus { border-color:var(--text); }
+  .handover-diff { font-size:12px; font-family:'IBM Plex Mono',monospace; padding:7px 10px; border-radius:var(--radius); margin-bottom:10px; display:flex; justify-content:space-between; }
+  .handover-diff.ok { background:var(--accent-bg); color:var(--accent); }
+  .handover-diff.short { background:var(--red-bg); color:var(--red); }
+  .handover-diff.none { background:var(--surface2); color:var(--text3); }
+
+  /* UNVERIFIED ALERT */
+  .unverified-alert { background:var(--accent2-bg); border:1px solid #fcd34d; border-radius:var(--radius); padding:10px 14px; font-size:12px; color:var(--accent2); display:flex; gap:8px; align-items:flex-start; margin-bottom:14px; }
+
+  /* MODAL */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:40; align-items:center; justify-content:center; }
+  .modal-overlay.open { display:flex; }
+  .modal { background:var(--surface); border-radius:var(--radius-lg); border:1px solid var(--border); width:420px; box-shadow:0 8px 40px rgba(0,0,0,0.12); animation:fadeUp 0.2s ease; }
+  .modal-head { padding:18px 20px; border-bottom:1px solid var(--border); display:flex; align-items:flex-start; justify-content:space-between; }
+  .modal-title { font-size:15px; font-weight:600; }
+  .modal-body { padding:20px; }
+  .modal-footer { padding:14px 20px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; }
+  .close-btn { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; color:var(--text2); }
+  .sum-row { display:flex; justify-content:space-between; padding:7px 0; font-size:13px; border-bottom:1px solid var(--border); }
+  .sum-row:last-child { border-bottom:none; }
+  .sum-mono { font-family:'IBM Plex Mono',monospace; font-weight:600; }
+
+  /* TABS */
+  .tabs { display:flex; gap:2px; padding:0 28px; background:var(--surface); border-bottom:1px solid var(--border); }
+  .tab { padding:12px 16px; font-size:13px; font-weight:500; color:var(--text3); cursor:pointer; border-bottom:2px solid transparent; transition:all 0.1s; display:flex; align-items:center; gap:7px; }
+  .tab:hover { color:var(--text2); }
+  .tab.active { color:var(--text); border-bottom-color:var(--text); }
+  .tab-count { font-size:11px; font-family:'IBM Plex Mono',monospace; background:var(--surface2); color:var(--text2); padding:1px 6px; border-radius:100px; }
+  .tab.active .tab-count { background:var(--text); color:#fff; }
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark"><i class="ti ti-flame"></i></div>
+    <div><div class="logo-text">Ember</div><div class="logo-sub">charcoal system</div></div>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Overview</div>
+    <a class="nav-item"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
+    <a class="nav-item"><i class="ti ti-chart-bar"></i> Reports</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Stock</div>
+    <a class="nav-item"><i class="ti ti-ship"></i> Containers</a>
+    <a class="nav-item"><i class="ti ti-building-warehouse"></i> Warehouse</a>
+    <a class="nav-item"><i class="ti ti-tools"></i> Packing</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Sales</div>
+    <a class="nav-item"><i class="ti ti-users"></i> Clients <span class="nav-badge amber">3</span></a>
+    <a class="nav-item"><i class="ti ti-file-invoice"></i> Orders</a>
+    <a class="nav-item"><i class="ti ti-truck"></i> Delivery</a>
+    <a class="nav-item active"><i class="ti ti-building-store"></i> Warehouse sales</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Finance</div>
+    <a class="nav-item"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item"><i class="ti ti-cash"></i> Payments</a>
+    <a class="nav-item"><i class="ti ti-calculator"></i> Cash handover</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item"><i class="ti ti-settings"></i> Settings</a>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="user-row">
+      <div class="avatar-sm">KA</div>
+      <div><div class="user-name">Khalil Abi Nader</div><div class="user-role">owner</div></div>
+    </div>
+  </div>
+</aside>
+
+<div class="main">
+  <header class="topbar">
+    <span class="page-title">Warehouse sales</span>
+    <div class="topbar-right">
+      <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">Rate: 89,550 LL/$</span>
+      <button class="btn"><i class="ti ti-history" style="font-size:15px"></i> Full history</button>
+    </div>
+  </header>
+
+  <!-- PENDING BANNER -->
+  <div class="pending-banner" id="pendingBanner">
+    <i class="ti ti-alert-circle" style="font-size:16px;flex-shrink:0"></i>
+    <span><strong>7 unverified sales</strong> from the last 3 days waiting to be entered — worker's paper log below</span>
+    <button class="btn" style="margin-left:auto;font-size:12px;padding:5px 10px" onclick="showTab('log',document.querySelector('.tab:last-child'))">View log →</button>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('entry',this)">
+      <i class="ti ti-plus" style="font-size:14px"></i> Enter sale
+    </div>
+    <div class="tab" onclick="showTab('log',this)">
+      <i class="ti ti-list" style="font-size:14px"></i> Sales log
+      <span class="tab-count">24</span>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- KPI ROW -->
+    <div class="kpi-row">
+      <div class="kpi">
+        <div class="kpi-label">Sales today</div>
+        <div class="kpi-value" id="kpi-today">$284</div>
+        <div class="kpi-sub">6 transactions</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">This week</div>
+        <div class="kpi-value">$1,840</div>
+        <div class="kpi-sub">38 transactions</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Cash in warehouse</div>
+        <div class="kpi-value" style="color:var(--accent)" id="kpi-cash">$284</div>
+        <div class="kpi-sub">since last handover</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Unverified</div>
+        <div class="kpi-value" style="color:var(--accent2)">7</div>
+        <div class="kpi-sub">sales not yet entered</div>
+      </div>
+    </div>
+
+    <!-- ENTRY TAB -->
+    <div id="tab-entry">
+      <div class="two-col">
+
+        <!-- LEFT: SALE ENTRY FORM -->
+        <div>
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title"><i class="ti ti-plus"></i> Enter a walk-in sale</div>
+              <span style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">Each sale is entered separately</span>
+            </div>
+            <div class="sale-form">
+
+              <!-- Date + Buyer -->
+              <div class="form-row">
+                <div>
+                  <label class="form-label">Sale date</label>
+                  <input class="form-input" type="date" value="2026-05-21" id="saleDate">
+                </div>
+                <div>
+                  <label class="form-label">Buyer name</label>
+                  <input class="form-input" type="text" id="buyerName" placeholder="Name or 'Walk-in' if unknown">
+                </div>
+              </div>
+
+              <!-- Charcoal spec -->
+              <div class="form-row">
+                <div>
+                  <label class="form-label">Charcoal type</label>
+                  <select class="form-input" id="charType">
+                    <option>BBQ Hardwood</option>
+                    <option>Shisha</option>
+                    <option>Restaurant Grade</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label">Grade</label>
+                  <select class="form-input" id="charGrade">
+                    <option>Grade A</option>
+                    <option>Grade B</option>
+                    <option>Grade C</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Bag lines -->
+              <div>
+                <label class="form-label">Bags sold</label>
+                <div class="bag-lines" id="bagLines">
+                  <div class="bag-line">
+                    <select class="bag-line-select" onchange="calcSaleTotal()">
+                      <option>2 kg bag</option>
+                      <option>1.9 kg bag</option>
+                      <option>5 kg bag</option>
+                      <option>10 kg bag</option>
+                      <option>20 kg bag</option>
+                    </select>
+                    <input class="bag-line-qty" type="number" value="1" min="1" placeholder="qty" oninput="calcSaleTotal()">
+                    <button class="bag-line-del" onclick="removeBagLine(this)"><i class="ti ti-x" style="font-size:11px"></i></button>
+                  </div>
+                </div>
+                <button class="add-bag-line" onclick="addBagLine()">
+                  <i class="ti ti-plus" style="font-size:13px"></i> Add another bag size
+                </button>
+              </div>
+
+              <div style="height:1px;background:var(--border);margin:16px 0"></div>
+
+              <!-- Price per bag -->
+              <div class="form-row">
+                <div>
+                  <label class="form-label">Price per bag</label>
+                  <input class="form-input" type="number" id="pricePerBag" placeholder="0.00" step="0.01" oninput="calcSaleTotal()">
+                </div>
+                <div>
+                  <label class="form-label">Invoice currency</label>
+                  <select class="form-input" id="invoiceCurr">
+                    <option>USD</option>
+                    <option>LBP</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Total preview -->
+              <div class="total-preview" id="totalPreview">
+                <div>
+                  <div class="tp-label">Order total</div>
+                  <div style="font-size:12px;color:var(--text3);margin-top:1px" id="totalBreakdown">Enter price per bag to calculate</div>
+                </div>
+                <div class="tp-value" id="totalVal">—</div>
+              </div>
+
+              <!-- Amount received — split USD + LBP -->
+              <label class="form-label">Amount received <span style="font-weight:400;color:var(--text3)">(can split USD + LBP)</span></label>
+              <div class="currency-split">
+                <div class="cs-row">
+                  <span class="cs-label">USD</span>
+                  <input class="cs-input" type="number" placeholder="0.00" id="rcvUsd" oninput="calcReceived()">
+                  <span class="cs-curr">$</span>
+                  <span class="cs-eq" id="usdEq"></span>
+                </div>
+                <div class="cs-row">
+                  <span class="cs-label">LBP</span>
+                  <input class="cs-input" type="number" placeholder="0" id="rcvLbp" oninput="calcReceived()">
+                  <span class="cs-curr">LL</span>
+                  <span class="cs-eq" id="lbpEq"></span>
+                </div>
+              </div>
+
+              <div class="recv-bar none" id="recvBar">
+                <span class="recv-label" id="recvLabel">Enter amount received above</span>
+                <span class="recv-val" id="recvVal">—</span>
+              </div>
+
+              <!-- Method -->
+              <div class="form-group">
+                <label class="form-label">Payment method</label>
+                <select class="form-input" id="payMethod">
+                  <option>Cash</option>
+                  <option>Whish</option>
+                  <option>OMT</option>
+                  <option>On account</option>
+                </select>
+              </div>
+
+              <!-- Notes -->
+              <div class="form-group" style="margin-bottom:16px">
+                <label class="form-label">Notes (optional)</label>
+                <input class="form-input" type="text" placeholder="Any observations…">
+              </div>
+
+              <button class="submit-btn green" id="submitBtn" onclick="submitSale()">
+                <i class="ti ti-check"></i> Record this sale
+              </button>
+
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: CASH BOX + TODAY'S QUICK LOG -->
+        <div>
+
+          <!-- CASH BOX -->
+          <div class="cash-box">
+            <div class="cb-head">
+              <div class="cb-title"><i class="ti ti-safe" style="font-size:14px;color:var(--text2)"></i> Warehouse cash box</div>
+              <span style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">since last handover</span>
+            </div>
+            <div class="cb-row"><span class="cb-label">Cash collected</span><span class="cb-val green" id="cb-cash">$284.00</span></div>
+            <div class="cb-row"><span class="cb-label">Whish received</span><span class="cb-val">$40.00</span></div>
+            <div class="cb-row"><span class="cb-label">OMT received</span><span class="cb-val">$0.00</span></div>
+            <div class="cb-row"><span class="cb-label">On account</span><span class="cb-val amber">$120.00</span></div>
+            <div class="cb-total">
+              <span class="cb-total-label">Total received</span>
+              <span class="cb-total-val" id="cb-total">$444.00</span>
+            </div>
+
+            <!-- Handover to accounting -->
+            <div class="handover-section">
+              <label class="form-label">Hand over cash to accounting</label>
+              <input class="handover-inp" type="number" id="handoverAmt" placeholder="0.00" oninput="calcHandoverDiff()">
+              <div class="handover-diff none" id="handoverDiff">
+                <span>Expected (cash only)</span>
+                <span id="hdiff-val">$284.00</span>
+              </div>
+              <select class="form-input" style="margin-bottom:10px">
+                <option>Received by: Khalil (owner)</option>
+                <option>Received by: Accountant</option>
+              </select>
+              <button class="submit-btn" onclick="openHandoverModal()">
+                <i class="ti ti-arrow-right"></i> Record handover
+              </button>
+            </div>
+          </div>
+
+          <!-- TODAY'S QUICK LOG -->
+          <div class="card" style="margin-top:14px">
+            <div class="card-head">
+              <div class="card-title"><i class="ti ti-list"></i> Today's sales</div>
+              <span class="badge badge-gray">6 sales</span>
+            </div>
+            <div id="todayLog">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 18px;border-bottom:1px solid var(--border);font-size:12px">
+                <div>
+                  <div style="font-weight:500">Walk-in</div>
+                  <div style="color:var(--text3);font-family:'IBM Plex Mono',monospace;font-size:11px">3×2kg BBQ A · $2.80/bag</div>
+                </div>
+                <div style="text-align:right">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-weight:600">$8.40</div>
+                  <div style="font-size:11px;color:var(--text3)">cash · 09:14</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 18px;border-bottom:1px solid var(--border);font-size:12px">
+                <div>
+                  <div style="font-weight:500">Georges Khoury</div>
+                  <div style="color:var(--text3);font-family:'IBM Plex Mono',monospace;font-size:11px">10×5kg Shisha B · $4.50/bag</div>
+                </div>
+                <div style="text-align:right">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-weight:600">$45.00</div>
+                  <div style="font-size:11px;color:var(--text3)">cash · 10:02</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 18px;border-bottom:1px solid var(--border);font-size:12px">
+                <div>
+                  <div style="font-weight:500">Walk-in</div>
+                  <div style="color:var(--text3);font-family:'IBM Plex Mono',monospace;font-size:11px">5×2kg BBQ A · $2.80/bag</div>
+                </div>
+                <div style="text-align:right">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-weight:600">$14.00</div>
+                  <div style="font-size:11px;color:var(--text3)">Whish · 11:30</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 18px;border-bottom:1px solid var(--border);font-size:12px">
+                <div>
+                  <div style="font-weight:500">Ali Hamdan</div>
+                  <div style="color:var(--text3);font-family:'IBM Plex Mono',monospace;font-size:11px">20×2kg BBQ A · $2.80/bag</div>
+                </div>
+                <div style="text-align:right">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-weight:600">$56.00</div>
+                  <div style="font-size:11px;color:var(--text3)">cash · 12:15</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 18px;font-size:12px">
+                <div>
+                  <div style="font-weight:500">Walk-in</div>
+                  <div style="color:var(--text3);font-family:'IBM Plex Mono',monospace;font-size:11px">4×10kg Restaurant A · $8.00/bag</div>
+                </div>
+                <div style="text-align:right">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-weight:600">$32.00</div>
+                  <div style="font-size:11px;color:var(--text3)">cash · 14:48</div>
+                </div>
+              </div>
+            </div>
+            <div style="padding:10px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:space-between">
+              <span style="font-size:12px;color:var(--text3)">Total today</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-weight:600">$155.40</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- SALES LOG TAB -->
+    <div id="tab-log" style="display:none">
+
+      <div class="unverified-alert">
+        <i class="ti ti-clipboard-text" style="font-size:16px;flex-shrink:0;margin-top:1px"></i>
+        <div>
+          <strong>7 sales not yet entered</strong> — worker's paper log shows sales on 19 and 20 May that the accountant hasn't entered yet. Enter them using the form on the left tab.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-list"></i> All warehouse sales</div>
+          <div style="display:flex;gap:8px">
+            <select style="padding:5px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:12px;font-family:'IBM Plex Sans',sans-serif;outline:none;background:var(--surface);color:var(--text2)">
+              <option>All dates</option>
+              <option>Today</option>
+              <option>This week</option>
+              <option>This month</option>
+            </select>
+            <button class="btn" style="font-size:12px"><i class="ti ti-download" style="font-size:13px"></i> Export</button>
+          </div>
+        </div>
+
+        <!-- TODAY GROUP -->
+        <div class="date-group-label">
+          <span>Thursday 21 May 2026</span>
+          <span class="date-group-total">$155.40 · 5 sales</span>
+        </div>
+        <table class="data-table">
+          <tbody>
+            <tr>
+              <td><div style="font-weight:500">Walk-in</div><div style="font-size:11px;color:var(--text3)">09:14</div></td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">3×2kg BBQ A</span></td>
+              <td style="font-family:'IBM Plex Mono',monospace">$2.80/bag</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600">$8.40</td>
+              <td><span class="badge badge-gray">Cash</span></td>
+              <td><span class="badge badge-green">Verified</span></td>
+            </tr>
+            <tr>
+              <td><div style="font-weight:500">Georges Khoury</div><div style="font-size:11px;color:var(--text3)">10:02</div></td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">10×5kg Shisha B</span></td>
+              <td style="font-family:'IBM Plex Mono',monospace">$4.50/bag</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600">$45.00</td>
+              <td><span class="badge badge-gray">Cash</span></td>
+              <td><span class="badge badge-green">Verified</span></td>
+            </tr>
+            <tr>
+              <td><div style="font-weight:500">Ali Hamdan</div><div style="font-size:11px;color:var(--text3)">12:15</div></td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">20×2kg BBQ A</span></td>
+              <td style="font-family:'IBM Plex Mono',monospace">$2.80/bag</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600">$56.00</td>
+              <td><span class="badge badge-gray">Cash</span></td>
+              <td><span class="badge badge-green">Verified</span></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- YESTERDAY GROUP — unverified -->
+        <div class="date-group-label">
+          <span>Wednesday 20 May 2026</span>
+          <span class="date-group-total" style="color:var(--accent2)">⚠ 4 unverified</span>
+        </div>
+        <table class="data-table">
+          <tbody>
+            <tr style="opacity:0.7">
+              <td><div style="font-weight:500">Walk-in</div><div style="font-size:11px;color:var(--text3)">~morning</div></td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">5×2kg BBQ A</span></td>
+              <td style="color:var(--text3);font-size:12px">from paper log</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">—</td>
+              <td><span class="badge badge-gray">Cash</span></td>
+              <td><span class="unverified">Not entered</span></td>
+            </tr>
+            <tr style="opacity:0.7">
+              <td><div style="font-weight:500">Hassan Moussa</div><div style="font-size:11px;color:var(--text3)">~afternoon</div></td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">2×10kg Rest. A</span></td>
+              <td style="color:var(--text3);font-size:12px">from paper log</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">—</td>
+              <td><span class="badge badge-gray">Cash</span></td>
+              <td><span class="unverified">Not entered</span></td>
+            </tr>
+            <tr style="opacity:0.7">
+              <td><div style="font-weight:500">Walk-in</div><div style="font-size:11px;color:var(--text3)">~afternoon</div></td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">8×5kg Shisha B</span></td>
+              <td style="color:var(--text3);font-size:12px">from paper log</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">—</td>
+              <td><span class="badge badge-gray">Cash</span></td>
+              <td><span class="unverified">Not entered</span></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style="padding:10px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:space-between">
+          <span style="font-size:12px;color:var(--text3)">Showing 6 of 24 records this month</span>
+          <button style="font-size:12px;color:var(--text3);background:none;border:none;cursor:pointer">Show all →</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- HANDOVER CONFIRMATION MODAL -->
+<div class="modal-overlay" id="handoverModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Record warehouse cash handover</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px">Cash collected from walk-in sales</div>
+      </div>
+      <button class="close-btn" onclick="closeHandoverModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="sum-row"><strong>Cash collected (walk-in sales)</strong><span class="sum-mono" style="color:var(--accent)">$284.00</span></div>
+      <div class="sum-row"><strong>Whish + OMT</strong><span class="sum-mono">$40.00</span></div>
+      <div class="sum-row"><strong>On account</strong><span class="sum-mono" style="color:var(--accent2)">$120.00</span></div>
+      <div class="sum-row" style="border-top:2px solid var(--border);padding-top:10px;margin-top:4px">
+        <strong>Cash handed over</strong>
+        <span class="sum-mono" style="font-size:18px" id="modal-handed">—</span>
+      </div>
+      <div style="margin-top:12px;padding:10px 12px;border-radius:var(--radius);font-size:13px;background:var(--accent-bg);color:var(--accent);border:1px solid #a7f3d0" id="modal-diff-note">
+        Amount matches expected cash ✓
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeHandoverModal()">Cancel</button>
+      <button class="btn green" onclick="closeHandoverModal()"><i class="ti ti-check" style="font-size:14px"></i> Confirm handover</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const RATE = 89550;
+  const BAG_NOMINAL = { '2 kg bag':2, '1.9 kg bag':1.9, '5 kg bag':5, '10 kg bag':10, '20 kg bag':20 };
+
+  function showTab(name, el) {
+    document.getElementById('tab-entry').style.display = name==='entry' ? 'block' : 'none';
+    document.getElementById('tab-log').style.display   = name==='log'   ? 'block' : 'none';
+    document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+    if (el) el.classList.add('active');
+  }
+
+  function addBagLine() {
+    const lines = document.getElementById('bagLines');
+    const div = document.createElement('div');
+    div.className = 'bag-line';
+    div.innerHTML = `
+      <select class="bag-line-select" onchange="calcSaleTotal()">
+        <option>2 kg bag</option>
+        <option>1.9 kg bag</option>
+        <option>5 kg bag</option>
+        <option>10 kg bag</option>
+        <option>20 kg bag</option>
+      </select>
+      <input class="bag-line-qty" type="number" value="1" min="1" placeholder="qty" oninput="calcSaleTotal()">
+      <button class="bag-line-del" onclick="removeBagLine(this)"><i class="ti ti-x" style="font-size:11px"></i></button>
+    `;
+    lines.appendChild(div);
+  }
+
+  function removeBagLine(btn) {
+    const lines = document.getElementById('bagLines');
+    if (lines.children.length > 1) {
+      btn.closest('.bag-line').remove();
+      calcSaleTotal();
+    }
+  }
+
+  function calcSaleTotal() {
+    const price = parseFloat(document.getElementById('pricePerBag').value) || 0;
+    let totalBags = 0, totalKg = 0;
+    document.querySelectorAll('.bag-line').forEach(line => {
+      const type = line.querySelector('select').value;
+      const qty  = parseInt(line.querySelector('input').value) || 0;
+      totalBags += qty;
+      totalKg   += qty * (BAG_NOMINAL[type] || 2);
+    });
+    const total = totalBags * price;
+    document.getElementById('totalVal').textContent = price > 0 ? '$' + total.toFixed(2) : '—';
+    document.getElementById('totalBreakdown').textContent = price > 0
+      ? `${totalBags} bags × $${price.toFixed(2)} = $${total.toFixed(2)}`
+      : 'Enter price per bag to calculate';
+    calcReceived();
+  }
+
+  function calcReceived() {
+    const usd = parseFloat(document.getElementById('rcvUsd').value) || 0;
+    const lbp = parseFloat(document.getElementById('rcvLbp').value) || 0;
+    const lbpAsUsd = lbp / RATE;
+    const total = usd + lbpAsUsd;
+
+    document.getElementById('usdEq').textContent = usd > 0 ? '= $' + usd.toFixed(2) : '';
+    document.getElementById('lbpEq').textContent = lbp > 0 ? '≈ $' + lbpAsUsd.toFixed(2) : '';
+
+    const bar = document.getElementById('recvBar');
+    if (total === 0) {
+      bar.className = 'recv-bar none';
+      document.getElementById('recvLabel').textContent = 'Enter amount received above';
+      document.getElementById('recvVal').textContent = '—';
+      return;
+    }
+
+    // Compare to expected total
+    const price = parseFloat(document.getElementById('pricePerBag').value) || 0;
+    let totalBags = 0;
+    document.querySelectorAll('.bag-line').forEach(line => {
+      totalBags += parseInt(line.querySelector('input').value) || 0;
+    });
+    const expected = totalBags * price;
+    const diff = total - expected;
+
+    document.getElementById('recvVal').textContent = '$' + total.toFixed(2) + ' total';
+
+    if (Math.abs(diff) < 0.01 || expected === 0) {
+      bar.className = 'recv-bar ok';
+      document.getElementById('recvLabel').textContent = expected > 0 ? 'Matches total ✓' : 'Total received';
+    } else if (diff < 0) {
+      bar.className = 'recv-bar short';
+      document.getElementById('recvLabel').textContent = 'Short $' + Math.abs(diff).toFixed(2) + ' — goes on account';
+    } else {
+      bar.className = 'recv-bar ok';
+      document.getElementById('recvLabel').textContent = 'Over by $' + diff.toFixed(2);
+    }
+  }
+
+  function submitSale() {
+    const buyer = document.getElementById('buyerName').value || 'Walk-in';
+    const price = parseFloat(document.getElementById('pricePerBag').value) || 0;
+    if (!price) { alert('Please enter a price per bag'); return; }
+
+    let totalBags = 0;
+    let bagDesc = '';
+    document.querySelectorAll('.bag-line').forEach(line => {
+      const type = line.querySelector('select').value;
+      const qty  = parseInt(line.querySelector('input').value) || 0;
+      if (qty > 0) { totalBags += qty; bagDesc += qty + '×' + type + ' '; }
+    });
+
+    const total = (totalBags * price).toFixed(2);
+    const now = new Date();
+    const timeStr = now.getHours() + ':' + String(now.getMinutes()).padStart(2,'0');
+
+    // Add to today's log
+    const log = document.getElementById('todayLog');
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:9px 18px;border-bottom:1px solid var(--border);font-size:12px;animation:fadeUp 0.3s ease';
+    div.innerHTML = `
+      <div>
+        <div style="font-weight:500">${buyer}</div>
+        <div style="color:var(--text3);font-family:'IBM Plex Mono',monospace;font-size:11px">${bagDesc.trim()} · $${price.toFixed(2)}/bag</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-family:'IBM Plex Mono',monospace;font-weight:600">$${total}</div>
+        <div style="font-size:11px;color:var(--text3)">cash · ${timeStr}</div>
+      </div>
+    `;
+    log.appendChild(div);
+
+    // Update cash box
+    const cbCash = document.getElementById('cb-cash');
+    const current = parseFloat(cbCash.textContent.replace('$','')) || 0;
+    cbCash.textContent = '$' + (current + parseFloat(total)).toFixed(2);
+
+    // Reset form
+    document.getElementById('buyerName').value = '';
+    document.getElementById('pricePerBag').value = '';
+    document.getElementById('rcvUsd').value = '';
+    document.getElementById('rcvLbp').value = '';
+    document.getElementById('usdEq').textContent = '';
+    document.getElementById('lbpEq').textContent = '';
+    document.getElementById('totalVal').textContent = '—';
+    document.getElementById('totalBreakdown').textContent = 'Enter price per bag to calculate';
+    document.getElementById('recvBar').className = 'recv-bar none';
+    document.getElementById('recvLabel').textContent = 'Enter amount received above';
+    document.getElementById('recvVal').textContent = '—';
+    while (document.getElementById('bagLines').children.length > 1)
+      document.getElementById('bagLines').lastChild.remove();
+    document.getElementById('bagLines').querySelector('input').value = 1;
+  }
+
+  function calcHandoverDiff() {
+    const handed = parseFloat(document.getElementById('handoverAmt').value) || 0;
+    const expected = 284;
+    const diff = handed - expected;
+    const diffEl = document.getElementById('handoverDiff');
+    if (handed === 0) {
+      diffEl.className = 'handover-diff none';
+      diffEl.innerHTML = '<span>Expected (cash only)</span><span>$284.00</span>';
+      return;
+    }
+    if (Math.abs(diff) < 0.01) {
+      diffEl.className = 'handover-diff ok';
+      diffEl.innerHTML = '<span>Exact match ✓</span><span>$0.00</span>';
+    } else if (diff < 0) {
+      diffEl.className = 'handover-diff short';
+      diffEl.innerHTML = '<span>Short</span><span>−$' + Math.abs(diff).toFixed(2) + '</span>';
+    } else {
+      diffEl.className = 'handover-diff ok';
+      diffEl.innerHTML = '<span>Over</span><span>+$' + diff.toFixed(2) + '</span>';
+    }
+  }
+
+  function openHandoverModal() {
+    const v = parseFloat(document.getElementById('handoverAmt').value) || 0;
+    document.getElementById('modal-handed').textContent = '$' + v.toFixed(2);
+    const diff = v - 284;
+    const note = document.getElementById('modal-diff-note');
+    if (Math.abs(diff) < 0.01) {
+      note.style.background = 'var(--accent-bg)'; note.style.color = 'var(--accent)'; note.style.borderColor = '#a7f3d0';
+      note.textContent = 'Amount matches expected cash ✓';
+    } else if (diff < 0) {
+      note.style.background = 'var(--red-bg)'; note.style.color = 'var(--red)'; note.style.borderColor = '#fca5a5';
+      note.textContent = '⚠ Short $' + Math.abs(diff).toFixed(2) + ' — will be noted on record.';
+    } else {
+      note.style.background = 'var(--accent-bg)'; note.style.color = 'var(--accent)'; note.style.borderColor = '#a7f3d0';
+      note.textContent = 'Over by $' + diff.toFixed(2) + ' — noted on record.';
+    }
+    document.getElementById('handoverModal').classList.add('open');
+  }
+
+  function closeHandoverModal() {
+    document.getElementById('handoverModal').classList.remove('open');
+  }
+
+  document.getElementById('handoverModal').addEventListener('click', function(e) {
+    if (e.target === this) closeHandoverModal();
+  });
+</script>
+</body>
+</html>

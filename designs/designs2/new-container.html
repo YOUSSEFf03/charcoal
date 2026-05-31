@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — New container</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .form-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 20px; }
+  .form-card-head { font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; }
+  .grid-2c { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3c { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .grid-4c { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+
+  .pline-row {
+    display: grid; grid-template-columns: 1.4fr 0.8fr 1.1fr 90px 90px 90px 100px 36px;
+    gap: 8px; align-items: end;
+    padding: 10px 0;
+    border-top: 1px dashed var(--border);
+  }
+  .pline-row:first-of-type { border-top: none; }
+  .pline-row input, .pline-row select {
+    width: 100%; padding: 8px 10px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 13px; background: var(--surface); outline: none;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .pline-row input.num { text-align: right; font-family: 'IBM Plex Mono', monospace; }
+  .pline-row input:focus, .pline-row select:focus { border-color: var(--text); }
+  .pline-row .lbl { font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; display: block; }
+  .pline-row .line-cost {
+    font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 600;
+    text-align: right; padding: 8px 0; color: var(--accent);
+  }
+  .line-del {
+    width: 36px; height: 36px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface);
+    cursor: pointer; color: var(--text3);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .line-del:hover { background: var(--red-bg); border-color: #fca5a5; color: var(--red); }
+  .add-line {
+    margin-top: 8px; background: transparent; border: 1px dashed var(--border2);
+    color: var(--text2); font-family: 'IBM Plex Sans', sans-serif;
+    padding: 9px 14px; border-radius: var(--radius);
+    cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .add-line:hover { background: var(--surface2); color: var(--text); }
+
+  .status-track {
+    display: flex; align-items: center; gap: 0; margin-top: 4px;
+  }
+  .status-step {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px 6px 10px;
+    font-size: 12px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); border-radius: 100px; background: var(--surface2);
+    cursor: pointer;
+  }
+  .status-step.sel { color: #fff; background: var(--text); }
+  .status-step .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .status-arrow { width: 12px; height: 1px; background: var(--border); margin: 0 4px; }
+
+  .summary {
+    position: sticky; top: 76px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden;
+  }
+  .sum-head { background: var(--surface2); padding: 13px 18px; font-size: 12px; font-family: 'IBM Plex Mono', monospace; color: var(--text2); text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
+  .sum-body { padding: 16px 18px; }
+  .sum-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 13px; }
+  .sum-row .lbl { color: var(--text2); }
+  .sum-row .val { font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
+  .sum-row.big { font-size: 17px; font-weight: 700; border-top: 1px dashed var(--border2); padding-top: 10px; margin-top: 8px; }
+  .sum-row.big .val { font-weight: 700; color: var(--accent); }
+  .sum-actions { padding: 12px 18px; border-top: 1px solid var(--border); background: #FAFAF8; display: flex; flex-direction: column; gap: 8px; }
+  .sum-actions .btn { justify-content: center; }
+  .btn.green { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.green:hover { background: #155237; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="containers"></aside>
+
+<div class="main">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="back-link" href="containers.html"><i class="ti ti-chevron-left"></i> Containers</a>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-title">New container</span>
+      <span class="badge badge-gray" style="margin-left:4px">draft</span>
+    </div>
+    <div class="topbar-right">
+      <a class="btn" href="containers.html" style="text-decoration:none">Cancel</a>
+      <button class="btn">Save draft</button>
+      <button class="btn primary"><i class="ti ti-check" style="font-size:15px"></i> Create container</button>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <div style="display:grid;grid-template-columns:1.7fr 1fr;gap:14px;align-items:start">
+
+      <div class="stack">
+
+        <!-- CONTAINER HEADER -->
+        <div class="form-card">
+          <div class="form-card-head">container details</div>
+          <div class="grid-3c">
+            <div class="field">
+              <label class="field-label">Container number</label>
+              <input class="input mono" placeholder="CONT-2026-015" value="CONT-2026-015">
+            </div>
+            <div class="field">
+              <label class="field-label">Supplier</label>
+              <select class="input">
+                <option>Sahara Export — Sudan</option>
+                <option>Al-Amin Trading — Iraq</option>
+                <option>Black Forest Co. — Indonesia</option>
+                <option>+ New supplier …</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label">ETA</label>
+              <input class="input" type="date" value="2026-06-15">
+            </div>
+          </div>
+
+          <div class="field" style="margin-top:14px">
+            <label class="field-label" style="display:block;margin-bottom:6px">Status</label>
+            <div class="status-track">
+              <div class="status-step sel"><span class="dot"></span> Created</div>
+              <div class="status-arrow"></div>
+              <div class="status-step"><span class="dot"></span> At port</div>
+              <div class="status-arrow"></div>
+              <div class="status-step"><span class="dot"></span> In transit</div>
+              <div class="status-arrow"></div>
+              <div class="status-step"><span class="dot"></span> Arrived</div>
+            </div>
+          </div>
+
+          <div class="field" style="margin-top:14px">
+            <label class="field-label">Notes</label>
+            <textarea class="textarea" placeholder="e.g. expected 28 tons total, request 3 lots"></textarea>
+          </div>
+        </div>
+
+        <!-- PRODUCT LINES -->
+        <div class="form-card">
+          <div class="form-card-head">
+            <span>product lines · one row per charcoal type</span>
+            <span style="font-size:11px;color:var(--text3)">cost calculated live</span>
+          </div>
+
+          <div class="pline-row">
+            <div>
+              <span class="lbl">Type</span>
+              <input value="BBQ Hardwood">
+            </div>
+            <div>
+              <span class="lbl">Grade</span>
+              <select>
+                <option>A</option><option>B</option><option>C</option>
+              </select>
+            </div>
+            <div>
+              <span class="lbl">Supplier</span>
+              <select>
+                <option>Sahara Export</option>
+                <option>Al-Amin Trading</option>
+              </select>
+            </div>
+            <div>
+              <span class="lbl">Paid bags</span>
+              <input class="num" type="number" value="1280">
+            </div>
+            <div>
+              <span class="lbl">Gift bags</span>
+              <input class="num" type="number" value="6">
+            </div>
+            <div>
+              <span class="lbl">kg / bag</span>
+              <input class="num" type="number" value="10.0" step="0.1">
+            </div>
+            <div>
+              <span class="lbl">$ / ton</span>
+              <input class="num" type="number" value="680">
+            </div>
+            <button class="line-del"><i class="ti ti-x" style="font-size:13px"></i></button>
+          </div>
+
+          <div class="pline-row">
+            <div>
+              <span class="lbl">Type</span>
+              <input value="Shisha">
+            </div>
+            <div>
+              <span class="lbl">Grade</span>
+              <select>
+                <option>A</option><option selected>B</option><option>C</option>
+              </select>
+            </div>
+            <div>
+              <span class="lbl">Supplier</span>
+              <select><option>Sahara Export</option></select>
+            </div>
+            <div>
+              <span class="lbl">Paid bags</span>
+              <input class="num" type="number" value="820">
+            </div>
+            <div>
+              <span class="lbl">Gift bags</span>
+              <input class="num" type="number" value="12">
+            </div>
+            <div>
+              <span class="lbl">kg / bag</span>
+              <input class="num" type="number" value="5.0" step="0.1">
+            </div>
+            <div>
+              <span class="lbl">$ / ton</span>
+              <input class="num" type="number" value="820">
+            </div>
+            <button class="line-del"><i class="ti ti-x" style="font-size:13px"></i></button>
+          </div>
+
+          <div class="pline-row">
+            <div>
+              <span class="lbl">Type</span>
+              <input value="Restaurant Grade">
+            </div>
+            <div>
+              <span class="lbl">Grade</span>
+              <select>
+                <option selected>A</option><option>B</option>
+              </select>
+            </div>
+            <div>
+              <span class="lbl">Supplier</span>
+              <select><option>Sahara Export</option></select>
+            </div>
+            <div>
+              <span class="lbl">Paid bags</span>
+              <input class="num" type="number" value="412">
+            </div>
+            <div>
+              <span class="lbl">Gift bags</span>
+              <input class="num" type="number" value="6">
+            </div>
+            <div>
+              <span class="lbl">kg / bag</span>
+              <input class="num" type="number" value="8.0" step="0.1">
+            </div>
+            <div>
+              <span class="lbl">$ / ton</span>
+              <input class="num" type="number" value="840">
+            </div>
+            <button class="line-del"><i class="ti ti-x" style="font-size:13px"></i></button>
+          </div>
+
+          <button class="add-line"><i class="ti ti-plus" style="font-size:14px"></i> Add product line</button>
+        </div>
+
+        <!-- DISCOUNT + INITIAL EXPENSE -->
+        <div class="form-card">
+          <div class="form-card-head">discount &amp; pre-arrival expenses (optional · add more after arrival)</div>
+          <div class="grid-2c">
+            <div class="field">
+              <label class="field-label">Supplier discount (USD)</label>
+              <div class="input-prefix">
+                <span class="input-prefix-text">$</span>
+                <input class="input num" type="number" value="250" step="10">
+              </div>
+              <span style="font-size:11px;color:var(--text3);margin-top:4px;font-family:'IBM Plex Mono',monospace">split across product lines by tonnage</span>
+            </div>
+            <div class="field">
+              <label class="field-label">Pre-arrival freight estimate (USD)</label>
+              <div class="input-prefix">
+                <span class="input-prefix-text">$</span>
+                <input class="input num" type="number" value="3200" step="100">
+              </div>
+              <span style="font-size:11px;color:var(--text3);margin-top:4px;font-family:'IBM Plex Mono',monospace">add port fees, agent, etc. on detail page</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- SUMMARY -->
+      <div class="summary">
+        <div class="sum-head">
+          <span>Cost preview</span>
+          <span style="color:var(--text3)">live</span>
+        </div>
+        <div class="sum-body">
+          <div class="sum-row"><span class="lbl">Product lines</span><span class="val">3</span></div>
+          <div class="sum-row"><span class="lbl">Paid bags · gift</span><span class="val">2,512 · 24</span></div>
+          <div class="sum-row"><span class="lbl">Total tonnage</span><span class="val">20.20 t</span></div>
+          <div class="sum-row"><span class="lbl">Product cost</span><span class="val">$11,209</span></div>
+          <div class="sum-row"><span class="lbl">+ Pre-arrival</span><span class="val" style="color:var(--red)">+ $3,200</span></div>
+          <div class="sum-row"><span class="lbl">− Discount</span><span class="val" style="color:var(--accent)">− $250</span></div>
+          <div class="sum-row big"><span class="lbl">All-in (est.)</span><span class="val">$14,159</span></div>
+          <div class="sum-row" style="color:var(--text3)"><span class="lbl">Avg cost / kg</span><span class="val">≈ $0.70</span></div>
+        </div>
+        <div class="sum-actions">
+          <button class="btn green"><i class="ti ti-check" style="font-size:14px"></i> Create container</button>
+          <a class="btn" href="container-detail.html" style="text-decoration:none;justify-content:center">Create + open detail</a>
+          <button class="btn">Save as draft</button>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

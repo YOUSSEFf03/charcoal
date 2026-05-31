@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — CONT-2026-014</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .status-track {
+    display: flex; align-items: center; gap: 0;
+    margin-top: 16px;
+  }
+  .status-step {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px 6px 10px;
+    font-size: 12px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); border-radius: 100px;
+    background: var(--surface2);
+  }
+  .status-step.done { color: var(--accent); background: var(--accent-bg); }
+  .status-step.current { color: #fff; background: var(--text); }
+  .status-step .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .status-arrow { width: 12px; height: 1px; background: var(--border); margin: 0 4px; }
+
+  /* expense list */
+  .exp-row {
+    display: grid; grid-template-columns: 1fr 110px 32px;
+    gap: 8px; align-items: center;
+    padding: 8px 18px; border-bottom: 1px solid var(--border);
+  }
+  .exp-row:last-of-type { border-bottom: none; }
+  .exp-row input { background: transparent; }
+  .exp-amount { text-align: right; font-family: 'IBM Plex Mono', monospace; font-weight: 500; padding-right: 8px; }
+  .exp-del {
+    width: 28px; height: 28px; border-radius: 6px;
+    border: 1px solid var(--border); background: transparent;
+    cursor: pointer; color: var(--text3);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .exp-del:hover { background: var(--red-bg); border-color: #fca5a5; color: var(--red); }
+
+  /* cost summary */
+  .cost-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 9px 18px; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .cost-row:last-child { border-bottom: none; }
+  .cost-row.total {
+    background: var(--surface2); font-weight: 600;
+  }
+  .cost-label { color: var(--text2); }
+  .cost-row.total .cost-label { color: var(--text); }
+  .cost-value { font-family: 'IBM Plex Mono', monospace; }
+  .cost-value.green { color: var(--accent); }
+  .cost-value.red { color: var(--red); }
+
+  .product-cell {
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .product-cell .name { font-weight: 500; }
+  .product-cell .meta { font-size: 11px; color: var(--text3); }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="containers"></aside>
+
+<div class="main">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="back-link" href="containers.html"><i class="ti ti-chevron-left"></i> All containers</a>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-title">CONT-2026-014</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn"><i class="ti ti-edit" style="font-size:15px"></i> Edit</button>
+      <button class="btn"><i class="ti ti-copy" style="font-size:15px"></i> Duplicate</button>
+      <button class="btn primary"><i class="ti ti-anchor" style="font-size:15px"></i> Mark arrived</button>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- HEADER -->
+    <div class="page-header">
+      <div>
+        <h1>CONT-2026-014</h1>
+        <div class="page-header-meta">
+          <span class="meta-row"><i class="ti ti-building-store"></i> Sahara Export · Sudan</span>
+          <span class="meta-row"><i class="ti ti-calendar"></i> created 28 Apr 2026</span>
+          <span class="meta-row"><i class="ti ti-clock"></i> ETA 22 May 2026</span>
+        </div>
+
+        <div class="status-track">
+          <div class="status-step done"><span class="dot"></span> Created</div>
+          <div class="status-arrow"></div>
+          <div class="status-step done"><span class="dot"></span> At port</div>
+          <div class="status-arrow"></div>
+          <div class="status-step current"><span class="dot"></span> In transit</div>
+          <div class="status-arrow"></div>
+          <div class="status-step"><span class="dot"></span> Arrived</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;min-width:340px">
+        <div class="kpi-tile">
+          <div class="kpi-tile-label">Total weight</div>
+          <div class="kpi-tile-value">20.12<span style="font-size:14px;color:var(--text3);font-weight:400">&nbsp;tons</span></div>
+          <div class="kpi-tile-sub">2,512 paid bags · 24 gifted</div>
+        </div>
+        <div class="kpi-tile green">
+          <div class="kpi-tile-label">Avg cost / kg</div>
+          <div class="kpi-tile-value">$0.78</div>
+          <div class="kpi-tile-sub">all-in, with expenses</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:14px">
+
+      <div class="stack">
+
+        <!-- PRODUCT LINES -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-package"></i> Product lines</div>
+            <button class="card-action"><i class="ti ti-plus" style="font-size:13px"></i> Add line</button>
+          </div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Charcoal</th>
+                <th class="right">Paid bags</th>
+                <th class="right">Kg/bag</th>
+                <th class="right">$/ton</th>
+                <th class="right">Tonnage</th>
+                <th class="right">All-in $/kg</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <div class="product-cell">
+                    <span class="name">BBQ Hardwood</span>
+                    <span class="meta">Grade A · +6 gift bags</span>
+                  </div>
+                </td>
+                <td class="right num">1,280</td>
+                <td class="right num" style="color:var(--text3)">10.0</td>
+                <td class="right num">$680</td>
+                <td class="right num">12.80</td>
+                <td class="right num" style="color:var(--accent);font-weight:600">$0.74</td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="product-cell">
+                    <span class="name">Shisha</span>
+                    <span class="meta">Grade B · +12 gift bags</span>
+                  </div>
+                </td>
+                <td class="right num">820</td>
+                <td class="right num" style="color:var(--text3)">5.0</td>
+                <td class="right num">$820</td>
+                <td class="right num">4.10</td>
+                <td class="right num" style="color:var(--accent);font-weight:600">$0.89</td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="product-cell">
+                    <span class="name">Restaurant Grade</span>
+                    <span class="meta">Grade A · +6 gift bags</span>
+                  </div>
+                </td>
+                <td class="right num">412</td>
+                <td class="right num" style="color:var(--text3)">8.0</td>
+                <td class="right num">$840</td>
+                <td class="right num">3.30</td>
+                <td class="right num" style="color:var(--accent);font-weight:600">$0.91</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="padding:10px 18px;background:var(--surface2);display:flex;justify-content:space-between;font-size:12px;color:var(--text2);font-family:'IBM Plex Mono',monospace">
+            <span>3 product lines · 2,512 bags · 20.20 t paid weight</span>
+            <span>kg/bag is reference only, not used in cost</span>
+          </div>
+        </div>
+
+        <!-- EXPENSES -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-receipt-tax"></i> Expenses</div>
+            <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">split by tonnage</span>
+          </div>
+          <div class="exp-row" style="background:var(--surface2);border-bottom:1px solid var(--border);font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;padding:7px 18px">
+            <span>Description</span>
+            <span style="text-align:right;padding-right:8px">Amount (USD)</span>
+            <span></span>
+          </div>
+
+          <div class="exp-row">
+            <input class="input" value="Freight (BL + sea)" style="border:none;padding:6px 8px;font-size:13px">
+            <input class="input num" value="3,200" style="border:none;padding:6px 8px;font-size:13px">
+            <button class="exp-del"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="exp-row">
+            <input class="input" value="Port fees · Beirut" style="border:none;padding:6px 8px;font-size:13px">
+            <input class="input num" value="480" style="border:none;padding:6px 8px;font-size:13px">
+            <button class="exp-del"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="exp-row">
+            <input class="input" value="Customs agent" style="border:none;padding:6px 8px;font-size:13px">
+            <input class="input num" value="650" style="border:none;padding:6px 8px;font-size:13px">
+            <button class="exp-del"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="exp-row">
+            <input class="input" value="Truck warehouse drop" style="border:none;padding:6px 8px;font-size:13px">
+            <input class="input num" value="280" style="border:none;padding:6px 8px;font-size:13px">
+            <button class="exp-del"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="exp-row">
+            <input class="input" value="Paper / admin" style="border:none;padding:6px 8px;font-size:13px">
+            <input class="input num" value="120" style="border:none;padding:6px 8px;font-size:13px">
+            <button class="exp-del"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="exp-row">
+            <input class="input" value="Worker unloading" style="border:none;padding:6px 8px;font-size:13px">
+            <input class="input num" value="90" style="border:none;padding:6px 8px;font-size:13px">
+            <button class="exp-del"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+
+          <div style="padding:10px 18px;display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border)">
+            <button class="btn" style="padding:6px 10px;font-size:12.5px"><i class="ti ti-plus" style="font-size:13px"></i> Add expense</button>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600">
+              Total: <span style="color:var(--red)">$4,820.00</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="stack">
+
+        <!-- DISCOUNT -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-discount"></i> Supplier discount</div>
+          </div>
+          <div style="padding:14px 18px">
+            <div class="input-prefix">
+              <span class="input-prefix-text">$</span>
+              <input class="input num" value="250.00">
+            </div>
+            <p style="font-size:11.5px;color:var(--text3);margin-top:6px;font-family:'IBM Plex Mono',monospace;line-height:1.5">applied to whole container, split across product lines proportionally by tonnage</p>
+          </div>
+        </div>
+
+        <!-- COST SUMMARY -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-calculator"></i> Cost summary</div>
+            <span class="badge badge-gray">live</span>
+          </div>
+          <div class="cost-row">
+            <span class="cost-label">Total weight</span>
+            <span class="cost-value">20.20 t</span>
+          </div>
+          <div class="cost-row">
+            <span class="cost-label">Product cost</span>
+            <span class="cost-value">$11,209.00</span>
+          </div>
+          <div class="cost-row">
+            <span class="cost-label">+ Expenses (6 items)</span>
+            <span class="cost-value red">+ $4,820.00</span>
+          </div>
+          <div class="cost-row">
+            <span class="cost-label">− Discount</span>
+            <span class="cost-value green">− $250.00</span>
+          </div>
+          <div class="cost-row total">
+            <span class="cost-label">All-in cost</span>
+            <span class="cost-value">$15,779.00</span>
+          </div>
+          <div class="cost-row">
+            <span class="cost-label">Avg cost / ton</span>
+            <span class="cost-value">$781.14</span>
+          </div>
+          <div class="cost-row" style="background:var(--accent-bg)">
+            <span class="cost-label" style="color:var(--accent);font-weight:500">Avg cost / kg</span>
+            <span class="cost-value" style="color:var(--accent);font-weight:600">$0.78</span>
+          </div>
+        </div>
+
+        <!-- ARRIVAL PREVIEW -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-anchor"></i> On arrival — preview</div>
+          </div>
+          <div style="padding:12px 18px;font-size:12.5px;color:var(--text2);line-height:1.5;border-bottom:1px solid var(--border)">
+            Marking this container as arrived will create <strong style="color:var(--text)">3 stock lots</strong> in the warehouse with the cost/kg shown below. Late expenses added after arrival will update cost/kg automatically.
+          </div>
+          <div class="cost-row">
+            <span class="cost-label">BBQ Hardwood · A</span>
+            <span class="cost-value">12,800 kg @ $0.74</span>
+          </div>
+          <div class="cost-row">
+            <span class="cost-label">Shisha · B</span>
+            <span class="cost-value">4,100 kg @ $0.89</span>
+          </div>
+          <div class="cost-row">
+            <span class="cost-label">Restaurant · A</span>
+            <span class="cost-value">3,296 kg @ $0.91</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

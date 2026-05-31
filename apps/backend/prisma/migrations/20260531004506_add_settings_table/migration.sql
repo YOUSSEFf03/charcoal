@@ -1,0 +1,1 @@
+CREATE TABLE "settings" ("key" TEXT NOT NULL, "value" TEXT NOT NULL, "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "settings_pkey" PRIMARY KEY ("key")); INSERT INTO "settings" ("key", "value", "updatedAt") VALUES ('exchange_rate', '89550', NOW());

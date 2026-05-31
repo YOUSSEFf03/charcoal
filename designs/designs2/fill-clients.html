@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Fill clients</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .ar { font-family: 'Noto Sans Arabic', 'IBM Plex Sans', sans-serif; }
+
+  /* KPI strip */
+  .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+
+  /* search row */
+  .search-row { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; }
+  .search-wrap { flex: 1; position: relative; max-width: 380px; }
+  .search-wrap i {
+    position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    font-size: 14px; color: var(--text3);
+  }
+  .search-wrap input {
+    width: 100%; padding: 9px 12px 9px 32px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 13px; font-family: 'IBM Plex Sans', sans-serif;
+    background: var(--surface);
+  }
+  .search-wrap input:focus { outline: none; border-color: var(--text); }
+
+  .seg {
+    display: inline-flex; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 2px;
+  }
+  .seg-opt {
+    padding: 6px 12px; font-size: 12.5px; color: var(--text2);
+    cursor: pointer; border-radius: 6px; font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .seg-opt.sel { background: var(--text); color: #fff; }
+
+  /* GRID OF SQUARES */
+  .square-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+  @media (max-width: 1280px) { .square-grid { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 960px)  { .square-grid { grid-template-columns: repeat(2, 1fr); } }
+
+  .sq {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
+    display: flex; flex-direction: column; gap: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+    text-decoration: none; color: inherit;
+    position: relative; overflow: hidden;
+    aspect-ratio: 1.05;
+  }
+  .sq:hover {
+    border-color: var(--text3);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+    transform: translateY(-1px);
+  }
+
+  /* status indicator strip */
+  .sq::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0;
+    height: 3px; background: var(--border);
+  }
+  .sq.active::before { background: var(--accent); }
+  .sq.amber::before  { background: var(--accent2); }
+  .sq.dormant::before { background: var(--border2); }
+
+  .sq-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  }
+  .sq-mono {
+    width: 44px; height: 44px; border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 600;
+    background: var(--surface2); color: var(--text);
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .sq-mono.green { background: var(--accent-bg); color: var(--accent); border-color: #a7f3d0; }
+  .sq-mono.blue  { background: var(--blue-bg);   color: var(--blue);   border-color: #c5d4f5; }
+  .sq-mono.amber { background: var(--accent2-bg); color: var(--accent2); border-color: #fcd34d; }
+
+  .sq-status {
+    font-size: 10px; font-family: 'IBM Plex Mono', monospace;
+    padding: 3px 8px; border-radius: 100px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;
+  }
+  .sq-status.active  { background: var(--accent-bg); color: var(--accent); }
+  .sq-status.amber   { background: var(--accent2-bg); color: var(--accent2); }
+  .sq-status.gray    { background: var(--surface2); color: var(--text3); }
+
+  .sq-name {
+    font-size: 16.5px; font-weight: 600; letter-spacing: -0.3px;
+    line-height: 1.25;
+  }
+  .sq-name-ar {
+    font-size: 12.5px; color: var(--text3); margin-top: 2px;
+  }
+
+  /* balance */
+  .sq-balance {
+    display: flex; flex-direction: column; gap: 2px;
+    margin-top: auto;
+  }
+  .sq-balance-label {
+    font-size: 10.5px; color: var(--text3); font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .sq-balance-val {
+    font-size: 26px; font-weight: 700; letter-spacing: -1px; line-height: 1;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .sq-balance-val.amber { color: var(--accent2); }
+  .sq-balance-val.zero  { color: var(--text3); font-weight: 500; }
+
+  /* stats grid bottom */
+  .sq-stats {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 0; padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .sq-stat-k {
+    font-size: 10px; color: var(--text3); font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px;
+  }
+  .sq-stat-v {
+    font-size: 14px; font-weight: 600; font-family: 'IBM Plex Mono', monospace;
+    letter-spacing: -0.3px;
+  }
+  .sq-stat-v.green { color: var(--accent); }
+  .sq-stat-v.amber { color: var(--accent2); }
+
+  /* add new square */
+  .sq.add {
+    border-style: dashed;
+    background: transparent;
+    align-items: center;
+    justify-content: center;
+    color: var(--text3);
+    gap: 8px;
+  }
+  .sq.add:hover { color: var(--text); background: var(--surface); }
+  .sq.add .icon {
+    width: 48px; height: 48px; border-radius: 50%;
+    background: var(--surface); border: 1.5px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+    transition: all 0.15s;
+  }
+  .sq.add:hover .icon { background: var(--text); color: #fff; border-color: var(--text); }
+  .sq.add .label { font-size: 13.5px; font-weight: 500; }
+  .sq.add .hint  { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="fill-clients"></aside>
+
+<div class="main">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="page-title">Fill clients</span>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-sub">companies that bring their own bags</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn"><i class="ti ti-download" style="font-size:15px"></i> Export</button>
+      <button class="btn primary"><i class="ti ti-plus" style="font-size:15px"></i> New fill client</button>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- KPI ROW -->
+    <div class="kpi-row">
+      <div class="kpi-tile">
+        <div class="kpi-tile-label">Fill clients</div>
+        <div class="kpi-tile-value">6</div>
+        <div class="kpi-tile-sub">2 active · 4 historic</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-tile-label">Bags filled this month</div>
+        <div class="kpi-tile-value">1,840</div>
+        <div class="kpi-tile-sub">+22% vs April</div>
+      </div>
+      <div class="kpi-tile green">
+        <div class="kpi-tile-label">Profit this month</div>
+        <div class="kpi-tile-value">$1,180</div>
+        <div class="kpi-tile-sub">after charcoal cost</div>
+      </div>
+      <div class="kpi-tile amber">
+        <div class="kpi-tile-label">Outstanding</div>
+        <div class="kpi-tile-value">$1,420</div>
+        <div class="kpi-tile-sub">3 clients owe us</div>
+      </div>
+    </div>
+
+    <!-- SEARCH + FILTER -->
+    <div class="search-row">
+      <div class="search-wrap">
+        <i class="ti ti-search"></i>
+        <input type="text" placeholder="Search fill clients…">
+      </div>
+      <div class="seg">
+        <div class="seg-opt sel">All <span style="color:var(--text3);margin-left:4px">6</span></div>
+        <div class="seg-opt">Active <span style="color:var(--text3);margin-left:4px">2</span></div>
+        <div class="seg-opt">With balance <span style="color:var(--text3);margin-left:4px">3</span></div>
+        <div class="seg-opt">Has bags on site <span style="color:var(--text3);margin-left:4px">2</span></div>
+        <div class="seg-opt">Historic <span style="color:var(--text3);margin-left:4px">3</span></div>
+      </div>
+      <div style="margin-left:auto;font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">sort: most recent activity</div>
+    </div>
+
+    <!-- GRID -->
+    <div class="square-grid">
+
+      <!-- 1 — Al Sahha -->
+      <a class="sq active" href="fill-client-detail.html">
+        <div class="sq-head">
+          <div class="sq-mono green">SH</div>
+          <span class="sq-status active"><i class="ti ti-stack-2" style="font-size:10px"></i> filling today</span>
+        </div>
+        <div>
+          <div class="sq-name">Al Sahha Catering</div>
+          <div class="sq-name-ar ar" dir="rtl">الصحة للتموين</div>
+        </div>
+        <div class="sq-balance">
+          <span class="sq-balance-label">balance</span>
+          <span class="sq-balance-val amber">$320.00</span>
+        </div>
+        <div class="sq-stats">
+          <div>
+            <div class="sq-stat-k">Bags filled YTD</div>
+            <div class="sq-stat-v">1,240</div>
+          </div>
+          <div style="text-align:right">
+            <div class="sq-stat-k">Profit YTD</div>
+            <div class="sq-stat-v green">$386</div>
+          </div>
+        </div>
+      </a>
+
+      <!-- 2 — Gulf Exports -->
+      <a class="sq amber" href="fill-client-detail.html">
+        <div class="sq-head">
+          <div class="sq-mono blue">GE</div>
+          <span class="sq-status amber"><i class="ti ti-alert-circle" style="font-size:10px"></i> 120 bags left</span>
+        </div>
+        <div>
+          <div class="sq-name">Gulf Exports Co.</div>
+          <div class="sq-name-ar">export-grade · own woven bags</div>
+        </div>
+        <div class="sq-balance">
+          <span class="sq-balance-label">balance</span>
+          <span class="sq-balance-val amber">$840.00</span>
+        </div>
+        <div class="sq-stats">
+          <div>
+            <div class="sq-stat-k">Bags filled YTD</div>
+            <div class="sq-stat-v">3,820</div>
+          </div>
+          <div style="text-align:right">
+            <div class="sq-stat-k">Profit YTD</div>
+            <div class="sq-stat-v green">$1,142</div>
+          </div>
+        </div>
+      </a>
+
+      <!-- 3 — Byblos -->
+      <a class="sq amber" href="fill-client-detail.html">
+        <div class="sq-head">
+          <div class="sq-mono">BB</div>
+          <span class="sq-status amber">12 days idle</span>
+        </div>
+        <div>
+          <div class="sq-name">Byblos BBQ Supply</div>
+          <div class="sq-name-ar ar" dir="rtl">جبيل للشواء</div>
+        </div>
+        <div class="sq-balance">
+          <span class="sq-balance-label">balance</span>
+          <span class="sq-balance-val amber">$260.00</span>
+        </div>
+        <div class="sq-stats">
+          <div>
+            <div class="sq-stat-k">Bags filled YTD</div>
+            <div class="sq-stat-v">820</div>
+          </div>
+          <div style="text-align:right">
+            <div class="sq-stat-k">Profit YTD</div>
+            <div class="sq-stat-v green">$234</div>
+          </div>
+        </div>
+      </a>
+
+      <!-- 4 — Ras Beirut Hotel -->
+      <a class="sq" href="fill-client-detail.html">
+        <div class="sq-head">
+          <div class="sq-mono">RB</div>
+          <span class="sq-status gray">1 mo idle</span>
+        </div>
+        <div>
+          <div class="sq-name">Ras Beirut Hotel Group</div>
+          <div class="sq-name-ar">2 restaurants, 1 rooftop bar</div>
+        </div>
+        <div class="sq-balance">
+          <span class="sq-balance-label">balance</span>
+          <span class="sq-balance-val zero">$0.00</span>
+        </div>
+        <div class="sq-stats">
+          <div>
+            <div class="sq-stat-k">Bags filled YTD</div>
+            <div class="sq-stat-v">480</div>
+          </div>
+          <div style="text-align:right">
+            <div class="sq-stat-k">Profit YTD</div>
+            <div class="sq-stat-v green">$148</div>
+          </div>
+        </div>
+      </a>
+
+      <!-- 5 — Cedars Catering -->
+      <a class="sq" href="fill-client-detail.html">
+        <div class="sq-head">
+          <div class="sq-mono">CN</div>
+          <span class="sq-status gray">2 mo idle</span>
+        </div>
+        <div>
+          <div class="sq-name">Cedars Catering Network</div>
+          <div class="sq-name-ar ar" dir="rtl">شبكة الأرز للتموين</div>
+        </div>
+        <div class="sq-balance">
+          <span class="sq-balance-label">balance</span>
+          <span class="sq-balance-val zero">$0.00</span>
+        </div>
+        <div class="sq-stats">
+          <div>
+            <div class="sq-stat-k">Bags filled YTD</div>
+            <div class="sq-stat-v">260</div>
+          </div>
+          <div style="text-align:right">
+            <div class="sq-stat-k">Profit YTD</div>
+            <div class="sq-stat-v green">$78</div>
+          </div>
+        </div>
+      </a>
+
+      <!-- 6 — Jordan Export -->
+      <a class="sq dormant" href="fill-client-detail.html">
+        <div class="sq-head">
+          <div class="sq-mono" style="color:var(--text3)">JX</div>
+          <span class="sq-status gray">6 mo idle</span>
+        </div>
+        <div>
+          <div class="sq-name" style="color:var(--text2)">Jordan Export Trading</div>
+          <div class="sq-name-ar">historic · last job Nov 2025</div>
+        </div>
+        <div class="sq-balance">
+          <span class="sq-balance-label">balance</span>
+          <span class="sq-balance-val zero">$0.00</span>
+        </div>
+        <div class="sq-stats">
+          <div>
+            <div class="sq-stat-k">Bags filled 2025</div>
+            <div class="sq-stat-v" style="color:var(--text3)">1,200</div>
+          </div>
+          <div style="text-align:right">
+            <div class="sq-stat-k">Profit 2025</div>
+            <div class="sq-stat-v" style="color:var(--text3)">$340</div>
+          </div>
+        </div>
+      </a>
+
+      <!-- ADD NEW -->
+      <a class="sq add" href="#">
+        <div class="icon"><i class="ti ti-plus"></i></div>
+        <div class="label">New fill client</div>
+        <div class="hint">company that brings own bags</div>
+      </a>
+
+    </div>
+
+    <div style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace;text-align:center;padding:10px">
+      6 clients · 7,820 bags filled YTD · 520 empty bags currently on site
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

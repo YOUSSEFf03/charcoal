@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Physical stock count</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  /* count rows */
+  .count-row {
+    display: grid;
+    grid-template-columns: 1.6fr 110px 110px 110px 1.5fr 90px;
+    gap: 12px; align-items: center;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .count-row:last-child { border-bottom: none; }
+  .count-row .product-cell { display: flex; flex-direction: column; gap: 2px; }
+  .count-row .product-cell .name { font-weight: 500; }
+  .count-row .product-cell .meta { font-size: 11px; color: var(--text3); }
+
+  .count-num {
+    font-family: 'IBM Plex Mono', monospace; text-align: right; font-weight: 500;
+  }
+  .count-input {
+    width: 100%; padding: 7px 10px;
+    border: 1px solid var(--border2); border-radius: var(--radius);
+    font-size: 13px; font-family: 'IBM Plex Mono', monospace;
+    text-align: right; background: var(--surface); color: var(--text);
+    outline: none; transition: border-color 0.1s, box-shadow 0.1s;
+  }
+  .count-input:focus { border-color: var(--text); box-shadow: 0 0 0 3px rgba(26,25,22,0.06); }
+
+  .diff-cell {
+    font-family: 'IBM Plex Mono', monospace; text-align: right;
+    font-weight: 600;
+  }
+  .diff-cell.zero { color: var(--text3); }
+  .diff-cell.neg { color: var(--red); }
+  .diff-cell.pos { color: var(--accent2); }
+
+  .reason-input {
+    width: 100%; padding: 7px 10px;
+    border: 1px solid var(--border2); border-radius: var(--radius);
+    font-size: 13px; font-family: 'IBM Plex Sans', sans-serif;
+    background: var(--surface); color: var(--text);
+    outline: none; transition: border-color 0.1s;
+  }
+  .reason-input:focus { border-color: var(--text); }
+  .reason-input::placeholder { color: var(--text3); }
+
+  .row-status {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    padding: 3px 8px; border-radius: 100px; text-align: center;
+    white-space: nowrap; font-weight: 500;
+  }
+  .row-status.ok    { background: var(--accent-bg);  color: var(--accent); }
+  .row-status.diff  { background: var(--accent2-bg); color: var(--accent2); }
+  .row-status.todo  { background: var(--surface2);   color: var(--text3); }
+
+  /* header row */
+  .count-head-row {
+    display: grid;
+    grid-template-columns: 1.6fr 110px 110px 110px 1.5fr 90px;
+    gap: 12px;
+    padding: 8px 18px; background: var(--surface2);
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .count-head-row .right { text-align: right; }
+
+  /* summary bar */
+  .summary-bar {
+    background: var(--text); color: #fff;
+    border-radius: var(--radius-lg);
+    padding: 16px 22px;
+    display: flex; align-items: center; gap: 32px;
+    margin-bottom: 16px;
+  }
+  .summary-stat .v { font-size: 22px; font-weight: 600; letter-spacing: -0.6px; line-height: 1; }
+  .summary-stat .v.red { color: #FCA5A5; }
+  .summary-stat .v.amber { color: #FCD34D; }
+  .summary-stat .v.green { color: #86EFAC; }
+  .summary-stat .k { font-size: 11px; color: rgba(255,255,255,0.5); font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.6px; margin-top: 4px; }
+  .summary-divider { width: 1px; height: 32px; background: rgba(255,255,255,0.15); }
+  .summary-spacer { flex: 1; }
+
+  /* progress strip */
+  .progress-strip {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 12px; color: var(--text2); font-family: 'IBM Plex Mono', monospace;
+    margin-bottom: 14px;
+  }
+  .progress-track { flex: 1; height: 5px; background: var(--surface2); border-radius: 100px; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--accent); border-radius: 100px; width: 52%; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="warehouse"></aside>
+
+<div class="main">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="back-link" href="warehouse.html"><i class="ti ti-chevron-left"></i> Warehouse</a>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-title">Physical stock count</span>
+      <span class="badge badge-blue" style="margin-left:4px">In progress</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn"><i class="ti ti-clock" style="font-size:15px"></i> Save &amp; resume later</button>
+      <button class="btn danger"><i class="ti ti-x" style="font-size:15px"></i> Cancel</button>
+      <button class="btn primary"><i class="ti ti-check" style="font-size:15px"></i> Submit &amp; approve adjustments</button>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- HEADER -->
+    <div class="page-header" style="padding-bottom:14px;border-bottom:none;margin-bottom:0">
+      <div>
+        <h1>Stock count — 22 May 2026</h1>
+        <div class="page-header-meta">
+          <span class="meta-row"><i class="ti ti-id-badge"></i> counted by Khalil &amp; Hasan</span>
+          <span class="meta-row"><i class="ti ti-clock"></i> started 08:15 · running 1h 42m</span>
+          <span class="meta-row"><i class="ti ti-lock"></i> requires owner approval</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUMMARY BAR -->
+    <div class="summary-bar">
+      <div class="summary-stat">
+        <div class="v">22</div>
+        <div class="k">items to count</div>
+      </div>
+      <div class="summary-divider"></div>
+      <div class="summary-stat">
+        <div class="v green">11</div>
+        <div class="k">matched</div>
+      </div>
+      <div class="summary-stat">
+        <div class="v amber">3</div>
+        <div class="k">differences</div>
+      </div>
+      <div class="summary-stat">
+        <div class="v red">8</div>
+        <div class="k">not counted yet</div>
+      </div>
+      <div class="summary-spacer"></div>
+      <div class="summary-stat" style="text-align:right">
+        <div class="v amber">−324<span style="font-size:14px;color:rgba(255,255,255,0.5);font-weight:400">&nbsp;kg</span></div>
+        <div class="k">net difference · ≈ $254 at avg cost</div>
+      </div>
+    </div>
+
+    <div class="progress-strip">
+      <span>Progress</span>
+      <div class="progress-track"><div class="progress-fill"></div></div>
+      <span>14 / 22 counted · 52%</span>
+    </div>
+
+    <div class="stack">
+
+      <!-- RAW LOTS -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-package"></i> Zone 1 — Raw stock lots</div>
+          <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">10 open lots</span>
+        </div>
+        <div class="count-head-row">
+          <span>Lot · type / grade</span>
+          <span class="right">System kg</span>
+          <span class="right">Counted kg</span>
+          <span class="right">Diff</span>
+          <span>Reason (required if diff)</span>
+          <span class="right">Status</span>
+        </div>
+
+        <div class="count-row">
+          <div class="product-cell">
+            <span class="name">LOT-2026-014a · BBQ Hardwood</span>
+            <span class="meta">Grade A · Sahara Export</span>
+          </div>
+          <div class="count-num">12,400</div>
+          <div><input class="count-input" value="12,400"></div>
+          <div class="diff-cell zero">0</div>
+          <div></div>
+          <div><span class="row-status ok">Match</span></div>
+        </div>
+
+        <div class="count-row">
+          <div class="product-cell">
+            <span class="name">LOT-2026-013b · Shisha</span>
+            <span class="meta">Grade B · Al-Amin Trading</span>
+          </div>
+          <div class="count-num">8,980</div>
+          <div><input class="count-input" value="8,840"></div>
+          <div class="diff-cell neg">−140</div>
+          <div><input class="reason-input" value="dust loss during repacking"></div>
+          <div><span class="row-status diff">Adjust</span></div>
+        </div>
+
+        <div class="count-row">
+          <div class="product-cell">
+            <span class="name">LOT-2026-012a · Restaurant Grade</span>
+            <span class="meta">Grade A · Sahara Export</span>
+          </div>
+          <div class="count-num">3,200</div>
+          <div><input class="count-input" value="3,180"></div>
+          <div class="diff-cell neg">−20</div>
+          <div><input class="reason-input" value="bag torn in storage"></div>
+          <div><span class="row-status diff">Adjust</span></div>
+        </div>
+
+        <div class="count-row">
+          <div class="product-cell">
+            <span class="name">LOT-2026-011b · BBQ Hardwood</span>
+            <span class="meta">Grade B · Sahara Export</span>
+          </div>
+          <div class="count-num">9,740</div>
+          <div><input class="count-input" value="9,740"></div>
+          <div class="diff-cell zero">0</div>
+          <div></div>
+          <div><span class="row-status ok">Match</span></div>
+        </div>
+
+        <div class="count-row">
+          <div class="product-cell">
+            <span class="name">LOT-2026-010a · BBQ Hardwood</span>
+            <span class="meta">Grade A · Al-Amin Trading</span>
+          </div>
+          <div class="count-num">5,120</div>
+          <div><input class="count-input" placeholder="—"></div>
+          <div class="diff-cell zero">—</div>
+          <div></div>
+          <div><span class="row-status todo">Pending</span></div>
+        </div>
+
+        <div class="count-row">
+          <div class="product-cell">
+            <span class="name">LOT-2026-009c · Shisha</span>
+            <span class="meta">Grade C · Al-Amin Trading</span>
+          </div>
+          <div class="count-num">1,240</div>
+          <div><input class="count-input" placeholder="—"></div>
+          <div class="diff-cell zero">—</div>
+          <div></div>
+          <div><span class="row-status todo">Pending</span></div>
+        </div>
+      </div>
+
+      <!-- PACKED BAGS -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-box"></i> Zone 2 — Packed bags</div>
+          <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">by bag type</span>
+        </div>
+        <div class="count-head-row" style="grid-template-columns:1.6fr 110px 110px 110px 1.5fr 90px">
+          <span>Bag type</span>
+          <span class="right">System qty</span>
+          <span class="right">Counted qty</span>
+          <span class="right">Diff</span>
+          <span>Reason (required if diff)</span>
+          <span class="right">Status</span>
+        </div>
+
+        <div class="count-row">
+          <div class="product-cell">
+            <span class="name">2 kg bag</span>
+            <span class="meta">across all source lots</span>
+          </div>
+          <div class="count-num">1,240</div>
+          <div><input class="count-input" value="1,232"></div>
+          <div class="diff-cell neg">−8</div>
+          <div><input class="reason-input" value="bags torn — set aside for repack"></div>
+          <div><span class="row-status diff">Adjust</span></div>
+        </div>
+
+        <div class="count-row">
+          <div class="product-cell">
+            <span class="name">5 kg bag</span>
+            <span class="meta">across all source lots</span>
+          </div>
+          <div class="count-num">380</div>
+          <div><input class="count-input" value="380"></div>
+          <div class="diff-cell zero">0</div>
+          <div></div>
+          <div><span class="row-status ok">Match</span></div>
+        </div>
+
+        <div class="count-row">
+          <div class="product-cell">
+            <span class="name">10 kg bag</span>
+            <span class="meta">across all source lots</span>
+          </div>
+          <div class="count-num">210</div>
+          <div><input class="count-input" value="210"></div>
+          <div class="diff-cell zero">0</div>
+          <div></div>
+          <div><span class="row-status ok">Match</span></div>
+        </div>
+
+        <div class="count-row">
+          <div class="product-cell">
+            <span class="name">20 kg bag</span>
+            <span class="meta">across all source lots</span>
+          </div>
+          <div class="count-num">95</div>
+          <div><input class="count-input" placeholder="—"></div>
+          <div class="diff-cell zero">—</div>
+          <div></div>
+          <div><span class="row-status todo">Pending</span></div>
+        </div>
+
+        <div class="count-row">
+          <div class="product-cell">
+            <span class="name">1.9 kg bag</span>
+            <span class="meta">same physical bag as 2kg</span>
+          </div>
+          <div class="count-num">840</div>
+          <div><input class="count-input" placeholder="—"></div>
+          <div class="diff-cell zero">—</div>
+          <div></div>
+          <div><span class="row-status todo">Pending</span></div>
+        </div>
+      </div>
+
+      <!-- PENDING ADJUSTMENTS -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-clipboard-check"></i> Pending adjustments to approve</div>
+          <span class="badge badge-amber">4 items · −$254 net value</span>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>Before</th>
+              <th>After</th>
+              <th>Diff</th>
+              <th>Reason</th>
+              <th class="right">Value impact</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>LOT-2026-013b · Shisha B</td>
+              <td class="mono">8,980 kg</td>
+              <td class="mono">8,840 kg</td>
+              <td class="mono" style="color:var(--red);font-weight:600">−140 kg</td>
+              <td style="color:var(--text2)">dust loss during repacking</td>
+              <td class="right num" style="color:var(--red);font-weight:600">−$124.60</td>
+            </tr>
+            <tr>
+              <td>LOT-2026-012a · Restaurant A</td>
+              <td class="mono">3,200 kg</td>
+              <td class="mono">3,180 kg</td>
+              <td class="mono" style="color:var(--red);font-weight:600">−20 kg</td>
+              <td style="color:var(--text2)">bag torn in storage</td>
+              <td class="right num" style="color:var(--red);font-weight:600">−$18.20</td>
+            </tr>
+            <tr>
+              <td>2 kg bag · packed</td>
+              <td class="mono">1,240 bags</td>
+              <td class="mono">1,232 bags</td>
+              <td class="mono" style="color:var(--red);font-weight:600">−8 bags</td>
+              <td style="color:var(--text2)">bags torn — set aside for repack</td>
+              <td class="right num" style="color:var(--red);font-weight:600">−$11.84</td>
+            </tr>
+          </tbody>
+        </table>
+        <div style="padding:11px 18px;background:var(--surface2);display:flex;align-items:center;gap:10px;border-top:1px solid var(--border);font-size:12.5px;color:var(--text2)">
+          <i class="ti ti-info-circle" style="font-size:16px;color:var(--accent2)"></i>
+          Adjustments require <strong style="color:var(--text)">owner approval</strong> before they are applied. System never auto-corrects silently.
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

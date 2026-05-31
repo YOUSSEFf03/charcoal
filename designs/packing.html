@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Ember — Packing Session</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #F5F4F0;
+    --surface:   #FFFFFF;
+    --surface2:  #F0EEE9;
+    --border:    #E4E1D9;
+    --text:      #1A1916;
+    --text2:     #6B6860;
+    --text3:     #9B9890;
+    --accent:    #1D6B4A;
+    --accent-bg: #EAF5EF;
+    --accent2:   #B45309;
+    --accent2-bg:#FEF3C7;
+    --red:       #C0392B;
+    --red-bg:    #FEF2F2;
+    --blue:      #1D4ED8;
+    --blue-bg:   #EFF6FF;
+    --radius:    10px;
+    --radius-lg: 16px;
+  }
+
+  body {
+    font-family: 'IBM Plex Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 0;
+  }
+
+  /* PHONE SHELL for desktop preview */
+  .phone-wrap {
+    width: 100%;
+    max-width: 420px;
+    min-height: 100vh;
+    background: var(--bg);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* TOP BAR */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .topbar-back {
+    width: 34px; height: 34px;
+    border-radius: 9px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .topbar-info { flex: 1; }
+  .topbar-title { font-size: 15px; font-weight: 600; letter-spacing: -0.2px; }
+  .topbar-sub { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+
+  .topbar-session {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 8px; color: var(--text2);
+  }
+
+  /* PROGRESS STEPS */
+  .progress {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+
+  .prog-step {
+    display: flex; align-items: center; gap: 6px;
+    flex: 1;
+  }
+
+  .prog-dot {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600;
+    flex-shrink: 0;
+    transition: all 0.2s;
+  }
+
+  .prog-dot.done { background: var(--accent); color: #fff; }
+  .prog-dot.active { background: var(--text); color: #fff; }
+  .prog-dot.pending { background: var(--surface2); color: var(--text3); border: 1px solid var(--border); }
+
+  .prog-label {
+    font-size: 10px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .prog-label.active { color: var(--text); font-weight: 600; }
+
+  .prog-line {
+    flex: 1; height: 1px;
+    background: var(--border);
+    margin: 0 4px;
+  }
+  .prog-line.done { background: var(--accent); }
+
+  /* SCREENS */
+  .screen { display: none; flex-direction: column; flex: 1; padding: 20px; }
+  .screen.active { display: flex; }
+
+  /* SCREEN ANIMATIONS */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .screen.active { animation: fadeUp 0.25s ease; }
+
+  /* SECTION LABEL */
+  .section-label {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 10px;
+  }
+
+  /* LOT CARDS */
+  .lot-card {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+  }
+  .lot-card:hover { border-color: var(--border2,#D4D0C8); }
+  .lot-card.selected { border-color: var(--text); background: #FAFAF8; }
+
+  .lot-card-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; }
+  .lot-name { font-size: 15px; font-weight: 600; letter-spacing: -0.2px; }
+  .lot-grade { font-size: 12px; color: var(--text2); margin-top: 1px; }
+
+  .lot-check {
+    width: 22px; height: 22px; border-radius: 50%;
+    border: 2px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.15s;
+  }
+  .lot-card.selected .lot-check { background: var(--text); border-color: var(--text); }
+  .lot-card.selected .lot-check i { color: #fff; display: block !important; }
+  .lot-check i { display: none; font-size: 12px; }
+
+  .lot-bar-wrap { margin-bottom: 8px; }
+  .lot-bar-track { height: 6px; background: var(--surface2); border-radius: 100px; overflow: hidden; margin-bottom: 4px; }
+  .lot-bar-fill { height: 100%; border-radius: 100px; }
+  .bar-green { background: var(--accent); }
+  .bar-amber { background: var(--accent2); }
+  .bar-red   { background: var(--red); }
+
+  .lot-stats { display: flex; gap: 14px; }
+  .lot-stat { font-size: 12px; }
+  .lot-stat-val { font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+  .lot-stat-lbl { color: var(--text3); font-size: 11px; }
+
+  /* MODE CARDS */
+  .mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+  .mode-card {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 18px 16px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+  }
+  .mode-card:hover { border-color: var(--border2,#D4D0C8); }
+  .mode-card.selected { border-color: var(--text); background: #FAFAF8; }
+  .mode-icon { font-size: 28px; margin-bottom: 8px; }
+  .mode-title { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+  .mode-desc { font-size: 11px; color: var(--text3); line-height: 1.4; }
+
+  /* ORDER SELECT */
+  .order-select-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-top: 12px;
+  }
+  .order-opt {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .order-opt:last-child { border-bottom: none; }
+  .order-opt:hover { background: var(--surface2); }
+  .order-opt.sel { background: var(--accent-bg); }
+  .order-opt-info { flex: 1; }
+  .order-opt-name { font-size: 13px; font-weight: 500; }
+  .order-opt-meta { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-top:1px; }
+  .order-opt-kg { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; }
+
+  /* KG INPUT */
+  .kg-input-wrap {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 24px 20px;
+    text-align: center;
+    margin-bottom: 16px;
+    transition: border-color 0.15s;
+  }
+  .kg-input-wrap:focus-within { border-color: var(--text); }
+
+  .kg-label { font-size: 12px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+
+  .kg-input {
+    font-size: 48px; font-weight: 600; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text); letter-spacing: -2px; line-height: 1;
+    border: none; outline: none; background: transparent;
+    text-align: center; width: 100%;
+  }
+  .kg-unit { font-size: 16px; color: var(--text3); font-weight: 400; margin-top: 4px; }
+
+  .lot-remaining-note {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--text2);
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .kg-warning {
+    background: var(--red-bg);
+    border: 1px solid #fca5a5;
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--red);
+    display: none;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  /* BAG OUTPUT */
+  .bag-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .bag-info { flex: 1; }
+  .bag-name { font-size: 15px; font-weight: 600; }
+  .bag-meta { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-top: 2px; }
+
+  .bag-counter {
+    display: flex; align-items: center; gap: 0;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .counter-btn {
+    width: 40px; height: 44px;
+    border: none; background: var(--surface2);
+    font-size: 20px; font-weight: 400;
+    cursor: pointer; color: var(--text2);
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.1s;
+    flex-shrink: 0;
+  }
+  .counter-btn:hover { background: var(--border); }
+  .counter-btn:active { background: var(--text); color: #fff; }
+
+  .counter-val {
+    width: 64px; height: 44px;
+    border: none; outline: none;
+    font-size: 18px; font-weight: 600;
+    font-family: 'IBM Plex Mono', monospace;
+    text-align: center;
+    background: var(--surface);
+    color: var(--text);
+    border-left: 1.5px solid var(--border);
+    border-right: 1.5px solid var(--border);
+  }
+
+  /* VARIANCE DISPLAY */
+  .variance-box {
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    margin-bottom: 16px;
+  }
+  .variance-box.ok     { background: var(--accent-bg); border: 1.5px solid #a7f3d0; }
+  .variance-box.warn   { background: var(--accent2-bg); border: 1.5px solid #fcd34d; }
+  .variance-box.error  { background: var(--red-bg); border: 1.5px solid #fca5a5; }
+
+  .var-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; font-size: 13px; }
+  .var-row:last-child { margin-bottom: 0; }
+  .var-label { color: var(--text2); }
+  .var-value { font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+
+  .var-big {
+    font-size: 32px; font-weight: 600; letter-spacing: -1.5px;
+    font-family: 'IBM Plex Mono', monospace; text-align: center;
+    padding: 8px 0;
+  }
+  .var-note { font-size: 12px; text-align: center; margin-top: 2px; }
+
+  /* SUMMARY CARD */
+  .summary-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin-bottom: 14px;
+  }
+  .summary-head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+    font-size: 12px; font-weight: 600;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .summary-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .summary-row:last-child { border-bottom: none; }
+  .summary-row-label { color: var(--text2); }
+  .summary-row-val { font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+
+  /* NOTE INPUT */
+  .note-textarea {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    color: var(--text);
+    outline: none;
+    resize: none;
+    background: var(--surface);
+    min-height: 80px;
+    transition: border-color 0.15s;
+  }
+  .note-textarea:focus { border-color: var(--text); }
+
+  /* EARNINGS PILL */
+  .earnings-pill {
+    background: var(--accent-bg);
+    border: 1.5px solid #a7f3d0;
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .earn-label { font-size: 12px; color: var(--accent); }
+  .earn-value { font-size: 28px; font-weight: 600; letter-spacing: -1px; color: var(--accent); font-family: 'IBM Plex Mono', monospace; }
+
+  /* BOTTOM BUTTON */
+  .bottom-btn-wrap {
+    padding: 16px 20px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    position: sticky;
+    bottom: 0;
+  }
+
+  .main-btn {
+    width: 100%;
+    padding: 16px;
+    background: var(--text);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-lg);
+    font-size: 16px;
+    font-weight: 600;
+    font-family: 'IBM Plex Sans', sans-serif;
+    cursor: pointer;
+    transition: background 0.15s;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .main-btn:hover { background: #2d2b28; }
+  .main-btn:active { background: #0f0e0c; transform: scale(0.99); }
+  .main-btn:disabled { background: var(--border); color: var(--text3); cursor: not-allowed; }
+  .main-btn.green { background: var(--accent); }
+  .main-btn.green:hover { background: #155237; }
+
+  /* SUCCESS SCREEN */
+  .success-icon {
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    background: var(--accent-bg);
+    border: 2px solid #a7f3d0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 36px;
+    margin: 0 auto 20px;
+    animation: popIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes popIn {
+    from { transform: scale(0); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+  }
+
+  /* HISTORY VIEW (session list) */
+  .session-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .session-card:hover { border-color: var(--border2,#D4D0C8); }
+  .session-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .session-id { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--text3); }
+  .session-date { font-size: 12px; color: var(--text2); }
+  .session-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .session-meta { font-size: 12px; color: var(--text2); display: flex; gap: 12px; }
+  .session-variance { font-size: 12px; font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+
+  /* VIEW TOGGLE */
+  .view-toggle {
+    display: flex;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+  }
+  .vt-btn {
+    padding: 11px 16px;
+    font-size: 13px; font-weight: 500;
+    color: var(--text3);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.1s;
+  }
+  .vt-btn.active { color: var(--text); border-bottom-color: var(--text); }
+
+  /* FORM LABEL */
+  .form-label { font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; display: block; }
+</style>
+</head>
+<body>
+<div class="phone-wrap">
+
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <div class="topbar-back" onclick="goBack()"><i class="ti ti-arrow-left" style="font-size:16px;color:var(--text2)"></i></div>
+    <div class="topbar-info">
+      <div class="topbar-title" id="topbarTitle">New packing session</div>
+      <div class="topbar-sub" id="topbarSub">Hasan Moussa · Worker</div>
+    </div>
+    <div class="topbar-session" id="sessionId">PS-0843</div>
+  </div>
+
+  <!-- VIEW TOGGLE (sessions list vs new session) -->
+  <div class="view-toggle">
+    <div class="vt-btn active" onclick="showView('new',this)">New session</div>
+    <div class="vt-btn" onclick="showView('history',this)">Session history</div>
+  </div>
+
+  <!-- PROGRESS BAR -->
+  <div class="progress" id="progressBar">
+    <div class="prog-step">
+      <div class="prog-dot active" id="dot1">1</div>
+      <div class="prog-label active" id="lbl1">Lot</div>
+    </div>
+    <div class="prog-line" id="line1"></div>
+    <div class="prog-step">
+      <div class="prog-dot pending" id="dot2">2</div>
+      <div class="prog-label" id="lbl2">Mode</div>
+    </div>
+    <div class="prog-line" id="line2"></div>
+    <div class="prog-step">
+      <div class="prog-dot pending" id="dot3">3</div>
+      <div class="prog-label" id="lbl3">Weight</div>
+    </div>
+    <div class="prog-line" id="line3"></div>
+    <div class="prog-step">
+      <div class="prog-dot pending" id="dot4">4</div>
+      <div class="prog-label" id="lbl4">Bags</div>
+    </div>
+    <div class="prog-line" id="line4"></div>
+    <div class="prog-step">
+      <div class="prog-dot pending" id="dot5">5</div>
+      <div class="prog-label" id="lbl5">Close</div>
+    </div>
+  </div>
+
+  <!-- ── STEP 1: SELECT LOT ── -->
+  <div class="screen active" id="screen-1">
+    <p class="section-label">Select stock lot to open</p>
+
+    <div class="lot-card" id="lot-bbq" onclick="selectLot('bbq',this)">
+      <div class="lot-card-head">
+        <div>
+          <div class="lot-name">BBQ Hardwood</div>
+          <div class="lot-grade">Grade A · Al-Amin Trading · LOT-0041</div>
+        </div>
+        <div class="lot-check"><i class="ti ti-check"></i></div>
+      </div>
+      <div class="lot-bar-wrap">
+        <div class="lot-bar-track"><div class="lot-bar-fill bar-green" style="width:78%"></div></div>
+      </div>
+      <div class="lot-stats">
+        <div class="lot-stat"><div class="lot-stat-val">12,400 kg</div><div class="lot-stat-lbl">remaining</div></div>
+        <div class="lot-stat"><div class="lot-stat-val">$0.740</div><div class="lot-stat-lbl">cost/kg</div></div>
+        <div class="lot-stat"><div class="lot-stat-val">78%</div><div class="lot-stat-lbl">full</div></div>
+      </div>
+    </div>
+
+    <div class="lot-card" id="lot-shisha" onclick="selectLot('shisha',this)">
+      <div class="lot-card-head">
+        <div>
+          <div class="lot-name">Shisha</div>
+          <div class="lot-grade">Grade B · Al-Amin Trading · LOT-0042</div>
+        </div>
+        <div class="lot-check"><i class="ti ti-check"></i></div>
+      </div>
+      <div class="lot-bar-wrap">
+        <div class="lot-bar-track"><div class="lot-bar-fill bar-amber" style="width:60%"></div></div>
+      </div>
+      <div class="lot-stats">
+        <div class="lot-stat"><div class="lot-stat-val">8,980 kg</div><div class="lot-stat-lbl">remaining</div></div>
+        <div class="lot-stat"><div class="lot-stat-val">$0.890</div><div class="lot-stat-lbl">cost/kg</div></div>
+        <div class="lot-stat"><div class="lot-stat-val">60%</div><div class="lot-stat-lbl">full</div></div>
+      </div>
+    </div>
+
+    <div class="lot-card" id="lot-rest" onclick="selectLot('rest',this)">
+      <div class="lot-card-head">
+        <div>
+          <div class="lot-name">Restaurant Grade</div>
+          <div class="lot-grade">Grade A · Sahara Export · LOT-0043</div>
+        </div>
+        <div class="lot-check"><i class="ti ti-check"></i></div>
+      </div>
+      <div class="lot-bar-wrap">
+        <div class="lot-bar-track"><div class="lot-bar-fill bar-red" style="width:22%"></div></div>
+      </div>
+      <div class="lot-stats">
+        <div class="lot-stat"><div class="lot-stat-val" style="color:var(--red)">3,200 kg</div><div class="lot-stat-lbl">remaining</div></div>
+        <div class="lot-stat"><div class="lot-stat-val">$0.910</div><div class="lot-stat-lbl">cost/kg</div></div>
+        <div class="lot-stat"><div class="lot-stat-val" style="color:var(--red)">22%</div><div class="lot-stat-lbl">full</div></div>
+      </div>
+    </div>
+
+    <div class="bottom-btn-wrap">
+      <button class="main-btn" id="btn1" disabled onclick="goToStep(2)">
+        <i class="ti ti-arrow-right"></i> Continue
+      </button>
+    </div>
+  </div>
+
+  <!-- ── STEP 2: SET MODE ── -->
+  <div class="screen" id="screen-2">
+    <p class="section-label">What are you packing for?</p>
+
+    <div class="mode-cards">
+      <div class="mode-card" id="mode-stock" onclick="selectMode('stock',this)">
+        <div class="mode-icon">🏭</div>
+        <div class="mode-title">Stock build</div>
+        <div class="mode-desc">Goes to general inventory — no specific client</div>
+      </div>
+      <div class="mode-card" id="mode-order" onclick="selectMode('order',this)">
+        <div class="mode-icon">📦</div>
+        <div class="mode-title">Client order</div>
+        <div class="mode-desc">Reserved for a specific client's order</div>
+      </div>
+    </div>
+
+    <!-- Order selector (shows when mode = order) -->
+    <div id="orderPicker" style="display:none">
+      <p class="section-label">Select order to fill</p>
+      <div class="order-select-box">
+        <div class="order-opt" onclick="selectOrder(this)">
+          <div class="order-opt-info">
+            <div class="order-opt-name">Al Rawda Restaurant</div>
+            <div class="order-opt-meta">ORD-0284 · BBQ Hardwood A · 160kg needed</div>
+          </div>
+          <div class="order-opt-kg">160 kg</div>
+        </div>
+        <div class="order-opt" onclick="selectOrder(this)">
+          <div class="order-opt-info">
+            <div class="order-opt-name">Byblos BBQ Supply</div>
+            <div class="order-opt-meta">ORD-0281 · BBQ Hardwood A · 500kg needed</div>
+          </div>
+          <div class="order-opt-kg">500 kg</div>
+        </div>
+        <div class="order-opt" onclick="selectOrder(this)">
+          <div class="order-opt-info">
+            <div class="order-opt-name">Cedar Grill House</div>
+            <div class="order-opt-meta">ORD-0279 · BBQ Hardwood A · 240kg needed</div>
+          </div>
+          <div class="order-opt-kg">240 kg</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom-btn-wrap">
+      <button class="main-btn" id="btn2" disabled onclick="goToStep(3)">
+        <i class="ti ti-arrow-right"></i> Continue
+      </button>
+    </div>
+  </div>
+
+  <!-- ── STEP 3: LOG KG CONSUMED ── -->
+  <div class="screen" id="screen-3">
+    <p class="section-label">Weigh and enter kg consumed</p>
+
+    <div class="lot-remaining-note">
+      <i class="ti ti-info-circle" style="font-size:16px;color:var(--text3)"></i>
+      <span><strong id="lotNameNote">BBQ Hardwood Grade A</strong> · <span id="lotRemNote">12,400 kg</span> remaining</span>
+    </div>
+
+    <div class="kg-input-wrap">
+      <div class="kg-label">Kg consumed from lot</div>
+      <input
+        class="kg-input"
+        type="number"
+        id="kgInput"
+        placeholder="0"
+        inputmode="decimal"
+        oninput="checkKg()"
+      >
+      <div class="kg-unit">kilograms</div>
+    </div>
+
+    <div class="kg-warning" id="kgWarning">
+      <i class="ti ti-alert-triangle" style="font-size:16px"></i>
+      <span>Cannot exceed lot remaining (<span id="warningKg">12,400</span> kg)</span>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;font-size:13px;color:var(--text2);display:flex;align-items:center;gap:8px">
+      <i class="ti ti-lock" style="font-size:15px;color:var(--text3)"></i>
+      This reduces the lot immediately. You cannot go back after confirming.
+    </div>
+
+    <div class="bottom-btn-wrap">
+      <button class="main-btn" id="btn3" disabled onclick="goToStep(4)">
+        <i class="ti ti-arrow-right"></i> Confirm weight &amp; start packing
+      </button>
+    </div>
+  </div>
+
+  <!-- ── STEP 4: LOG BAG OUTPUT ── -->
+  <div class="screen" id="screen-4">
+    <p class="section-label">Count bags produced by size</p>
+
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;font-size:12px;color:var(--text2);display:flex;justify-content:space-between;align-items:center">
+      <span>Kg consumed: <strong id="kgConsumedDisplay">—</strong></span>
+      <span>Kg output: <strong id="kgOutputDisplay">0 kg</strong></span>
+    </div>
+
+    <div class="bag-row">
+      <div class="bag-info">
+        <div class="bag-name">1.9 kg bag</div>
+        <div class="bag-meta">nominal 1.9kg · same bag as 2kg</div>
+      </div>
+      <div class="bag-counter">
+        <button class="counter-btn" onclick="adjustBag('b19',-1)">−</button>
+        <input class="counter-val" type="number" id="b19" value="0" min="0" oninput="updateOutput()">
+        <button class="counter-btn" onclick="adjustBag('b19',1)">+</button>
+      </div>
+    </div>
+
+    <div class="bag-row">
+      <div class="bag-info">
+        <div class="bag-name">2 kg bag</div>
+        <div class="bag-meta">nominal 2kg · earns 0.05$/bag</div>
+      </div>
+      <div class="bag-counter">
+        <button class="counter-btn" onclick="adjustBag('b2',-1)">−</button>
+        <input class="counter-val" type="number" id="b2" value="0" min="0" oninput="updateOutput()">
+        <button class="counter-btn" onclick="adjustBag('b2',1)">+</button>
+      </div>
+    </div>
+
+    <div class="bag-row">
+      <div class="bag-info">
+        <div class="bag-name">5 kg bag</div>
+        <div class="bag-meta">nominal 5kg · earns 0.08$/bag</div>
+      </div>
+      <div class="bag-counter">
+        <button class="counter-btn" onclick="adjustBag('b5',-1)">−</button>
+        <input class="counter-val" type="number" id="b5" value="0" min="0" oninput="updateOutput()">
+        <button class="counter-btn" onclick="adjustBag('b5',1)">+</button>
+      </div>
+    </div>
+
+    <div class="bag-row">
+      <div class="bag-info">
+        <div class="bag-name">10 kg bag</div>
+        <div class="bag-meta">nominal 10kg · earns 0.12$/bag</div>
+      </div>
+      <div class="bag-counter">
+        <button class="counter-btn" onclick="adjustBag('b10',-1)">−</button>
+        <input class="counter-val" type="number" id="b10" value="0" min="0" oninput="updateOutput()">
+        <button class="counter-btn" onclick="adjustBag('b10',1)">+</button>
+      </div>
+    </div>
+
+    <div class="bag-row">
+      <div class="bag-info">
+        <div class="bag-name">20 kg bag</div>
+        <div class="bag-meta">nominal 20kg · earns 0.18$/bag</div>
+      </div>
+      <div class="bag-counter">
+        <button class="counter-btn" onclick="adjustBag('b20',-1)">−</button>
+        <input class="counter-val" type="number" id="b20" value="0" min="0" oninput="updateOutput()">
+        <button class="counter-btn" onclick="adjustBag('b20',1)">+</button>
+      </div>
+    </div>
+
+    <!-- Live variance -->
+    <div id="varianceBox" class="variance-box ok" style="margin-top:16px">
+      <div class="var-row">
+        <span class="var-label">Kg consumed</span>
+        <span class="var-value" id="vConsumed">—</span>
+      </div>
+      <div class="var-row">
+        <span class="var-label">Kg output (counted)</span>
+        <span class="var-value" id="vOutput">0 kg</span>
+      </div>
+      <div class="var-row" style="border-top:1px solid rgba(0,0,0,0.08);padding-top:8px;margin-top:4px">
+        <span class="var-label" style="font-weight:600">Variance</span>
+        <span class="var-value" id="vVariance" style="font-size:16px">— kg</span>
+      </div>
+    </div>
+
+    <!-- Negative variance note field -->
+    <div id="negVarNote" style="display:none;margin-top:10px">
+      <label class="form-label" style="color:var(--red)">⚠ Output exceeds input — explanation required</label>
+      <textarea class="note-textarea" placeholder="Explain why output kg exceeds input kg…" style="border-color:var(--red)"></textarea>
+    </div>
+
+    <div class="bottom-btn-wrap">
+      <button class="main-btn" id="btn4" onclick="goToStep(5)">
+        <i class="ti ti-arrow-right"></i> Review and close session
+      </button>
+    </div>
+  </div>
+
+  <!-- ── STEP 5: REVIEW & CLOSE ── -->
+  <div class="screen" id="screen-5">
+    <p class="section-label">Session summary</p>
+
+    <div class="summary-card">
+      <div class="summary-head"><i class="ti ti-stack-2" style="font-size:14px"></i> Lot used</div>
+      <div class="summary-row"><span class="summary-row-label">Charcoal</span><span class="summary-row-val" id="sum-lot">BBQ Hardwood Grade A</span></div>
+      <div class="summary-row"><span class="summary-row-label">Mode</span><span class="summary-row-val" id="sum-mode">Stock build</span></div>
+      <div class="summary-row"><span class="summary-row-label">Kg consumed</span><span class="summary-row-val" id="sum-kg">—</span></div>
+    </div>
+
+    <div class="summary-card">
+      <div class="summary-head"><i class="ti ti-box" style="font-size:14px"></i> Bags produced</div>
+      <div id="sum-bags-list"></div>
+      <div class="summary-row" style="background:var(--surface2)">
+        <span class="summary-row-label" style="font-weight:600">Total bags</span>
+        <span class="summary-row-val" id="sum-total-bags">0</span>
+      </div>
+    </div>
+
+    <div class="summary-card" id="sum-variance-card">
+      <div class="summary-head"><i class="ti ti-arrows-diff" style="font-size:14px"></i> Variance</div>
+      <div class="summary-row">
+        <span class="summary-row-label">Kg output total</span>
+        <span class="summary-row-val" id="sum-output">0 kg</span>
+      </div>
+      <div class="summary-row">
+        <span class="summary-row-label">Variance kg</span>
+        <span class="summary-row-val" id="sum-variance">0 kg</span>
+      </div>
+    </div>
+
+    <div class="earnings-pill">
+      <div>
+        <div class="earn-label">Your earnings this session</div>
+        <div style="font-size:12px;color:var(--accent);margin-top:2px">Added to your total automatically</div>
+      </div>
+      <div class="earn-value" id="sum-earnings">$0.00</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Session notes (optional)</label>
+      <textarea class="note-textarea" id="sessionNote" placeholder="Any observations, issues, or notes…"></textarea>
+    </div>
+
+    <div class="bottom-btn-wrap">
+      <button class="main-btn green" onclick="closeSession()">
+        <i class="ti ti-check"></i> Close session &amp; add to stock
+      </button>
+    </div>
+  </div>
+
+  <!-- ── SUCCESS SCREEN ── -->
+  <div class="screen" id="screen-success">
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px">
+      <div class="success-icon"><i class="ti ti-check" style="color:var(--accent);font-size:36px"></i></div>
+      <div style="font-size:22px;font-weight:600;letter-spacing:-0.5px;margin-bottom:6px">Session closed</div>
+      <div style="font-size:14px;color:var(--text2);margin-bottom:24px" id="successSub">Stock has been updated</div>
+
+      <div style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;margin-bottom:20px">
+        <div class="summary-row"><span class="summary-row-label">Session</span><span class="summary-row-val">PS-0843</span></div>
+        <div class="summary-row"><span class="summary-row-label">Bags produced</span><span class="summary-row-val" id="succ-bags">—</span></div>
+        <div class="summary-row"><span class="summary-row-label">Variance</span><span class="summary-row-val" id="succ-var">—</span></div>
+        <div class="summary-row"><span class="summary-row-label">Earnings</span><span class="summary-row-val" style="color:var(--accent)" id="succ-earn">—</span></div>
+      </div>
+
+      <button class="main-btn" style="width:100%;margin-bottom:10px" onclick="startNew()">
+        <i class="ti ti-plus"></i> Start new session
+      </button>
+      <button class="main-btn" style="background:var(--surface);color:var(--text2);border:1.5px solid var(--border);width:100%">
+        <i class="ti ti-list"></i> View session history
+      </button>
+    </div>
+  </div>
+
+  <!-- ── HISTORY VIEW ── -->
+  <div id="historyView" style="display:none;flex:1;padding:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <p class="section-label" style="margin:0">Your sessions</p>
+      <span style="font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--text3)">42 sessions total</span>
+    </div>
+
+    <div class="session-card">
+      <div class="session-head">
+        <span class="session-id">PS-0842</span>
+        <span class="session-date">Today, 09:14</span>
+      </div>
+      <div class="session-title">BBQ Hardwood Grade A</div>
+      <div class="session-meta">
+        <span>480 kg consumed</span>
+        <span>240 bags</span>
+        <span class="session-variance" style="color:var(--accent2)">−12 kg var</span>
+      </div>
+    </div>
+
+    <div class="session-card">
+      <div class="session-head">
+        <span class="session-id">PS-0838</span>
+        <span class="session-date">19 May</span>
+      </div>
+      <div class="session-title">BBQ Hardwood Grade A</div>
+      <div class="session-meta">
+        <span>1,200 kg consumed</span>
+        <span>600 bags</span>
+        <span class="session-variance" style="color:var(--accent2)">−28 kg var</span>
+      </div>
+    </div>
+
+    <div class="session-card">
+      <div class="session-head">
+        <span class="session-id">PS-0834</span>
+        <span class="session-date">17 May</span>
+      </div>
+      <div class="session-title">Restaurant Grade A</div>
+      <div class="session-meta">
+        <span>2,100 kg consumed</span>
+        <span>210 bags (10kg)</span>
+        <span class="session-variance" style="color:var(--accent)">−44 kg var</span>
+      </div>
+    </div>
+
+    <div class="session-card">
+      <div class="session-head">
+        <span class="session-id">PS-0829</span>
+        <span class="session-date">15 May</span>
+      </div>
+      <div class="session-title">Shisha Grade B</div>
+      <div class="session-meta">
+        <span>960 kg consumed</span>
+        <span>192 bags (5kg)</span>
+        <span class="session-variance" style="color:var(--accent)">−18 kg var</span>
+      </div>
+    </div>
+
+    <!-- Earnings summary -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;margin-top:6px">
+      <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">Your earnings</div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
+        <span style="color:var(--text2)">Total earned</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-weight:600">$448.80</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
+        <span style="color:var(--text2)">Total paid</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--accent)">$264.60</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border);font-size:14px">
+        <span style="font-weight:600">Owed to you</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--accent2)">$184.20</span>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /phone-wrap -->
+
+<script>
+  // State
+  let selectedLot = null;
+  let selectedMode = null;
+  let kgConsumed = 0;
+  const LOT_REMAINING = { bbq: 12400, shisha: 8980, rest: 3200 };
+  const LOT_NAMES = { bbq: 'BBQ Hardwood Grade A', shisha: 'Shisha Grade B', rest: 'Restaurant Grade A' };
+  const BAG_NOMINAL = { b19: 1.9, b2: 2, b5: 5, b10: 10, b20: 20 };
+  const BAG_RATE    = { b19: 0.05, b2: 0.05, b5: 0.08, b10: 0.12, b20: 0.18 };
+  let currentStep = 1;
+
+  function selectLot(id, el) {
+    document.querySelectorAll('.lot-card').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+    selectedLot = id;
+    document.getElementById('btn1').disabled = false;
+    // Update notes for step 3
+    document.getElementById('lotNameNote').textContent = LOT_NAMES[id];
+    document.getElementById('lotRemNote').textContent = LOT_REMAINING[id].toLocaleString() + ' kg';
+    document.getElementById('warningKg').textContent = LOT_REMAINING[id].toLocaleString();
+  }
+
+  function selectMode(mode, el) {
+    document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+    selectedMode = mode;
+    document.getElementById('orderPicker').style.display = mode === 'order' ? 'block' : 'none';
+    if (mode === 'stock') document.getElementById('btn2').disabled = false;
+  }
+
+  function selectOrder(el) {
+    document.querySelectorAll('.order-opt').forEach(o => o.classList.remove('sel'));
+    el.classList.add('sel');
+    document.getElementById('btn2').disabled = false;
+  }
+
+  function checkKg() {
+    const val = parseFloat(document.getElementById('kgInput').value) || 0;
+    const max = selectedLot ? LOT_REMAINING[selectedLot] : 99999;
+    const warn = document.getElementById('kgWarning');
+    const btn = document.getElementById('btn3');
+    if (val > max) {
+      warn.style.display = 'flex';
+      btn.disabled = true;
+    } else if (val > 0) {
+      warn.style.display = 'none';
+      btn.disabled = false;
+    } else {
+      warn.style.display = 'none';
+      btn.disabled = true;
+    }
+  }
+
+  function adjustBag(id, delta) {
+    const el = document.getElementById(id);
+    const val = Math.max(0, (parseInt(el.value) || 0) + delta);
+    el.value = val;
+    updateOutput();
+  }
+
+  function updateOutput() {
+    let totalKg = 0, totalEarn = 0;
+    ['b19','b2','b5','b10','b20'].forEach(id => {
+      const qty = parseInt(document.getElementById(id).value) || 0;
+      totalKg += qty * BAG_NOMINAL[id];
+      totalEarn += qty * BAG_RATE[id];
+    });
+
+    document.getElementById('kgOutputDisplay').textContent = totalKg.toFixed(1) + ' kg';
+    document.getElementById('vOutput').textContent = totalKg.toFixed(1) + ' kg';
+
+    const consumed = kgConsumed || 0;
+    const variance = consumed - totalKg;
+    const varEl = document.getElementById('vVariance');
+    const vBox = document.getElementById('varianceBox');
+    const negNote = document.getElementById('negVarNote');
+
+    varEl.textContent = (variance >= 0 ? '−' : '+') + Math.abs(variance).toFixed(1) + ' kg';
+
+    if (consumed === 0) {
+      vBox.className = 'variance-box ok';
+      varEl.textContent = '— kg';
+    } else if (variance > 0) {
+      vBox.className = 'variance-box warn';
+      negNote.style.display = 'none';
+    } else if (variance < 0) {
+      vBox.className = 'variance-box error';
+      negNote.style.display = 'block';
+    } else {
+      vBox.className = 'variance-box ok';
+      negNote.style.display = 'none';
+    }
+  }
+
+  function buildSummary() {
+    const kg = parseFloat(document.getElementById('kgInput').value) || 0;
+    kgConsumed = kg;
+
+    document.getElementById('sum-lot').textContent = selectedLot ? LOT_NAMES[selectedLot] : '—';
+    document.getElementById('sum-mode').textContent = selectedMode === 'order' ? 'Client order' : 'Stock build';
+    document.getElementById('sum-kg').textContent = kg.toFixed(1) + ' kg';
+    document.getElementById('kgConsumedDisplay').textContent = kg.toFixed(1) + ' kg';
+    document.getElementById('vConsumed').textContent = kg.toFixed(1) + ' kg';
+
+    // bags list
+    let totalBags = 0, totalKg = 0, totalEarn = 0;
+    const bagNames = { b19: '1.9kg bag', b2: '2kg bag', b5: '5kg bag', b10: '10kg bag', b20: '20kg bag' };
+    let html = '';
+    ['b19','b2','b5','b10','b20'].forEach(id => {
+      const qty = parseInt(document.getElementById(id).value) || 0;
+      if (qty > 0) {
+        totalBags += qty;
+        totalKg += qty * BAG_NOMINAL[id];
+        totalEarn += qty * BAG_RATE[id];
+        html += `<div class="summary-row"><span class="summary-row-label">${bagNames[id]}</span><span class="summary-row-val">${qty} bags</span></div>`;
+      }
+    });
+
+    document.getElementById('sum-bags-list').innerHTML = html || '<div class="summary-row"><span style="color:var(--text3);font-size:13px">No bags logged yet</span></div>';
+    document.getElementById('sum-total-bags').textContent = totalBags + ' bags';
+    document.getElementById('sum-output').textContent = totalKg.toFixed(1) + ' kg';
+
+    const variance = kg - totalKg;
+    const varEl = document.getElementById('sum-variance');
+    varEl.textContent = (variance >= 0 ? '−' : '+') + Math.abs(variance).toFixed(1) + ' kg';
+    varEl.style.color = variance < 0 ? 'var(--red)' : variance > kg * 0.05 ? 'var(--accent2)' : 'var(--accent)';
+
+    document.getElementById('sum-earnings').textContent = '$' + totalEarn.toFixed(2);
+
+    // Store for success screen
+    window._succ = { bags: totalBags, variance: variance, earn: totalEarn };
+  }
+
+  function goToStep(step) {
+    if (step === 4) {
+      kgConsumed = parseFloat(document.getElementById('kgInput').value) || 0;
+      document.getElementById('kgConsumedDisplay').textContent = kgConsumed.toFixed(1) + ' kg';
+      document.getElementById('vConsumed').textContent = kgConsumed.toFixed(1) + ' kg';
+      updateOutput();
+    }
+    if (step === 5) buildSummary();
+
+    // Hide current, show next
+    document.getElementById('screen-' + currentStep).classList.remove('active');
+    document.getElementById('screen-' + step).classList.add('active');
+
+    // Update progress
+    updateProgress(step);
+    currentStep = step;
+  }
+
+  function updateProgress(step) {
+    for (let i = 1; i <= 5; i++) {
+      const dot = document.getElementById('dot' + i);
+      const lbl = document.getElementById('lbl' + i);
+      if (i < step) {
+        dot.className = 'prog-dot done';
+        dot.innerHTML = '<i class="ti ti-check" style="font-size:11px"></i>';
+        lbl.className = 'prog-label';
+      } else if (i === step) {
+        dot.className = 'prog-dot active';
+        dot.textContent = i;
+        lbl.className = 'prog-label active';
+      } else {
+        dot.className = 'prog-dot pending';
+        dot.textContent = i;
+        lbl.className = 'prog-label';
+      }
+      if (i < 5) {
+        document.getElementById('line' + i).className = i < step ? 'prog-line done' : 'prog-line';
+      }
+    }
+  }
+
+  function goBack() {
+    if (currentStep > 1) {
+      document.getElementById('screen-' + currentStep).classList.remove('active');
+      currentStep--;
+      document.getElementById('screen-' + currentStep).classList.add('active');
+      updateProgress(currentStep);
+    }
+  }
+
+  function closeSession() {
+    const s = window._succ || {};
+    document.getElementById('succ-bags').textContent = (s.bags || 0) + ' bags';
+    document.getElementById('succ-var').textContent = (s.variance >= 0 ? '−' : '+') + Math.abs(s.variance || 0).toFixed(1) + ' kg';
+    document.getElementById('succ-earn').textContent = '$' + (s.earn || 0).toFixed(2);
+    document.getElementById('successSub').textContent = 'Bags added to packed stock · Lot updated';
+
+    document.getElementById('screen-5').classList.remove('active');
+    document.getElementById('screen-success').classList.add('active');
+    document.getElementById('progressBar').style.display = 'none';
+  }
+
+  function startNew() {
+    // Reset
+    selectedLot = null; selectedMode = null; kgConsumed = 0; currentStep = 1;
+    document.querySelectorAll('.lot-card').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('selected'));
+    document.getElementById('orderPicker').style.display = 'none';
+    document.getElementById('kgInput').value = '';
+    ['b19','b2','b5','b10','b20'].forEach(id => document.getElementById(id).value = 0);
+    document.getElementById('btn1').disabled = true;
+    document.getElementById('btn2').disabled = true;
+    document.getElementById('btn3').disabled = true;
+    document.getElementById('kgWarning').style.display = 'none';
+    document.getElementById('progressBar').style.display = 'flex';
+    document.getElementById('screen-success').classList.remove('active');
+    document.getElementById('screen-1').classList.add('active');
+    updateProgress(1);
+  }
+
+  function showView(view, el) {
+    document.querySelectorAll('.vt-btn').forEach(b => b.classList.remove('active'));
+    el.classList.add('active');
+    const isHistory = view === 'history';
+    document.getElementById('progressBar').style.display = isHistory ? 'none' : 'flex';
+    document.getElementById('historyView').style.display = isHistory ? 'block' : 'none';
+    ['1','2','3','4','5','success'].forEach(s => {
+      const el = document.getElementById('screen-' + s);
+      if (el) el.classList.remove('active');
+    });
+    if (!isHistory) document.getElementById('screen-' + currentStep).classList.add('active');
+  }
+</script>
+</body>
+</html>

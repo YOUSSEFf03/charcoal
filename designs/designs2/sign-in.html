@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  body { display: block; }
+  .signin-wrap {
+    min-height: 100vh;
+    display: grid; grid-template-columns: 1fr 1fr;
+  }
+  .signin-left {
+    background: var(--text);
+    color: #fff;
+    padding: 48px 56px;
+    display: flex; flex-direction: column;
+    justify-content: space-between;
+    position: relative; overflow: hidden;
+  }
+  .signin-left::before {
+    content: ""; position: absolute; inset: 0;
+    background:
+      radial-gradient(circle at 80% 20%, rgba(180,83,9,0.15), transparent 50%),
+      radial-gradient(circle at 10% 90%, rgba(29,107,74,0.12), transparent 45%);
+    pointer-events: none;
+  }
+  .brand-block { display: flex; align-items: center; gap: 12px; position: relative; }
+  .brand-block .logo-mark { background: #fff; }
+  .brand-block .logo-mark i { color: var(--text); }
+  .brand-block .logo-text { font-size: 17px; color: #fff; }
+  .brand-block .logo-sub { color: rgba(255,255,255,0.5); }
+
+  .marketing { position: relative; max-width: 440px; }
+  .marketing h2 {
+    font-size: 34px; font-weight: 600; letter-spacing: -1px; line-height: 1.15;
+    margin-bottom: 16px;
+  }
+  .marketing p { font-size: 15px; color: rgba(255,255,255,0.7); line-height: 1.6; }
+  .marketing ul { list-style: none; margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
+  .marketing li { display: flex; align-items: center; gap: 10px; font-size: 13px; color: rgba(255,255,255,0.75); font-family: 'IBM Plex Mono', monospace; }
+  .marketing li i { color: rgba(255,255,255,0.4); font-size: 15px; }
+
+  .signin-foot { position: relative; font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: rgba(255,255,255,0.4); }
+
+  .signin-right {
+    background: var(--bg);
+    padding: 48px 56px;
+    display: flex; flex-direction: column;
+    justify-content: center;
+  }
+  .signin-form { max-width: 380px; width: 100%; margin: 0 auto; }
+  .signin-form h1 {
+    font-size: 26px; font-weight: 600; letter-spacing: -0.8px;
+    margin-bottom: 6px;
+  }
+  .signin-form .lede {
+    font-size: 14px; color: var(--text2); margin-bottom: 32px;
+  }
+
+  .signin-form .field { margin-bottom: 14px; }
+  .signin-form .field-row {
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .signin-form .field-row a {
+    font-size: 12px; color: var(--accent); text-decoration: none;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .signin-form .input-wrap { position: relative; }
+  .signin-form .input-wrap i {
+    position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    font-size: 15px; color: var(--text3);
+  }
+  .signin-form .input-wrap .input { padding-left: 34px; }
+
+  .signin-submit {
+    margin-top: 6px; width: 100%;
+    background: var(--text); color: #fff; border: none;
+    padding: 11px; border-radius: var(--radius);
+    font-size: 14px; font-weight: 600; font-family: 'IBM Plex Sans', sans-serif;
+    cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px;
+    transition: background 0.1s;
+  }
+  .signin-submit:hover { background: #2d2b28; }
+
+  .divider {
+    display: flex; align-items: center; gap: 12px;
+    margin: 24px 0 16px;
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 1px;
+  }
+  .divider::before, .divider::after {
+    content: ""; flex: 1; height: 1px; background: var(--border);
+  }
+
+  .role-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .role-pill {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px; border: 1px solid var(--border);
+    border-radius: var(--radius); background: var(--surface);
+    text-decoration: none; color: var(--text2);
+    font-size: 12.5px; cursor: pointer; transition: all 0.1s;
+  }
+  .role-pill:hover { border-color: var(--text3); color: var(--text); background: #FAFAF8; }
+  .role-pill i { font-size: 14px; color: var(--text3); }
+  .role-pill:hover i { color: var(--text); }
+  .role-pill .role-name { font-weight: 500; }
+
+  .foot-note {
+    margin-top: 32px; font-size: 11px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace; text-align: center;
+  }
+
+  @media (max-width: 880px) {
+    .signin-wrap { grid-template-columns: 1fr; }
+    .signin-left { padding: 32px; min-height: 30vh; }
+    .signin-right { padding: 32px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="signin-wrap">
+
+  <div class="signin-left">
+    <div class="brand-block">
+      <div class="logo-mark"><i class="ti ti-flame"></i></div>
+      <div>
+        <div class="logo-text">Ember</div>
+        <div class="logo-sub">charcoal system</div>
+      </div>
+    </div>
+
+    <div class="marketing">
+      <h2 style="text-wrap: balance">Run the warehouse, the route, and the ledger from one place.</h2>
+      <p>Container costing, packing reconciliation, client CRM and driver delivery — built for the way your business actually works.</p>
+      <ul>
+        <li><i class="ti ti-ship"></i> container → lot → bag, traced end-to-end</li>
+        <li><i class="ti ti-truck"></i> mobile driver flow with on-site receipts</li>
+        <li><i class="ti ti-language"></i> Arabic-supported fields, USD &amp; LBP currencies</li>
+      </ul>
+    </div>
+
+    <div class="signin-foot">© 2026 Ember · v1.0 · Beirut, LB</div>
+  </div>
+
+  <div class="signin-right">
+    <div class="signin-form">
+      <h1>Sign in</h1>
+      <p class="lede">Welcome back. Use your work email and password.</p>
+
+      <div class="field">
+        <label class="field-label" for="email">Email</label>
+        <div class="input-wrap">
+          <i class="ti ti-send"></i>
+          <input class="input" id="email" type="email" autocomplete="email" value="khalil@embercharcoal.com">
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-row">
+          <label class="field-label" for="pwd">Password</label>
+          <a href="#">Forgot?</a>
+        </div>
+        <div class="input-wrap">
+          <i class="ti ti-lock"></i>
+          <input class="input" id="pwd" type="password" autocomplete="current-password" value="••••••••••">
+        </div>
+      </div>
+
+      <button class="signin-submit" onclick="window.location.href='dashboard.html'">
+        Sign in
+        <i class="ti ti-arrow-right" style="font-size:15px"></i>
+      </button>
+
+      <div class="divider">or jump in as</div>
+      <div class="role-picker">
+        <a class="role-pill" href="dashboard.html"><i class="ti ti-id-badge"></i><span class="role-name">Owner</span></a>
+        <a class="role-pill" href="reports.html"><i class="ti ti-calculator"></i><span class="role-name">Accountant</span></a>
+        <a class="role-pill" href="orders.html"><i class="ti ti-receipt"></i><span class="role-name">Sales rep</span></a>
+        <a class="role-pill" href="packing.html"><i class="ti ti-tools"></i><span class="role-name">Worker</span></a>
+        <a class="role-pill" href="driver-mobile.html" style="grid-column: span 2"><i class="ti ti-truck"></i><span class="role-name">Driver</span><span style="margin-left:auto;font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">mobile</span></a>
+      </div>
+
+      <div class="foot-note">prototype demo · jump to any role above</div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

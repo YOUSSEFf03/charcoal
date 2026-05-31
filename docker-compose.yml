@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: charcoal_db
+    environment:
+      POSTGRES_USER: charcoal
+      POSTGRES_PASSWORD: charcoal_secret
+      POSTGRES_DB: charcoal_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - charcoal_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  charcoal_postgres_data:

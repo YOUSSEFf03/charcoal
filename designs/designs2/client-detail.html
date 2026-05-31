@@ -1,0 +1,1367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Al Rawda Restaurant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .ar { font-family: 'Noto Sans Arabic', 'IBM Plex Sans', sans-serif; direction: rtl; unicode-bidi: plaintext; }
+
+  .client-hero { display: flex; gap: 18px; align-items: flex-start; }
+  .client-mono {
+    width: 56px; height: 56px; border-radius: 12px;
+    background: var(--surface2); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 600;
+    border: 1px solid var(--border);
+  }
+  .client-hero h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.5px; }
+  .client-name-ar { font-size: 15px; color: var(--text2); margin-top: 2px; }
+
+  /* phone rows */
+  .phone-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 18px; border-bottom: 1px solid var(--border);
+  }
+  .phone-row:last-child { border-bottom: none; }
+  .phone-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+  .phone-dot.inactive { background: var(--text3); }
+  .phone-number { font-family: 'IBM Plex Mono', monospace; font-size: 13px; }
+  .phone-label { font-size: 11px; color: var(--text3); }
+  .phone-meta { margin-left: auto; font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+  .phone-row.inactive .phone-number { color: var(--text3); text-decoration: line-through; }
+  .phone-row .row-actions { margin-left: 8px; }
+
+  /* timeline */
+  .tl-row { display: flex; gap: 12px; padding: 10px 18px; border-bottom: 1px solid var(--border); }
+  .tl-row:last-child { border-bottom: none; }
+  .tl-icon {
+    width: 28px; height: 28px; border-radius: 7px;
+    background: var(--surface2); color: var(--text2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; flex-shrink: 0;
+  }
+  .tl-icon.green { background: var(--accent-bg); color: var(--accent); }
+  .tl-icon.amber { background: var(--accent2-bg); color: var(--accent2); }
+  .tl-icon.red   { background: var(--red-bg);     color: var(--red); }
+  .tl-body { flex: 1; }
+  .tl-text { font-size: 13px; line-height: 1.4; }
+  .tl-text strong { font-weight: 500; }
+  .tl-time { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-top: 2px; }
+
+  /* preferred chips */
+  .pref-chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 14px 18px; }
+  .pref-chip {
+    font-size: 12px; padding: 4px 10px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 100px; color: var(--text2);
+  }
+  .pref-chip .grade { font-family: 'IBM Plex Mono', monospace; color: var(--text3); margin-left: 4px; }
+
+  /* row actions */
+  .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+  .icon-btn {
+    width: 28px; height: 28px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface);
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text2); transition: all 0.1s; text-decoration: none;
+  }
+  .icon-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--text3); }
+  .icon-btn.primary { background: var(--text); color: #fff; border-color: var(--text); }
+  .icon-btn.primary:hover { background: #2d2b28; }
+  .icon-btn.danger:hover { background: var(--red-bg); color: var(--red); border-color: #f5c8c4; }
+  .icon-btn i { font-size: 14px; }
+
+  /* payments KPI row */
+  .pay-kpis {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    border-top: 1px solid var(--border);
+  }
+  .pay-kpi { padding: 12px 18px; border-right: 1px solid var(--border); }
+  .pay-kpi:last-child { border-right: none; }
+  .pay-kpi .lbl { font-size: 10px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
+  .pay-kpi .val { font-size: 17px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; letter-spacing: -0.3px; }
+  .pay-kpi .val.green { color: var(--accent); }
+  .pay-kpi .val.amber { color: var(--accent2); }
+
+  /* ── show-more footer ─────────────────────────────────────── */
+  .more-foot {
+    padding: 10px 14px; background: var(--surface2);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; color: var(--text3); font-family: 'IBM Plex Mono', monospace;
+  }
+  .btn-more {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: 12px; font-weight: 500;
+    font-family: 'IBM Plex Sans', sans-serif; cursor: pointer;
+    transition: all 0.1s;
+  }
+  .btn-more:hover { background: var(--text); color: #fff; border-color: var(--text); }
+  .btn-more:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-more.collapsed { background: var(--text); color: #fff; border-color: var(--text); }
+
+  /* ── Modal ─────────────────────────────────────────────────── */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(26,25,22,0.45);
+    display: none; align-items: center; justify-content: center;
+    z-index: 100; padding: 20px;
+    backdrop-filter: blur(2px);
+  }
+  .modal-overlay.show { display: flex; }
+  .modal {
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    width: 100%; max-width: 720px;
+    max-height: 90vh; overflow: hidden;
+    display: flex; flex-direction: column;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.25);
+  }
+  .modal-head {
+    padding: 16px 22px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .modal-head h2 { font-size: 16px; font-weight: 600; letter-spacing: -0.2px;
+    display: flex; align-items: center; gap: 9px; }
+  .modal-head h2 i { color: var(--text2); font-size: 18px; }
+  .modal-close {
+    width: 30px; height: 30px; border-radius: 6px;
+    border: none; background: transparent; color: var(--text3);
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .modal-close:hover { background: var(--surface2); color: var(--text); }
+  .modal-body {
+    padding: 18px 22px; overflow-y: auto; flex: 1;
+  }
+  .modal-foot {
+    padding: 12px 22px; border-top: 1px solid var(--border);
+    background: var(--surface2);
+    display: flex; justify-content: space-between; gap: 8px; align-items: center;
+  }
+  .modal-foot .hint {
+    font-size: 11.5px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .form-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .form-grid .full { grid-column: 1 / -1; }
+  .field-label { font-size: 11px; color: var(--text2); font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    font-family: 'IBM Plex Mono', monospace; }
+
+  /* phones editor inside modal */
+  .phones-editor {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .phone-edit-row {
+    display: grid; grid-template-columns: 1fr 1.4fr 100px 32px;
+    gap: 8px; align-items: center;
+  }
+  .phone-edit-row .input {
+    height: 36px; padding: 0 10px; font-size: 13px;
+  }
+  .btn-add-phone {
+    align-self: flex-start; padding: 7px 12px;
+    background: transparent; border: 1.5px dashed var(--border2);
+    border-radius: var(--radius); color: var(--text2);
+    font-size: 12.5px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .btn-add-phone:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+
+  /* New order modal — line items */
+  .lines-table {
+    width: 100%; border-collapse: collapse;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+  }
+  .lines-table th {
+    background: var(--surface2); padding: 8px 10px;
+    text-align: left; font-size: 10.5px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+    font-weight: 400;
+  }
+  .lines-table th.right { text-align: right; }
+  .lines-table td {
+    padding: 8px; border-top: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  .lines-table .ln-select, .lines-table .ln-input {
+    height: 36px; width: 100%; border: 1px solid var(--border);
+    border-radius: 6px; padding: 0 10px; font-size: 13px;
+    background: var(--surface); font-family: 'IBM Plex Sans', sans-serif;
+    outline: none;
+  }
+  .lines-table .ln-input.num {
+    font-family: 'IBM Plex Mono', monospace; text-align: right;
+    font-weight: 500;
+  }
+  .lines-table .ln-select {
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='none' stroke='%239B9890' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/></svg>");
+    background-repeat: no-repeat; background-position: right 10px center;
+    padding-right: 26px;
+  }
+  .lines-table .ln-subtotal {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+    text-align: right; font-size: 13px;
+  }
+  .lines-table tfoot td {
+    background: var(--surface2); font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+  }
+  .btn-add-line {
+    margin-top: 10px; padding: 8px 14px;
+    background: transparent; border: 1.5px dashed var(--border2);
+    border-radius: var(--radius); color: var(--text2);
+    font-size: 13px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: 'IBM Plex Sans', sans-serif; font-weight: 500;
+  }
+  .btn-add-line:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+
+  .order-totals {
+    display: flex; flex-direction: column; gap: 4px;
+    align-items: flex-end; margin-top: 14px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 13px;
+    color: var(--text2);
+  }
+  .order-totals .grand {
+    font-size: 22px; font-weight: 600; color: var(--accent);
+    letter-spacing: -0.5px;
+  }
+
+  /* ── Export bar in card head ──────────────────────────── */
+  .export-bar {
+    display: flex; align-items: center; gap: 6px;
+    flex-wrap: nowrap;
+  }
+  .export-bar .lbl {
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+    margin-right: 2px;
+  }
+  .date-mini {
+    height: 30px; padding: 0 8px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); color: var(--text);
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+    outline: none;
+  }
+  .date-mini:focus { border-color: var(--text); box-shadow: 0 0 0 2px rgba(26,25,22,0.06); }
+  .date-mini::-webkit-calendar-picker-indicator { opacity: 0.5; cursor: pointer; }
+  .export-bar .arrow { font-size: 11px; color: var(--text3); margin: 0 -2px; }
+
+  .btn-export {
+    height: 30px; padding: 0 11px;
+    background: var(--accent); color: #fff;
+    border: 1px solid var(--accent); border-radius: 6px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    font-family: 'IBM Plex Sans', sans-serif;
+    display: inline-flex; align-items: center; gap: 5px;
+    transition: background 0.1s;
+  }
+  .btn-export:hover { background: #155237; border-color: #155237; }
+  .btn-export i { font-size: 13px; }
+  .btn-export.preset {
+    background: transparent; color: var(--text2);
+    border-color: var(--border); font-weight: 500;
+  }
+  .btn-export.preset:hover { background: var(--surface2); color: var(--text); }
+
+  /* card-head needs to wrap properly when export bar is wide */
+  .card-head { flex-wrap: wrap; gap: 10px; row-gap: 8px; }
+
+  /* toast */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: #fff;
+    padding: 11px 18px; border-radius: var(--radius);
+    font-size: 13px; display: flex; align-items: center; gap: 8px;
+    opacity: 0; pointer-events: none; transition: all 0.25s;
+    z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast i { color: #6ee7b7; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="clients"></aside>
+
+<div class="main">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="back-link" href="clients.html"><i class="ti ti-chevron-left"></i> All clients</a>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-title" id="topClientName">Al Rawda Restaurant</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn" onclick="openEdit()"><i class="ti ti-edit" style="font-size:15px"></i> Edit</button>
+      <button class="btn" onclick="openNewPayment()"><i class="ti ti-receipt" style="font-size:15px"></i> Log payment</button>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- HERO -->
+    <div class="page-header">
+      <div class="client-hero">
+        <div class="client-mono" id="heroMono">AR</div>
+        <div>
+          <h1 id="heroName">Al Rawda Restaurant</h1>
+          <div class="client-name-ar ar" id="heroNameAr">مطعم الروضة</div>
+          <div class="page-header-meta">
+            <span class="badge badge-green" id="heroType">restaurant</span>
+            <span class="badge badge-gray" id="heroCur">USD</span>
+            <span class="meta-row"><i class="ti ti-map-pin"></i> <span id="heroAddr">Hamra, Beirut</span></span>
+            <span class="meta-row"><i class="ti ti-calendar"></i> client since Jan 2024</span>
+            <span class="meta-row"><i class="ti ti-clock"></i> avg 12d between orders</span>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px">
+        <div class="kpi-tile amber" style="min-width:160px">
+          <div class="kpi-tile-label">Outstanding balance</div>
+          <div class="kpi-tile-value">$840.00</div>
+          <div class="kpi-tile-sub">2 open invoices</div>
+        </div>
+        <div class="kpi-tile red" style="min-width:160px">
+          <div class="kpi-tile-label">Days since last order</div>
+          <div class="kpi-tile-value">26</div>
+          <div class="kpi-tile-sub">+14 vs avg · OVERDUE</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:14px">
+
+      <div class="stack">
+
+        <!-- ORDERS -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-file-invoice"></i> Order history <span style="font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace">38 orders · $14,820 total</span></div>
+            <div class="export-bar">
+              <span class="lbl">Export</span>
+              <input class="date-mini" type="date" id="ordFrom">
+              <span class="arrow">→</span>
+              <input class="date-mini" type="date" id="ordTo">
+              <button class="btn-export preset" onclick="setPreset('orders','30d')" title="Last 30 days">30d</button>
+              <button class="btn-export preset" onclick="setPreset('orders','ytd')" title="Year to date">YTD</button>
+              <button class="btn-export" onclick="exportRange('orders')"><i class="ti ti-table-export"></i> Excel</button>
+            </div>
+          </div>
+          <table class="data-table" style="border-bottom:1px solid var(--border)">
+            <thead>
+              <tr>
+                <th style="width:120px">Date</th>
+                <th>Order</th>
+                <th>Items</th>
+                <th class="right" style="width:100px">Total</th>
+                <th style="width:90px">Status</th>
+                <th class="right" style="width:90px">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="ordersBody"></tbody>
+          </table>
+          <div class="more-foot">
+            <span id="ordersStatus">showing 5 of 12 orders</span>
+            <button class="btn-more" id="ordersBtn" onclick="loadMore('orders')">
+              <i class="ti ti-chevron-down" style="font-size:14px"></i> Show 10 more
+            </button>
+          </div>
+        </div>
+
+        <!-- INVOICES -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-receipt-2"></i> Invoices <span style="font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace">38 issued · 2 open</span></div>
+            <div class="export-bar">
+              <span class="lbl">Export</span>
+              <input class="date-mini" type="date" id="invFrom">
+              <span class="arrow">→</span>
+              <input class="date-mini" type="date" id="invTo">
+              <button class="btn-export preset" onclick="setPreset('invoices','30d')" title="Last 30 days">30d</button>
+              <button class="btn-export preset" onclick="setPreset('invoices','ytd')" title="Year to date">YTD</button>
+              <button class="btn-export" onclick="exportRange('invoices')"><i class="ti ti-table-export"></i> Excel</button>
+            </div>
+          </div>
+          <table class="data-table" style="border-bottom:1px solid var(--border)">
+            <thead>
+              <tr>
+                <th style="width:120px">Issued</th>
+                <th>Invoice</th>
+                <th class="right" style="width:100px">Amount</th>
+                <th class="right" style="width:100px">Paid</th>
+                <th class="right" style="width:100px">Due</th>
+                <th style="width:80px">Status</th>
+                <th class="right" style="width:70px">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="invoicesBody"></tbody>
+          </table>
+          <div class="more-foot">
+            <span id="invoicesStatus">showing 5 of 12 invoices</span>
+            <button class="btn-more" id="invoicesBtn" onclick="loadMore('invoices')">
+              <i class="ti ti-chevron-down" style="font-size:14px"></i> Show 10 more
+            </button>
+          </div>
+        </div>
+
+        <!-- PAYMENTS -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-cash"></i> Payment history <span style="font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace">42 payments</span></div>
+            <div class="export-bar">
+              <span class="lbl">Export</span>
+              <input class="date-mini" type="date" id="payFrom">
+              <span class="arrow">→</span>
+              <input class="date-mini" type="date" id="payTo">
+              <button class="btn-export preset" onclick="setPreset('payments','30d')" title="Last 30 days">30d</button>
+              <button class="btn-export preset" onclick="setPreset('payments','ytd')" title="Year to date">YTD</button>
+              <button class="btn-export" onclick="exportRange('payments')"><i class="ti ti-table-export"></i> Excel</button>
+            </div>
+          </div>
+          <div class="pay-kpis">
+            <div class="pay-kpi"><div class="lbl">Total invoiced</div><div class="val">$14,820.00</div></div>
+            <div class="pay-kpi"><div class="lbl">Total paid</div><div class="val green">$13,980.00</div></div>
+            <div class="pay-kpi"><div class="lbl">Outstanding</div><div class="val amber">$840.00</div></div>
+          </div>
+          <table class="data-table" style="border-bottom:1px solid var(--border)">
+            <thead>
+              <tr><th style="width:120px">Date</th><th style="width:80px">Method</th><th>Invoice</th><th>Logged by</th><th class="right" style="width:110px">Amount</th></tr>
+            </thead>
+            <tbody id="paymentsBody"></tbody>
+          </table>
+          <div class="more-foot">
+            <span id="paymentsStatus">showing 5 of 12 payments</span>
+            <button class="btn-more" id="paymentsBtn" onclick="loadMore('payments')">
+              <i class="ti ti-chevron-down" style="font-size:14px"></i> Show 10 more
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="stack">
+
+        <!-- PHONES -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-phone"></i> Phone numbers <span id="phonesCount" style="font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace">3 numbers</span></div>
+            <button class="card-action" onclick="openEdit('phones')"><i class="ti ti-plus" style="font-size:13px"></i> Manage</button>
+          </div>
+          <div id="phonesBody"></div>
+          <div class="more-foot" id="phonesFoot" style="display:none">
+            <span id="phonesStatus">showing 5 of 5</span>
+            <button class="btn-more" id="phonesBtn" onclick="loadMore('phones')">
+              <i class="ti ti-chevron-down" style="font-size:14px"></i> Show more
+            </button>
+          </div>
+        </div>
+
+        <!-- PREFERRED -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-star"></i> Preferred charcoal</div>
+          </div>
+          <div class="pref-chips" id="prefChips">
+            <span class="pref-chip">BBQ Hardwood<span class="grade">A</span></span>
+            <span class="pref-chip">Shisha<span class="grade">B</span></span>
+            <span class="pref-chip">Restaurant Grade<span class="grade">A</span></span>
+          </div>
+        </div>
+
+        <!-- TERMS -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-clipboard-text"></i> Terms &amp; notes</div>
+            <button class="card-action" onclick="openEdit('notes')">Edit</button>
+          </div>
+          <div style="padding:14px 18px;display:flex;flex-direction:column;gap:12px;font-size:13px">
+            <div>
+              <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:3px">Payment terms</div>
+              <div id="termsView">Net 15 days from invoice</div>
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:3px">Notes</div>
+              <div class="ar" id="notesArView" style="font-size:13.5px">يدفع نقداً عند التسليم عادةً. يفضل التوصيل قبل الساعة الواحدة ظهراً.</div>
+              <div id="notesEnView" style="color:var(--text3);font-style:italic;margin-top:4px;font-size:12.5px">Usually pays cash on delivery. Prefers delivery before 1pm.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ACTIVITY -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-activity"></i> Activity</div>
+          </div>
+          <div id="activityBody"></div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═════════════ MODAL · EDIT CLIENT ═════════════ -->
+<div class="modal-overlay" id="editModal" onclick="if (event.target === this) closeModal('editModal')">
+  <div class="modal" style="max-width:760px">
+    <div class="modal-head">
+      <h2><i class="ti ti-edit"></i> Edit client</h2>
+      <button class="modal-close" onclick="closeModal('editModal')"><i class="ti ti-x" style="font-size:16px"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field">
+          <span class="field-label">Display name</span>
+          <input class="input" id="editName" value="Al Rawda Restaurant">
+        </div>
+        <div class="field">
+          <span class="field-label">Arabic name</span>
+          <input class="input ar" id="editNameAr" value="مطعم الروضة" dir="rtl">
+        </div>
+        <div class="field">
+          <span class="field-label">Client type</span>
+          <select class="select" id="editType">
+            <option value="restaurant" selected>Restaurant</option>
+            <option value="wholesale">Wholesale</option>
+            <option value="retail">Retail</option>
+            <option value="export">Export</option>
+            <option value="shisha">Shisha lounge</option>
+          </select>
+        </div>
+        <div class="field">
+          <span class="field-label">Currency</span>
+          <select class="select" id="editCur">
+            <option value="USD" selected>USD</option>
+            <option value="LBP">LBP</option>
+            <option value="EUR">EUR</option>
+          </select>
+        </div>
+        <div class="field full">
+          <span class="field-label">Address</span>
+          <input class="input" id="editAddr" value="Hamra, Beirut">
+        </div>
+        <div class="field">
+          <span class="field-label">Payment terms</span>
+          <select class="select" id="editTerms">
+            <option>Cash on delivery</option>
+            <option selected>Net 15 days from invoice</option>
+            <option>Net 30 days from invoice</option>
+            <option>Net 45 days from invoice</option>
+            <option>Prepaid</option>
+          </select>
+        </div>
+        <div class="field">
+          <span class="field-label">Credit limit (USD)</span>
+          <input class="input num" id="editLimit" type="number" value="2000">
+        </div>
+        <div class="field full">
+          <span class="field-label">Notes</span>
+          <textarea class="textarea ar" id="editNotesAr" dir="rtl" style="min-height:60px">يدفع نقداً عند التسليم عادةً. يفضل التوصيل قبل الساعة الواحدة ظهراً.</textarea>
+        </div>
+        <div class="field full">
+          <span class="field-label">Notes (English)</span>
+          <textarea class="textarea" id="editNotesEn" style="min-height:50px">Usually pays cash on delivery. Prefers delivery before 1pm.</textarea>
+        </div>
+
+        <div class="field full">
+          <span class="field-label" style="margin-bottom:8px;display:block">Phone numbers</span>
+          <div class="phones-editor" id="phonesEditor"></div>
+          <button class="btn-add-phone" onclick="addPhoneInEditor()">
+            <i class="ti ti-plus" style="font-size:14px"></i> Add phone
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint">last updated 3 Apr 2026 by Rita Salameh</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeModal('editModal')">Cancel</button>
+        <button class="btn green" onclick="saveEdit()"><i class="ti ti-check" style="font-size:15px"></i> Save changes</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════ MODAL · NEW ORDER ═════════════ -->
+<div class="modal-overlay" id="orderModal" onclick="if (event.target === this) closeModal('orderModal')">
+  <div class="modal" style="max-width:880px">
+    <div class="modal-head">
+      <h2><i class="ti ti-plus"></i> New order · <span id="orderClientName">Al Rawda Restaurant</span></h2>
+      <button class="modal-close" onclick="closeModal('orderModal')"><i class="ti ti-x" style="font-size:16px"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid" style="margin-bottom:16px">
+        <div class="field">
+          <span class="field-label">Order date</span>
+          <input class="input" type="date" id="orderDate">
+        </div>
+        <div class="field">
+          <span class="field-label">Delivery date</span>
+          <input class="input" type="date" id="orderDelivery">
+        </div>
+        <div class="field">
+          <span class="field-label">Driver</span>
+          <select class="select" id="orderDriver">
+            <option>— Assign later —</option>
+            <option>Joseph Nasr</option>
+            <option>Mohammed Khalil</option>
+            <option>Hasan Moussa</option>
+          </select>
+        </div>
+        <div class="field">
+          <span class="field-label">Payment expected</span>
+          <select class="select" id="orderPayExp">
+            <option>Cash on delivery</option>
+            <option selected>Net 15 days</option>
+            <option>Pre-paid</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:baseline">
+        <span class="field-label">Order items</span>
+        <span style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">pick bag · grade · qty · price</span>
+      </div>
+
+      <table class="lines-table">
+        <thead>
+          <tr>
+            <th style="width:130px">Bag</th>
+            <th>Charcoal</th>
+            <th class="right" style="width:90px">Qty</th>
+            <th class="right" style="width:110px">Unit $</th>
+            <th class="right" style="width:110px">Subtotal</th>
+            <th style="width:36px"></th>
+          </tr>
+        </thead>
+        <tbody id="linesBody"></tbody>
+        <tfoot>
+          <tr>
+            <td colspan="4" style="text-align:right;color:var(--text2)">Subtotal</td>
+            <td class="right" id="orderSubtotal">$0.00</td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+
+      <button class="btn-add-line" onclick="addOrderLine()">
+        <i class="ti ti-plus" style="font-size:14px"></i> Add another item
+      </button>
+
+      <div class="order-totals">
+        <div>Subtotal · <span id="oSub">$0.00</span></div>
+        <div>VAT (11%) · <span id="oVat">$0.00</span></div>
+        <div style="margin-top:4px;padding-top:6px;border-top:1px solid var(--border);width:240px;text-align:right">
+          Grand total <span class="grand" id="oGrand">$0.00</span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint">draft is auto-saved · ORD-0342 (next number)</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeModal('orderModal')">Cancel</button>
+        <button class="btn" onclick="saveOrder('draft')">Save draft</button>
+        <button class="btn green" onclick="saveOrder('confirm')"><i class="ti ti-check" style="font-size:15px"></i> Create order</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════ MODAL · LOG PAYMENT ═════════════ -->
+<div class="modal-overlay" id="payModal" onclick="if (event.target === this) closeModal('payModal')">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-head">
+      <h2><i class="ti ti-receipt"></i> Log payment</h2>
+      <button class="modal-close" onclick="closeModal('payModal')"><i class="ti ti-x" style="font-size:16px"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field">
+          <span class="field-label">Date</span>
+          <input class="input" type="date" id="payDate">
+        </div>
+        <div class="field">
+          <span class="field-label">Method</span>
+          <select class="select" id="payMethod">
+            <option>cash</option>
+            <option>whish</option>
+            <option>omt</option>
+            <option>bank transfer</option>
+          </select>
+        </div>
+        <div class="field full">
+          <span class="field-label">Apply to invoice</span>
+          <select class="select" id="payInv">
+            <option>INV-0329 · $280 · $120 due</option>
+            <option>INV-0314 · $560 · $560 due</option>
+            <option>— unallocated —</option>
+          </select>
+        </div>
+        <div class="field">
+          <span class="field-label">Amount (USD)</span>
+          <input class="input num" type="number" id="payAmt" placeholder="0.00">
+        </div>
+        <div class="field">
+          <span class="field-label">Received by</span>
+          <select class="select" id="payBy">
+            <option>Joseph Nasr (driver)</option>
+            <option>Mohammed Khalil (driver)</option>
+            <option>Rita Salameh (sales)</option>
+            <option>Khalil Abi Nader (owner)</option>
+          </select>
+        </div>
+        <div class="field full">
+          <span class="field-label">Reference / note</span>
+          <input class="input" id="payNote" placeholder="e.g. cheque #4521, whish ref">
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint">payment will deduct from outstanding $840.00</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeModal('payModal')">Cancel</button>
+        <button class="btn green" onclick="savePayment()"><i class="ti ti-check" style="font-size:15px"></i> Log payment</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast">
+  <i class="ti ti-check-circle" style="font-size:16px"></i>
+  <span id="toastMsg">Saved</span>
+</div>
+
+<script>
+  // ── CLIENT STATE ────────────────────────────────────────────
+  let client = {
+    name: 'Al Rawda Restaurant',
+    nameAr: 'مطعم الروضة',
+    initials: 'AR',
+    type: 'restaurant',
+    currency: 'USD',
+    address: 'Hamra, Beirut',
+    terms: 'Net 15 days from invoice',
+    limit: 2000,
+    notesAr: 'يدفع نقداً عند التسليم عادةً. يفضل التوصيل قبل الساعة الواحدة ظهراً.',
+    notesEn: 'Usually pays cash on delivery. Prefers delivery before 1pm.',
+    phones: [
+      { number: '+961 71 234 567', label: 'mobile · Hussein (owner)', meta: 'primary',   active: true,  primary: true },
+      { number: '+961 1 345 678',  label: 'office',                   meta: 'added 2024', active: true,  primary: false },
+      { number: '+961 76 998 211', label: 'mobile · old line',        meta: 'inactive · 2024', active: false, primary: false },
+    ],
+  };
+
+  // ── PAGE-LOAD DATA (generated mock) ─────────────────────────
+  const ORDERS = [
+    { date: '25 Apr 2026', id: 'ORD-0341', char: 'BBQ Hardwood A',     items: '120×2kg · 30×5kg',    total: 420, status: 'partial' },
+    { date: '12 Apr 2026', id: 'ORD-0329', char: 'BBQ Hardwood A',     items: '80×2kg · 20×5kg',     total: 280, status: 'partial' },
+    { date: '31 Mar 2026', id: 'ORD-0314', char: 'BBQ Hardwood A · Shisha B', items: '100×2kg · 40×5kg · 12×10kg', total: 560, status: 'unpaid' },
+    { date: '18 Mar 2026', id: 'ORD-0297', char: 'Shisha B',           items: '200×2kg',             total: 400, status: 'paid' },
+    { date: '04 Mar 2026', id: 'ORD-0276', char: 'BBQ Hardwood A',     items: '150×2kg · 20×5kg',    total: 430, status: 'paid' },
+    { date: '19 Feb 2026', id: 'ORD-0253', char: 'BBQ Hardwood A',     items: '180×2kg · 30×5kg',    total: 520, status: 'paid' },
+    { date: '06 Feb 2026', id: 'ORD-0231', char: 'Restaurant Grade A', items: '240×2kg · 40×5kg · 10×10kg', total: 760, status: 'paid' },
+    { date: '22 Jan 2026', id: 'ORD-0210', char: 'BBQ Hardwood A',     items: '120×2kg · 20×5kg',    total: 340, status: 'paid' },
+    { date: '10 Jan 2026', id: 'ORD-0192', char: 'Shisha B',           items: '150×2kg',             total: 310, status: 'paid' },
+    { date: '28 Dec 2025', id: 'ORD-0178', char: 'BBQ Hardwood A',     items: '200×2kg · 30×5kg',    total: 520, status: 'paid' },
+    { date: '14 Dec 2025', id: 'ORD-0164', char: 'BBQ Hardwood A',     items: '140×2kg · 25×5kg',    total: 390, status: 'paid' },
+    { date: '02 Dec 2025', id: 'ORD-0151', char: 'Shisha B · BBQ A',   items: '180×2kg · 40×5kg',    total: 580, status: 'paid' },
+    { date: '18 Nov 2025', id: 'ORD-0138', char: 'BBQ Hardwood A',     items: '160×2kg · 30×5kg',    total: 480, status: 'paid' },
+    { date: '04 Nov 2025', id: 'ORD-0123', char: 'Shisha B',           items: '220×2kg',             total: 440, status: 'paid' },
+    { date: '20 Oct 2025', id: 'ORD-0109', char: 'BBQ Hardwood A',     items: '180×2kg · 25×5kg',    total: 490, status: 'paid' },
+    { date: '06 Oct 2025', id: 'ORD-0094', char: 'Restaurant Grade A', items: '210×2kg · 30×5kg',    total: 580, status: 'paid' },
+    { date: '22 Sep 2025', id: 'ORD-0081', char: 'BBQ Hardwood A',     items: '150×2kg · 20×5kg',    total: 400, status: 'paid' },
+    { date: '08 Sep 2025', id: 'ORD-0068', char: 'BBQ Hardwood A',     items: '140×2kg · 18×5kg',    total: 370, status: 'paid' },
+    { date: '25 Aug 2025', id: 'ORD-0054', char: 'Shisha B',           items: '180×2kg',             total: 360, status: 'paid' },
+    { date: '11 Aug 2025', id: 'ORD-0042', char: 'BBQ Hardwood A',     items: '160×2kg · 22×5kg',    total: 430, status: 'paid' },
+  ];
+
+  const INVOICES = [
+    { date: '25 Apr 2026', id: 'INV-0341', order: 'ORD-0341', amount: 420, paid: 420, status: 'paid' },
+    { date: '12 Apr 2026', id: 'INV-0329', order: 'ORD-0329', amount: 280, paid: 160, status: 'partial' },
+    { date: '31 Mar 2026', id: 'INV-0314', order: 'ORD-0314', amount: 560, paid:   0, status: 'unpaid' },
+    { date: '18 Mar 2026', id: 'INV-0297', order: 'ORD-0297', amount: 400, paid: 400, status: 'paid' },
+    { date: '04 Mar 2026', id: 'INV-0276', order: 'ORD-0276', amount: 430, paid: 430, status: 'paid' },
+    { date: '19 Feb 2026', id: 'INV-0253', order: 'ORD-0253', amount: 520, paid: 520, status: 'paid' },
+    { date: '06 Feb 2026', id: 'INV-0231', order: 'ORD-0231', amount: 760, paid: 760, status: 'paid' },
+    { date: '22 Jan 2026', id: 'INV-0210', order: 'ORD-0210', amount: 340, paid: 340, status: 'paid' },
+    { date: '10 Jan 2026', id: 'INV-0192', order: 'ORD-0192', amount: 310, paid: 310, status: 'paid' },
+    { date: '28 Dec 2025', id: 'INV-0178', order: 'ORD-0178', amount: 520, paid: 520, status: 'paid' },
+    { date: '14 Dec 2025', id: 'INV-0164', order: 'ORD-0164', amount: 390, paid: 390, status: 'paid' },
+    { date: '02 Dec 2025', id: 'INV-0151', order: 'ORD-0151', amount: 580, paid: 580, status: 'paid' },
+    { date: '18 Nov 2025', id: 'INV-0138', order: 'ORD-0138', amount: 480, paid: 480, status: 'paid' },
+    { date: '04 Nov 2025', id: 'INV-0123', order: 'ORD-0123', amount: 440, paid: 440, status: 'paid' },
+    { date: '20 Oct 2025', id: 'INV-0109', order: 'ORD-0109', amount: 490, paid: 490, status: 'paid' },
+    { date: '06 Oct 2025', id: 'INV-0094', order: 'ORD-0094', amount: 580, paid: 580, status: 'paid' },
+    { date: '22 Sep 2025', id: 'INV-0081', order: 'ORD-0081', amount: 400, paid: 400, status: 'paid' },
+    { date: '08 Sep 2025', id: 'INV-0068', order: 'ORD-0068', amount: 370, paid: 370, status: 'paid' },
+  ];
+
+  const PAYMENTS = [
+    { date: '28 Apr 2026', method: 'cash',  inv: 'INV-0341', by: 'Joseph Nasr',       role: 'driver', amount: 420 },
+    { date: '15 Apr 2026', method: 'whish', inv: 'INV-0329', by: 'Rita Salameh',      role: 'sales',  amount: 160, note: 'partial' },
+    { date: '20 Mar 2026', method: 'cash',  inv: 'INV-0297', by: 'Mohammed Khalil',   role: 'driver', amount: 400 },
+    { date: '06 Mar 2026', method: 'omt',   inv: 'INV-0276', by: 'Khalil Abi Nader',  role: 'owner',  amount: 430 },
+    { date: '26 Feb 2026', method: 'cash',  inv: 'INV-0253', by: 'Joseph Nasr',       role: 'driver', amount: 520 },
+    { date: '12 Feb 2026', method: 'whish', inv: 'INV-0231', by: 'Rita Salameh',      role: 'sales',  amount: 760 },
+    { date: '28 Jan 2026', method: 'cash',  inv: 'INV-0210', by: 'Mohammed Khalil',   role: 'driver', amount: 340 },
+    { date: '16 Jan 2026', method: 'cash',  inv: 'INV-0192', by: 'Joseph Nasr',       role: 'driver', amount: 310 },
+    { date: '04 Jan 2026', method: 'omt',   inv: 'INV-0178', by: 'Khalil Abi Nader',  role: 'owner',  amount: 520 },
+    { date: '20 Dec 2025', method: 'cash',  inv: 'INV-0164', by: 'Joseph Nasr',       role: 'driver', amount: 390 },
+    { date: '08 Dec 2025', method: 'cash',  inv: 'INV-0151', by: 'Mohammed Khalil',   role: 'driver', amount: 580 },
+    { date: '24 Nov 2025', method: 'whish', inv: 'INV-0138', by: 'Rita Salameh',      role: 'sales',  amount: 480 },
+    { date: '10 Nov 2025', method: 'cash',  inv: 'INV-0123', by: 'Joseph Nasr',       role: 'driver', amount: 440 },
+    { date: '26 Oct 2025', method: 'omt',   inv: 'INV-0109', by: 'Khalil Abi Nader',  role: 'owner',  amount: 490 },
+    { date: '12 Oct 2025', method: 'cash',  inv: 'INV-0094', by: 'Joseph Nasr',       role: 'driver', amount: 580 },
+    { date: '28 Sep 2025', method: 'cash',  inv: 'INV-0081', by: 'Mohammed Khalil',   role: 'driver', amount: 400 },
+    { date: '14 Sep 2025', method: 'whish', inv: 'INV-0068', by: 'Rita Salameh',      role: 'sales',  amount: 370 },
+    { date: '31 Aug 2025', method: 'cash',  inv: 'INV-0054', by: 'Joseph Nasr',       role: 'driver', amount: 360 },
+  ];
+
+  const ACTIVITY = [
+    { type: 'pay',   text: 'Cash payment <strong>$420</strong> received for ORD-0341', when: '28 Apr 2026 · 16:40 · Joseph Nasr' },
+    { type: 'truck', text: 'Order ORD-0341 delivered — 150 bags', when: '25 Apr 2026 · 12:18' },
+    { type: 'inv',   text: 'Invoice INV-0329 issued — <strong>$280.00</strong>', when: '12 Apr 2026 · 09:14' },
+    { type: 'phone', text: 'Added new phone <strong>+961 71 234 567</strong>', when: '03 Apr 2026 · 11:02 · Rita Salameh' },
+  ];
+
+  // ── STATE: how many rows currently visible per section ───
+  const INITIAL = 5;
+  const STEP = 10;
+  const shown = { orders: INITIAL, invoices: INITIAL, payments: INITIAL, phones: client.phones.length };
+
+  // ── HELPERS ────────────────────────────────────────────────
+  function $(id) { return document.getElementById(id); }
+  function fmt(n) { return '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+  function showToast(msg) {
+    const t = $('toast');
+    $('toastMsg').textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.remove('show'), 2400);
+  }
+  function statusBadge(s) {
+    const map = { paid: 'badge-green', partial: 'badge-amber', unpaid: 'badge-red', draft: 'badge-gray' };
+    const label = s.charAt(0).toUpperCase() + s.slice(1);
+    return `<span class="badge ${map[s] || 'badge-gray'}">${label}</span>`;
+  }
+
+  // ── RENDER · ORDERS ────────────────────────────────────────
+  function renderOrders() {
+    const rows = ORDERS.slice(0, shown.orders).map(o => `
+      <tr onclick="window.location.href='order-detail.html'">
+        <td class="mono">${o.date}</td>
+        <td>
+          <div style="font-weight:500">${o.id}</div>
+          <div style="font-size:11px;color:var(--text3)">${o.char}</div>
+        </td>
+        <td style="font-size:12.5px;color:var(--text2)">${o.items}</td>
+        <td class="right num" style="font-weight:500">${fmt(o.total)}</td>
+        <td>${statusBadge(o.status)}</td>
+        <td>
+          <div class="row-actions" onclick="event.stopPropagation()">
+            <a class="icon-btn" href="order-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+            <a class="icon-btn" href="invoice.html" target="_blank" title="Invoice"><i class="ti ti-printer"></i></a>
+          </div>
+        </td>
+      </tr>
+    `).join('');
+    $('ordersBody').innerHTML = rows;
+    updateMoreFoot('orders', ORDERS.length, 'order');
+  }
+
+  // ── RENDER · INVOICES ──────────────────────────────────────
+  function renderInvoices() {
+    const rows = INVOICES.slice(0, shown.invoices).map(inv => {
+      const due = inv.amount - inv.paid;
+      return `
+        <tr onclick="window.open('invoice.html','_blank')">
+          <td class="mono">${inv.date}</td>
+          <td>
+            <div style="font-weight:500;font-family:'IBM Plex Mono',monospace">${inv.id}</div>
+            <div style="font-size:11px;color:var(--text3)">from ${inv.order}</div>
+          </td>
+          <td class="right num" style="font-weight:500">${fmt(inv.amount)}</td>
+          <td class="right num" style="color:var(--accent)">${fmt(inv.paid)}</td>
+          <td class="right num" style="color:${due > 0 ? 'var(--accent2)' : 'var(--text3)'};font-weight:${due>0?'600':'400'}">${fmt(due)}</td>
+          <td>${statusBadge(inv.status)}</td>
+          <td>
+            <div class="row-actions" onclick="event.stopPropagation()">
+              <a class="icon-btn" href="invoice.html" target="_blank" title="Open"><i class="ti ti-arrow-up-right"></i></a>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+    $('invoicesBody').innerHTML = rows;
+    updateMoreFoot('invoices', INVOICES.length, 'invoice');
+  }
+
+  // ── RENDER · PAYMENTS ──────────────────────────────────────
+  function renderPayments() {
+    const rows = PAYMENTS.slice(0, shown.payments).map(p => `
+      <tr>
+        <td class="mono">${p.date}</td>
+        <td><span class="badge badge-gray">${p.method}</span></td>
+        <td>
+          <a class="mono" href="invoice.html" target="_blank" style="color:var(--accent);text-decoration:none;font-family:'IBM Plex Mono',monospace">${p.inv}</a>
+          ${p.note ? `<span style="font-size:11px;color:var(--text3);margin-left:4px">${p.note}</span>` : ''}
+        </td>
+        <td>${p.by} <span style="font-size:11px;color:var(--text3)">${p.role}</span></td>
+        <td class="right num" style="font-weight:500;color:var(--accent)">+${fmt(p.amount)}</td>
+      </tr>
+    `).join('');
+    $('paymentsBody').innerHTML = rows;
+    updateMoreFoot('payments', PAYMENTS.length, 'payment');
+  }
+
+  // ── RENDER · PHONES ────────────────────────────────────────
+  function renderPhones() {
+    const phones = client.phones;
+    const list = phones.slice(0, shown.phones).map((p, i) => `
+      <div class="phone-row ${p.active ? '' : 'inactive'}">
+        <div class="phone-dot ${p.active ? '' : 'inactive'}"></div>
+        <div style="min-width:0">
+          <div class="phone-number">${p.number}</div>
+          <div class="phone-label">${p.label}</div>
+        </div>
+        <div class="phone-meta">${p.meta}</div>
+        <div class="row-actions">
+          <a class="icon-btn" href="tel:${p.number.replace(/\s/g,'')}" title="Call"><i class="ti ti-phone"></i></a>
+          <a class="icon-btn" href="https://wa.me/${p.number.replace(/\D/g,'')}" target="_blank" title="WhatsApp"><i class="ti ti-brand-whatsapp"></i></a>
+        </div>
+      </div>
+    `).join('');
+    $('phonesBody').innerHTML = list;
+    $('phonesCount').textContent = `${phones.length} number${phones.length === 1 ? '' : 's'}`;
+    // hide foot if all already shown
+    const foot = $('phonesFoot');
+    if (phones.length > INITIAL) {
+      foot.style.display = 'flex';
+      updateMoreFoot('phones', phones.length, 'number');
+    } else {
+      foot.style.display = 'none';
+    }
+  }
+
+  // ── RENDER · ACTIVITY ──────────────────────────────────────
+  function renderActivity() {
+    const icons = { pay: ['ti-cash', 'green'], truck: ['ti-truck', ''], inv: ['ti-file-invoice', 'amber'], phone: ['ti-phone', ''] };
+    $('activityBody').innerHTML = ACTIVITY.map(a => {
+      const [ic, cls] = icons[a.type] || ['ti-circle', ''];
+      return `
+        <div class="tl-row">
+          <div class="tl-icon ${cls}"><i class="ti ${ic}"></i></div>
+          <div class="tl-body">
+            <div class="tl-text">${a.text}</div>
+            <div class="tl-time">${a.when}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // ── SHOW-MORE FOOT ─────────────────────────────────────────
+  function updateMoreFoot(key, total, noun) {
+    const statusEl = $(key + 'Status');
+    const btn = $(key + 'Btn');
+    const visible = Math.min(shown[key], total);
+    statusEl.textContent = `showing ${visible} of ${total} ${noun}${total === 1 ? '' : 's'}`;
+    if (visible >= total) {
+      // all shown — switch to "Show less" if we have shown more than initial
+      if (shown[key] > INITIAL) {
+        btn.innerHTML = `<i class="ti ti-chevron-up" style="font-size:14px"></i> Show less`;
+        btn.classList.add('collapsed');
+        btn.disabled = false;
+      } else {
+        btn.style.display = 'none';
+      }
+    } else {
+      const remaining = total - visible;
+      const next = Math.min(STEP, remaining);
+      btn.innerHTML = `<i class="ti ti-chevron-down" style="font-size:14px"></i> Show ${next} more`;
+      btn.classList.remove('collapsed');
+      btn.disabled = false;
+      btn.style.display = '';
+    }
+  }
+
+  function loadMore(key) {
+    const totalMap = { orders: ORDERS.length, invoices: INVOICES.length, payments: PAYMENTS.length, phones: client.phones.length };
+    const total = totalMap[key];
+    if (shown[key] >= total) {
+      // collapse back to initial
+      shown[key] = INITIAL;
+    } else {
+      shown[key] = Math.min(shown[key] + STEP, total);
+    }
+    if (key === 'orders') renderOrders();
+    else if (key === 'invoices') renderInvoices();
+    else if (key === 'payments') renderPayments();
+    else if (key === 'phones') renderPhones();
+    if (window.lucide) lucide.createIcons();
+  }
+
+  // ── HERO ───────────────────────────────────────────────────
+  function renderHero() {
+    $('topClientName').textContent = client.name;
+    $('heroName').textContent = client.name;
+    $('heroNameAr').textContent = client.nameAr;
+    $('heroMono').textContent = client.initials;
+    $('heroType').textContent = client.type;
+    $('heroCur').textContent = client.currency;
+    $('heroAddr').textContent = client.address;
+    $('termsView').textContent = client.terms;
+    $('notesArView').textContent = client.notesAr;
+    $('notesEnView').textContent = client.notesEn;
+    document.title = `Ember — ${client.name}`;
+    $('orderClientName').textContent = client.name;
+  }
+
+  // ── EDIT MODAL ─────────────────────────────────────────────
+  function openEdit() {
+    $('editName').value = client.name;
+    $('editNameAr').value = client.nameAr;
+    $('editType').value = client.type;
+    $('editCur').value = client.currency;
+    $('editAddr').value = client.address;
+    $('editTerms').value = client.terms;
+    $('editLimit').value = client.limit;
+    $('editNotesAr').value = client.notesAr;
+    $('editNotesEn').value = client.notesEn;
+    renderPhonesEditor();
+    $('editModal').classList.add('show');
+    if (window.lucide) lucide.createIcons();
+  }
+  function renderPhonesEditor() {
+    $('phonesEditor').innerHTML = client.phones.map((p, i) => `
+      <div class="phone-edit-row">
+        <input class="input mono" value="${p.number}" oninput="client.phones[${i}].number=this.value">
+        <input class="input" value="${p.label}" oninput="client.phones[${i}].label=this.value">
+        <select class="select" onchange="setPhoneStatus(${i}, this.value)">
+          <option value="primary" ${p.primary ? 'selected' : ''}>Primary</option>
+          <option value="active" ${p.active && !p.primary ? 'selected' : ''}>Active</option>
+          <option value="inactive" ${!p.active ? 'selected' : ''}>Inactive</option>
+        </select>
+        <button class="icon-btn danger" onclick="removePhone(${i})" title="Remove"><i class="ti ti-trash"></i></button>
+      </div>
+    `).join('');
+    if (window.lucide) lucide.createIcons();
+  }
+  function setPhoneStatus(i, v) {
+    if (v === 'primary') {
+      client.phones.forEach(p => p.primary = false);
+      client.phones[i].primary = true;
+      client.phones[i].active = true;
+      client.phones[i].meta = 'primary';
+    } else if (v === 'active') {
+      client.phones[i].primary = false;
+      client.phones[i].active = true;
+      if (client.phones[i].meta === 'primary' || client.phones[i].meta.startsWith('inactive')) {
+        client.phones[i].meta = 'added ' + new Date().getFullYear();
+      }
+    } else {
+      client.phones[i].primary = false;
+      client.phones[i].active = false;
+      client.phones[i].meta = 'inactive · ' + new Date().getFullYear();
+    }
+  }
+  function addPhoneInEditor() {
+    client.phones.push({ number: '+961 ', label: 'mobile', meta: 'new', active: true, primary: false });
+    renderPhonesEditor();
+  }
+  function removePhone(i) {
+    client.phones.splice(i, 1);
+    renderPhonesEditor();
+  }
+  function saveEdit() {
+    client.name = $('editName').value.trim() || client.name;
+    client.nameAr = $('editNameAr').value.trim();
+    client.type = $('editType').value;
+    client.currency = $('editCur').value;
+    client.address = $('editAddr').value;
+    client.terms = $('editTerms').value;
+    client.limit = parseFloat($('editLimit').value) || 0;
+    client.notesAr = $('editNotesAr').value;
+    client.notesEn = $('editNotesEn').value;
+    // recompute initials
+    client.initials = client.name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+    renderHero();
+    shown.phones = client.phones.length;
+    renderPhones();
+    closeModal('editModal');
+    showToast('Client info updated');
+  }
+
+  // ── NEW ORDER MODAL ────────────────────────────────────────
+  const BAG_TYPES = ['1.9 kg', '2 kg', '5 kg', '10 kg', '20 kg'];
+  const CHARCOAL_TYPES = ['BBQ Hardwood · A', 'BBQ Hardwood · B', 'Shisha · A', 'Shisha · B', 'Restaurant Grade · A'];
+  const DEFAULT_PRICES = { '1.9 kg': 2.5, '2 kg': 2.6, '5 kg': 6.4, '10 kg': 12.5, '20 kg': 24.0 };
+  let orderLines = [];
+
+  function openNewOrder() {
+    const today = new Date().toISOString().slice(0, 10);
+    $('orderDate').value = today;
+    const d = new Date(); d.setDate(d.getDate() + 2);
+    $('orderDelivery').value = d.toISOString().slice(0, 10);
+    orderLines = [{ bag: '2 kg', char: 'BBQ Hardwood · A', qty: 100, price: 2.6 }];
+    renderOrderLines();
+    $('orderModal').classList.add('show');
+    if (window.lucide) lucide.createIcons();
+  }
+  function renderOrderLines() {
+    $('linesBody').innerHTML = orderLines.map((l, i) => `
+      <tr>
+        <td>
+          <select class="ln-select" onchange="updateLine(${i}, 'bag', this.value)">
+            ${BAG_TYPES.map(b => `<option ${b === l.bag ? 'selected' : ''}>${b}</option>`).join('')}
+          </select>
+        </td>
+        <td>
+          <select class="ln-select" onchange="updateLine(${i}, 'char', this.value)">
+            ${CHARCOAL_TYPES.map(c => `<option ${c === l.char ? 'selected' : ''}>${c}</option>`).join('')}
+          </select>
+        </td>
+        <td><input class="ln-input num" type="number" value="${l.qty}" min="0" oninput="updateLine(${i}, 'qty', this.value)"></td>
+        <td><input class="ln-input num" type="number" value="${l.price}" min="0" step="0.01" oninput="updateLine(${i}, 'price', this.value)"></td>
+        <td class="ln-subtotal">${fmt(l.qty * l.price)}</td>
+        <td>
+          <button class="icon-btn danger" onclick="removeLine(${i})" ${orderLines.length === 1 ? 'disabled' : ''}><i class="ti ti-x"></i></button>
+        </td>
+      </tr>
+    `).join('');
+    updateOrderTotal();
+    if (window.lucide) lucide.createIcons();
+  }
+  function updateLine(i, key, v) {
+    if (key === 'qty' || key === 'price') v = parseFloat(v) || 0;
+    orderLines[i][key] = v;
+    if (key === 'bag' && DEFAULT_PRICES[v]) orderLines[i].price = DEFAULT_PRICES[v];
+    renderOrderLines();
+  }
+  function addOrderLine() {
+    orderLines.push({ bag: '2 kg', char: 'BBQ Hardwood · A', qty: 0, price: 2.6 });
+    renderOrderLines();
+  }
+  function removeLine(i) {
+    if (orderLines.length === 1) return;
+    orderLines.splice(i, 1);
+    renderOrderLines();
+  }
+  function updateOrderTotal() {
+    const sub = orderLines.reduce((s, l) => s + l.qty * l.price, 0);
+    const vat = sub * 0.11;
+    $('orderSubtotal').textContent = fmt(sub);
+    $('oSub').textContent = fmt(sub);
+    $('oVat').textContent = fmt(vat);
+    $('oGrand').textContent = fmt(sub + vat);
+  }
+  function saveOrder(kind) {
+    const sub = orderLines.reduce((s, l) => s + l.qty * l.price, 0);
+    if (sub === 0) { showToast('Add at least one item'); return; }
+    const newOrd = {
+      date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+      id: 'ORD-0342',
+      char: orderLines.map(l => l.char.split('·')[0].trim()).filter((v, i, a) => a.indexOf(v) === i).join(' · '),
+      items: orderLines.filter(l => l.qty > 0).map(l => `${l.qty}×${l.bag.replace(' ','')}`).join(' · '),
+      total: sub * 1.11,
+      status: kind === 'draft' ? 'draft' : 'unpaid',
+    };
+    ORDERS.unshift(newOrd);
+    INVOICES.unshift({
+      date: newOrd.date, id: 'INV-0342', order: 'ORD-0342',
+      amount: newOrd.total, paid: 0, status: 'unpaid'
+    });
+    ACTIVITY.unshift({ type: 'inv', text: `New order <strong>ORD-0342</strong> created — ${fmt(newOrd.total)}`, when: 'just now · you' });
+    renderOrders(); renderInvoices(); renderActivity();
+    closeModal('orderModal');
+    showToast(`Order ${newOrd.id} ${kind === 'draft' ? 'saved as draft' : 'created'} · ${fmt(newOrd.total)}`);
+  }
+
+  // ── PAYMENT MODAL ──────────────────────────────────────────
+  function openNewPayment() {
+    $('payDate').value = new Date().toISOString().slice(0, 10);
+    $('payAmt').value = '';
+    $('payNote').value = '';
+    $('payModal').classList.add('show');
+    if (window.lucide) lucide.createIcons();
+  }
+  function savePayment() {
+    const amt = parseFloat($('payAmt').value);
+    if (!amt || amt <= 0) { showToast('Enter an amount'); return; }
+    const invFull = $('payInv').value;
+    const invId = invFull.split('·')[0].trim();
+    const by = $('payBy').value;
+    const byName = by.replace(/\s*\(.+\)$/, '');
+    const role = (by.match(/\((.+)\)/) || [, ''])[1];
+    PAYMENTS.unshift({
+      date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+      method: $('payMethod').value, inv: invId, by: byName, role, amount: amt,
+      note: $('payNote').value || undefined,
+    });
+    ACTIVITY.unshift({ type: 'pay', text: `${$('payMethod').value} payment <strong>${fmt(amt)}</strong> logged for ${invId}`, when: 'just now · ' + byName });
+    renderPayments(); renderActivity();
+    closeModal('payModal');
+    showToast(`Payment ${fmt(amt)} logged`);
+  }
+
+  // ── MODAL CTL ──────────────────────────────────────────────
+  function closeModal(id) { $(id).classList.remove('show'); }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+  });
+
+  // ── EXPORT TO EXCEL ────────────────────────────────────────
+  // parses "25 Apr 2026" → Date
+  const MONTH_IDX = { Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11 };
+  function parseRowDate(s) {
+    const m = s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
+    if (!m) return null;
+    return new Date(parseInt(m[3]), MONTH_IDX[m[2]], parseInt(m[1]));
+  }
+  function isoToDate(s) { return s ? new Date(s + 'T00:00:00') : null; }
+
+  function setPreset(section, kind) {
+    const today = new Date();
+    let from;
+    if (kind === '30d') { from = new Date(); from.setDate(today.getDate() - 30); }
+    else if (kind === 'ytd') { from = new Date(today.getFullYear(), 0, 1); }
+    const map = { orders: ['ordFrom','ordTo'], invoices: ['invFrom','invTo'], payments: ['payFrom','payTo'] };
+    const [fromId, toId] = map[section];
+    $(fromId).value = from.toISOString().slice(0, 10);
+    $(toId).value = today.toISOString().slice(0, 10);
+  }
+
+  function filterByRange(rows, fromDate, toDate) {
+    return rows.filter(r => {
+      const d = parseRowDate(r.date);
+      if (!d) return false;
+      if (fromDate && d < fromDate) return false;
+      if (toDate && d > toDate) return false;
+      return true;
+    });
+  }
+
+  function exportRange(section) {
+    if (typeof XLSX === 'undefined') {
+      showToast('Excel library still loading — try again');
+      return;
+    }
+    const map = {
+      orders:   { fromId: 'ordFrom', toId: 'ordTo', data: ORDERS,   label: 'Orders'   },
+      invoices: { fromId: 'invFrom', toId: 'invTo', data: INVOICES, label: 'Invoices' },
+      payments: { fromId: 'payFrom', toId: 'payTo', data: PAYMENTS, label: 'Payments' },
+    };
+    const cfg = map[section];
+    const fromDate = isoToDate($(cfg.fromId).value);
+    const toDate   = isoToDate($(cfg.toId).value);
+
+    if (!fromDate && !toDate) {
+      showToast('Pick a date range first (or use 30d / YTD)');
+      return;
+    }
+    if (fromDate && toDate && fromDate > toDate) {
+      showToast('"From" date must be before "To" date');
+      return;
+    }
+
+    const filtered = filterByRange(cfg.data, fromDate, toDate);
+    if (filtered.length === 0) {
+      showToast(`No ${section} found in that range`);
+      return;
+    }
+
+    // build worksheet rows depending on section
+    let aoa = [];
+    let totals;
+
+    if (section === 'orders') {
+      aoa.push(['Date','Order ID','Charcoal','Items','Total (USD)','Status']);
+      filtered.forEach(o => aoa.push([o.date, o.id, o.char, o.items, o.total, o.status]));
+      totals = filtered.reduce((s, o) => s + o.total, 0);
+      aoa.push(['','','','TOTAL', totals, '']);
+    } else if (section === 'invoices') {
+      aoa.push(['Issued','Invoice ID','From Order','Amount (USD)','Paid (USD)','Due (USD)','Status']);
+      filtered.forEach(inv => aoa.push([inv.date, inv.id, inv.order, inv.amount, inv.paid, inv.amount - inv.paid, inv.status]));
+      const totA = filtered.reduce((s, i) => s + i.amount, 0);
+      const totP = filtered.reduce((s, i) => s + i.paid, 0);
+      aoa.push(['','','TOTAL', totA, totP, totA - totP, '']);
+      totals = totA;
+    } else {
+      aoa.push(['Date','Method','Invoice','Received by','Role','Amount (USD)','Note']);
+      filtered.forEach(p => aoa.push([p.date, p.method, p.inv, p.by, p.role, p.amount, p.note || '']));
+      totals = filtered.reduce((s, p) => s + p.amount, 0);
+      aoa.push(['','','','','TOTAL', totals, '']);
+    }
+
+    // build header metadata at the top
+    const fromStr = fromDate ? fromDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'beginning';
+    const toStr   = toDate   ? toDate  .toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'today';
+    const meta = [
+      [`${client.name} — ${cfg.label} export`],
+      [`Range: ${fromStr}  →  ${toStr}`],
+      [`Generated: ${new Date().toLocaleString('en-GB')}`],
+      [`${filtered.length} ${section} · total ${fmt(totals || 0)}`],
+      [],
+    ];
+    aoa = meta.concat(aoa);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    // column widths
+    const widths = section === 'invoices'
+      ? [{wch:12},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},{wch:10}]
+      : section === 'orders'
+        ? [{wch:14},{wch:12},{wch:24},{wch:32},{wch:14},{wch:10}]
+        : [{wch:14},{wch:10},{wch:14},{wch:22},{wch:10},{wch:14},{wch:18}];
+    ws['!cols'] = widths;
+    // merge title row across all columns
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: widths.length - 1 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: widths.length - 1 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: widths.length - 1 } },
+      { s: { r: 3, c: 0 }, e: { r: 3, c: widths.length - 1 } },
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, cfg.label);
+
+    const slug = client.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const stamp = new Date().toISOString().slice(0, 10);
+    const fname = `${slug}-${section}-${stamp}.xlsx`;
+    XLSX.writeFile(wb, fname);
+    showToast(`Exported ${filtered.length} ${section} · ${fname}`);
+  }
+
+  // ── INIT ───────────────────────────────────────────────────
+  renderHero();
+  renderOrders();
+  renderInvoices();
+  renderPayments();
+  renderPhones();
+  renderActivity();
+  // pre-fill date ranges to YTD so the user can just click Excel
+  setPreset('orders', 'ytd');
+  setPreset('invoices', 'ytd');
+  setPreset('payments', 'ytd');
+</script>
+</body>
+</html>

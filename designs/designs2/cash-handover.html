@@ -1,0 +1,1034 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Cash Handover</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .topbar-right { display: flex; align-items: center; gap: 8px; }
+
+  /* ── Top section tabs (Drivers / Warehouse) ─────────────── */
+  .section-tabs {
+    display: flex; gap: 2px;
+    padding: 0 28px; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .stab {
+    padding: 13px 20px;
+    font-size: 14px; font-weight: 500;
+    color: var(--text3); cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.1s;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .stab:hover { color: var(--text2); }
+  .stab.active { color: var(--text); border-bottom-color: var(--text); }
+  .stab i { font-size: 17px; }
+  .stab .stab-count {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    background: var(--surface2); color: var(--text2);
+    padding: 1px 7px; border-radius: 100px;
+  }
+  .stab.active .stab-count { background: var(--text); color: #fff; }
+
+  /* ── KPI row ────────────────────────────────────────────── */
+  .kpi-row {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px;
+  }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 16px 18px;
+  }
+  .kpi-label {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;
+  }
+  .kpi-value { font-size: 24px; font-weight: 600; letter-spacing: -1px; line-height: 1; margin-bottom: 4px; }
+  .kpi-sub { font-size: 12px; color: var(--text3); }
+  .kpi-value.green { color: var(--accent); }
+  .kpi-value.amber { color: var(--accent2); }
+  .kpi-value.red { color: var(--red); }
+
+  /* ── PERSON TABS (drivers / warehouse receivers) ────────── */
+  .person-tabs {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .person-tab {
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 14px; border-radius: var(--radius-lg);
+    border: 1.5px solid var(--border); background: var(--surface);
+    cursor: pointer; transition: all 0.15s;
+    text-decoration: none;
+  }
+  .person-tab:hover { border-color: var(--border2); }
+  .person-tab.active { border-color: var(--text); background: var(--text); color: #fff; }
+  .person-tab.active .pt-name { color: #fff; }
+  .person-tab.active .pt-meta { color: rgba(255,255,255,0.6); }
+  .person-tab.active .pt-avatar { background: rgba(255,255,255,0.15); color: #fff; }
+  .pt-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--surface2); color: var(--text2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600; flex-shrink: 0;
+  }
+  .pt-info { line-height: 1.3; }
+  .pt-name { font-size: 13.5px; font-weight: 600; }
+  .pt-meta { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+  .pt-role-pill {
+    font-size: 10px; font-family: 'IBM Plex Mono', monospace;
+    background: var(--surface2); color: var(--text2);
+    padding: 1px 7px; border-radius: 100px;
+    margin-left: 4px;
+  }
+  .person-tab.active .pt-role-pill {
+    background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.85);
+  }
+  .pt-balance {
+    margin-left: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 700; font-size: 14px;
+    color: var(--accent2);
+  }
+  .person-tab.active .pt-balance { color: #fcd34d; }
+  .pt-balance.zero { color: var(--text3); }
+  .person-tab.active .pt-balance.zero { color: rgba(255,255,255,0.5); }
+
+  /* ── Layout ─────────────────────────────────────────────── */
+  .two-col { display: grid; grid-template-columns: 1fr 360px; gap: 20px; align-items: start; }
+
+  /* ── Data table (receipts) ──────────────────────────────── */
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table th {
+    text-align: left; padding: 9px 18px; font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 0.6px;
+    border-bottom: 1px solid var(--border); font-weight: 400;
+    background: var(--surface2);
+  }
+  .data-table td {
+    padding: 10px 18px; border-bottom: 1px solid var(--border);
+    font-size: 13px; vertical-align: middle;
+  }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tbody tr.handed { background: var(--accent-bg); }
+  .data-table tbody tr.handed:hover { background: #d8efe3; }
+  .data-table tbody tr.pending:hover { background: #FAFAF8; }
+  .data-table .num {
+    font-family: 'IBM Plex Mono', monospace;
+    text-align: right; font-weight: 500;
+  }
+  .data-table .num.green { color: var(--accent); font-weight: 600; }
+  .data-table .num.amber { color: var(--accent2); font-weight: 600; }
+  .data-table .check-cell { text-align: center; }
+  .data-table input[type="checkbox"] {
+    width: 16px; height: 16px;
+    accent-color: var(--accent); cursor: pointer;
+  }
+
+  .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+  .icon-btn {
+    width: 26px; height: 26px; border-radius: 5px;
+    border: 1px solid var(--border); background: var(--surface);
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text2); transition: all 0.1s;
+  }
+  .icon-btn:hover { background: var(--surface2); color: var(--text); }
+  .icon-btn i { font-size: 12px; }
+
+  /* ── Reconciliation / handover panel ────────────────────── */
+  .recon {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden;
+    position: sticky; top: 76px;
+  }
+  .recon-head {
+    padding: 13px 16px; background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .recon-head h3 {
+    font-size: 13px; font-weight: 600;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .recon-head h3 i { color: var(--text2); font-size: 15px; }
+  .recon-head .who {
+    font-size: 11px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .recon-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .recon-row:last-child { border-bottom: none; }
+  .recon-row .lbl { color: var(--text2); }
+  .recon-row .val {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+  }
+  .recon-row .val.green { color: var(--accent); }
+  .recon-row .val.amber { color: var(--accent2); }
+
+  .recon-balance {
+    padding: 14px 16px; background: var(--accent2-bg);
+    border-top: 1px solid #fcd34d; border-bottom: 1px solid #fcd34d;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .recon-balance.zero {
+    background: var(--surface2); border-top-color: var(--border); border-bottom-color: var(--border);
+  }
+  .recon-balance .lbl {
+    font-size: 12px; font-weight: 600; color: var(--accent2);
+    text-transform: uppercase; letter-spacing: 0.4px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .recon-balance.zero .lbl { color: var(--text3); }
+  .recon-balance .val {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 22px; font-weight: 700; letter-spacing: -0.5px;
+    color: var(--accent2);
+  }
+  .recon-balance.zero .val { color: var(--text3); }
+
+  /* handover form */
+  .handover-form { padding: 14px 16px; }
+  .handover-form label {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+    display: block; margin-bottom: 5px;
+  }
+  .handover-form input, .handover-form select {
+    width: 100%; padding: 9px 12px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 13px; background: var(--surface); outline: none;
+    transition: border-color 0.15s;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .handover-form input.num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 700; font-size: 20px;
+    text-align: right;
+  }
+  .handover-form input:focus, .handover-form select:focus { border-color: var(--text); }
+  .handover-form .field { margin-bottom: 10px; }
+  .handover-form select {
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='none' stroke='%239B9890' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/></svg>");
+    background-repeat: no-repeat; background-position: right 10px center;
+    padding-right: 26px;
+  }
+
+  .quick-btns { display: flex; gap: 6px; margin-bottom: 10px; }
+  .quick-btn {
+    flex: 1; padding: 6px 8px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); color: var(--text2);
+    font-size: 11.5px; cursor: pointer;
+    font-family: 'IBM Plex Sans', sans-serif;
+    transition: all 0.1s;
+  }
+  .quick-btn:hover { background: var(--surface2); color: var(--text); }
+  .quick-btn.full { background: var(--text); color: #fff; border-color: var(--text); font-weight: 600; }
+  .quick-btn.full:hover { background: #2d2b28; }
+
+  .diff-bar {
+    border-radius: var(--radius); padding: 9px 12px;
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 10px;
+  }
+  .diff-bar.ok { background: var(--accent-bg); border: 1px solid #a7f3d0; color: var(--accent); }
+  .diff-bar.short { background: var(--red-bg); border: 1px solid #fca5a5; color: var(--red); }
+  .diff-bar.none { background: var(--surface2); border: 1px solid var(--border); color: var(--text3); }
+  .diff-bar .v { font-family: 'IBM Plex Mono', monospace; font-weight: 700; }
+
+  .confirm-btn {
+    width: 100%; padding: 12px;
+    background: var(--accent); color: #fff;
+    border: none; border-radius: var(--radius);
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    transition: background 0.15s;
+  }
+  .confirm-btn:hover { background: #155237; }
+  .confirm-btn:disabled { background: var(--border); color: var(--text3); cursor: not-allowed; }
+
+  /* Add new receipt button */
+  .add-receipt-btn {
+    width: 100%; padding: 8px;
+    background: transparent; border: 1.5px dashed var(--border2);
+    border-radius: var(--radius); color: var(--text2);
+    font-size: 12.5px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    font-family: 'IBM Plex Sans', sans-serif; font-weight: 500;
+  }
+  .add-receipt-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+
+  /* status pills in receipt rows */
+  .status-pill {
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    padding: 2px 8px; border-radius: 100px; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .status-pill.handed { background: var(--accent-bg); color: var(--accent); }
+  .status-pill.pending { background: var(--accent2-bg); color: var(--accent2); }
+
+  /* table foot summary */
+  .tfoot-row {
+    padding: 11px 18px; background: var(--surface2);
+    border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px; color: var(--text2);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .tfoot-row strong {
+    color: var(--text); font-family: 'IBM Plex Sans', sans-serif; font-weight: 600;
+  }
+
+  /* History card rows */
+  .hist-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 18px; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .hist-row:last-child { border-bottom: none; }
+  .hist-icon {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: var(--accent-bg); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .hist-body { flex: 1; }
+  .hist-body strong { font-weight: 500; }
+  .hist-body small { color: var(--text3); font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+  .hist-amt { font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+
+  /* toast */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: #fff;
+    padding: 11px 18px; border-radius: var(--radius);
+    font-size: 13px; display: flex; align-items: center; gap: 8px;
+    opacity: 0; pointer-events: none; transition: all 0.25s;
+    z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast i { color: #6ee7b7; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="cash-handover"></aside>
+
+<div class="main">
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="page-title">Cash handover</span>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-sub">who has cash, and who needs to give it back</span>
+    </div>
+    <div class="topbar-right">
+      <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">Thursday 21 May 2026</span>
+      <button class="btn"><i class="ti ti-history" style="font-size:15px"></i> History</button>
+    </div>
+  </header>
+
+  <!-- Section tabs (Drivers / Warehouse) -->
+  <div class="section-tabs">
+    <div class="stab active" data-sec="drivers" onclick="setSection('drivers')">
+      <i class="ti ti-truck"></i> Drivers (from deliveries) <span class="stab-count" id="drvCount">3</span>
+    </div>
+    <div class="stab" data-sec="warehouse" onclick="setSection('warehouse')">
+      <i class="ti ti-building-warehouse"></i> Warehouse staff (from sales) <span class="stab-count" id="whCount">5</span>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- KPI strip — updates per section -->
+    <div class="kpi-row" id="kpis"></div>
+
+    <!-- Person tabs -->
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+      <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:1px" id="personTabsTitle">Pick a driver</span>
+      <button class="btn" id="addPersonBtn" style="font-size:12px;padding:5px 11px;display:none" onclick="openAddPerson()"><i class="ti ti-plus" style="font-size:13px"></i> Add new person</button>
+    </div>
+    <div class="person-tabs" id="personTabs"></div>
+
+    <!-- Main layout -->
+    <div class="two-col">
+
+      <!-- LEFT: receipts table + add-new -->
+      <div>
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title" id="receiptsTitle"><i class="ti ti-list"></i> Money collected, not yet given back</div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <span style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace" id="receiptsCount"></span>
+              <button class="btn" style="font-size:12px" onclick="openTransfer()"><i class="ti ti-arrow-right" style="font-size:13px"></i> Give money to someone else</button>
+            </div>
+          </div>
+          <table class="data-table" id="receiptsTable">
+            <thead id="receiptsHead"></thead>
+            <tbody id="receiptsBody"></tbody>
+          </table>
+          <div class="tfoot-row" id="receiptsFoot"></div>
+        </div>
+
+        <!-- Driver expenses (only for drivers section) -->
+        <div class="card" id="expCard">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-gas-station"></i> Driver costs (fuel, tolls — they keep this from the cash)</div>
+            <button class="btn" style="font-size:12px" onclick="addExpRow()"><i class="ti ti-plus" style="font-size:13px"></i> Add</button>
+          </div>
+          <div id="expRows"></div>
+          <div class="tfoot-row">
+            <span>Total kept by driver</span>
+            <strong style="color:var(--accent2);font-family:'IBM Plex Mono',monospace" id="expTotal">$0.00</strong>
+          </div>
+        </div>
+
+        <!-- Recent handovers for this person -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-history"></i> What this person handed over before</div>
+            <span style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">last 5</span>
+          </div>
+          <div id="recentHist"></div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Reconciliation + handover form -->
+      <div>
+        <div class="recon">
+          <div class="recon-head">
+            <h3><i class="ti ti-calculator"></i> Give the money back</h3>
+            <span class="who" id="reconWho">—</span>
+          </div>
+
+          <div class="recon-row">
+            <span class="lbl">Total money they took</span>
+            <span class="val green" id="rTotal">$0.00</span>
+          </div>
+          <div class="recon-row" id="rExpRow">
+            <span class="lbl">− What they kept (fuel etc.)</span>
+            <span class="val amber" id="rExp">−$0.00</span>
+          </div>
+          <div class="recon-row">
+            <span class="lbl">Already given back</span>
+            <span class="val" id="rHanded" style="color:var(--text3)">$0.00</span>
+          </div>
+
+          <div class="recon-balance" id="rBalanceBar">
+            <span class="lbl">Still in their pocket</span>
+            <span class="val" id="rBalance">$0.00</span>
+          </div>
+
+          <div class="handover-form">
+            <div class="field">
+              <label>How much they are giving now (USD)</label>
+              <input class="num" type="number" id="handoverAmt" placeholder="0.00" oninput="calcDiff()">
+              <div class="quick-btns">
+                <button class="quick-btn full" onclick="setHandoverFull()" id="fullBtn">All of it</button>
+                <button class="quick-btn" onclick="setHandoverHalf()">Half</button>
+                <button class="quick-btn" onclick="setHandoverZero()">Clear</button>
+              </div>
+            </div>
+
+            <div class="diff-bar none" id="diffBar">
+              <span id="diffLabel">Type how much they're handing over</span>
+              <span class="v" id="diffVal">—</span>
+            </div>
+
+            <div class="field">
+              <label>Who is taking the money</label>
+              <select id="handoverTo">
+                <option>Khalil Abi Nader (owner)</option>
+                <option>Rita Salameh (accounts)</option>
+                <option>Bank deposit</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label>Note (optional)</label>
+              <input id="handoverNote" placeholder="e.g. will bring the rest tomorrow">
+            </div>
+
+            <button class="confirm-btn" id="confirmBtn" disabled onclick="confirmHandover()">
+              <i class="ti ti-check"></i> <span id="confirmLbl">Done — money taken</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Transfer modal (hand over to another receiver) -->
+<div class="modal-shade" id="xferModal" style="position:fixed;inset:0;background:rgba(26,25,22,0.45);display:none;align-items:center;justify-content:center;z-index:100;padding:20px" onclick="if (event.target === this) closeTransfer()">
+  <div class="modal" style="background:var(--surface);border-radius:var(--radius-lg);width:100%;max-width:520px;box-shadow:0 24px 60px rgba(0,0,0,0.25);overflow:hidden">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:15px;font-weight:600">Move money to another person</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px;font-family:'IBM Plex Mono',monospace">money stays inside the company — just goes from one pocket to another</div>
+      </div>
+      <button class="icon-btn" onclick="closeTransfer()"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="padding:18px 20px">
+      <!-- From / arrow / To row -->
+      <div style="display:grid;grid-template-columns:1fr 36px 1fr;gap:12px;align-items:end;margin-bottom:14px">
+        <div>
+          <label style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:5px">From (giving money)</label>
+          <div style="padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);display:flex;align-items:center;gap:9px">
+            <div class="pt-avatar" id="xferFromAvatar">—</div>
+            <div style="min-width:0">
+              <div style="font-size:13px;font-weight:600" id="xferFromName">—</div>
+              <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">has <span id="xferFromBal" style="color:var(--accent2);font-weight:600">—</span></div>
+            </div>
+          </div>
+        </div>
+        <div style="text-align:center;padding-bottom:11px"><i class="ti ti-arrow-right" style="font-size:22px;color:var(--text3)"></i></div>
+        <div>
+          <label style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:5px">To (taking money)</label>
+          <select id="xferTo" style="width:100%;padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;background:var(--surface);outline:none;appearance:none;-webkit-appearance:none;background-image:url(&quot;data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='none' stroke='%239B9890' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/></svg>&quot;);background-repeat:no-repeat;background-position:right 10px center;padding-right:26px"></select>
+        </div>
+      </div>
+
+      <!-- Amount -->
+      <div style="margin-bottom:10px">
+        <label style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:5px">How much (USD)</label>
+        <input class="num" type="number" id="xferAmt" placeholder="0.00" style="width:100%;padding:11px 12px;border:1.5px solid var(--border);border-radius:var(--radius);font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:20px;text-align:right;outline:none;background:var(--surface)">
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="quick-btn full" onclick="setXferFull()" id="xferFullBtn">All of it</button>
+          <button class="quick-btn" onclick="setXferHalf()">Half</button>
+          <button class="quick-btn" onclick="$('xferAmt').value='';$('xferAmt').focus()">Clear</button>
+        </div>
+      </div>
+
+      <div style="margin-bottom:10px">
+        <label style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:5px">Why are you moving it (optional)</label>
+        <input id="xferNote" placeholder="e.g. driver needs cash for fuel" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;outline:none;background:var(--surface)">
+      </div>
+
+      <div style="padding:10px 12px;background:var(--accent-bg);border:1px solid #a7f3d0;border-radius:var(--radius);font-size:12px;color:var(--accent)">
+        <i class="ti ti-info-circle" style="vertical-align:-2px"></i>
+        The first person's pocket goes down, the second person's pocket goes up.
+      </div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn" onclick="closeTransfer()">Cancel</button>
+      <button class="btn green" onclick="confirmTransfer()"><i class="ti ti-arrow-right" style="font-size:14px"></i> Move the money</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add receiver modal -->
+<div class="modal-shade" id="addPersonModal" style="position:fixed;inset:0;background:rgba(26,25,22,0.45);display:none;align-items:center;justify-content:center;z-index:100;padding:20px" onclick="if (event.target === this) closeAddPerson()">
+  <div class="modal" style="background:var(--surface);border-radius:var(--radius-lg);width:100%;max-width:440px;box-shadow:0 24px 60px rgba(0,0,0,0.25);overflow:hidden">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:15px;font-weight:600">Add a new person at the warehouse</div>
+      <button class="icon-btn" onclick="closeAddPerson()"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="padding:18px 20px">
+      <div style="margin-bottom:12px">
+        <label style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:5px">Full name</label>
+        <input id="newPersonName" placeholder="e.g. Walid Hage" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;outline:none;background:var(--surface)">
+      </div>
+      <div>
+        <label style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:5px">Role</label>
+        <select id="newPersonRole" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;outline:none;background:var(--surface);appearance:none;-webkit-appearance:none;background-image:url(&quot;data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='none' stroke='%239B9890' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/></svg>&quot;);background-repeat:no-repeat;background-position:right 10px center;padding-right:26px">
+          <option value="worker">Worker</option>
+          <option value="driver">Driver</option>
+          <option value="sales">Sales</option>
+          <option value="accounts">Accounts</option>
+          <option value="owner">Owner</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn" onclick="closeAddPerson()">Cancel</button>
+      <button class="btn green" onclick="savePerson()"><i class="ti ti-check" style="font-size:14px"></i> Add person</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><i class="ti ti-check-circle"></i><span id="toastMsg">Saved</span></div>
+
+<script>
+  // ── DATA ────────────────────────────────────────────────
+  // Each person = { id, name, role, initials, activeOnly?: 'drivers'|'warehouse', expenses: [...] }
+  // Each receipt = { id, date, source, ref, amount, method, handed: bool, handedDate? }
+  const people = {
+    // ── Drivers ─────────────────────────────────
+    mk: { name: 'Mohammed Khalil', role: 'driver', initials: 'MK', section: 'drivers',
+      expenses: [
+        { desc: 'Fuel', amount: 45 },
+        { desc: 'Toll fees', amount: 12 },
+      ],
+      receipts: [
+        { id: 'R-1001', date: '21 May 2026', source: 'Al Rawda Restaurant', ref: 'INV-0341', amount: 420, method: 'cash', handed: false },
+        { id: 'R-1002', date: '21 May 2026', source: 'Chez Michel',         ref: 'INV-0339', amount: 320, method: 'cash', handed: false },
+        { id: 'R-1003', date: '21 May 2026', source: 'Cedar Grill House',   ref: 'INV-0340', amount: 100, method: 'cash', handed: false },
+        { id: 'R-0998', date: '20 May 2026', source: 'Beit el Naar',        ref: 'INV-0335', amount: 180, method: 'cash', handed: true, handedDate: '20 May 2026' },
+      ],
+    },
+    ah: { name: 'Ahmad Hassan', role: 'driver', initials: 'AH', section: 'drivers',
+      expenses: [{ desc: 'Fuel', amount: 38 }],
+      receipts: [
+        { id: 'R-1004', date: '21 May 2026', source: 'Mountain Grill', ref: 'INV-0342', amount: 480, method: 'cash', handed: false },
+        { id: 'R-0995', date: '20 May 2026', source: 'Al Sahha Catering', ref: 'PU-0033', amount: 300, method: 'whish', handed: true, handedDate: '20 May 2026' },
+      ],
+    },
+    jn: { name: 'Joseph Nasr', role: 'driver', initials: 'JN', section: 'drivers',
+      expenses: [{ desc: 'Fuel', amount: 52 }, { desc: 'Parking', amount: 8 }],
+      receipts: [
+        { id: 'R-1005', date: '21 May 2026', source: 'Gulf Charcoal', ref: 'INV-0343', amount: 620, method: 'cash', handed: true, handedDate: '21 May 2026' },
+        { id: 'R-1006', date: '21 May 2026', source: 'Lina Boutique', ref: 'INV-0344', amount: 380, method: 'cash', handed: true, handedDate: '21 May 2026' },
+        { id: 'R-1007', date: '21 May 2026', source: 'Beit el Naar',  ref: 'INV-0345', amount: 240, method: 'cash', handed: true, handedDate: '21 May 2026' },
+      ],
+    },
+    // ── Warehouse receivers ─────────────────────
+    ka: { name: 'Khalil Abi Nader', role: 'owner', initials: 'KA', section: 'warehouse',
+      receipts: [
+        { id: 'R-2001', date: '21 May 2026', source: 'Walk-in (Walid)',  ref: 'sale 12:48', amount: 280, method: 'cash', handed: false },
+        { id: 'R-2002', date: '21 May 2026', source: 'Georges Khoury',   ref: 'sale 10:02', amount: 45,  method: 'cash', handed: false },
+        { id: 'R-1998', date: '20 May 2026', source: 'Mountain Grill',   ref: 'PU-0030',    amount: 480, method: 'omt',  handed: true, handedDate: '20 May 2026' },
+      ],
+    },
+    rs: { name: 'Rita Salameh', role: 'sales', initials: 'RS', section: 'warehouse',
+      receipts: [
+        { id: 'R-2003', date: '21 May 2026', source: 'Ali Hamdan',  ref: 'sale 12:15', amount: 58.80, method: 'cash', handed: false },
+        { id: 'R-2004', date: '21 May 2026', source: 'Al Sahha',    ref: 'PU-0034',    amount: 432,   method: 'whish',handed: false },
+      ],
+    },
+    hm: { name: 'Hasan Moussa', role: 'worker', initials: 'HM', section: 'warehouse',
+      receipts: [
+        { id: 'R-2005', date: '21 May 2026', source: 'Walk-in',     ref: 'sale 09:14', amount: 8.40, method: 'cash', handed: false },
+        { id: 'R-2006', date: '21 May 2026', source: 'Walk-in',     ref: 'sale 11:30', amount: 14,   method: 'cash', handed: false },
+        { id: 'R-1990', date: '19 May 2026', source: 'Walk-in',     ref: 'sale 14:20', amount: 22,   method: 'cash', handed: true, handedDate: '19 May 2026' },
+      ],
+    },
+    as: { name: 'Ali Saadeh', role: 'worker', initials: 'AS', section: 'warehouse',
+      receipts: [
+        { id: 'R-2007', date: '20 May 2026', source: 'Walk-in', ref: 'sale 16:00', amount: 12, method: 'cash', handed: false },
+      ],
+    },
+    jn2: { name: 'Joseph Nasr', role: 'driver', initials: 'JN', section: 'warehouse',
+      receipts: [
+        { id: 'R-2008', date: '21 May 2026', source: 'Walk-in (extra)', ref: 'cash drop', amount: 80, method: 'cash', handed: false },
+      ],
+    },
+  };
+
+  // handover history (across sections)
+  const history = [
+    { person: 'mk', amount: 863, date: '20 May 2026', to: 'Khalil Abi Nader', diff: 0 },
+    { person: 'ah', amount: 592, date: '20 May 2026', to: 'Khalil Abi Nader', diff: 0 },
+    { person: 'jn', amount: 1240,date: '21 May 2026', to: 'Khalil Abi Nader', diff: 0 },
+    { person: 'ka', amount: 480, date: '20 May 2026', to: 'Accountant',       diff: 0 },
+    { person: 'hm', amount: 22,  date: '19 May 2026', to: 'Khalil',           diff: 0 },
+  ];
+
+  // ── STATE ───────────────────────────────────────────────
+  let section = 'drivers';
+  let activePerson = 'mk';
+
+  const $ = id => document.getElementById(id);
+  function fmt(n) { return '$' + (+n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+  function showToast(msg) {
+    const t = $('toast'); $('toastMsg').textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._timer); t._timer = setTimeout(() => t.classList.remove('show'), 2400);
+  }
+
+  // people in current section
+  function peopleInSection() {
+    return Object.entries(people).filter(([, p]) => p.section === section);
+  }
+  function getPerson() { return people[activePerson]; }
+
+  // money math for a person
+  function computeBalance(p) {
+    const collected = p.receipts.reduce((s, r) => s + r.amount, 0);
+    const handed = p.receipts.filter(r => r.handed).reduce((s, r) => s + r.amount, 0);
+    const expenses = (p.expenses || []).reduce((s, e) => s + (e.amount || 0), 0);
+    const balance = collected - handed - expenses;
+    return { collected, handed, expenses, balance };
+  }
+
+  // ── SECTION TOGGLE ──────────────────────────────────────
+  function setSection(s) {
+    section = s;
+    document.querySelectorAll('.stab').forEach(el => el.classList.toggle('active', el.dataset.sec === s));
+    $('expCard').style.display = s === 'drivers' ? '' : 'none';
+    $('rExpRow').style.display = s === 'drivers' ? '' : 'none';
+    $('personTabsTitle').textContent = s === 'drivers' ? 'Pick a driver' : 'Pick a person from the warehouse';
+    $('addPersonBtn').style.display = s === 'warehouse' ? '' : 'none';
+    // pick first person in section
+    const list = peopleInSection();
+    activePerson = list[0] ? list[0][0] : '';
+    renderAll();
+  }
+
+  // ── RENDER · KPI strip ──────────────────────────────────
+  function renderKpis() {
+    const list = peopleInSection();
+    let collected = 0, handed = 0, balance = 0, expenses = 0;
+    list.forEach(([, p]) => {
+      const b = computeBalance(p);
+      collected += b.collected; handed += b.handed; balance += b.balance; expenses += b.expenses;
+    });
+    const pending = list.filter(([, p]) => computeBalance(p).balance > 0.01).length;
+
+    if (section === 'drivers') {
+      $('kpis').innerHTML = `
+        <div class="kpi"><div class="kpi-label">Cash drivers collected today</div><div class="kpi-value">${fmt(collected)}</div><div class="kpi-sub">${list.length} driver${list.length===1?'':'s'}</div></div>
+        <div class="kpi"><div class="kpi-label">What drivers kept (fuel, tolls)</div><div class="kpi-value amber">${fmt(expenses)}</div><div class="kpi-sub">they take this from the money</div></div>
+        <div class="kpi"><div class="kpi-label">Still in drivers' pockets</div><div class="kpi-value amber">${fmt(balance)}</div><div class="kpi-sub">${pending} driver${pending===1?'':'s'} haven't given it back</div></div>
+        <div class="kpi"><div class="kpi-label">Money drivers gave back</div><div class="kpi-value green">${fmt(handed)}</div><div class="kpi-sub">today &amp; recently</div></div>
+      `;
+    } else {
+      $('kpis').innerHTML = `
+        <div class="kpi"><div class="kpi-label">Cash collected at warehouse</div><div class="kpi-value">${fmt(collected)}</div><div class="kpi-sub">${list.length} people</div></div>
+        <div class="kpi"><div class="kpi-label">Still in their pockets</div><div class="kpi-value amber">${fmt(balance)}</div><div class="kpi-sub">${pending} haven't given it back</div></div>
+        <div class="kpi"><div class="kpi-label">Money given to accounting</div><div class="kpi-value green">${fmt(handed)}</div><div class="kpi-sub">recently</div></div>
+        <div class="kpi"><div class="kpi-label">Number of transactions</div><div class="kpi-value">${list.reduce((s,[,p]) => s + p.receipts.length, 0)}</div><div class="kpi-sub">recorded</div></div>
+      `;
+    }
+  }
+
+  // ── RENDER · person tabs ────────────────────────────────
+  function renderPersonTabs() {
+    const list = peopleInSection();
+    $('personTabs').innerHTML = list.map(([id, p]) => {
+      const b = computeBalance(p);
+      const balCls = b.balance < 0.01 ? 'zero' : '';
+      return `
+        <div class="person-tab ${id === activePerson ? 'active' : ''}" onclick="setActive('${id}')">
+          <div class="pt-avatar">${p.initials}</div>
+          <div class="pt-info">
+            <div class="pt-name">${p.name} <span class="pt-role-pill">${p.role}</span></div>
+            <div class="pt-meta">${p.receipts.length} receipt${p.receipts.length===1?'':'s'} · ${fmt(b.collected)}</div>
+          </div>
+          <div class="pt-balance ${balCls}">${b.balance < 0.01 ? '✓' : fmt(b.balance)}</div>
+        </div>
+      `;
+    }).join('');
+  }
+  function setActive(id) { activePerson = id; renderAll(); }
+
+  // ── RENDER · receipts table ─────────────────────────────
+  function renderReceipts() {
+    const p = getPerson();
+    if (!p) {
+      $('receiptsBody').innerHTML = `<tr><td colspan="7" style="padding:30px;text-align:center;color:var(--text3)">no person selected</td></tr>`;
+      return;
+    }
+    $('receiptsTitle').innerHTML = `<i class="ti ti-list"></i> ${p.name}'s receipts`;
+    $('receiptsHead').innerHTML = `
+      <tr>
+        <th style="width:32px"></th>
+        <th>Date</th>
+        <th>From / source</th>
+        <th>Reference</th>
+        <th style="width:80px">Method</th>
+        <th class="right" style="width:100px">Amount</th>
+        <th style="width:100px">Status</th>
+      </tr>`;
+    // sort: pending first, then handed
+    const sorted = p.receipts.slice().sort((a, b) => (a.handed ? 1 : 0) - (b.handed ? 1 : 0));
+    $('receiptsBody').innerHTML = sorted.map((r, idx) => {
+      const realIdx = p.receipts.indexOf(r);
+      return `
+        <tr class="${r.handed ? 'handed' : 'pending'}">
+          <td class="check-cell">
+            <input type="checkbox" ${r.handed ? 'checked' : ''} onchange="toggleHanded(${realIdx})">
+          </td>
+          <td class="mono" style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--text2)">${r.date}</td>
+          <td><strong style="font-weight:500">${r.source}</strong></td>
+          <td><span class="mono" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--text3)">${r.ref}</span></td>
+          <td><span class="status-pill" style="background:var(--surface2);color:var(--text2)">${r.method}</span></td>
+          <td class="num ${r.handed ? '' : 'amber'}">${fmt(r.amount)}</td>
+          <td>${r.handed
+            ? `<span class="status-pill handed"><i class="ti ti-check" style="font-size:11px"></i> handed ${r.handedDate || ''}</span>`
+            : `<span class="status-pill pending"><i class="ti ti-clock" style="font-size:11px"></i> pending</span>`
+          }</td>
+        </tr>
+      `;
+    }).join('');
+
+    const b = computeBalance(p);
+    const pendingAmt = b.collected - b.handed;
+    $('receiptsCount').textContent = `${p.receipts.length} receipts · ${p.receipts.filter(r => !r.handed).length} pending`;
+    $('receiptsFoot').innerHTML = `
+      <span>collected total <strong>${fmt(b.collected)}</strong>  ·  handed <strong style="color:var(--accent)">${fmt(b.handed)}</strong>  ·  pending <strong style="color:var(--accent2)">${fmt(pendingAmt)}</strong></span>
+      <span>tick a row to mark it handed over</span>
+    `;
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function toggleHanded(idx) {
+    const p = getPerson();
+    const r = p.receipts[idx];
+    r.handed = !r.handed;
+    if (r.handed) r.handedDate = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    else delete r.handedDate;
+    renderAll();
+    showToast(r.handed ? `${fmt(r.amount)} marked as handed` : `${fmt(r.amount)} marked pending`);
+  }
+
+  // ── RENDER · expenses ───────────────────────────────────
+  function renderExpenses() {
+    const p = getPerson();
+    if (!p || !p.expenses) { $('expRows').innerHTML = ''; $('expTotal').textContent = fmt(0); return; }
+    $('expRows').innerHTML = p.expenses.map((e, i) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 18px;border-bottom:1px solid var(--border)">
+        <i class="ti ti-receipt-tax" style="font-size:14px;color:var(--text3)"></i>
+        <input style="flex:1;border:none;outline:none;font-size:13px;font-family:'IBM Plex Sans',sans-serif;background:transparent" value="${e.desc}" oninput="p.expenses[${i}].desc=this.value" placeholder="Expense">
+        <input style="width:90px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-family:'IBM Plex Mono',monospace;text-align:right;outline:none;font-size:13px;background:var(--surface)" type="number" value="${e.amount}" oninput="setExpAmt(${i}, this.value)">
+        <span style="font-size:12px;color:var(--text3)">$</span>
+        <button class="icon-btn" onclick="removeExp(${i})"><i class="ti ti-x"></i></button>
+      </div>
+    `).join('');
+    const tot = p.expenses.reduce((s, e) => s + (e.amount || 0), 0);
+    $('expTotal').textContent = fmt(tot);
+    if (window.lucide) lucide.createIcons();
+  }
+  function setExpAmt(i, v) {
+    getPerson().expenses[i].amount = parseFloat(v) || 0;
+    renderExpenses();
+    renderRecon();
+    renderKpis();
+    renderPersonTabs();
+  }
+  function removeExp(i) { getPerson().expenses.splice(i, 1); renderExpenses(); renderRecon(); renderKpis(); renderPersonTabs(); }
+  function addExpRow() {
+    const p = getPerson();
+    if (!p.expenses) p.expenses = [];
+    p.expenses.push({ desc: '', amount: 0 });
+    renderExpenses();
+  }
+
+  // ── RENDER · recon panel ────────────────────────────────
+  function renderRecon() {
+    const p = getPerson();
+    if (!p) return;
+    const b = computeBalance(p);
+    $('reconWho').textContent = `${p.name} (${p.role})`;
+    $('rTotal').textContent = fmt(b.collected);
+    $('rExp').textContent = '−' + fmt(b.expenses);
+    $('rHanded').textContent = fmt(b.handed);
+    $('rBalance').textContent = fmt(b.balance);
+    $('rBalanceBar').classList.toggle('zero', b.balance < 0.01);
+    $('fullBtn').textContent = `Full ${fmt(b.balance)}`;
+    // confirm button label
+    $('confirmLbl').textContent = `Hand over to ${$('handoverTo').value.replace(/\s*\(.+\)$/, '')}`;
+    calcDiff();
+  }
+
+  // ── RENDER · recent handovers for this person ───────────
+  function renderRecent() {
+    const items = history.filter(h => h.person === activePerson).slice(0, 5);
+    if (items.length === 0) {
+      $('recentHist').innerHTML = `<div style="padding:24px;text-align:center;color:var(--text3);font-size:12.5px">No previous handovers</div>`;
+      return;
+    }
+    $('recentHist').innerHTML = items.map(h => `
+      <div class="hist-row">
+        <div class="hist-icon"><i class="ti ti-cash"></i></div>
+        <div class="hist-body">
+          <strong>${fmt(h.amount)} handed to ${h.to}</strong>
+          <small>${h.date}${h.diff !== 0 ? ' · diff ' + (h.diff > 0 ? '+' : '') + fmt(h.diff) : ' · matched ✓'}</small>
+        </div>
+      </div>
+    `).join('');
+    if (window.lucide) lucide.createIcons();
+  }
+
+  // ── HANDOVER CALC ───────────────────────────────────────
+  function calcDiff() {
+    const v = parseFloat($('handoverAmt').value) || 0;
+    const balance = computeBalance(getPerson()).balance;
+    const bar = $('diffBar');
+    const btn = $('confirmBtn');
+    if (v === 0) {
+      bar.className = 'diff-bar none';
+      $('diffLabel').textContent = 'Enter amount';
+      $('diffVal').textContent = '—';
+      btn.disabled = true;
+      return;
+    }
+    btn.disabled = false;
+    const diff = v - balance;
+    if (Math.abs(diff) < 0.01) {
+      bar.className = 'diff-bar ok';
+      $('diffLabel').textContent = 'Matches balance ✓';
+      $('diffVal').textContent = fmt(0);
+    } else if (v < balance) {
+      bar.className = 'diff-bar ok';
+      $('diffLabel').textContent = `partial · ${fmt(balance - v)} stays in pocket`;
+      $('diffVal').textContent = fmt(v);
+    } else {
+      bar.className = 'diff-bar short';
+      $('diffLabel').textContent = `over by ${fmt(diff)}`;
+      $('diffVal').textContent = fmt(v);
+    }
+  }
+  function setHandoverFull() { $('handoverAmt').value = computeBalance(getPerson()).balance.toFixed(2); calcDiff(); }
+  function setHandoverHalf() { $('handoverAmt').value = (computeBalance(getPerson()).balance / 2).toFixed(2); calcDiff(); }
+  function setHandoverZero() { $('handoverAmt').value = ''; calcDiff(); }
+
+  function confirmHandover() {
+    const v = parseFloat($('handoverAmt').value) || 0;
+    if (v <= 0) return;
+    const p = getPerson();
+    const b = computeBalance(p);
+    // mark pending receipts as handed in order until we've covered `v`
+    let toCover = v;
+    const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    for (const r of p.receipts) {
+      if (toCover <= 0) break;
+      if (!r.handed && r.amount <= toCover + 0.01) {
+        r.handed = true; r.handedDate = today; toCover -= r.amount;
+      }
+    }
+    // log to history
+    history.unshift({
+      person: activePerson, amount: v, date: today,
+      to: $('handoverTo').value.replace(/\s*\(.+\)$/, ''),
+      diff: v - b.balance,
+    });
+    $('handoverAmt').value = '';
+    renderAll();
+    showToast(`Handed ${fmt(v)} from ${p.name} to ${$('handoverTo').value.replace(/\s*\(.+\)$/, '')}`);
+  }
+
+  // ── ADD RECEIPT modal ───────────────────────────────────
+  // ── Section header for add-person & section toggle wiring ──
+  function openTransfer() {
+    const from = getPerson();
+    if (!from) return;
+    const fromBal = computeBalance(from).balance;
+    $('xferFromAvatar').textContent = from.initials;
+    $('xferFromName').textContent = from.name + ' · ' + from.role;
+    $('xferFromBal').textContent = fmt(fromBal);
+    const others = Object.entries(people).filter(([id]) => id !== activePerson);
+    $('xferTo').innerHTML = others.map(([id, p]) => {
+      const bal = computeBalance(p).balance;
+      return `<option value="${id}">${p.name} · ${p.role} · has ${fmt(bal)}</option>`;
+    }).join('');
+    $('xferAmt').value = ''; $('xferNote').value = '';
+    $('xferFullBtn').textContent = `Full ${fmt(fromBal)}`;
+    $('xferModal').style.display = 'flex';
+    if (window.lucide) lucide.createIcons();
+  }
+  function closeTransfer() { $('xferModal').style.display = 'none'; }
+  function setXferFull() { $('xferAmt').value = computeBalance(getPerson()).balance.toFixed(2); }
+  function setXferHalf() { $('xferAmt').value = (computeBalance(getPerson()).balance / 2).toFixed(2); }
+  function confirmTransfer() {
+    const v = parseFloat($('xferAmt').value);
+    if (!v || v <= 0) { showToast('Enter amount'); return; }
+    const from = getPerson();
+    const toId = $('xferTo').value;
+    const to = people[toId];
+    if (!to) { showToast('Pick a receiver'); return; }
+    const fromBal = computeBalance(from).balance;
+    if (v > fromBal + 0.01) {
+      showToast(`Only ${fmt(fromBal)} in ${from.name}'s pocket`);
+      return;
+    }
+    const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const note = $('xferNote').value.trim();
+
+    let toCover = v;
+    for (const r of from.receipts) {
+      if (toCover <= 0.005) break;
+      if (!r.handed && r.amount <= toCover + 0.005) {
+        r.handed = true; r.handedDate = today; r.handedTo = `→ ${to.name}`;
+        toCover -= r.amount;
+      }
+    }
+    if (toCover > 0.005) {
+      const r = from.receipts.find(r => !r.handed);
+      if (r) {
+        r.amount -= toCover;
+        from.receipts.unshift({
+          id: 'R-' + Math.floor(Math.random()*9000+1000),
+          date: r.date, source: r.source + ' (split)', ref: r.ref,
+          amount: toCover, method: r.method,
+          handed: true, handedDate: today, handedTo: `→ ${to.name}`,
+        });
+        toCover = 0;
+      }
+    }
+
+    to.receipts.unshift({
+      id: 'R-' + Math.floor(Math.random()*9000+1000),
+      date: today,
+      source: `From ${from.name}`,
+      ref: note || 'transfer',
+      amount: v, method: 'transfer', handed: false,
+    });
+
+    history.unshift({
+      person: activePerson, amount: v, date: today,
+      to: to.name, diff: 0, transfer: true,
+    });
+
+    closeTransfer();
+    renderAll();
+    showToast(`${fmt(v)} moved from ${from.name} → ${to.name}`);
+  }
+
+  function openAddPerson() {
+    $('newPersonName').value = '';
+    $('newPersonRole').value = 'worker';
+    $('addPersonModal').style.display = 'flex';
+    if (window.lucide) lucide.createIcons();
+  }
+  function closeAddPerson() { $('addPersonModal').style.display = 'none'; }
+  function savePerson() {
+    const name = $('newPersonName').value.trim();
+    if (!name) { showToast('Enter a name'); return; }
+    const role = $('newPersonRole').value;
+    const id = 'p_' + Math.floor(Math.random()*9000+1000);
+    const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+    people[id] = { name, role, initials, section: 'warehouse', receipts: [] };
+    $('whCount').textContent = Object.values(people).filter(p => p.section === 'warehouse').length;
+    activePerson = id;
+    closeAddPerson();
+    renderAll();
+    showToast(`Added ${name}`);
+  }
+
+  // ── RENDER ALL ──────────────────────────────────────────
+  function renderAll() {
+    renderKpis();
+    renderPersonTabs();
+    renderReceipts();
+    renderExpenses();
+    renderRecon();
+    renderRecent();
+  }
+
+  // counts
+  $('drvCount').textContent = Object.values(people).filter(p => p.section === 'drivers').length;
+  $('whCount').textContent  = Object.values(people).filter(p => p.section === 'warehouse').length;
+
+  // recompute confirm-button label when "to" changes
+  $('handoverTo').addEventListener('change', () => {
+    $('confirmLbl').textContent = `Hand over to ${$('handoverTo').value.replace(/\s*\(.+\)$/, '')}`;
+  });
+
+  renderAll();
+</script>
+</body>
+</html>

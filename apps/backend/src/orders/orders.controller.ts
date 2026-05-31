@@ -1,0 +1,88 @@
+import {
+  Body,
+  Controller,
+  DefaultValuePipe,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseIntPipe,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { OrderStatus } from '@prisma/client';
+import { OrdersService } from './orders.service';
+import { CreateOrderDto } from './dto/create-order.dto';
+import { UpdateOrderDto } from './dto/update-order.dto';
+import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { ClerkUser } from '../auth/clerk.strategy';
+
+@ApiTags('orders')
+@ApiBearerAuth()
+@Controller('orders')
+export class OrdersController {
+  constructor(private readonly ordersService: OrdersService) {}
+
+  @ApiOperation({ summary: 'List orders (paginated)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 400, description: 'Bad request / constraint violation' })
+  @Get()
+  @Roles('owner', 'sales_rep')
+  findAll(
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('clientId') clientId?: string,
+    @Query('status') status?: OrderStatus,
+  ) {
+    return this.ordersService.findAll(page, limit, clientId, status);
+  }
+
+  @ApiOperation({ summary: 'Get an order by ID' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Get(':id')
+  @Roles('owner', 'sales_rep')
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ordersService.findOne(id);
+  }
+
+  @ApiOperation({ summary: 'Create a new order' })
+  @ApiResponse({ status: 201, description: 'Created' })
+  @ApiResponse({ status: 400, description: 'Bad request / constraint violation' })
+  @Post()
+  @Roles('owner', 'sales_rep')
+  create(
+    @Body() dto: CreateOrderDto,
+    @CurrentUser() user: ClerkUser,
+  ) {
+    return this.ordersService.create(dto, user.userId);
+  }
+
+  @ApiOperation({ summary: 'Update an order' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 400, description: 'Bad request / constraint violation' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Patch(':id')
+  @Roles('owner', 'sales_rep')
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateOrderDto,
+  ) {
+    return this.ordersService.update(id, dto);
+  }
+
+  @ApiOperation({ summary: 'Delete a draft order (no shipments)' })
+  @ApiResponse({ status: 204, description: 'No content' })
+  @ApiResponse({ status: 400, description: 'Bad request / constraint violation' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Delete(':id')
+  @Roles('owner')
+  @HttpCode(204)
+  remove(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ordersService.remove(id);
+  }
+}

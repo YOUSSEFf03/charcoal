@@ -1,0 +1,1144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #F5F4F0;
+    --surface:   #FFFFFF;
+    --surface2:  #F0EEE9;
+    --border:    #E4E1D9;
+    --border2:   #D4D0C8;
+    --text:      #1A1916;
+    --text2:     #6B6860;
+    --text3:     #9B9890;
+    --accent:    #1D6B4A;
+    --accent-bg: #EAF5EF;
+    --accent2:   #B45309;
+    --accent2-bg:#FEF3C7;
+    --red:       #C0392B;
+    --red-bg:    #FEF2F2;
+    --blue:      #1D4ED8;
+    --blue-bg:   #EFF6FF;
+    --sidebar-w: 220px;
+    --radius:    8px;
+    --radius-lg: 12px;
+  }
+
+  body {
+    font-family: 'IBM Plex Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+    display: flex;
+  }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    width: var(--sidebar-w);
+    min-height: 100vh;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    z-index: 10;
+  }
+
+  .sidebar-logo {
+    padding: 20px 18px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+
+  .logo-mark {
+    width: 30px; height: 30px;
+    background: var(--text);
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .logo-mark i { color: #fff; font-size: 16px; }
+
+  .logo-text {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+  }
+
+  .logo-sub {
+    font-size: 10px;
+    color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace;
+    letter-spacing: 0.5px;
+  }
+
+  .sidebar-section {
+    padding: 16px 10px 4px;
+  }
+
+  .sidebar-section-label {
+    font-size: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 0 8px;
+    margin-bottom: 4px;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    color: var(--text2);
+    font-size: 13.5px;
+    font-weight: 400;
+    transition: background 0.1s, color 0.1s;
+    text-decoration: none;
+    position: relative;
+  }
+
+  .nav-item:hover { background: var(--surface2); color: var(--text); }
+
+  .nav-item.active {
+    background: var(--text);
+    color: #fff;
+  }
+
+  .nav-item.active i { color: #fff; }
+
+  .nav-item i { font-size: 16px; color: var(--text3); transition: color 0.1s; }
+  .nav-item:hover i { color: var(--text); }
+
+  .nav-badge {
+    margin-left: auto;
+    font-size: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    background: var(--red);
+    color: #fff;
+    border-radius: 100px;
+    padding: 1px 6px;
+    font-weight: 500;
+  }
+
+  .nav-badge.amber {
+    background: var(--accent2);
+  }
+
+  .sidebar-bottom {
+    margin-top: auto;
+    padding: 12px 10px;
+    border-top: 1px solid var(--border);
+  }
+
+  .user-row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+  .user-row:hover { background: var(--surface2); }
+
+  .avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--text);
+    color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  .user-name { font-size: 13px; font-weight: 500; }
+  .user-role { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+
+  /* ── MAIN ── */
+  .main {
+    margin-left: var(--sidebar-w);
+    flex: 1;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── TOPBAR ── */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 28px;
+    height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0;
+    position: sticky; top: 0; z-index: 5;
+  }
+
+  .topbar-left { display: flex; align-items: center; gap: 6px; }
+
+  .page-title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.2px;
+  }
+
+  .topbar-date {
+    font-size: 12px;
+    color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace;
+    margin-left: 4px;
+  }
+
+  .topbar-right { display: flex; align-items: center; gap: 8px; }
+
+  .topbar-btn {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    cursor: pointer;
+    font-size: 13px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    color: var(--text2);
+    transition: all 0.1s;
+  }
+  .topbar-btn:hover { background: var(--surface2); color: var(--text); }
+
+  .topbar-btn.primary {
+    background: var(--text);
+    color: #fff;
+    border-color: var(--text);
+  }
+  .topbar-btn.primary:hover { background: #2d2b28; }
+
+  /* ── CONTENT ── */
+  .content {
+    padding: 24px 28px;
+    flex: 1;
+  }
+
+  /* ── KPI ROW ── */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+
+  .kpi {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    animation: fadeUp 0.4s ease both;
+  }
+
+  .kpi:hover {
+    border-color: var(--border2);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .kpi:nth-child(1) { animation-delay: 0.05s; }
+  .kpi:nth-child(2) { animation-delay: 0.10s; }
+  .kpi:nth-child(3) { animation-delay: 0.15s; }
+  .kpi:nth-child(4) { animation-delay: 0.20s; }
+
+  .kpi-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .kpi-label {
+    font-size: 12px;
+    color: var(--text2);
+    font-weight: 500;
+    letter-spacing: 0.1px;
+  }
+
+  .kpi-icon {
+    width: 30px; height: 30px;
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+  }
+
+  .kpi-value {
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -1px;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+
+  .kpi-sub {
+    font-size: 12px;
+    color: var(--text3);
+    display: flex; align-items: center; gap: 4px;
+  }
+
+  .kpi-delta {
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+
+  .delta-up   { background: var(--accent-bg); color: var(--accent); }
+  .delta-down { background: var(--red-bg); color: var(--red); }
+  .delta-warn { background: var(--accent2-bg); color: var(--accent2); }
+
+  /* ── GRID ── */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+
+  .grid-3-2 {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+
+  /* ── CARD ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    animation: fadeUp 0.4s ease both;
+  }
+
+  .card-head {
+    padding: 14px 18px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -0.1px;
+    display: flex; align-items: center; gap: 7px;
+  }
+
+  .card-title i { font-size: 15px; color: var(--text2); }
+
+  .card-action {
+    font-size: 12px;
+    color: var(--text3);
+    cursor: pointer;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: transparent;
+    font-family: 'IBM Plex Sans', sans-serif;
+    transition: all 0.1s;
+  }
+  .card-action:hover { background: var(--surface2); color: var(--text2); }
+
+  /* ── TABLE ── */
+  .data-table { width: 100%; border-collapse: collapse; }
+
+  .data-table th {
+    text-align: left;
+    padding: 9px 18px;
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 400;
+    background: var(--surface2);
+  }
+
+  .data-table td {
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    vertical-align: middle;
+  }
+
+  .data-table tr:last-child td { border-bottom: none; }
+
+  .data-table tbody tr {
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .data-table tbody tr:hover { background: #FAFAF8; }
+
+  /* ── BADGES ── */
+  .badge {
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    padding: 2px 8px;
+    border-radius: 100px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .badge-green  { background: var(--accent-bg);  color: var(--accent); }
+  .badge-amber  { background: var(--accent2-bg); color: var(--accent2); }
+  .badge-red    { background: var(--red-bg);     color: var(--red); }
+  .badge-blue   { background: var(--blue-bg);    color: var(--blue); }
+  .badge-gray   { background: var(--surface2);   color: var(--text2); }
+
+  /* ── STOCK BARS ── */
+  .stock-row {
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .stock-row:last-child { border-bottom: none; }
+
+  .stock-meta {
+    display: flex; align-items: center; justify-content: space-between;
+  }
+
+  .stock-name { font-size: 13px; font-weight: 500; }
+  .stock-detail { font-size: 11px; color: var(--text3); margin-top: 1px; }
+
+  .stock-nums {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .stock-kg { font-weight: 500; }
+  .stock-pct { color: var(--text3); }
+
+  .bar-track {
+    height: 5px;
+    background: var(--surface2);
+    border-radius: 100px;
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    height: 100%;
+    border-radius: 100px;
+    transition: width 0.6s ease;
+  }
+
+  .bar-high   { background: var(--accent); }
+  .bar-mid    { background: var(--accent2); }
+  .bar-low    { background: var(--red); }
+
+  /* ── ALERT LIST ── */
+  .alert-row {
+    padding: 11px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .alert-row:hover { background: #FAFAF8; }
+  .alert-row:last-child { border-bottom: none; }
+
+  .alert-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+
+  .alert-name { font-size: 13px; font-weight: 500; flex: 1; }
+  .alert-meta { font-size: 12px; color: var(--text3); }
+  .alert-days { font-size: 12px; font-family: 'IBM Plex Mono', monospace; }
+
+  /* ── ACTIVITY ── */
+  .activity-row {
+    padding: 10px 18px;
+    display: flex; align-items: flex-start; gap: 11px;
+    border-bottom: 1px solid var(--border);
+  }
+  .activity-row:last-child { border-bottom: none; }
+
+  .act-icon {
+    width: 28px; height: 28px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; flex-shrink: 0; margin-top: 1px;
+  }
+
+  .act-body { flex: 1; }
+  .act-text { font-size: 13px; line-height: 1.4; }
+  .act-text strong { font-weight: 500; }
+  .act-time { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-top: 2px; }
+
+  /* ── DELIVERIES ── */
+  .delivery-row {
+    padding: 11px 18px;
+    display: flex; align-items: center; gap: 12px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .delivery-row:hover { background: #FAFAF8; }
+  .delivery-row:last-child { border-bottom: none; }
+
+  .driver-avatar {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--surface2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; color: var(--text2);
+    flex-shrink: 0;
+  }
+
+  .del-info { flex: 1; }
+  .del-driver { font-size: 13px; font-weight: 500; }
+  .del-stops { font-size: 11px; color: var(--text3); margin-top: 1px; }
+  .del-kg { font-size: 12px; font-family: 'IBM Plex Mono', monospace; color: var(--text2); }
+
+  /* ── PROFIT CARD ── */
+  .profit-block {
+    padding: 18px 20px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+
+  .profit-main {
+    display: flex; align-items: flex-end; justify-content: space-between;
+  }
+
+  .profit-value {
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: -1.5px;
+    color: var(--accent);
+  }
+
+  .profit-period {
+    font-size: 12px;
+    color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace;
+    margin-bottom: 4px;
+  }
+
+  .profit-breakdown {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .pb-item {
+    background: var(--surface2);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+  }
+
+  .pb-label { font-size: 11px; color: var(--text3); margin-bottom: 3px; }
+  .pb-value { font-size: 15px; font-weight: 600; letter-spacing: -0.5px; }
+  .pb-value.red { color: var(--red); }
+  .pb-value.green { color: var(--accent); }
+
+  /* ── MINI CHART ── */
+  .mini-chart {
+    display: flex; align-items: flex-end; gap: 4px;
+    height: 36px; padding: 0 20px 14px;
+  }
+
+  .bar-col {
+    flex: 1;
+    border-radius: 3px 3px 0 0;
+    min-height: 4px;
+    transition: opacity 0.15s;
+  }
+  .bar-col:hover { opacity: 0.7; }
+
+  /* ── PACKED BAGS ── */
+  .bags-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 1px; background: var(--border);
+  }
+
+  .bag-cell {
+    background: var(--surface);
+    padding: 14px 16px;
+    text-align: center;
+  }
+
+  .bag-size {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); margin-bottom: 4px;
+  }
+
+  .bag-count {
+    font-size: 20px; font-weight: 600; letter-spacing: -0.5px;
+  }
+
+  .bag-kg {
+    font-size: 11px; color: var(--text3); margin-top: 2px;
+  }
+
+  /* ── EMPTY STATE ── */
+  .empty {
+    padding: 24px 18px;
+    text-align: center;
+    color: var(--text3);
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark"><i class="ti ti-flame"></i></div>
+    <div>
+      <div class="logo-text">Ember</div>
+      <div class="logo-sub">charcoal system</div>
+    </div>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Overview</div>
+    <a class="nav-item active"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
+    <a class="nav-item"><i class="ti ti-chart-bar"></i> Reports</a>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Stock</div>
+    <a class="nav-item"><i class="ti ti-ship"></i> Containers</a>
+    <a class="nav-item"><i class="ti ti-building-warehouse"></i> Warehouse</a>
+    <a class="nav-item"><i class="ti ti-tools"></i> Packing</a>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Sales</div>
+    <a class="nav-item"><i class="ti ti-users"></i> Clients <span class="nav-badge amber">3</span></a>
+    <a class="nav-item"><i class="ti ti-file-invoice"></i> Orders</a>
+    <a class="nav-item"><i class="ti ti-truck"></i> Delivery <span class="nav-badge">2</span></a>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Finance</div>
+    <a class="nav-item"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item"><i class="ti ti-cash"></i> Payments</a>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item"><i class="ti ti-settings"></i> Settings</a>
+  </div>
+
+  <div class="sidebar-bottom">
+    <div class="user-row">
+      <div class="avatar">KA</div>
+      <div>
+        <div class="user-name">Khalil Abi Nader</div>
+        <div class="user-role">owner</div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="page-title">Dashboard</span>
+      <span class="topbar-date">Thursday, 21 May 2026</span>
+    </div>
+    <div class="topbar-right">
+      <button class="topbar-btn"><i class="ti ti-bell" style="font-size:15px"></i></button>
+      <button class="topbar-btn"><i class="ti ti-plus" style="font-size:15px"></i> New order</button>
+      <button class="topbar-btn primary"><i class="ti ti-ship" style="font-size:15px"></i> Add container</button>
+    </div>
+  </header>
+
+  <!-- CONTENT -->
+  <div class="content">
+
+    <!-- KPI ROW -->
+    <div class="kpi-row">
+      <div class="kpi">
+        <div class="kpi-header">
+          <span class="kpi-label">Total stock</span>
+          <div class="kpi-icon" style="background:#EAF5EF"><i class="ti ti-building-warehouse" style="color:#1D6B4A"></i></div>
+        </div>
+        <div class="kpi-value">48,320<span style="font-size:14px;font-weight:400;color:var(--text3)"> kg</span></div>
+        <div class="kpi-sub">
+          <span class="kpi-delta delta-up">+2,100 kg</span>
+          <span>from last week</span>
+        </div>
+      </div>
+
+      <div class="kpi">
+        <div class="kpi-header">
+          <span class="kpi-label">Outstanding balance</span>
+          <div class="kpi-icon" style="background:#FEF3C7"><i class="ti ti-credit-card" style="color:#B45309"></i></div>
+        </div>
+        <div class="kpi-value">$14,820</div>
+        <div class="kpi-sub">
+          <span class="kpi-delta delta-warn">12 clients</span>
+          <span>with open balance</span>
+        </div>
+      </div>
+
+      <div class="kpi">
+        <div class="kpi-header">
+          <span class="kpi-label">This month revenue</span>
+          <div class="kpi-icon" style="background:#EFF6FF"><i class="ti ti-trending-up" style="color:#1D4ED8"></i></div>
+        </div>
+        <div class="kpi-value">$38,450</div>
+        <div class="kpi-sub">
+          <span class="kpi-delta delta-up">+18%</span>
+          <span>vs last month</span>
+        </div>
+      </div>
+
+      <div class="kpi">
+        <div class="kpi-header">
+          <span class="kpi-label">Gross profit</span>
+          <div class="kpi-icon" style="background:#EAF5EF"><i class="ti ti-cash" style="color:#1D6B4A"></i></div>
+        </div>
+        <div class="kpi-value" style="color:var(--accent)">$9,240</div>
+        <div class="kpi-sub">
+          <span class="kpi-delta delta-up">24.0%</span>
+          <span>margin</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROW 2: Stock + Deliveries -->
+    <div class="grid-3-2">
+
+      <!-- RAW STOCK LOTS -->
+      <div class="card" style="animation-delay:0.25s">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-package"></i> Raw stock — open lots</div>
+          <button class="card-action">View all</button>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Type / grade</th>
+              <th>Supplier</th>
+              <th>Remaining</th>
+              <th>Cost/kg</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <div style="font-weight:500">BBQ Hardwood</div>
+                <div style="font-size:11px;color:var(--text3)">Grade A</div>
+              </td>
+              <td style="color:var(--text2)">Al-Amin Trading</td>
+              <td>
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:500">12,400 kg</span>
+                <div class="bar-track" style="margin-top:5px;width:80px">
+                  <div class="bar-fill bar-high" style="width:78%"></div>
+                </div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace">$0.74</td>
+              <td><span class="badge badge-green">Active</span></td>
+            </tr>
+            <tr>
+              <td>
+                <div style="font-weight:500">Shisha</div>
+                <div style="font-size:11px;color:var(--text3)">Grade B</div>
+              </td>
+              <td style="color:var(--text2)">Al-Amin Trading</td>
+              <td>
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:500">8,980 kg</span>
+                <div class="bar-track" style="margin-top:5px;width:80px">
+                  <div class="bar-fill bar-mid" style="width:55%"></div>
+                </div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace">$0.89</td>
+              <td><span class="badge badge-green">Active</span></td>
+            </tr>
+            <tr>
+              <td>
+                <div style="font-weight:500">Restaurant Grade</div>
+                <div style="font-size:11px;color:var(--text3)">Grade A</div>
+              </td>
+              <td style="color:var(--text2)">Sahara Export</td>
+              <td>
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:500">3,200 kg</span>
+                <div class="bar-track" style="margin-top:5px;width:80px">
+                  <div class="bar-fill bar-low" style="width:22%"></div>
+                </div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace">$0.91</td>
+              <td><span class="badge badge-amber">Low</span></td>
+            </tr>
+            <tr>
+              <td>
+                <div style="font-weight:500">BBQ Hardwood</div>
+                <div style="font-size:11px;color:var(--text3)">Grade B</div>
+              </td>
+              <td style="color:var(--text2)">Sahara Export</td>
+              <td>
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:500">9,740 kg</span>
+                <div class="bar-track" style="margin-top:5px;width:80px">
+                  <div class="bar-fill bar-high" style="width:67%"></div>
+                </div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace">$0.71</td>
+              <td><span class="badge badge-green">Active</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- TODAY'S DELIVERIES -->
+      <div class="card" style="animation-delay:0.3s">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-truck"></i> Today's deliveries</div>
+          <button class="card-action">Manage</button>
+        </div>
+
+        <div class="delivery-row">
+          <div class="driver-avatar">MK</div>
+          <div class="del-info">
+            <div class="del-driver">Mohammed Khalil</div>
+            <div class="del-stops">3 stops — Hamra, Achrafieh, Jdeideh</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+            <span class="badge badge-blue">In progress</span>
+            <span class="del-kg">890 kg</span>
+          </div>
+        </div>
+
+        <div class="delivery-row">
+          <div class="driver-avatar">AH</div>
+          <div class="del-info">
+            <div class="del-driver">Ahmad Hassan</div>
+            <div class="del-stops">2 stops — Dbayeh, Jounieh</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+            <span class="badge badge-gray">Planned</span>
+            <span class="del-kg">620 kg</span>
+          </div>
+        </div>
+
+        <div class="delivery-row">
+          <div class="driver-avatar">JN</div>
+          <div class="del-info">
+            <div class="del-driver">Joseph Nasr</div>
+            <div class="del-stops">4 stops — Verdun, Ras Beirut, Cola, Bourj</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+            <span class="badge badge-green">Completed</span>
+            <span class="del-kg">1,140 kg</span>
+          </div>
+        </div>
+
+        <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:12px;color:var(--text3)">Total today</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:14px">2,650 kg</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROW 3: Packed bags + CRM alerts + Profit + Activity -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px">
+
+      <!-- PACKED BAGS -->
+      <div class="card" style="animation-delay:0.35s">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-box"></i> Packed stock</div>
+          <button class="card-action">View all</button>
+        </div>
+        <div class="bags-grid">
+          <div class="bag-cell">
+            <div class="bag-size">1.9 kg</div>
+            <div class="bag-count">840</div>
+            <div class="bag-kg">1,596 kg</div>
+          </div>
+          <div class="bag-cell">
+            <div class="bag-size">2 kg</div>
+            <div class="bag-count">1,240</div>
+            <div class="bag-kg">2,480 kg</div>
+          </div>
+          <div class="bag-cell">
+            <div class="bag-size">5 kg</div>
+            <div class="bag-count">380</div>
+            <div class="bag-kg">1,900 kg</div>
+          </div>
+          <div class="bag-cell">
+            <div class="bag-size">10 kg</div>
+            <div class="bag-count">210</div>
+            <div class="bag-kg">2,100 kg</div>
+          </div>
+          <div class="bag-cell">
+            <div class="bag-size">20 kg</div>
+            <div class="bag-count">95</div>
+            <div class="bag-kg">1,900 kg</div>
+          </div>
+          <div class="bag-cell" style="background:var(--surface2)">
+            <div class="bag-size">total</div>
+            <div class="bag-count" style="color:var(--accent)">2,765</div>
+            <div class="bag-kg">9,976 kg</div>
+          </div>
+        </div>
+        <div style="padding:10px 18px;border-top:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:12px;color:var(--text3)">Last session</span>
+            <span style="font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--text2)">Today, 09:14 — 240 bags</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- CRM ALERTS -->
+      <div class="card" style="animation-delay:0.4s">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-alert-circle" style="color:var(--accent2)"></i> CRM alerts</div>
+          <span class="badge badge-amber">3 overdue</span>
+        </div>
+
+        <div class="alert-row">
+          <div class="alert-dot" style="background:var(--red)"></div>
+          <div style="flex:1">
+            <div class="alert-name">Al Rawda Restaurant</div>
+            <div class="alert-meta">restaurant · $840 balance</div>
+          </div>
+          <div style="text-align:right">
+            <div class="alert-days" style="color:var(--red)">+14 days</div>
+            <div style="font-size:11px;color:var(--text3)">avg 12d</div>
+          </div>
+        </div>
+
+        <div class="alert-row">
+          <div class="alert-dot" style="background:var(--accent2)"></div>
+          <div style="flex:1">
+            <div class="alert-name">Chez Michel</div>
+            <div class="alert-meta">restaurant · $320 balance</div>
+          </div>
+          <div style="text-align:right">
+            <div class="alert-days" style="color:var(--accent2)">+6 days</div>
+            <div style="font-size:11px;color:var(--text3)">avg 10d</div>
+          </div>
+        </div>
+
+        <div class="alert-row">
+          <div class="alert-dot" style="background:var(--accent2)"></div>
+          <div style="flex:1">
+            <div class="alert-name">Byblos BBQ Supply</div>
+            <div class="alert-meta">wholesale · $2,100 balance</div>
+          </div>
+          <div style="text-align:right">
+            <div class="alert-days" style="color:var(--accent2)">+3 days</div>
+            <div style="font-size:11px;color:var(--text3)">avg 21d</div>
+          </div>
+        </div>
+
+        <div style="padding:11px 18px;border-top:1px solid var(--border)">
+          <button style="width:100%;padding:7px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;cursor:pointer;font-family:'IBM Plex Sans',sans-serif;color:var(--text2)">View all clients →</button>
+        </div>
+      </div>
+
+      <!-- PROFIT THIS MONTH -->
+      <div class="card" style="animation-delay:0.45s">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-chart-pie"></i> Profit — May 2026</div>
+          <button class="card-action">Full report</button>
+        </div>
+        <div class="profit-block">
+          <div class="profit-main">
+            <div>
+              <div class="profit-period">gross profit</div>
+              <div class="profit-value">$9,240</div>
+            </div>
+            <div style="text-align:right">
+              <div class="profit-period">margin</div>
+              <div style="font-size:20px;font-weight:600;letter-spacing:-0.5px;color:var(--accent)">24.0%</div>
+            </div>
+          </div>
+
+          <div class="profit-breakdown">
+            <div class="pb-item">
+              <div class="pb-label">Revenue</div>
+              <div class="pb-value">$38,450</div>
+            </div>
+            <div class="pb-item">
+              <div class="pb-label">COGS</div>
+              <div class="pb-value red">$24,180</div>
+            </div>
+            <div class="pb-item">
+              <div class="pb-label">Bag costs</div>
+              <div class="pb-value red">$2,840</div>
+            </div>
+            <div class="pb-item">
+              <div class="pb-label">Variances</div>
+              <div class="pb-value red">$1,290</div>
+            </div>
+          </div>
+
+          <!-- Mini bar chart -->
+          <div>
+            <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace;padding:0 0 6px">daily revenue — may</div>
+            <div class="mini-chart">
+              <div class="bar-col" style="height:40%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:55%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:70%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:45%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:80%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:65%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:90%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:75%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:85%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:60%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:95%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:70%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:88%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:72%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:92%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:78%;background:#CBD5E1"></div>
+              <div class="bar-col" style="height:84%;background:#1D6B4A"></div>
+              <div class="bar-col" style="height:91%;background:#1D6B4A"></div>
+              <div class="bar-col" style="height:96%;background:#1D6B4A"></div>
+              <div class="bar-col" style="height:100%;background:#1D6B4A"></div>
+              <div class="bar-col" style="height:88%;background:#1D6B4A"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROW 4: Recent activity + Worker -->
+    <div class="grid-2">
+
+      <!-- RECENT ACTIVITY -->
+      <div class="card" style="animation-delay:0.5s">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-activity"></i> Recent activity</div>
+          <button class="card-action">All logs</button>
+        </div>
+
+        <div class="activity-row">
+          <div class="act-icon" style="background:var(--accent-bg)"><i class="ti ti-box" style="color:var(--accent)"></i></div>
+          <div class="act-body">
+            <div class="act-text">Packing session closed — <strong>240 bags</strong> (2kg × 180, 5kg × 60)</div>
+            <div class="act-time">Today 09:14 · Worker session #PS-0842</div>
+          </div>
+        </div>
+
+        <div class="activity-row">
+          <div class="act-icon" style="background:var(--blue-bg)"><i class="ti ti-truck" style="color:var(--blue)"></i></div>
+          <div class="act-body">
+            <div class="act-text">Delivery confirmed — <strong>Al Rawda Restaurant</strong>, 120 bags</div>
+            <div class="act-time">Today 08:52 · Joseph Nasr · Stop 1 of 4</div>
+          </div>
+        </div>
+
+        <div class="activity-row">
+          <div class="act-icon" style="background:var(--accent2-bg)"><i class="ti ti-file-invoice" style="color:var(--accent2)"></i></div>
+          <div class="act-body">
+            <div class="act-text">Invoice issued — <strong>Byblos BBQ Supply</strong> · $2,100 USD</div>
+            <div class="act-time">Today 08:30 · Invoice #INV-2026-0341</div>
+          </div>
+        </div>
+
+        <div class="activity-row">
+          <div class="act-icon" style="background:var(--red-bg)"><i class="ti ti-cash" style="color:var(--red)"></i></div>
+          <div class="act-body">
+            <div class="act-text">Payment received — <strong>Chez Michel</strong> · $640 cash</div>
+            <div class="act-time">Yesterday 17:20 · Logged by Sales Rep</div>
+          </div>
+        </div>
+
+        <div class="activity-row">
+          <div class="act-icon" style="background:var(--accent-bg)"><i class="ti ti-ship" style="color:var(--accent)"></i></div>
+          <div class="act-body">
+            <div class="act-text">Container <strong>CONT-2026-014</strong> marked as arrived — 3 lots created</div>
+            <div class="act-time">Yesterday 14:05 · 20,120 kg added to warehouse</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WORKER EARNINGS -->
+      <div class="card" style="animation-delay:0.55s">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-tools"></i> Worker — Hasan Moussa</div>
+          <button class="card-action">Pay now</button>
+        </div>
+
+        <div style="padding:16px 18px;border-bottom:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px">
+            <div>
+              <div style="font-size:12px;color:var(--text3);margin-bottom:3px">total owed</div>
+              <div style="font-size:28px;font-weight:600;letter-spacing:-1px;color:var(--accent2)">$184.20</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:12px;color:var(--text3)">this month</div>
+              <div style="font-size:16px;font-weight:600">$92.40</div>
+            </div>
+          </div>
+        </div>
+
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Bag type</th>
+              <th>Bags packed</th>
+              <th>Rate</th>
+              <th>Earned</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span style="font-family:'IBM Plex Mono',monospace">2 kg</span></td>
+              <td style="font-family:'IBM Plex Mono',monospace">4,820</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">$0.05</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$241.00</td>
+            </tr>
+            <tr>
+              <td><span style="font-family:'IBM Plex Mono',monospace">5 kg</span></td>
+              <td style="font-family:'IBM Plex Mono',monospace">1,240</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">$0.08</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$99.20</td>
+            </tr>
+            <tr>
+              <td><span style="font-family:'IBM Plex Mono',monospace">10 kg</span></td>
+              <td style="font-family:'IBM Plex Mono',monospace">620</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">$0.12</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$74.40</td>
+            </tr>
+            <tr>
+              <td><span style="font-family:'IBM Plex Mono',monospace">20 kg</span></td>
+              <td style="font-family:'IBM Plex Mono',monospace">190</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">$0.18</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$34.20</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:12px;color:var(--text3)">Total earned all-time</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:600">$448.80</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

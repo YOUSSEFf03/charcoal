@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Settings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:#F5F4F0; --surface:#FFFFFF; --surface2:#F0EEE9;
+    --border:#E4E1D9; --border2:#D4D0C8;
+    --text:#1A1916; --text2:#6B6860; --text3:#9B9890;
+    --accent:#1D6B4A; --accent-bg:#EAF5EF;
+    --accent2:#B45309; --accent2-bg:#FEF3C7;
+    --red:#C0392B; --red-bg:#FEF2F2;
+    --blue:#1D4ED8; --blue-bg:#EFF6FF;
+    --sidebar-w:220px; --radius:8px; --radius-lg:12px;
+  }
+  body { font-family:'IBM Plex Sans',sans-serif; background:var(--bg); color:var(--text); font-size:14px; line-height:1.5; min-height:100vh; display:flex; }
+
+  /* SIDEBAR */
+  .sidebar { width:var(--sidebar-w); min-height:100vh; background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; position:fixed; top:0; left:0; bottom:0; z-index:10; }
+  .sidebar-logo { padding:20px 18px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+  .logo-mark { width:30px; height:30px; background:var(--text); border-radius:7px; display:flex; align-items:center; justify-content:center; }
+  .logo-mark i { color:#fff; font-size:16px; }
+  .logo-text { font-size:15px; font-weight:600; letter-spacing:-0.3px; }
+  .logo-sub { font-size:10px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+  .sidebar-section { padding:16px 10px 4px; }
+  .sidebar-section-label { font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:1px; padding:0 8px; margin-bottom:4px; }
+  .nav-item { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; color:var(--text2); font-size:13.5px; font-weight:400; transition:background 0.1s,color 0.1s; text-decoration:none; }
+  .nav-item:hover { background:var(--surface2); color:var(--text); }
+  .nav-item.active { background:var(--text); color:#fff; }
+  .nav-item.active i { color:#fff; }
+  .nav-item i { font-size:16px; color:var(--text3); }
+  .nav-item:hover i { color:var(--text); }
+  .nav-badge { margin-left:auto; font-size:10px; font-family:'IBM Plex Mono',monospace; background:var(--red); color:#fff; border-radius:100px; padding:1px 6px; font-weight:500; }
+  .nav-badge.amber { background:var(--accent2); }
+  .sidebar-bottom { margin-top:auto; padding:12px 10px; border-top:1px solid var(--border); }
+  .user-row { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; }
+  .user-row:hover { background:var(--surface2); }
+  .avatar-sm { width:28px; height:28px; border-radius:50%; background:var(--text); color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; flex-shrink:0; }
+  .user-name { font-size:13px; font-weight:500; }
+  .user-role { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+
+  /* MAIN */
+  .main { margin-left:var(--sidebar-w); flex:1; display:flex; min-height:100vh; }
+
+  /* SETTINGS LAYOUT: left nav + content */
+  .settings-nav { width:220px; min-height:100vh; background:var(--surface); border-right:1px solid var(--border); padding:24px 12px; flex-shrink:0; position:sticky; top:0; height:100vh; overflow-y:auto; }
+  .settings-nav-label { font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:1px; padding:0 10px; margin-bottom:4px; margin-top:16px; }
+  .settings-nav-label:first-child { margin-top:0; }
+  .snav-item { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; color:var(--text2); font-size:13px; font-weight:400; transition:background 0.1s,color 0.1s; }
+  .snav-item:hover { background:var(--surface2); color:var(--text); }
+  .snav-item.active { background:var(--surface2); color:var(--text); font-weight:500; }
+  .snav-item i { font-size:15px; color:var(--text3); }
+  .snav-item.active i { color:var(--text); }
+
+  .settings-content { flex:1; padding:32px 36px; max-width:760px; }
+
+  @keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+  .fade-up { animation:fadeUp 0.25s ease both; }
+
+  /* SECTION HEADER */
+  .section-header { margin-bottom:20px; }
+  .section-title { font-size:18px; font-weight:600; letter-spacing:-0.3px; margin-bottom:4px; }
+  .section-desc { font-size:13px; color:var(--text2); }
+
+  /* CARD */
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:16px; }
+  .card-head { padding:13px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .card-title { font-size:13px; font-weight:600; display:flex; align-items:center; gap:7px; }
+  .card-title i { font-size:15px; color:var(--text2); }
+
+  /* BADGE */
+  .badge { font-size:11px; font-family:'IBM Plex Mono',monospace; padding:2px 8px; border-radius:100px; font-weight:500; white-space:nowrap; }
+  .badge-green  { background:var(--accent-bg); color:var(--accent); }
+  .badge-amber  { background:var(--accent2-bg); color:var(--accent2); }
+  .badge-red    { background:var(--red-bg); color:var(--red); }
+  .badge-blue   { background:var(--blue-bg); color:var(--blue); }
+  .badge-gray   { background:var(--surface2); color:var(--text2); }
+
+  /* FORM */
+  .form-group { margin-bottom:16px; }
+  .form-label { font-size:12px; font-weight:500; color:var(--text2); margin-bottom:5px; display:block; }
+  .form-sub { font-size:11px; color:var(--text3); margin-bottom:5px; display:block; }
+  .form-input { width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text); outline:none; background:var(--surface); transition:border-color 0.15s; }
+  .form-input:focus { border-color:var(--text); }
+  .form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
+  .form-row-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:16px; }
+  .save-btn { display:flex; align-items:center; gap:6px; padding:8px 16px; background:var(--text); color:#fff; border:none; border-radius:var(--radius); font-size:13px; font-weight:600; font-family:'IBM Plex Sans',sans-serif; cursor:pointer; transition:background 0.15s; }
+  .save-btn:hover { background:#2d2b28; }
+  .btn { display:flex; align-items:center; gap:6px; padding:7px 12px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text2); transition:all 0.1s; }
+  .btn:hover { background:var(--surface2); color:var(--text); }
+  .btn.primary { background:var(--text); color:#fff; border-color:var(--text); }
+  .btn.primary:hover { background:#2d2b28; }
+  .btn.danger { background:var(--red-bg); color:var(--red); border-color:#fca5a5; }
+  .btn.danger:hover { background:#fee2e2; }
+
+  /* BAG TYPES TABLE */
+  .bag-row { display:flex; align-items:center; gap:10px; padding:11px 18px; border-bottom:1px solid var(--border); }
+  .bag-row:last-child { border-bottom:none; }
+  .bag-name { font-size:13px; font-weight:500; flex:1; }
+  .bag-field { width:90px; padding:6px 10px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Mono',monospace; text-align:right; outline:none; background:var(--surface); transition:border-color 0.15s; }
+  .bag-field:focus { border-color:var(--text); }
+  .bag-label { font-size:11px; color:var(--text3); min-width:40px; }
+  .bag-del { width:28px; height:28px; border-radius:6px; border:1px solid var(--border); background:transparent; cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--text3); transition:all 0.1s; flex-shrink:0; }
+  .bag-del:hover { background:var(--red-bg); border-color:#fca5a5; color:var(--red); }
+  .bag-note { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* USER ROWS */
+  .user-row-item { display:flex; align-items:center; gap:12px; padding:11px 18px; border-bottom:1px solid var(--border); }
+  .user-row-item:last-child { border-bottom:none; }
+  .user-avatar { width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; flex-shrink:0; }
+  .user-info { flex:1; }
+  .user-info-name { font-size:13px; font-weight:500; }
+  .user-info-email { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; margin-top:1px; }
+  .user-actions { display:flex; gap:6px; }
+
+  /* RATE BOX */
+  .rate-box { padding:18px; }
+  .rate-current { display:flex; align-items:center; justify-content:space-between; padding:14px 16px; background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius-lg); margin-bottom:14px; }
+  .rate-label { font-size:12px; color:var(--text2); margin-bottom:2px; }
+  .rate-value { font-size:24px; font-weight:600; letter-spacing:-1px; font-family:'IBM Plex Mono',monospace; }
+  .rate-updated { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; margin-top:2px; }
+
+  /* TOGGLE */
+  .toggle-row { display:flex; align-items:center; justify-content:space-between; padding:12px 18px; border-bottom:1px solid var(--border); }
+  .toggle-row:last-child { border-bottom:none; }
+  .toggle-info { flex:1; margin-right:16px; }
+  .toggle-name { font-size:13px; font-weight:500; margin-bottom:2px; }
+  .toggle-desc { font-size:12px; color:var(--text3); }
+  .toggle { width:40px; height:22px; border-radius:100px; background:var(--border); cursor:pointer; position:relative; transition:background 0.15s; flex-shrink:0; }
+  .toggle.on { background:var(--accent); }
+  .toggle-knob { position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:#fff; transition:transform 0.15s; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
+  .toggle.on .toggle-knob { transform:translateX(18px); }
+
+  /* DIVIDER */
+  .divider { height:1px; background:var(--border); margin:20px 0; }
+
+  /* DANGER ZONE */
+  .danger-zone { border:1px solid #fca5a5; border-radius:var(--radius-lg); overflow:hidden; }
+  .danger-head { padding:12px 18px; background:var(--red-bg); border-bottom:1px solid #fca5a5; display:flex; align-items:center; gap:8px; }
+  .danger-title { font-size:13px; font-weight:600; color:var(--red); }
+  .danger-row { display:flex; align-items:center; justify-content:space-between; padding:14px 18px; border-bottom:1px solid #fca5a5; }
+  .danger-row:last-child { border-bottom:none; }
+  .danger-label { font-size:13px; font-weight:500; }
+  .danger-desc { font-size:12px; color:var(--text3); margin-top:2px; }
+
+  /* MODAL */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:40; align-items:center; justify-content:center; }
+  .modal-overlay.open { display:flex; }
+  .modal { background:var(--surface); border-radius:var(--radius-lg); border:1px solid var(--border); width:460px; box-shadow:0 8px 40px rgba(0,0,0,0.12); animation:fadeUp 0.2s ease; }
+  .modal-head { padding:18px 20px; border-bottom:1px solid var(--border); display:flex; align-items:flex-start; justify-content:space-between; }
+  .modal-title { font-size:15px; font-weight:600; }
+  .modal-body { padding:20px; }
+  .modal-footer { padding:14px 20px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; }
+  .close-btn { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; color:var(--text2); }
+
+  /* SAVED TOAST */
+  .toast { position:fixed; bottom:24px; right:24px; background:var(--text); color:#fff; padding:10px 18px; border-radius:var(--radius); font-size:13px; font-weight:500; display:flex; align-items:center; gap:8px; z-index:50; transform:translateY(60px); opacity:0; transition:all 0.25s ease; }
+  .toast.show { transform:translateY(0); opacity:1; }
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark"><i class="ti ti-flame"></i></div>
+    <div><div class="logo-text">Ember</div><div class="logo-sub">charcoal system</div></div>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Overview</div>
+    <a class="nav-item" href="dashboard.html"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
+    <a class="nav-item" href="reports.html"><i class="ti ti-chart-bar"></i> Reports</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Stock</div>
+    <a class="nav-item" href="containers.html"><i class="ti ti-ship"></i> Containers</a>
+    <a class="nav-item" href="warehouse.html"><i class="ti ti-building-warehouse"></i> Warehouse</a>
+    <a class="nav-item" href="packing.html"><i class="ti ti-tools"></i> Packing</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Sales</div>
+    <a class="nav-item" href="clients.html"><i class="ti ti-users"></i> Clients <span class="nav-badge amber">3</span></a>
+    <a class="nav-item" href="orders.html"><i class="ti ti-file-invoice"></i> Orders</a>
+    <a class="nav-item" href="driver-mobile.html"><i class="ti ti-truck"></i> Delivery</a>
+    <a class="nav-item" href="warehouse-sales.html"><i class="ti ti-building-store"></i> Warehouse sales</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Finance</div>
+    <a class="nav-item" href="balances.html"><i class="ti ti-credit-card"></i> Balances <span class="nav-badge amber"><a class="nav-item" href="invoices.html"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-cash"></i> Payments</a>
+    <a class="nav-item" href="cash-handover.html"><i class="ti ti-calculator"></i> Cash handover</a>
+    <a class="nav-item" href="expenses.html"><i class="ti ti-wallet"></i> Expenses</a>
+    <a class="nav-item" href="employees.html"><i class="ti ti-users"></i> Employees</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item" href="suppliers.html"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item active" href="settings.html"><i class="ti ti-settings"></i> Settings</a>
+    <a class="nav-item" href="fill-clients.html"><i class="ti ti-stack-2"></i> Fill clients</a>6k</span></a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-cash"></i> Payments</a>
+    <a class="nav-item" href="cash-handover.html"><i class="ti ti-calculator"></i> Cash handover</a>
+    <a class="nav-item" href="expenses.html"><i class="ti ti-wallet"></i> Expenses</a>
+    <a class="nav-item" href="employees.html"><i class="ti ti-users"></i> Employees</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item" href="suppliers.html"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item active" href="settings.html"><i class="ti ti-settings"></i> Settings</a>
+    <a class="nav-item" href="fill-clients.html"><i class="ti ti-stack-2"></i> Fill clients</a>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="user-row">
+      <div class="avatar-sm">KA</div>
+      <div><div class="user-name">Khalil Abi Nader</div><div class="user-role">owner</div></div>
+    </div>
+  </div>
+</aside>
+
+<div class="main">
+
+  <!-- SETTINGS LEFT NAV -->
+  <div class="settings-nav">
+    <div class="settings-nav-label">Business</div>
+    <div class="snav-item active" onclick="showSection('company',this)"><i class="ti ti-building"></i> Company info</div>
+    <div class="snav-item" onclick="showSection('currency',this)"><i class="ti ti-currency-dollar"></i> Currency & rate</div>
+
+    <div class="settings-nav-label">Stock</div>
+    <div class="snav-item" onclick="showSection('bagtypes',this)"><i class="ti ti-box"></i> Bag types</div>
+    <div class="snav-item" onclick="showSection('charcoal',this)"><i class="ti ti-flame"></i> Charcoal types</div>
+
+    <div class="settings-nav-label">Employees</div>
+    <div class="snav-item" onclick="showSection('workerrates',this)"><i class="ti ti-tools"></i> Worker rates</div>
+    <div class="snav-item" onclick="showSection('driverrates',this)"><i class="ti ti-truck"></i> Driver rates</div>
+
+    <div class="settings-nav-label">Access</div>
+    <div class="snav-item" onclick="showSection('users',this)"><i class="ti ti-users"></i> Users & roles</div>
+
+    <div class="settings-nav-label">System</div>
+    <div class="snav-item" onclick="showSection('preferences',this)"><i class="ti ti-adjustments"></i> Preferences</div>
+    <div class="snav-item" onclick="showSection('danger',this)"><i class="ti ti-alert-triangle" style="color:var(--red)"></i> <span style="color:var(--red)">Danger zone</span></div>
+  </div>
+
+  <!-- SETTINGS CONTENT -->
+  <div class="settings-content">
+
+    <!-- ── COMPANY INFO ── -->
+    <div id="sec-company" class="fade-up">
+      <div class="section-header">
+        <div class="section-title">Company info</div>
+        <div class="section-desc">Appears on invoices, receipts, and printed documents</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title"><i class="ti ti-building"></i> Business details</div></div>
+        <div style="padding:20px">
+          <div class="form-row">
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Company name</label>
+              <input class="form-input" value="Ember Charcoal Co.">
+            </div>
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Phone number</label>
+              <input class="form-input" value="+961 1 234 567">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Address <span style="font-weight:400;color:var(--text3)">(Arabic supported)</span></label>
+            <input class="form-input" value="Beirut, Lebanon">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Address in Arabic</label>
+            <input class="form-input" style="direction:rtl;text-align:right" value="بيروت، لبنان">
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Tax / VAT number (optional)</label>
+              <input class="form-input" placeholder="e.g. LB-1234567">
+            </div>
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Email</label>
+              <input class="form-input" value="contact@embercharcoal.lb">
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Invoice footer note (optional)</label>
+            <input class="form-input" placeholder="e.g. Thank you for your business · يشرفنا تعاملكم">
+          </div>
+        </div>
+        <div style="padding:14px 20px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:flex-end">
+          <button class="save-btn" onclick="showToast()"><i class="ti ti-check" style="font-size:14px"></i> Save changes</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CURRENCY & RATE ── -->
+    <div id="sec-currency" style="display:none" class="fade-up">
+      <div class="section-header">
+        <div class="section-title">Currency & exchange rate</div>
+        <div class="section-desc">Controls how LBP amounts are converted to USD across all reports and balances</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title"><i class="ti ti-currency-dollar"></i> USD / LBP rate</div></div>
+        <div class="rate-box">
+          <div class="rate-current">
+            <div>
+              <div class="rate-label">Current rate</div>
+              <div class="rate-value" id="currentRate">89,550</div>
+              <div class="rate-updated">LBP per $1 USD · updated 21 May 2026 by Khalil</div>
+            </div>
+            <span class="badge badge-green">Active</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Update rate</label>
+            <span class="form-sub">Changing this affects all future LBP conversions. Past transactions keep their original rate.</span>
+            <div style="display:flex;gap:10px;align-items:center">
+              <input class="form-input" type="number" id="newRate" placeholder="Enter new rate" style="font-family:'IBM Plex Mono',monospace;font-size:16px">
+              <button class="save-btn" style="white-space:nowrap" onclick="updateRate()"><i class="ti ti-refresh" style="font-size:14px"></i> Update rate</button>
+            </div>
+          </div>
+          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--text2)">
+            <strong>Example:</strong> At rate 89,550 — an invoice of $100 USD = 8,955,000 LBP
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title"><i class="ti ti-history"></i> Rate history</div></div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="background:var(--surface2);border-bottom:1px solid var(--border)">
+              <th style="text-align:left;padding:8px 18px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);font-weight:400;text-transform:uppercase;letter-spacing:0.6px">Rate (LBP/$)</th>
+              <th style="text-align:left;padding:8px 18px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);font-weight:400;text-transform:uppercase;letter-spacing:0.6px">Date set</th>
+              <th style="text-align:left;padding:8px 18px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);font-weight:400;text-transform:uppercase;letter-spacing:0.6px">Set by</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid var(--border)"><td style="padding:10px 18px;font-family:'IBM Plex Mono',monospace;font-weight:600">89,550</td><td style="padding:10px 18px;color:var(--text2)">21 May 2026</td><td style="padding:10px 18px;font-size:12px;color:var(--text2)">Khalil</td></tr>
+            <tr style="border-bottom:1px solid var(--border)"><td style="padding:10px 18px;font-family:'IBM Plex Mono',monospace;color:var(--text3)">89,200</td><td style="padding:10px 18px;color:var(--text2)">1 May 2026</td><td style="padding:10px 18px;font-size:12px;color:var(--text2)">Khalil</td></tr>
+            <tr><td style="padding:10px 18px;font-family:'IBM Plex Mono',monospace;color:var(--text3)">88,750</td><td style="padding:10px 18px;color:var(--text2)">15 Apr 2026</td><td style="padding:10px 18px;font-size:12px;color:var(--text2)">Khalil</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── BAG TYPES ── -->
+    <div id="sec-bagtypes" style="display:none" class="fade-up">
+      <div class="section-header">
+        <div class="section-title">Bag types</div>
+        <div class="section-desc">Define every bag size used. Nominal kg is used for all stock calculations.</div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-box"></i> Bag types</div>
+          <button class="btn" onclick="addBagRow()"><i class="ti ti-plus" style="font-size:13px"></i> Add bag type</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1.5fr auto;gap:0;background:var(--surface2);border-bottom:1px solid var(--border)">
+          <div style="padding:8px 18px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px">Name</div>
+          <div style="padding:8px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px">Nominal kg</div>
+          <div style="padding:8px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px">Cost/bag $</div>
+          <div style="padding:8px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px">Worker rate</div>
+          <div style="padding:8px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px">Note</div>
+          <div style="padding:8px 12px"></div>
+        </div>
+
+        <div id="bagTypeRows">
+          <div class="bag-row">
+            <div class="bag-name"><input style="border:none;outline:none;font-size:13px;font-weight:500;font-family:'IBM Plex Sans',sans-serif;background:transparent;width:100%" value="1.9 kg bag"></div>
+            <input class="bag-field" type="number" value="1.9" step="0.1">
+            <input class="bag-field" type="number" value="0.04" step="0.01">
+            <input class="bag-field" type="number" value="0.05" step="0.01">
+            <span class="bag-note">same bag as 2kg</span>
+            <button class="bag-del" onclick="this.closest('.bag-row').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="bag-row">
+            <div class="bag-name"><input style="border:none;outline:none;font-size:13px;font-weight:500;font-family:'IBM Plex Sans',sans-serif;background:transparent;width:100%" value="2 kg bag"></div>
+            <input class="bag-field" type="number" value="2.0" step="0.1">
+            <input class="bag-field" type="number" value="0.04" step="0.01">
+            <input class="bag-field" type="number" value="0.05" step="0.01">
+            <span class="bag-note">same bag as 1.9kg</span>
+            <button class="bag-del" onclick="this.closest('.bag-row').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="bag-row">
+            <div class="bag-name"><input style="border:none;outline:none;font-size:13px;font-weight:500;font-family:'IBM Plex Sans',sans-serif;background:transparent;width:100%" value="5 kg bag"></div>
+            <input class="bag-field" type="number" value="5.0" step="0.1">
+            <input class="bag-field" type="number" value="0.07" step="0.01">
+            <input class="bag-field" type="number" value="0.08" step="0.01">
+            <span class="bag-note"></span>
+            <button class="bag-del" onclick="this.closest('.bag-row').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="bag-row">
+            <div class="bag-name"><input style="border:none;outline:none;font-size:13px;font-weight:500;font-family:'IBM Plex Sans',sans-serif;background:transparent;width:100%" value="10 kg bag"></div>
+            <input class="bag-field" type="number" value="10.0" step="0.1">
+            <input class="bag-field" type="number" value="0.10" step="0.01">
+            <input class="bag-field" type="number" value="0.12" step="0.01">
+            <span class="bag-note"></span>
+            <button class="bag-del" onclick="this.closest('.bag-row').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="bag-row">
+            <div class="bag-name"><input style="border:none;outline:none;font-size:13px;font-weight:500;font-family:'IBM Plex Sans',sans-serif;background:transparent;width:100%" value="20 kg bag"></div>
+            <input class="bag-field" type="number" value="20.0" step="0.1">
+            <input class="bag-field" type="number" value="0.15" step="0.01">
+            <input class="bag-field" type="number" value="0.18" step="0.01">
+            <span class="bag-note"></span>
+            <button class="bag-del" onclick="this.closest('.bag-row').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+        </div>
+
+        <div style="padding:12px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:12px;color:var(--text3)">Changes affect all future packing sessions. Past sessions keep their original bag types.</span>
+          <button class="save-btn" onclick="showToast()"><i class="ti ti-check" style="font-size:14px"></i> Save bag types</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CHARCOAL TYPES ── -->
+    <div id="sec-charcoal" style="display:none" class="fade-up">
+      <div class="section-header">
+        <div class="section-title">Charcoal types</div>
+        <div class="section-desc">Define the charcoal types and grades used in the system</div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-flame"></i> Types & grades</div>
+          <button class="btn" onclick="addCharcoalRow()"><i class="ti ti-plus" style="font-size:13px"></i> Add type</button>
+        </div>
+        <div id="charcoalRows">
+          <div class="bag-row">
+            <div class="bag-name" style="display:flex;gap:8px">
+              <input style="border:none;outline:none;font-size:13px;font-weight:500;font-family:'IBM Plex Sans',sans-serif;background:transparent;flex:1" value="BBQ Hardwood">
+              <select style="border:1px solid var(--border);border-radius:var(--radius);font-size:12px;font-family:'IBM Plex Sans',sans-serif;padding:4px 8px;outline:none;background:var(--surface);color:var(--text2)">
+                <option>Grade A</option><option>Grade B</option><option>Grade C</option>
+              </select>
+            </div>
+            <button class="bag-del" onclick="this.closest('.bag-row').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="bag-row">
+            <div class="bag-name" style="display:flex;gap:8px">
+              <input style="border:none;outline:none;font-size:13px;font-weight:500;font-family:'IBM Plex Sans',sans-serif;background:transparent;flex:1" value="BBQ Hardwood">
+              <select style="border:1px solid var(--border);border-radius:var(--radius);font-size:12px;font-family:'IBM Plex Sans',sans-serif;padding:4px 8px;outline:none;background:var(--surface);color:var(--text2)">
+                <option>Grade A</option><option selected>Grade B</option><option>Grade C</option>
+              </select>
+            </div>
+            <button class="bag-del" onclick="this.closest('.bag-row').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="bag-row">
+            <div class="bag-name" style="display:flex;gap:8px">
+              <input style="border:none;outline:none;font-size:13px;font-weight:500;font-family:'IBM Plex Sans',sans-serif;background:transparent;flex:1" value="Shisha">
+              <select style="border:1px solid var(--border);border-radius:var(--radius);font-size:12px;font-family:'IBM Plex Sans',sans-serif;padding:4px 8px;outline:none;background:var(--surface);color:var(--text2)">
+                <option>Grade A</option><option selected>Grade B</option><option>Grade C</option>
+              </select>
+            </div>
+            <button class="bag-del" onclick="this.closest('.bag-row').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+          <div class="bag-row">
+            <div class="bag-name" style="display:flex;gap:8px">
+              <input style="border:none;outline:none;font-size:13px;font-weight:500;font-family:'IBM Plex Sans',sans-serif;background:transparent;flex:1" value="Restaurant Grade">
+              <select style="border:1px solid var(--border);border-radius:var(--radius);font-size:12px;font-family:'IBM Plex Sans',sans-serif;padding:4px 8px;outline:none;background:var(--surface);color:var(--text2)">
+                <option>Grade A</option><option>Grade B</option><option>Grade C</option>
+              </select>
+            </div>
+            <button class="bag-del" onclick="this.closest('.bag-row').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+          </div>
+        </div>
+        <div style="padding:12px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:flex-end">
+          <button class="save-btn" onclick="showToast()"><i class="ti ti-check" style="font-size:14px"></i> Save types</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── WORKER RATES ── -->
+    <div id="sec-workerrates" style="display:none" class="fade-up">
+      <div class="section-header">
+        <div class="section-title">Worker rates</div>
+        <div class="section-desc">Set Hasan's daily rate and per-bag rate for each bag type</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title"><i class="ti ti-tools"></i> Hasan Moussa — rate settings</div></div>
+        <div style="padding:18px">
+          <div class="form-row">
+            <div>
+              <label class="form-label">Daily rate ($ per day worked)</label>
+              <input class="form-input" type="number" value="15.00" step="0.5" style="font-family:'IBM Plex Mono',monospace;font-size:16px">
+            </div>
+            <div style="display:flex;align-items:flex-end">
+              <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--text2);width:100%">
+                At 22 working days/month = <strong>$330/month</strong> base wage
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="border-top:1px solid var(--border)">
+          <div style="padding:10px 18px;background:var(--surface2);font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+            <span>Bag type</span><span>Rate ($ per bag)</span><span>Monthly est.</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:center;padding:11px 18px;border-bottom:1px solid var(--border)">
+            <span style="font-size:13px;font-weight:500">1.9 kg bag</span>
+            <input class="bag-field" type="number" value="0.050" step="0.005" style="width:100%">
+            <span style="font-size:12px;color:var(--text3)">~$25 / month</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:center;padding:11px 18px;border-bottom:1px solid var(--border)">
+            <span style="font-size:13px;font-weight:500">2 kg bag</span>
+            <input class="bag-field" type="number" value="0.050" step="0.005" style="width:100%">
+            <span style="font-size:12px;color:var(--text3)">~$59 / month</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:center;padding:11px 18px;border-bottom:1px solid var(--border)">
+            <span style="font-size:13px;font-weight:500">5 kg bag</span>
+            <input class="bag-field" type="number" value="0.080" step="0.005" style="width:100%">
+            <span style="font-size:12px;color:var(--text3)">~$26 / month</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:center;padding:11px 18px;border-bottom:1px solid var(--border)">
+            <span style="font-size:13px;font-weight:500">10 kg bag</span>
+            <input class="bag-field" type="number" value="0.120" step="0.005" style="width:100%">
+            <span style="font-size:12px;color:var(--text3)">~$17 / month</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:center;padding:11px 18px">
+            <span style="font-size:13px;font-weight:500">20 kg bag</span>
+            <input class="bag-field" type="number" value="0.180" step="0.005" style="width:100%">
+            <span style="font-size:12px;color:var(--text3)">~$7 / month</span>
+          </div>
+        </div>
+        <div style="padding:12px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:flex-end">
+          <button class="save-btn" onclick="showToast()"><i class="ti ti-check" style="font-size:14px"></i> Save rates</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── DRIVER RATES ── -->
+    <div id="sec-driverrates" style="display:none" class="fade-up">
+      <div class="section-header">
+        <div class="section-title">Driver rates</div>
+        <div class="section-desc">Daily rate per driver. Each driver can have a different rate.</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title"><i class="ti ti-truck"></i> Driver daily rates</div></div>
+        <div style="padding:18px;display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;align-items:center;gap:14px;padding:14px;background:var(--surface2);border-radius:var(--radius)">
+            <div style="width:38px;height:38px;border-radius:50%;background:var(--blue-bg);color:var(--blue);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;flex-shrink:0">MK</div>
+            <div style="flex:1"><div style="font-size:13px;font-weight:500">Mohammed Khalil</div><div style="font-size:11px;color:var(--text3)">driver</div></div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input class="bag-field" type="number" value="35" step="1" style="width:80px;font-size:16px">
+              <span style="font-size:12px;color:var(--text2)">$ / day</span>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px;padding:14px;background:var(--surface2);border-radius:var(--radius)">
+            <div style="width:38px;height:38px;border-radius:50%;background:var(--accent2-bg);color:var(--accent2);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;flex-shrink:0">AH</div>
+            <div style="flex:1"><div style="font-size:13px;font-weight:500">Ahmad Hassan</div><div style="font-size:11px;color:var(--text3)">driver</div></div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input class="bag-field" type="number" value="35" step="1" style="width:80px;font-size:16px">
+              <span style="font-size:12px;color:var(--text2)">$ / day</span>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px;padding:14px;background:var(--surface2);border-radius:var(--radius)">
+            <div style="width:38px;height:38px;border-radius:50%;background:var(--surface2);color:var(--text2);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;flex-shrink:0;border:1px solid var(--border)">JN</div>
+            <div style="flex:1"><div style="font-size:13px;font-weight:500">Joseph Nasr</div><div style="font-size:11px;color:var(--text3)">driver</div></div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input class="bag-field" type="number" value="35" step="1" style="width:80px;font-size:16px">
+              <span style="font-size:12px;color:var(--text2)">$ / day</span>
+            </div>
+          </div>
+        </div>
+        <div style="padding:12px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:flex-end">
+          <button class="save-btn" onclick="showToast()"><i class="ti ti-check" style="font-size:14px"></i> Save rates</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── USERS & ROLES ── -->
+    <div id="sec-users" style="display:none" class="fade-up">
+      <div class="section-header">
+        <div class="section-title">Users & roles</div>
+        <div class="section-desc">Manage who has access. Only the owner can add or remove users.</div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-users"></i> Team members</div>
+          <button class="btn primary" onclick="openInviteModal()"><i class="ti ti-plus" style="font-size:13px"></i> Invite user</button>
+        </div>
+        <div class="user-row-item">
+          <div class="user-avatar" style="background:var(--text);color:#fff">KA</div>
+          <div class="user-info">
+            <div class="user-info-name">Khalil Abi Nader</div>
+            <div class="user-info-email"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="1d76757c7174715d78707f786f7e757c6f7e727c7133717f">[email&#160;protected]</a></div>
+          </div>
+          <span class="badge" style="background:var(--text);color:#fff">Owner</span>
+          <div class="user-actions"><span style="font-size:12px;color:var(--text3)">You</span></div>
+        </div>
+        <div class="user-row-item">
+          <div class="user-avatar" style="background:var(--accent2-bg);color:var(--accent2)">MA</div>
+          <div class="user-info">
+            <div class="user-info-name">Michel Abou Khalil</div>
+            <div class="user-info-email"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="2f42464c474a436f4a424d4a5d4c474e5d4c404e4301434d">[email&#160;protected]</a></div>
+          </div>
+          <span class="badge badge-amber">Accountant</span>
+          <div class="user-actions">
+            <button class="btn" style="font-size:12px;padding:5px 10px"><i class="ti ti-edit" style="font-size:13px"></i></button>
+            <button class="btn danger" style="font-size:12px;padding:5px 10px"><i class="ti ti-trash" style="font-size:13px"></i></button>
+          </div>
+        </div>
+        <div class="user-row-item">
+          <div class="user-avatar" style="background:var(--blue-bg);color:var(--blue)">SR</div>
+          <div class="user-info">
+            <div class="user-info-name">Samer Rahim</div>
+            <div class="user-info-email"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="0f7c6e626a7d4f6a626d6a7d6c676e7d6c606e6321636d">[email&#160;protected]</a></div>
+          </div>
+          <span class="badge badge-blue">Sales rep</span>
+          <div class="user-actions">
+            <button class="btn" style="font-size:12px;padding:5px 10px"><i class="ti ti-edit" style="font-size:13px"></i></button>
+            <button class="btn danger" style="font-size:12px;padding:5px 10px"><i class="ti ti-trash" style="font-size:13px"></i></button>
+          </div>
+        </div>
+        <div class="user-row-item">
+          <div class="user-avatar" style="background:var(--accent-bg);color:var(--accent)">HM</div>
+          <div class="user-info">
+            <div class="user-info-name">Hasan Moussa</div>
+            <div class="user-info-email"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="d0b8b1a3b1be90b5bdb2b5a2b3b8b1a2b3bfb1bcfebcb2">[email&#160;protected]</a></div>
+          </div>
+          <span class="badge badge-green">Worker</span>
+          <div class="user-actions">
+            <button class="btn" style="font-size:12px;padding:5px 10px"><i class="ti ti-edit" style="font-size:13px"></i></button>
+            <button class="btn danger" style="font-size:12px;padding:5px 10px"><i class="ti ti-trash" style="font-size:13px"></i></button>
+          </div>
+        </div>
+        <div class="user-row-item">
+          <div class="user-avatar" style="background:var(--blue-bg);color:var(--blue)">MK</div>
+          <div class="user-info">
+            <div class="user-info-name">Mohammed Khalil</div>
+            <div class="user-info-email"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="117c7e79707c7c747551747c73746372797063727e707d3f7d73">[email&#160;protected]</a></div>
+          </div>
+          <span class="badge badge-gray">Driver</span>
+          <div class="user-actions">
+            <button class="btn" style="font-size:12px;padding:5px 10px"><i class="ti ti-edit" style="font-size:13px"></i></button>
+            <button class="btn danger" style="font-size:12px;padding:5px 10px"><i class="ti ti-trash" style="font-size:13px"></i></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title"><i class="ti ti-lock"></i> Role permissions</div></div>
+        <div style="padding:14px 18px;font-size:12px;color:var(--text2);line-height:1.8">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;padding-bottom:8px;border-bottom:1px solid var(--border)">
+            <span>Feature</span><span>Owner</span><span>Accountant</span><span>Sales rep</span><span>Worker / Driver</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><span>See profit</span><span style="color:var(--accent)">✓</span><span style="color:var(--red)">✗</span><span style="color:var(--red)">✗</span><span style="color:var(--red)">✗</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><span>See cost/kg</span><span style="color:var(--accent)">✓</span><span style="color:var(--accent)">✓</span><span style="color:var(--red)">✗</span><span style="color:var(--red)">✗</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><span>Create orders</span><span style="color:var(--accent)">✓</span><span style="color:var(--accent)">✓</span><span style="color:var(--accent)">✓</span><span style="color:var(--red)">✗</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><span>Add users</span><span style="color:var(--accent)">✓</span><span style="color:var(--red)">✗</span><span style="color:var(--red)">✗</span><span style="color:var(--red)">✗</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;padding:6px 0"><span>Packing sessions</span><span style="color:var(--accent)">✓</span><span style="color:var(--red)">✗</span><span style="color:var(--red)">✗</span><span style="color:var(--accent)">✓ (worker)</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PREFERENCES ── -->
+    <div id="sec-preferences" style="display:none" class="fade-up">
+      <div class="section-header">
+        <div class="section-title">Preferences</div>
+        <div class="section-desc">System behaviour and notification settings</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title"><i class="ti ti-adjustments"></i> System preferences</div></div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <div class="toggle-name">CRM alerts — overdue client notifications</div>
+            <div class="toggle-desc">Show alert when a client hasn't ordered past their average order interval</div>
+          </div>
+          <div class="toggle on" onclick="this.classList.toggle('on')"><div class="toggle-knob"></div></div>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <div class="toggle-name">Low stock warnings</div>
+            <div class="toggle-desc">Alert on dashboard when a raw lot falls below 20% remaining</div>
+          </div>
+          <div class="toggle on" onclick="this.classList.toggle('on')"><div class="toggle-knob"></div></div>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <div class="toggle-name">Auto-generate invoice on delivery</div>
+            <div class="toggle-desc">Invoice is created automatically when driver confirms delivery</div>
+          </div>
+          <div class="toggle on" onclick="this.classList.toggle('on')"><div class="toggle-knob"></div></div>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <div class="toggle-name">Require variance explanation below zero</div>
+            <div class="toggle-desc">Worker must enter a note if packing output exceeds input kg</div>
+          </div>
+          <div class="toggle on" onclick="this.classList.toggle('on')"><div class="toggle-knob"></div></div>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <div class="toggle-name">Show LBP equivalent on all USD amounts</div>
+            <div class="toggle-desc">Display LBP equivalent below every USD amount using current rate</div>
+          </div>
+          <div class="toggle on" onclick="this.classList.toggle('on')"><div class="toggle-knob"></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title"><i class="ti ti-printer"></i> Print settings</div></div>
+        <div style="padding:18px">
+          <div class="form-group">
+            <label class="form-label">Receipt printer width</label>
+            <select class="form-input">
+              <option>58mm thermal roll</option>
+              <option selected>80mm thermal roll</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Default receipt language</label>
+            <select class="form-input">
+              <option selected>English</option>
+              <option>Arabic</option>
+              <option>English + Arabic</option>
+            </select>
+          </div>
+        </div>
+        <div style="padding:12px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:flex-end">
+          <button class="save-btn" onclick="showToast()"><i class="ti ti-check" style="font-size:14px"></i> Save preferences</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── DANGER ZONE ── -->
+    <div id="sec-danger" style="display:none" class="fade-up">
+      <div class="section-header">
+        <div class="section-title">Danger zone</div>
+        <div class="section-desc">Irreversible actions. Proceed with caution.</div>
+      </div>
+      <div class="danger-zone">
+        <div class="danger-head"><i class="ti ti-alert-triangle" style="color:var(--red);font-size:16px"></i><span class="danger-title">These actions cannot be undone</span></div>
+        <div class="danger-row">
+          <div>
+            <div class="danger-label">Reset all stock adjustments</div>
+            <div class="danger-desc">Removes all physical count adjustment records. Stock quantities are not affected.</div>
+          </div>
+          <button class="btn danger">Reset adjustments</button>
+        </div>
+        <div class="danger-row">
+          <div>
+            <div class="danger-label">Clear packing session history</div>
+            <div class="danger-desc">Removes all past packing session records. Current stock levels are not affected.</div>
+          </div>
+          <button class="btn danger">Clear sessions</button>
+        </div>
+        <div class="danger-row">
+          <div>
+            <div class="danger-label">Export all data</div>
+            <div class="danger-desc">Download a full backup of all system data as JSON.</div>
+          </div>
+          <button class="btn"><i class="ti ti-download" style="font-size:13px"></i> Export backup</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- INVITE USER MODAL -->
+<div class="modal-overlay" id="inviteModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">Invite team member</div>
+      <button class="close-btn" onclick="closeInviteModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Full name</label>
+        <input class="form-input" type="text" placeholder="e.g. Samer Rahim">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email address</label>
+        <input class="form-input" type="email" placeholder="name@company.com">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Role</label>
+        <select class="form-input">
+          <option>Accountant — financial access, no profit visibility</option>
+          <option>Sales rep — orders, clients, invoices, no costs</option>
+          <option>Worker — packing sessions only</option>
+          <option>Driver — delivery and trips only</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeInviteModal()">Cancel</button>
+      <button class="btn primary" onclick="closeInviteModal();showToast('Invite sent ✓')"><i class="ti ti-send" style="font-size:14px"></i> Send invite</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"><i class="ti ti-check" style="font-size:15px"></i> <span id="toastMsg">Changes saved</span></div>
+
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+  function showSection(name, el) {
+    const sections = ['company','currency','bagtypes','charcoal','workerrates','driverrates','users','preferences','danger'];
+    sections.forEach(s => {
+      const el = document.getElementById('sec-'+s);
+      if (el) el.style.display = s===name ? 'block' : 'none';
+    });
+    document.querySelectorAll('.snav-item').forEach(i => i.classList.remove('active'));
+    if (el) el.classList.add('active');
+  }
+
+  function addBagRow() {
+    const rows = document.getElementById('bagTypeRows');
+    const div = document.createElement('div');
+    div.className = 'bag-row';
+    div.innerHTML = `
+      <div class="bag-name"><input style="border:none;outline:none;font-size:13px;font-weight:500;font-family:'IBM Plex Sans',sans-serif;background:transparent;width:100%" placeholder="Bag name e.g. 25kg bag"></div>
+      <input class="bag-field" type="number" placeholder="0.0" step="0.1">
+      <input class="bag-field" type="number" placeholder="0.00" step="0.01">
+      <input class="bag-field" type="number" placeholder="0.00" step="0.01">
+      <span class="bag-note"></span>
+      <button class="bag-del" onclick="this.closest('.bag-row').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+    `;
+    rows.appendChild(div);
+    div.querySelector('input').focus();
+  }
+
+  function addCharcoalRow() {
+    const rows = document.getElementById('charcoalRows');
+    const div = document.createElement('div');
+    div.className = 'bag-row';
+    div.innerHTML = `
+      <div class="bag-name" style="display:flex;gap:8px">
+        <input style="border:none;outline:none;font-size:13px;font-weight:500;font-family:'IBM Plex Sans',sans-serif;background:transparent;flex:1" placeholder="Type name">
+        <select style="border:1px solid var(--border);border-radius:var(--radius);font-size:12px;font-family:'IBM Plex Sans',sans-serif;padding:4px 8px;outline:none;background:var(--surface);color:var(--text2)">
+          <option>Grade A</option><option>Grade B</option><option>Grade C</option>
+        </select>
+      </div>
+      <button class="bag-del" onclick="this.closest('.bag-row').remove()"><i class="ti ti-x" style="font-size:11px"></i></button>
+    `;
+    rows.appendChild(div);
+    div.querySelector('input').focus();
+  }
+
+  function updateRate() {
+    const val = parseInt(document.getElementById('newRate').value);
+    if (!val || isNaN(val)) return;
+    document.getElementById('currentRate').textContent = val.toLocaleString();
+    document.getElementById('newRate').value = '';
+    showToast('Exchange rate updated');
+  }
+
+  function openInviteModal() {
+    document.getElementById('inviteModal').classList.add('open');
+  }
+  function closeInviteModal() {
+    document.getElementById('inviteModal').classList.remove('open');
+  }
+
+  function showToast(msg) {
+    const toast = document.getElementById('toast');
+    document.getElementById('toastMsg').textContent = msg || 'Changes saved';
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2500);
+  }
+
+  document.getElementById('inviteModal').addEventListener('click', function(e) {
+    if (e.target === this) closeInviteModal();
+  });
+</script>
+</body>
+</html>

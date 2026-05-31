@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Warehouse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #F5F4F0;
+    --surface:   #FFFFFF;
+    --surface2:  #F0EEE9;
+    --border:    #E4E1D9;
+    --border2:   #D4D0C8;
+    --text:      #1A1916;
+    --text2:     #6B6860;
+    --text3:     #9B9890;
+    --accent:    #1D6B4A;
+    --accent-bg: #EAF5EF;
+    --accent2:   #B45309;
+    --accent2-bg:#FEF3C7;
+    --red:       #C0392B;
+    --red-bg:    #FEF2F2;
+    --blue:      #1D4ED8;
+    --blue-bg:   #EFF6FF;
+    --sidebar-w: 220px;
+    --radius:    8px;
+    --radius-lg: 12px;
+  }
+
+  body {
+    font-family: 'IBM Plex Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+    display: flex;
+  }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    width: var(--sidebar-w);
+    min-height: 100vh;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    z-index: 10;
+  }
+  .sidebar-logo {
+    padding: 20px 18px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .logo-mark {
+    width: 30px; height: 30px; background: var(--text);
+    border-radius: 7px; display: flex; align-items: center; justify-content: center;
+  }
+  .logo-mark i { color: #fff; font-size: 16px; }
+  .logo-text { font-size: 15px; font-weight: 600; letter-spacing: -0.3px; }
+  .logo-sub { font-size: 10px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.5px; }
+  .sidebar-section { padding: 16px 10px 4px; }
+  .sidebar-section-label { font-size: 10px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; padding: 0 8px; margin-bottom: 4px; }
+  .nav-item { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: var(--radius); cursor: pointer; color: var(--text2); font-size: 13.5px; font-weight: 400; transition: background 0.1s, color 0.1s; text-decoration: none; }
+  .nav-item:hover { background: var(--surface2); color: var(--text); }
+  .nav-item.active { background: var(--text); color: #fff; }
+  .nav-item.active i { color: #fff; }
+  .nav-item i { font-size: 16px; color: var(--text3); transition: color 0.1s; }
+  .nav-item:hover i { color: var(--text); }
+  .nav-badge { margin-left: auto; font-size: 10px; font-family: 'IBM Plex Mono', monospace; background: var(--red); color: #fff; border-radius: 100px; padding: 1px 6px; font-weight: 500; }
+  .nav-badge.amber { background: var(--accent2); }
+  .sidebar-bottom { margin-top: auto; padding: 12px 10px; border-top: 1px solid var(--border); }
+  .user-row { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: var(--radius); cursor: pointer; }
+  .user-row:hover { background: var(--surface2); }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--text); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .user-name { font-size: 13px; font-weight: 500; }
+  .user-role { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+
+  /* ── MAIN ── */
+  .main { margin-left: var(--sidebar-w); flex: 1; min-height: 100vh; display: flex; flex-direction: column; }
+
+  /* ── TOPBAR ── */
+  .topbar {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 0 28px; height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0; position: sticky; top: 0; z-index: 5;
+  }
+  .topbar-left { display: flex; align-items: center; gap: 10px; }
+  .page-title { font-size: 15px; font-weight: 600; letter-spacing: -0.2px; }
+  .topbar-right { display: flex; align-items: center; gap: 8px; }
+  .topbar-btn { display: flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface); cursor: pointer; font-size: 13px; font-family: 'IBM Plex Sans', sans-serif; color: var(--text2); transition: all 0.1s; }
+  .topbar-btn:hover { background: var(--surface2); color: var(--text); }
+  .topbar-btn.primary { background: var(--text); color: #fff; border-color: var(--text); }
+  .topbar-btn.primary:hover { background: #2d2b28; }
+  .topbar-btn.danger { background: var(--red-bg); color: var(--red); border-color: #fca5a5; }
+  .topbar-btn.danger:hover { background: #fee2e2; }
+
+  /* ── TABS ── */
+  .tabs {
+    display: flex; gap: 2px;
+    padding: 0 28px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    padding: 12px 16px;
+    font-size: 13px; font-weight: 500;
+    color: var(--text3);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.1s;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .tab:hover { color: var(--text2); }
+  .tab.active { color: var(--text); border-bottom-color: var(--text); }
+  .tab-count {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    background: var(--surface2); color: var(--text2);
+    padding: 1px 6px; border-radius: 100px;
+  }
+  .tab.active .tab-count { background: var(--text); color: #fff; }
+
+  /* ── CONTENT ── */
+  .content { padding: 24px 28px; flex: 1; }
+
+  /* ── SUMMARY BAR ── */
+  .summary-bar {
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    gap: 1px; background: var(--border);
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    overflow: hidden; margin-bottom: 20px;
+    animation: fadeUp 0.3s ease both;
+  }
+  @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+  .sum-cell { background: var(--surface); padding: 14px 18px; }
+  .sum-label { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-bottom: 4px; }
+  .sum-value { font-size: 20px; font-weight: 600; letter-spacing: -0.8px; }
+  .sum-sub { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+  /* ── FILTERS ── */
+  .filters {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 16px;
+  }
+  .filter-input {
+    display: flex; align-items: center; gap: 7px;
+    padding: 7px 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); font-size: 13px;
+    color: var(--text2); flex: 1; max-width: 280px;
+  }
+  .filter-input i { color: var(--text3); font-size: 15px; }
+  .filter-input input { border: none; outline: none; background: transparent; font-size: 13px; font-family: 'IBM Plex Sans', sans-serif; color: var(--text); width: 100%; }
+  .filter-input input::placeholder { color: var(--text3); }
+  .filter-select {
+    padding: 7px 12px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface);
+    font-size: 13px; font-family: 'IBM Plex Sans', sans-serif;
+    color: var(--text2); cursor: pointer; outline: none;
+  }
+  .filter-sep { flex: 1; }
+
+  /* ── CARD ── */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 14px; animation: fadeUp 0.4s ease both; }
+  .card-head { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .card-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+  .card-title i { font-size: 15px; color: var(--text2); }
+  .card-action { font-size: 12px; color: var(--text3); cursor: pointer; padding: 3px 8px; border-radius: 5px; border: 1px solid var(--border); background: transparent; font-family: 'IBM Plex Sans', sans-serif; transition: all 0.1s; }
+  .card-action:hover { background: var(--surface2); color: var(--text2); }
+
+  /* ── TABLE ── */
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table th { text-align: left; padding: 9px 18px; font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px; border-bottom: 1px solid var(--border); font-weight: 400; background: var(--surface2); }
+  .data-table td { padding: 11px 18px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tbody tr { cursor: pointer; transition: background 0.1s; }
+  .data-table tbody tr:hover { background: #FAFAF8; }
+
+  /* ── BADGE ── */
+  .badge { font-size: 11px; font-family: 'IBM Plex Mono', monospace; padding: 2px 8px; border-radius: 100px; font-weight: 500; white-space: nowrap; }
+  .badge-green  { background: var(--accent-bg);  color: var(--accent); }
+  .badge-amber  { background: var(--accent2-bg); color: var(--accent2); }
+  .badge-red    { background: var(--red-bg);     color: var(--red); }
+  .badge-blue   { background: var(--blue-bg);    color: var(--blue); }
+  .badge-gray   { background: var(--surface2);   color: var(--text2); }
+
+  /* ── PROGRESS ── */
+  .bar-wrap { display: flex; align-items: center; gap: 10px; }
+  .bar-track { flex: 1; height: 5px; background: var(--surface2); border-radius: 100px; overflow: hidden; min-width: 80px; }
+  .bar-fill { height: 100%; border-radius: 100px; }
+  .bar-high { background: var(--accent); }
+  .bar-mid  { background: var(--accent2); }
+  .bar-low  { background: var(--red); }
+  .bar-pct  { font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); min-width: 30px; text-align: right; }
+
+  /* ── PACKED BAGS GRID ── */
+  .packed-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 14px; margin-bottom: 14px;
+  }
+  .packed-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 16px 18px;
+    cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
+    animation: fadeUp 0.4s ease both;
+  }
+  .packed-card:hover { border-color: var(--border2); box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  .pc-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .pc-size { font-size: 13px; font-weight: 500; }
+  .pc-cost { font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); }
+  .pc-count { font-size: 28px; font-weight: 600; letter-spacing: -1px; line-height: 1; margin-bottom: 2px; }
+  .pc-unit { font-size: 12px; color: var(--text3); }
+  .pc-footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; }
+  .pc-meta { font-size: 11px; color: var(--text3); }
+  .pc-meta span { color: var(--text2); font-weight: 500; }
+
+  /* ── LOT DETAIL PANEL ── */
+  .lot-panel {
+    display: none;
+    position: fixed; right: 0; top: 0; bottom: 0;
+    width: 380px; background: var(--surface);
+    border-left: 1px solid var(--border);
+    z-index: 20; flex-direction: column;
+    box-shadow: -4px 0 20px rgba(0,0,0,0.08);
+    animation: slideIn 0.2s ease;
+  }
+  .lot-panel.open { display: flex; }
+  @keyframes slideIn { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  .panel-head { padding: 18px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: flex-start; justify-content: space-between; }
+  .panel-close { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 13px; color: var(--text2); }
+  .panel-body { flex: 1; overflow-y: auto; }
+  .panel-section { padding: 16px 20px; border-bottom: 1px solid var(--border); }
+  .panel-section-label { font-size: 10px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+  .panel-row { display: flex; justify-content: space-between; align-items: baseline; padding: 4px 0; font-size: 13px; }
+  .panel-row-label { color: var(--text2); }
+  .panel-row-value { font-weight: 500; font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+  .panel-footer { padding: 16px 20px; display: flex; gap: 8px; }
+  .panel-btn { flex: 1; padding: 9px; border-radius: var(--radius); font-size: 13px; font-family: 'IBM Plex Sans', sans-serif; cursor: pointer; font-weight: 500; transition: all 0.1s; }
+  .panel-btn-ghost { background: var(--surface); border: 1px solid var(--border); color: var(--text2); }
+  .panel-btn-ghost:hover { background: var(--surface2); }
+  .panel-btn-primary { background: var(--text); border: 1px solid var(--text); color: #fff; }
+  .panel-btn-primary:hover { background: #2d2b28; }
+
+  /* ── PHYSICAL COUNT MODAL ── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.3); z-index: 30;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--surface); border-radius: var(--radius-lg);
+    border: 1px solid var(--border); width: 500px;
+    max-height: 80vh; overflow-y: auto;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.12);
+    animation: fadeUp 0.2s ease;
+  }
+  .modal-head { padding: 18px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .modal-title { font-size: 15px; font-weight: 600; }
+  .modal-body { padding: 20px; }
+  .modal-footer { padding: 16px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; }
+  .form-group { margin-bottom: 14px; }
+  .form-label { font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 5px; display: block; }
+  .form-input { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; font-family: 'IBM Plex Sans', sans-serif; color: var(--text); outline: none; transition: border-color 0.15s; background: var(--surface); }
+  .form-input:focus { border-color: var(--text); }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .count-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .count-row:last-child { border-bottom: none; }
+  .count-name { flex: 1; font-size: 13px; font-weight: 500; }
+  .count-system { font-size: 12px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); min-width: 80px; }
+  .count-input { width: 100px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; font-family: 'IBM Plex Mono', monospace; text-align: right; outline: none; }
+  .count-input:focus { border-color: var(--text); }
+  .count-diff { min-width: 70px; text-align: right; font-size: 12px; font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
+
+  /* ── ADJUSTMENT HISTORY ── */
+  .adj-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 18px; border-bottom: 1px solid var(--border); }
+  .adj-row:last-child { border-bottom: none; }
+  .adj-icon { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
+  .adj-body { flex: 1; font-size: 13px; }
+  .adj-body strong { font-weight: 500; }
+  .adj-meta { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-top: 2px; }
+  .adj-diff { font-size: 13px; font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark"><i class="ti ti-flame"></i></div>
+    <div><div class="logo-text">Ember</div><div class="logo-sub">charcoal system</div></div>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Overview</div>
+    <a class="nav-item" href="dashboard.html"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
+    <a class="nav-item" href="reports.html"><i class="ti ti-chart-bar"></i> Reports</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Stock</div>
+    <a class="nav-item" href="containers.html"><i class="ti ti-ship"></i> Containers</a>
+    <a class="nav-item active" href="warehouse.html"><i class="ti ti-building-warehouse"></i> Warehouse</a>
+    <a class="nav-item" href="packing.html"><i class="ti ti-tools"></i> Packing</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Sales</div>
+    <a class="nav-item" href="clients.html"><i class="ti ti-users"></i> Clients <span class="nav-badge amber">3</span></a>
+    <a class="nav-item" href="orders.html"><i class="ti ti-file-invoice"></i> Orders</a>
+    <a class="nav-item" href="driver-mobile.html"><i class="ti ti-truck"></i> Delivery <span class="nav-badge">2</span></a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Finance</div>
+    <a class="nav-item" href="balances.html"><i class="ti ti-credit-card"></i> Balances <span class="nav-badge amber"><a class="nav-item" href="invoices.html"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-cash"></i> Payments</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item" href="suppliers.html"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item" href="settings.html"><i class="ti ti-settings"></i> Settings</a>
+    <a class="nav-item" href="fill-clients.html"><i class="ti ti-stack-2"></i> Fill clients</a>6k</span></a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-cash"></i> Payments</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item" href="suppliers.html"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item" href="settings.html"><i class="ti ti-settings"></i> Settings</a>
+    <a class="nav-item" href="fill-clients.html"><i class="ti ti-stack-2"></i> Fill clients</a>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="user-row">
+      <div class="avatar">KA</div>
+      <div><div class="user-name">Khalil Abi Nader</div><div class="user-role">owner</div></div>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="page-title">Warehouse</span>
+    </div>
+    <div class="topbar-right">
+      <button class="topbar-btn danger" onclick="openCountModal()"><i class="ti ti-clipboard-check" style="font-size:15px"></i> Physical count</button>
+      <button class="topbar-btn"><i class="ti ti-plus" style="font-size:15px"></i> Add stock directly</button>
+      <button class="topbar-btn primary"><i class="ti ti-tools" style="font-size:15px"></i> New packing session</button>
+    </div>
+  </header>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('raw', this)">
+      <i class="ti ti-stack-2" style="font-size:15px"></i> Raw lots
+      <span class="tab-count">8</span>
+    </div>
+    <div class="tab" onclick="showTab('packed', this)">
+      <i class="ti ti-box" style="font-size:15px"></i> Packed goods
+      <span class="tab-count">5</span>
+    </div>
+    <div class="tab" onclick="showTab('adjustments', this)">
+      <i class="ti ti-adjustments" style="font-size:15px"></i> Adjustments
+      <span class="tab-count">12</span>
+    </div>
+  </div>
+
+  <!-- CONTENT -->
+  <div class="content">
+
+    <!-- SUMMARY BAR -->
+    <div class="summary-bar">
+      <div class="sum-cell">
+        <div class="sum-label">total raw stock</div>
+        <div class="sum-value">38,344 <span style="font-size:13px;font-weight:400;color:var(--text3)">kg</span></div>
+        <div class="sum-sub">across 8 open lots</div>
+      </div>
+      <div class="sum-cell">
+        <div class="sum-label">total packed</div>
+        <div class="sum-value">9,976 <span style="font-size:13px;font-weight:400;color:var(--text3)">kg</span></div>
+        <div class="sum-sub">2,765 bags ready</div>
+      </div>
+      <div class="sum-cell">
+        <div class="sum-label">system total</div>
+        <div class="sum-value" style="color:var(--accent)">48,320 <span style="font-size:13px;font-weight:400;color:var(--text3)">kg</span></div>
+        <div class="sum-sub">raw + packed combined</div>
+      </div>
+      <div class="sum-cell">
+        <div class="sum-label">warehouse value</div>
+        <div class="sum-value">$41,240</div>
+        <div class="sum-sub">at cost price</div>
+      </div>
+      <div class="sum-cell">
+        <div class="sum-label">last physical count</div>
+        <div class="sum-value" style="font-size:15px;margin-top:2px">14 May 2026</div>
+        <div class="sum-sub" style="color:var(--accent2)">7 days ago</div>
+      </div>
+    </div>
+
+    <!-- RAW LOTS TAB -->
+    <div id="tab-raw">
+      <div class="filters">
+        <div class="filter-input">
+          <i class="ti ti-search"></i>
+          <input type="text" placeholder="Search by type, grade, supplier…">
+        </div>
+        <select class="filter-select">
+          <option>All types</option>
+          <option>BBQ Hardwood</option>
+          <option>Shisha</option>
+          <option>Restaurant Grade</option>
+        </select>
+        <select class="filter-select">
+          <option>All grades</option>
+          <option>Grade A</option>
+          <option>Grade B</option>
+          <option>Grade C</option>
+        </select>
+        <select class="filter-select">
+          <option>All suppliers</option>
+          <option>Al-Amin Trading</option>
+          <option>Sahara Export</option>
+        </select>
+        <div class="filter-sep"></div>
+        <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">8 lots</span>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-stack-2"></i> Raw stock lots — Zone 1</div>
+          <div style="display:flex;gap:6px">
+            <button class="card-action">Export</button>
+          </div>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Lot</th>
+              <th>Type / grade</th>
+              <th>Supplier</th>
+              <th>Received</th>
+              <th>Remaining</th>
+              <th>Fill level</th>
+              <th>Cost / kg</th>
+              <th>Value</th>
+              <th>Source</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr onclick="openLotPanel()">
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">LOT-0041</span></td>
+              <td>
+                <div style="font-weight:500">BBQ Hardwood</div>
+                <div style="font-size:11px;color:var(--text3)">Grade A</div>
+              </td>
+              <td style="color:var(--text2)">Al-Amin Trading</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text2)">15,900 kg</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">12,400 kg</td>
+              <td>
+                <div class="bar-wrap">
+                  <div class="bar-track"><div class="bar-fill bar-high" style="width:78%"></div></div>
+                  <span class="bar-pct">78%</span>
+                </div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace">$0.740</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$9,176</td>
+              <td><span class="badge badge-blue">Container</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+            <tr onclick="openLotPanel()">
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">LOT-0042</span></td>
+              <td>
+                <div style="font-weight:500">Shisha</div>
+                <div style="font-size:11px;color:var(--text3)">Grade B</div>
+              </td>
+              <td style="color:var(--text2)">Al-Amin Trading</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text2)">14,980 kg</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">8,980 kg</td>
+              <td>
+                <div class="bar-wrap">
+                  <div class="bar-track"><div class="bar-fill bar-mid" style="width:60%"></div></div>
+                  <span class="bar-pct">60%</span>
+                </div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace">$0.890</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$7,992</td>
+              <td><span class="badge badge-blue">Container</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+            <tr onclick="openLotPanel()">
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">LOT-0043</span></td>
+              <td>
+                <div style="font-weight:500">Restaurant Grade</div>
+                <div style="font-size:11px;color:var(--text3)">Grade A</div>
+              </td>
+              <td style="color:var(--text2)">Sahara Export</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text2)">14,400 kg</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">3,200 kg</td>
+              <td>
+                <div class="bar-wrap">
+                  <div class="bar-track"><div class="bar-fill bar-low" style="width:22%"></div></div>
+                  <span class="bar-pct" style="color:var(--red)">22%</span>
+                </div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace">$0.910</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$2,912</td>
+              <td><span class="badge badge-blue">Container</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+            <tr onclick="openLotPanel()">
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">LOT-0044</span></td>
+              <td>
+                <div style="font-weight:500">BBQ Hardwood</div>
+                <div style="font-size:11px;color:var(--text3)">Grade B</div>
+              </td>
+              <td style="color:var(--text2)">Sahara Export</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text2)">14,500 kg</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">9,740 kg</td>
+              <td>
+                <div class="bar-wrap">
+                  <div class="bar-track"><div class="bar-fill bar-high" style="width:67%"></div></div>
+                  <span class="bar-pct">67%</span>
+                </div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace">$0.710</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$6,915</td>
+              <td><span class="badge badge-blue">Container</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+            <tr onclick="openLotPanel()">
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">LOT-0039</span></td>
+              <td>
+                <div style="font-weight:500">Shisha</div>
+                <div style="font-size:11px;color:var(--text3)">Grade A</div>
+              </td>
+              <td style="color:var(--text2)">Al-Amin Trading</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text2)">5,000 kg</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">4,024 kg</td>
+              <td>
+                <div class="bar-wrap">
+                  <div class="bar-track"><div class="bar-fill bar-mid" style="width:80%"></div></div>
+                  <span class="bar-pct">80%</span>
+                </div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace">$0.860</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$3,461</td>
+              <td><span class="badge badge-gray">Direct</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+          </tbody>
+        </table>
+        <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--surface2)">
+          <span style="font-size:12px;color:var(--text3)">Showing 5 of 8 lots</span>
+          <button class="card-action">Show all 8 lots</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PACKED GOODS TAB -->
+    <div id="tab-packed" style="display:none">
+      <div class="packed-grid">
+        <div class="packed-card" style="animation-delay:0.1s">
+          <div class="pc-header">
+            <span class="pc-size">1.9 kg bag</span>
+            <span class="pc-cost">$0.04 / bag</span>
+          </div>
+          <div class="pc-count">840</div>
+          <div class="pc-unit">bags in stock</div>
+          <div class="bar-track" style="margin-top:10px"><div class="bar-fill bar-high" style="width:68%"></div></div>
+          <div class="pc-footer">
+            <div class="pc-meta">Nominal kg <span>1,596 kg</span></div>
+            <div class="pc-meta">Value <span>$1,181</span></div>
+          </div>
+        </div>
+
+        <div class="packed-card" style="animation-delay:0.15s">
+          <div class="pc-header">
+            <span class="pc-size">2 kg bag</span>
+            <span class="pc-cost">$0.04 / bag</span>
+          </div>
+          <div class="pc-count">1,240</div>
+          <div class="pc-unit">bags in stock</div>
+          <div class="bar-track" style="margin-top:10px"><div class="bar-fill bar-high" style="width:82%"></div></div>
+          <div class="pc-footer">
+            <div class="pc-meta">Nominal kg <span>2,480 kg</span></div>
+            <div class="pc-meta">Value <span>$1,840</span></div>
+          </div>
+        </div>
+
+        <div class="packed-card" style="animation-delay:0.2s">
+          <div class="pc-header">
+            <span class="pc-size">5 kg bag</span>
+            <span class="pc-cost">$0.07 / bag</span>
+          </div>
+          <div class="pc-count">380</div>
+          <div class="pc-unit">bags in stock</div>
+          <div class="bar-track" style="margin-top:10px"><div class="bar-fill bar-mid" style="width:42%"></div></div>
+          <div class="pc-footer">
+            <div class="pc-meta">Nominal kg <span>1,900 kg</span></div>
+            <div class="pc-meta">Value <span>$1,710</span></div>
+          </div>
+        </div>
+
+        <div class="packed-card" style="animation-delay:0.25s">
+          <div class="pc-header">
+            <span class="pc-size">10 kg bag</span>
+            <span class="pc-cost">$0.10 / bag</span>
+          </div>
+          <div class="pc-count">210</div>
+          <div class="pc-unit">bags in stock</div>
+          <div class="bar-track" style="margin-top:10px"><div class="bar-fill bar-mid" style="width:35%"></div></div>
+          <div class="pc-footer">
+            <div class="pc-meta">Nominal kg <span>2,100 kg</span></div>
+            <div class="pc-meta">Value <span>$1,890</span></div>
+          </div>
+        </div>
+
+        <div class="packed-card" style="animation-delay:0.3s">
+          <div class="pc-header">
+            <span class="pc-size">20 kg bag</span>
+            <span class="pc-cost">$0.15 / bag</span>
+          </div>
+          <div class="pc-count">95</div>
+          <div class="pc-unit">bags in stock</div>
+          <div class="bar-track" style="margin-top:10px"><div class="bar-fill bar-low" style="width:19%"></div></div>
+          <div class="pc-footer">
+            <div class="pc-meta">Nominal kg <span>1,900 kg</span></div>
+            <div class="pc-meta">Value <span>$1,710</span></div>
+          </div>
+        </div>
+
+        <div class="packed-card" style="animation-delay:0.35s;background:var(--surface2);border-color:var(--border2)">
+          <div class="pc-header">
+            <span class="pc-size" style="color:var(--text2)">All types</span>
+          </div>
+          <div class="pc-count" style="color:var(--accent)">2,765</div>
+          <div class="pc-unit">total bags</div>
+          <div style="height:20px"></div>
+          <div class="pc-footer">
+            <div class="pc-meta">Total kg <span>9,976 kg</span></div>
+            <div class="pc-meta">Total value <span>$8,331</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Packed stock detail table -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-list"></i> Packed stock — by source lot</div>
+          <button class="card-action">Export</button>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Bag type</th>
+              <th>Source lot</th>
+              <th>Charcoal type</th>
+              <th>Qty</th>
+              <th>Nominal kg</th>
+              <th>Session</th>
+              <th>Packed on</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-weight:500">2 kg bag</span></td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">LOT-0041</span></td>
+              <td>BBQ Hardwood · Grade A</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">640</td>
+              <td style="font-family:'IBM Plex Mono',monospace">1,280 kg</td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">#PS-0841</span></td>
+              <td style="color:var(--text2)">Today</td>
+              <td><span class="badge badge-green">Available</span></td>
+            </tr>
+            <tr>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-weight:500">2 kg bag</span></td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">LOT-0044</span></td>
+              <td>BBQ Hardwood · Grade B</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">600</td>
+              <td style="font-family:'IBM Plex Mono',monospace">1,200 kg</td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">#PS-0838</span></td>
+              <td style="color:var(--text2)">19 May</td>
+              <td><span class="badge badge-green">Available</span></td>
+            </tr>
+            <tr>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-weight:500">5 kg bag</span></td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">LOT-0042</span></td>
+              <td>Shisha · Grade B</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">380</td>
+              <td style="font-family:'IBM Plex Mono',monospace">1,900 kg</td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">#PS-0836</span></td>
+              <td style="color:var(--text2)">18 May</td>
+              <td><span class="badge badge-green">Available</span></td>
+            </tr>
+            <tr>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-weight:500">10 kg bag</span></td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">LOT-0043</span></td>
+              <td>Restaurant Grade · A</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">210</td>
+              <td style="font-family:'IBM Plex Mono',monospace">2,100 kg</td>
+              <td><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">#PS-0834</span></td>
+              <td style="color:var(--text2)">17 May</td>
+              <td><span class="badge badge-amber">Partial reserve</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ADJUSTMENTS TAB -->
+    <div id="tab-adjustments" style="display:none">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-adjustments"></i> Stock adjustments — physical count history</div>
+          <button class="card-action">Export</button>
+        </div>
+        <div class="adj-row">
+          <div class="adj-icon" style="background:var(--red-bg)"><i class="ti ti-minus" style="color:var(--red)"></i></div>
+          <div class="adj-body">
+            <strong>LOT-0041 — BBQ Hardwood Grade A</strong> adjusted after physical count
+            <div class="adj-meta">14 May 2026 · Counted by: Khalil · Approved by: Khalil · Reason: dust loss over 3 weeks</div>
+          </div>
+          <div class="adj-diff" style="color:var(--red)">−240 kg</div>
+        </div>
+        <div class="adj-row">
+          <div class="adj-icon" style="background:var(--red-bg)"><i class="ti ti-minus" style="color:var(--red)"></i></div>
+          <div class="adj-body">
+            <strong>Packed stock — 2kg bags</strong> adjusted after physical count
+            <div class="adj-meta">14 May 2026 · Counted by: Khalil · Approved by: Khalil · Reason: bags damaged during storage</div>
+          </div>
+          <div class="adj-diff" style="color:var(--red)">−18 bags</div>
+        </div>
+        <div class="adj-row">
+          <div class="adj-icon" style="background:var(--accent-bg)"><i class="ti ti-plus" style="color:var(--accent)"></i></div>
+          <div class="adj-body">
+            <strong>LOT-0039 — Shisha Grade A</strong> adjusted after physical count
+            <div class="adj-meta">1 May 2026 · Counted by: Khalil · Approved by: Khalil · Reason: scale calibration error on arrival</div>
+          </div>
+          <div class="adj-diff" style="color:var(--accent)">+120 kg</div>
+        </div>
+        <div class="adj-row">
+          <div class="adj-icon" style="background:var(--red-bg)"><i class="ti ti-minus" style="color:var(--red)"></i></div>
+          <div class="adj-body">
+            <strong>LOT-0037 — BBQ Hardwood Grade B</strong> adjusted after physical count
+            <div class="adj-meta">22 Apr 2026 · Counted by: Khalil · Approved by: Khalil · Reason: moisture loss</div>
+          </div>
+          <div class="adj-diff" style="color:var(--red)">−180 kg</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- LOT DETAIL PANEL -->
+<div class="lot-panel" id="lotPanel">
+  <div class="panel-head">
+    <div>
+      <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);margin-bottom:4px">LOT-0041</div>
+      <div style="font-size:16px;font-weight:600">BBQ Hardwood · Grade A</div>
+      <div style="font-size:12px;color:var(--text2);margin-top:2px">Al-Amin Trading · Container CONT-2026-014</div>
+    </div>
+    <button class="panel-close" onclick="closeLotPanel()">✕ Close</button>
+  </div>
+  <div class="panel-body">
+    <div class="panel-section">
+      <div class="panel-section-label">Stock levels</div>
+      <div class="panel-row"><span class="panel-row-label">Received</span><span class="panel-row-value">15,900 kg</span></div>
+      <div class="panel-row"><span class="panel-row-label">Consumed (sessions)</span><span class="panel-row-value" style="color:var(--red)">−3,260 kg</span></div>
+      <div class="panel-row"><span class="panel-row-label">Adjustments</span><span class="panel-row-value" style="color:var(--red)">−240 kg</span></div>
+      <div class="panel-row" style="border-top:1px solid var(--border);padding-top:6px;margin-top:4px">
+        <span class="panel-row-label" style="font-weight:500">Remaining</span>
+        <span class="panel-row-value" style="font-size:14px;color:var(--accent)">12,400 kg</span>
+      </div>
+      <div style="margin-top:10px">
+        <div class="bar-track" style="height:8px"><div class="bar-fill bar-high" style="width:78%"></div></div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3)">
+          <span>0 kg</span><span>78% remaining</span><span>15,900 kg</span>
+        </div>
+      </div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-label">Cost</div>
+      <div class="panel-row"><span class="panel-row-label">Cost per kg</span><span class="panel-row-value">$0.740</span></div>
+      <div class="panel-row"><span class="panel-row-label">Lot value (remaining)</span><span class="panel-row-value">$9,176</span></div>
+      <div class="panel-row"><span class="panel-row-label">Source</span><span class="panel-row-value">Container · CONT-2026-014</span></div>
+      <div class="panel-row"><span class="panel-row-label">Date received</span><span class="panel-row-value">19 May 2026</span></div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-label">Packing sessions (this lot)</div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px">
+        <span style="color:var(--text2)">#PS-0841 · Today</span>
+        <span style="font-family:'IBM Plex Mono',monospace">480 kg consumed</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px">
+        <span style="color:var(--text2)">#PS-0838 · 19 May</span>
+        <span style="font-family:'IBM Plex Mono',monospace">1,200 kg consumed</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px">
+        <span style="color:var(--text2)">#PS-0835 · 17 May</span>
+        <span style="font-family:'IBM Plex Mono',monospace">1,580 kg consumed</span>
+      </div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-label">Variance summary</div>
+      <div class="panel-row"><span class="panel-row-label">Total variance</span><span class="panel-row-value" style="color:var(--accent2)">−84 kg</span></div>
+      <div class="panel-row"><span class="panel-row-label">Variance cost</span><span class="panel-row-value" style="color:var(--accent2)">$62.16</span></div>
+      <div class="panel-row"><span class="panel-row-label">Avg variance / session</span><span class="panel-row-value">−28 kg</span></div>
+    </div>
+  </div>
+  <div class="panel-footer">
+    <button class="panel-btn panel-btn-ghost">View sessions</button>
+    <button class="panel-btn panel-btn-primary"><i class="ti ti-tools" style="font-size:13px"></i> New session</button>
+  </div>
+</div>
+
+<!-- PHYSICAL COUNT MODAL -->
+<div class="modal-overlay" id="countModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Physical stock count</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px">Enter counted quantities — differences will be flagged for approval</div>
+      </div>
+      <button class="panel-close" onclick="closeCountModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">Raw lots</div>
+      <div class="count-row">
+        <div class="count-name">BBQ Hardwood · A<div style="font-size:11px;color:var(--text3)">LOT-0041 · Al-Amin</div></div>
+        <div class="count-system">System: 12,400 kg</div>
+        <input class="count-input" type="number" placeholder="0" oninput="calcDiff(this, 12400)">
+        <div class="count-diff" id="diff-0">—</div>
+      </div>
+      <div class="count-row">
+        <div class="count-name">Shisha · Grade B<div style="font-size:11px;color:var(--text3)">LOT-0042 · Al-Amin</div></div>
+        <div class="count-system">System: 8,980 kg</div>
+        <input class="count-input" type="number" placeholder="0" oninput="calcDiff(this, 8980)">
+        <div class="count-diff" id="diff-1">—</div>
+      </div>
+      <div class="count-row">
+        <div class="count-name">Restaurant Grade · A<div style="font-size:11px;color:var(--text3)">LOT-0043 · Sahara</div></div>
+        <div class="count-system">System: 3,200 kg</div>
+        <input class="count-input" type="number" placeholder="0" oninput="calcDiff(this, 3200)">
+        <div class="count-diff" id="diff-2">—</div>
+      </div>
+      <div style="font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin:18px 0 12px">Packed goods</div>
+      <div class="count-row">
+        <div class="count-name">2 kg bags<div style="font-size:11px;color:var(--text3)">Zone 2 · packed</div></div>
+        <div class="count-system">System: 1,240 bags</div>
+        <input class="count-input" type="number" placeholder="0" oninput="calcDiff(this, 1240)">
+        <div class="count-diff" id="diff-3">—</div>
+      </div>
+      <div class="count-row">
+        <div class="count-name">5 kg bags<div style="font-size:11px;color:var(--text3)">Zone 2 · packed</div></div>
+        <div class="count-system">System: 380 bags</div>
+        <input class="count-input" type="number" placeholder="0" oninput="calcDiff(this, 380)">
+        <div class="count-diff" id="diff-4">—</div>
+      </div>
+      <div class="form-group" style="margin-top:18px">
+        <label class="form-label">Reason / notes (required if any difference found)</label>
+        <input class="form-input" type="text" placeholder="e.g. dust loss, damaged bags, scale error…">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="topbar-btn" onclick="closeCountModal()">Cancel</button>
+      <button class="topbar-btn primary">Submit count for approval</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let diffIndex = 0;
+
+  function showTab(name, el) {
+    ['raw','packed','adjustments'].forEach(t => {
+      document.getElementById('tab-'+t).style.display = t === name ? 'block' : 'none';
+    });
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  function openLotPanel() {
+    document.getElementById('lotPanel').classList.add('open');
+  }
+
+  function closeLotPanel() {
+    document.getElementById('lotPanel').classList.remove('open');
+  }
+
+  function openCountModal() {
+    document.getElementById('countModal').classList.add('open');
+  }
+
+  function closeCountModal() {
+    document.getElementById('countModal').classList.remove('open');
+  }
+
+  function calcDiff(input, systemQty) {
+    const counted = parseFloat(input.value);
+    const idx = Array.from(document.querySelectorAll('.count-input')).indexOf(input);
+    const diffEl = document.getElementById('diff-' + idx);
+    if (isNaN(counted) || input.value === '') {
+      diffEl.textContent = '—';
+      diffEl.style.color = 'var(--text3)';
+      return;
+    }
+    const diff = counted - systemQty;
+    if (diff === 0) {
+      diffEl.textContent = '✓';
+      diffEl.style.color = 'var(--accent)';
+    } else if (diff < 0) {
+      diffEl.textContent = diff.toLocaleString();
+      diffEl.style.color = 'var(--red)';
+    } else {
+      diffEl.textContent = '+' + diff.toLocaleString();
+      diffEl.style.color = 'var(--accent2)';
+    }
+  }
+
+  // Close panel on overlay click
+  document.getElementById('countModal').addEventListener('click', function(e) {
+    if (e.target === this) closeCountModal();
+  });
+</script>
+</body>
+</html>

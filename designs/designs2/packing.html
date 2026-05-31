@@ -1,0 +1,1301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Packing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  /* ─── Compose card ──────────────────────────────────────────────── */
+  .compose {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 22px;
+  }
+  .compose-head {
+    background: var(--text); color: #fff;
+    padding: 14px 20px;
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  }
+  .compose-head h2 {
+    font-size: 15px; font-weight: 600; letter-spacing: -0.2px;
+    display: flex; align-items: center; gap: 9px;
+  }
+  .compose-head h2 small {
+    font-size: 11px; color: rgba(255,255,255,0.55);
+    font-family: 'IBM Plex Mono', monospace;
+    margin-left: 6px; font-weight: 400; letter-spacing: 0.4px;
+  }
+  .stamp {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 100px;
+    letter-spacing: 0.4px;
+  }
+
+  /* ── Compose sections ──────────────────────────────────────── */
+  .compose-section {
+    border-bottom: 1px solid var(--border);
+    padding: 16px 20px 14px;
+  }
+  .compose-section:last-of-type { border-bottom: none; }
+  .section-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .section-head .stitle {
+    font-size: 12px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text2); text-transform: uppercase; letter-spacing: 0.8px;
+    font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .section-head .stitle .step {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--text); color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600;
+  }
+  .section-head .ssub {
+    font-size: 11px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  /* row-based compose: each row = type dropdown + quantity (or kg) */
+  .compose-rows {
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .compose-row {
+    display: grid;
+    grid-template-columns: 32px 1.5fr 1fr 130px 36px;
+    gap: 10px; align-items: end;
+  }
+  .row-index {
+    height: 44px; display: flex; align-items: center; justify-content: center;
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+    color: var(--text3); background: var(--surface2);
+    border-radius: var(--radius); border: 1px solid var(--border);
+    font-weight: 500;
+  }
+  .row-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .row-field .lbl {
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .compose-row:not(:first-child) .lbl { display: none; }
+
+  .row-select, .row-qty {
+    height: 44px; width: 100%;
+    border: 1.5px solid var(--border); border-radius: var(--radius);
+    background: var(--surface); color: var(--text);
+    font-family: 'IBM Plex Sans', sans-serif; font-size: 14px;
+    padding: 0 12px; outline: none;
+    transition: border-color 0.1s, box-shadow 0.1s;
+  }
+  .row-select:focus, .row-qty:focus {
+    border-color: var(--text); box-shadow: 0 0 0 3px rgba(26,25,22,0.06);
+  }
+  .row-select {
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='none' stroke='%239B9890' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5l5 5 5-5'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 32px;
+  }
+  .row-qty {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+    font-size: 18px; text-align: right;
+    padding-right: 44px;
+  }
+  .qty-shell { position: relative; }
+  .qty-shell .unit {
+    position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+    font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace;
+    pointer-events: none;
+  }
+  .row-qty::-webkit-outer-spin-button,
+  .row-qty::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .row-qty[type=number] { -moz-appearance: textfield; }
+
+  .row-out {
+    height: 44px; display: flex; flex-direction: column;
+    justify-content: center; align-items: flex-end;
+    padding: 0 12px;
+    background: var(--accent-bg); border-radius: var(--radius);
+    border: 1px solid #c7e7d4;
+  }
+  .row-out .o-lbl {
+    font-size: 9.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--accent); text-transform: uppercase; letter-spacing: 0.6px;
+    opacity: 0.7;
+  }
+  .row-out .o-val {
+    font-family: 'IBM Plex Mono', monospace; font-size: 15px;
+    font-weight: 600; color: var(--accent); letter-spacing: -0.3px;
+  }
+  .row-out.zero { background: var(--surface2); border-color: var(--border); }
+  .row-out.zero .o-lbl, .row-out.zero .o-val { color: var(--text3); opacity: 1; }
+
+  .row-remove {
+    height: 44px; width: 36px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface); color: var(--text3);
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    transition: all 0.1s;
+  }
+  .row-remove:hover { background: var(--red-bg); color: var(--red); border-color: #f5c8c4; }
+  .row-remove:disabled { opacity: 0.3; cursor: not-allowed; background: var(--surface); color: var(--text3); }
+
+  /* expand button */
+  .compose-expand {
+    margin-top: 10px;
+  }
+  .btn-expand {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 14px; background: transparent;
+    border: 1.5px dashed var(--border2); border-radius: var(--radius);
+    color: var(--text2); font-size: 13px; font-weight: 500;
+    font-family: 'IBM Plex Sans', sans-serif; cursor: pointer;
+    transition: all 0.1s;
+  }
+  .btn-expand:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+  .btn-expand:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-expand .max-hint {
+    font-size: 11px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace; margin-left: 4px;
+  }
+
+  /* ── Waste bar ─────────────────────────────────────────────── */
+  .waste-bar {
+    background: #FAFAF8;
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0;
+    position: relative;
+  }
+  .waste-cell {
+    padding: 0 18px;
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .waste-cell:first-child { padding-left: 0; }
+  .waste-cell:last-child { border-right: none; padding-right: 0; }
+  .waste-cell .wlbl {
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .waste-cell .wval {
+    font-family: 'IBM Plex Mono', monospace; font-size: 22px;
+    font-weight: 600; letter-spacing: -0.5px; color: var(--text); line-height: 1.2;
+  }
+  .waste-cell .wsub {
+    font-size: 11px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .waste-cell.in .wval { color: var(--text); }
+  .waste-cell.out .wval { color: var(--accent); }
+  .waste-cell.waste .wval { color: var(--accent2); }
+  .waste-cell.waste.bad .wval { color: var(--red); }
+  .waste-cell.waste.neutral .wval { color: var(--text3); }
+  .waste-pct {
+    font-size: 11px; color: var(--accent2); font-weight: 600;
+    background: var(--accent2-bg); padding: 1px 7px; border-radius: 100px;
+    font-family: 'IBM Plex Mono', monospace;
+    display: inline-block; margin-top: 3px;
+  }
+  .waste-cell.waste.bad .waste-pct { color: var(--red); background: var(--red-bg); }
+
+  /* footer of compose */
+  .compose-foot {
+    padding: 14px 20px; background: var(--surface2);
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  }
+  .compose-summary {
+    display: flex; align-items: baseline; gap: 22px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .compose-summary .v {
+    display: block; font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 22px; font-weight: 600; color: var(--text);
+    letter-spacing: -0.5px; text-transform: none; margin-top: 2px;
+  }
+  .compose-summary .v.green { color: var(--accent); }
+
+  .compose-actions { display: flex; gap: 8px; }
+  .btn-add {
+    padding: 12px 22px; background: var(--accent); color: #fff;
+    border: none; border-radius: var(--radius);
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    font-family: 'IBM Plex Sans', sans-serif;
+    display: inline-flex; align-items: center; gap: 7px;
+    transition: background 0.1s;
+  }
+  .btn-add:hover { background: #155237; }
+  .btn-add:disabled {
+    background: var(--border); color: var(--text3); cursor: not-allowed;
+  }
+  .btn-clear {
+    padding: 12px 16px; background: transparent; color: var(--text2);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 13px; cursor: pointer;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .btn-clear:hover { background: var(--surface); color: var(--text); }
+
+  /* toast */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: #fff;
+    padding: 11px 18px; border-radius: var(--radius);
+    font-size: 13px; display: flex; align-items: center; gap: 8px;
+    opacity: 0; pointer-events: none; transition: all 0.25s;
+    z-index: 100; box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast i { color: #6ee7b7; }
+
+  /* ─── Today's table ─────────────────────────────────────────────── */
+  .today-head {
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .today-head h3 {
+    font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px;
+  }
+  .today-head h3 .day {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+    color: var(--text3); font-weight: 400; margin-left: 4px;
+    text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .today-foot {
+    display: grid; grid-template-columns: repeat(5, 1fr) auto;
+    border-top: 1px solid var(--border); background: var(--surface2);
+  }
+  .today-foot .cell {
+    padding: 12px 14px; border-right: 1px solid var(--border);
+  }
+  .today-foot .cell:last-child { border-right: none; }
+  .today-foot .cell .lbl {
+    font-size: 10px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .today-foot .cell .v {
+    font-family: 'IBM Plex Mono', monospace; font-size: 18px;
+    font-weight: 600; color: var(--text); margin-top: 3px;
+  }
+  .today-foot .cell.total .v { color: var(--accent); }
+
+  /* mini chips inside today rows */
+  .qty-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .qty-chip {
+    display: inline-flex; align-items: baseline; gap: 4px;
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 3px 9px; background: var(--surface);
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+  }
+  .qty-chip .q { font-weight: 600; color: var(--text); }
+  .qty-chip .t { color: var(--text3); font-size: 10.5px; }
+
+  /* ─── History view button row ───────────────────────────────────── */
+  .view-history-row {
+    margin-top: 22px; display: flex; justify-content: center;
+  }
+  .btn-history {
+    padding: 13px 22px; background: var(--text); color: #fff;
+    border: none; border-radius: var(--radius);
+    font-size: 14px; font-weight: 500; cursor: pointer;
+    font-family: 'IBM Plex Sans', sans-serif;
+    display: inline-flex; align-items: center; gap: 9px;
+    transition: background 0.1s;
+  }
+  .btn-history:hover { background: #2d2b28; }
+  .btn-history .count {
+    background: rgba(255,255,255,0.12);
+    padding: 2px 8px; border-radius: 100px;
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+  }
+
+  /* ─── History view ──────────────────────────────────────────────── */
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .view-header {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 18px;
+  }
+  .back-btn {
+    width: 36px; height: 36px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface);
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; color: var(--text2);
+  }
+  .back-btn:hover { background: var(--surface2); color: var(--text); }
+  .view-header h1 {
+    font-size: 22px; font-weight: 600; letter-spacing: -0.5px;
+  }
+  .view-header .sub {
+    display: block; font-size: 12px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace; margin-top: 2px;
+    font-weight: 400; letter-spacing: 0.3px;
+  }
+
+  /* day list */
+  .day-row {
+    display: grid; grid-template-columns: 60px 1fr auto auto 24px;
+    gap: 18px; align-items: center;
+    padding: 14px 20px; cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+  }
+  .day-row:last-child { border-bottom: none; }
+  .day-row:hover { background: #FAFAF8; }
+  .day-row .dnum {
+    font-family: 'IBM Plex Mono', monospace; font-size: 22px;
+    font-weight: 600; color: var(--text); letter-spacing: -0.5px;
+  }
+  .day-row .dlabel { font-size: 14px; font-weight: 500; }
+  .day-row .dlabel small {
+    display: block; font-size: 11px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace; margin-top: 2px;
+    font-weight: 400; letter-spacing: 0.3px;
+  }
+  .day-row .dqty {
+    font-family: 'IBM Plex Mono', monospace; font-size: 18px;
+    font-weight: 600; text-align: right;
+  }
+  .day-row .dqty small {
+    display: block; font-size: 10.5px; color: var(--text3);
+    font-weight: 400; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .day-row .dkg {
+    font-family: 'IBM Plex Mono', monospace; font-size: 16px;
+    font-weight: 500; color: var(--accent); text-align: right;
+  }
+  .day-row .dkg small {
+    display: block; font-size: 10.5px; color: var(--text3);
+    font-weight: 400; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .day-row .chev { color: var(--text3); }
+  .day-row.empty-day { background: var(--accent2-bg); cursor: default; }
+  .day-row.empty-day .dnum { color: var(--accent2); }
+  .day-row.empty-day .dlabel { color: var(--accent2); }
+
+  /* month divider in history */
+  .month-bar {
+    padding: 12px 20px;
+    background: var(--text); color: #fff;
+    font-size: 11.5px; font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .month-bar .month-totals {
+    color: rgba(255,255,255,0.7); font-weight: 400; letter-spacing: 0.5px;
+  }
+  .month-bar .month-totals strong { color: #fff; font-weight: 600; }
+
+  /* ─── Day detail view ───────────────────────────────────────────── */
+  .detail-kpis {
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 22px;
+  }
+  .detail-kpis .cell {
+    padding: 18px 20px; border-right: 1px solid var(--border);
+  }
+  .detail-kpis .cell:last-child { border-right: none; }
+  .detail-kpis .lbl {
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px;
+  }
+  .detail-kpis .v {
+    font-size: 26px; font-weight: 600; letter-spacing: -0.6px;
+    margin-top: 4px; line-height: 1;
+  }
+  .detail-kpis .sub {
+    font-size: 11px; color: var(--text3); margin-top: 5px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .detail-kpis .cell.green .v { color: var(--accent); }
+
+  /* breakdown chart */
+  .breakdown-row {
+    display: grid; grid-template-columns: 110px 70px 1fr 90px;
+    gap: 14px; align-items: center;
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .breakdown-row:last-child { border-bottom: none; }
+  .breakdown-row .btype {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+    font-size: 14px;
+  }
+  .breakdown-row .btype small {
+    font-size: 10.5px; color: var(--text3); font-weight: 400;
+    margin-left: 4px;
+  }
+  .breakdown-row .bqty {
+    font-family: 'IBM Plex Mono', monospace; font-size: 22px;
+    font-weight: 600; text-align: right; letter-spacing: -0.5px;
+  }
+  .breakdown-row .bqty small {
+    font-size: 11px; color: var(--text3); font-weight: 400;
+    margin-left: 3px; font-family: 'IBM Plex Mono', monospace;
+  }
+  .breakdown-row .bbar {
+    height: 28px; background: var(--surface2); border-radius: 6px;
+    overflow: hidden; position: relative;
+  }
+  .breakdown-row .bbar .fill {
+    height: 100%; background: var(--accent); opacity: 0.85;
+    border-radius: 6px 0 0 6px;
+  }
+  .breakdown-row .bkg {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 500;
+    color: var(--accent); text-align: right; font-size: 14px;
+  }
+
+  /* entries timeline */
+  .entries-list .entry-row {
+    display: grid; grid-template-columns: 80px 1fr 100px 90px;
+    gap: 14px; align-items: center;
+    padding: 11px 20px; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .entries-list .entry-row:last-child { border-bottom: none; }
+  .entries-list .entry-row.head {
+    background: var(--surface2); padding: 8px 20px;
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .entries-list .entry-row .time {
+    font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text2);
+  }
+  .entries-list .entry-row .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .entries-list .entry-row .tot {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+    text-align: right; font-size: 14px;
+  }
+  .entries-list .entry-row .tot small {
+    font-size: 10.5px; color: var(--text3); font-weight: 400;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-left: 3px;
+  }
+  .entries-list .entry-row .kg {
+    font-family: 'IBM Plex Mono', monospace; color: var(--accent);
+    text-align: right; font-weight: 500;
+  }
+
+  .empty-state {
+    padding: 40px 20px; text-align: center; color: var(--text3);
+  }
+  .empty-state i {
+    font-size: 32px; color: var(--border2); margin-bottom: 8px; display: block;
+  }
+  .empty-state .t { font-size: 14px; color: var(--text2); margin-bottom: 4px; }
+  .empty-state .s { font-size: 12px; font-family: 'IBM Plex Mono', monospace; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="packing"></aside>
+
+<div class="main">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="page-title">Packing</span>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-sub" id="topSub">enter today's bags · by type</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn"><i class="ti ti-download" style="font-size:15px"></i> Export CSV</button>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- ════════════════════ VIEW 1 · TODAY ════════════════════ -->
+    <div class="view active" id="viewToday">
+
+      <!-- COMPOSE ENTRY -->
+      <div class="compose">
+        <div class="compose-head">
+          <h2>
+            <i class="ti ti-package" style="font-size:18px"></i>
+            Add packing entry
+            <small>pick the bag · list the charcoal lots used · we'll compute the waste</small>
+          </h2>
+          <span class="stamp" id="nowStamp">Thu 22 May · 14:42</span>
+        </div>
+
+        <!-- Step 1 · Bag produced -->
+        <div class="compose-section">
+          <div class="section-head">
+            <span class="stitle"><span class="step">1</span> Bag produced</span>
+            <span class="ssub">what came out of packing</span>
+          </div>
+          <div class="compose-row" style="grid-template-columns:32px 1.5fr 1fr 130px 36px">
+            <div class="row-index">B</div>
+            <div class="row-field">
+              <span class="lbl">Bag type</span>
+              <select class="row-select" id="bagType" onchange="updateAll()">
+                <option value="-1" selected disabled>Select bag type…</option>
+              </select>
+            </div>
+            <div class="row-field">
+              <span class="lbl">Quantity</span>
+              <div class="qty-shell">
+                <input class="row-qty" id="bagQty" type="number" min="0" placeholder="0" oninput="updateAll()">
+                <span class="unit">bags</span>
+              </div>
+            </div>
+            <div class="row-field">
+              <span class="lbl">Bag output</span>
+              <div class="row-out zero" id="bagOut">
+                <span class="o-lbl">waiting</span>
+                <span class="o-val">0 kg</span>
+              </div>
+            </div>
+            <div></div>
+          </div>
+        </div>
+
+        <!-- Step 2 · Charcoal used -->
+        <div class="compose-section">
+          <div class="section-head">
+            <span class="stitle"><span class="step">2</span> Charcoal used <span style="font-weight:400;color:var(--text3);text-transform:none;letter-spacing:0;margin-left:6px">· deducted from warehouse</span></span>
+            <span class="ssub">one row per lot · enter weight in kg</span>
+          </div>
+          <div class="compose-rows" id="charRows">
+            <!-- populated by JS -->
+          </div>
+          <div class="compose-expand">
+            <button class="btn-expand" id="expandBtn" onclick="addCharRow()">
+              <i class="ti ti-plus" style="font-size:15px"></i>
+              Add another charcoal type
+              <span class="max-hint" id="maxHint">1 of 4</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Live calc -->
+        <div class="waste-bar" id="wasteBar">
+          <div class="waste-cell in">
+            <span class="wlbl"><i class="ti ti-arrow-down-right" style="font-size:13px"></i> Charcoal in</span>
+            <span class="wval" id="wIn">0 kg</span>
+            <span class="wsub" id="wInSub">from warehouse</span>
+          </div>
+          <div class="waste-cell out">
+            <span class="wlbl"><i class="ti ti-arrow-up-right" style="font-size:13px"></i> Bag output</span>
+            <span class="wval" id="wOut">0 kg</span>
+            <span class="wsub" id="wOutSub">0 bags packed</span>
+          </div>
+          <div class="waste-cell waste neutral" id="wWasteCell">
+            <span class="wlbl"><i class="ti ti-trash" style="font-size:13px"></i> Waste / loss</span>
+            <span class="wval" id="wWaste">0 kg</span>
+            <span class="wsub"><span class="waste-pct" id="wPct" style="display:none">0%</span></span>
+          </div>
+        </div>
+
+        <div class="compose-foot">
+          <div class="compose-summary">
+            <div>
+              entry total
+              <span class="v" id="entryBags">0 <small style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace;font-weight:400">bags</small></span>
+            </div>
+            <div>
+              weight out
+              <span class="v green" id="entryKg">0 kg</span>
+            </div>
+          </div>
+          <div class="compose-actions">
+            <button class="btn-clear" onclick="clearCompose()">Clear</button>
+            <button class="btn-add" id="addBtn" onclick="addEntry()" disabled>
+              <i class="ti ti-plus" style="font-size:16px"></i> Add entry
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TODAY'S TABLE -->
+      <div class="card">
+        <div class="today-head">
+          <h3>
+            <i class="ti ti-list" style="font-size:16px;color:var(--text2)"></i>
+            Today's entries
+            <span class="day" id="todayDate">THURSDAY 22 MAY 2026</span>
+          </h3>
+          <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">newest first</span>
+        </div>
+
+        <table class="data-table" id="todayTable">
+          <thead>
+            <tr>
+              <th style="width:74px">Time</th>
+              <th style="width:160px">Bag produced</th>
+              <th>Charcoal used</th>
+              <th class="right" style="width:90px">In</th>
+              <th class="right" style="width:90px">Out</th>
+              <th class="right" style="width:100px">Waste</th>
+              <th style="width:46px"></th>
+            </tr>
+          </thead>
+          <tbody id="todayRows">
+            <!-- populated by JS -->
+          </tbody>
+        </table>
+
+        <!-- per-type footer roll-up -->
+        <div class="today-foot" id="todayFoot">
+          <!-- populated by JS -->
+        </div>
+      </div>
+
+      <!-- VIEW HISTORY BUTTON -->
+      <div class="view-history-row">
+        <button class="btn-history" onclick="showView('history')">
+          <i class="ti ti-history" style="font-size:18px"></i>
+          View packing history
+          <span class="count" id="histCount">19 days · May 2026</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ════════════════════ VIEW 2 · HISTORY ════════════════════ -->
+    <div class="view" id="viewHistory">
+
+      <div class="view-header">
+        <button class="back-btn" onclick="showView('today')"><i class="ti ti-arrow-left" style="font-size:18px"></i></button>
+        <div>
+          <h1>Packing history</h1>
+          <span class="sub">tap any day to see the bag-by-bag breakdown</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="month-bar">
+          <span>May 2026</span>
+          <span class="month-totals"><strong>1,648 bags</strong> · 5,108 kg · 19 days entered</span>
+        </div>
+        <div id="historyList">
+          <!-- populated by JS -->
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:18px">
+        <div class="month-bar">
+          <span>April 2026</span>
+          <span class="month-totals"><strong>2,012 bags</strong> · 6,284 kg · 24 days entered</span>
+        </div>
+        <div id="historyListApr">
+          <!-- populated by JS -->
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ════════════════════ VIEW 3 · DAY DETAIL ════════════════════ -->
+    <div class="view" id="viewDay">
+
+      <div class="view-header">
+        <button class="back-btn" onclick="showView('history')"><i class="ti ti-arrow-left" style="font-size:18px"></i></button>
+        <div>
+          <h1 id="dayTitle">Monday 19 May 2026</h1>
+          <span class="sub" id="daySub">peak day · 6 entries · all-day shift</span>
+        </div>
+      </div>
+
+      <!-- KPI strip -->
+      <div class="detail-kpis" id="dayKpis">
+        <!-- populated -->
+      </div>
+
+      <!-- bag breakdown -->
+      <div class="card" style="margin-bottom:18px">
+        <div class="today-head">
+          <h3><i class="ti ti-chart-bar" style="font-size:16px;color:var(--text2)"></i> Bags by type</h3>
+          <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">how many of each bag size</span>
+        </div>
+        <div id="dayBreakdown">
+          <!-- populated -->
+        </div>
+      </div>
+
+      <!-- entries timeline -->
+      <div class="card">
+        <div class="today-head">
+          <h3><i class="ti ti-clock" style="font-size:16px;color:var(--text2)"></i> Entries that day</h3>
+          <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">in order</span>
+        </div>
+        <div class="entries-list" id="dayEntries">
+          <!-- populated -->
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast">
+  <i class="ti ti-check-circle" style="font-size:16px"></i>
+  <span id="toastMsg">Entry added</span>
+</div>
+
+<script>
+  // ── DATA ────────────────────────────────────────────────────
+  const TYPES = [
+    { kg: 1.9, label: '1.9 kg', ref: '1.9' },
+    { kg: 2.0, label: '2 kg',   ref: '2.0' },
+    { kg: 5.0, label: '5 kg',   ref: '5.0' },
+    { kg: 10,  label: '10 kg',  ref: '10'  },
+    { kg: 20,  label: '20 kg',  ref: '20'  },
+  ];
+
+  // today's entries (each entry = a batch of multiple types)
+  // counts indexed by TYPES position
+  // each entry has charcoal[] (lot+kg), charIn, bagOut, waste
+  let todayEntries = [
+    { time: '13:18', counts: [0, 0, 0, 6, 0],
+      charcoal: [{ id: 'LOT-0041', label: 'BBQ Hardwood · A', kg: 38 }, { id: 'LOT-0044', label: 'BBQ Hardwood · B', kg: 24 }],
+      charIn: 62, bagOut: 60, waste: 2 },
+    { time: '11:45', counts: [0, 0, 14, 0, 0],
+      charcoal: [{ id: 'LOT-0042', label: 'Shisha · B', kg: 73 }],
+      charIn: 73, bagOut: 70, waste: 3 },
+    { time: '10:22', counts: [0, 42, 0, 0, 0],
+      charcoal: [{ id: 'LOT-0041', label: 'BBQ Hardwood · A', kg: 50 }, { id: 'LOT-0044', label: 'BBQ Hardwood · B', kg: 37 }],
+      charIn: 87, bagOut: 84, waste: 3 },
+    { time: '09:14', counts: [18, 0, 0, 0, 0],
+      charcoal: [{ id: 'LOT-0041', label: 'BBQ Hardwood · A', kg: 36 }],
+      charIn: 36, bagOut: 34.2, waste: 1.8 },
+  ];
+
+  // history (May 2026 sample) - newest first
+  const history = [
+    { date: '22 May', dnum: '22', dow: 'Thu', note: 'today · in progress',
+      counts: [18, 42, 14, 6, 0],
+      entries: [
+        { time: '13:18', counts: [0, 0, 0, 6, 0] },
+        { time: '11:45', counts: [0, 0, 14, 0, 0] },
+        { time: '10:22', counts: [0, 42, 0, 0, 0] },
+        { time: '09:14', counts: [18, 0, 0, 0, 0] },
+      ]},
+    { date: '21 May', dnum: '21', dow: 'Wed', note: '5 entries',
+      counts: [20, 48, 12, 8, 3],
+      entries: [
+        { time: '15:30', counts: [0, 0, 0, 0, 3] },
+        { time: '14:02', counts: [0, 0, 0, 8, 0] },
+        { time: '12:18', counts: [0, 0, 12, 0, 0] },
+        { time: '10:50', counts: [0, 48, 0, 0, 0] },
+        { time: '09:08', counts: [20, 0, 0, 0, 0] },
+      ]},
+    { date: '20 May', dnum: '20', dow: 'Tue', note: '5 entries',
+      counts: [16, 42, 10, 6, 2],
+      entries: [
+        { time: '15:14', counts: [0, 0, 0, 0, 2] },
+        { time: '13:42', counts: [0, 0, 0, 6, 0] },
+        { time: '11:36', counts: [0, 0, 10, 0, 0] },
+        { time: '10:00', counts: [0, 42, 0, 0, 0] },
+        { time: '08:55', counts: [16, 0, 0, 0, 0] },
+      ]},
+    { date: '19 May', dnum: '19', dow: 'Mon', note: 'peak day · 6 entries',
+      counts: [22, 54, 14, 7, 4],
+      entries: [
+        { time: '16:05', counts: [0, 0, 0, 0, 4] },
+        { time: '14:30', counts: [0, 0, 0, 7, 0] },
+        { time: '12:48', counts: [0, 0, 14, 0, 0] },
+        { time: '11:12', counts: [0, 30, 0, 0, 0] },
+        { time: '09:40', counts: [0, 24, 0, 0, 0] },
+        { time: '08:30', counts: [22, 0, 0, 0, 0] },
+      ]},
+    { date: '18 May', dnum: '18', dow: 'Sun', note: 'no entries · day off', empty: true },
+    { date: '17 May', dnum: '17', dow: 'Sat', note: '4 entries',
+      counts: [16, 38, 8, 4, 0],
+      entries: [
+        { time: '14:18', counts: [0, 0, 0, 4, 0] },
+        { time: '11:50', counts: [0, 0, 8, 0, 0] },
+        { time: '10:24', counts: [0, 38, 0, 0, 0] },
+        { time: '09:00', counts: [16, 0, 0, 0, 0] },
+      ]},
+    { date: '16 May', dnum: '16', dow: 'Fri', note: '5 entries',
+      counts: [18, 44, 11, 6, 2], entries: null },
+    { date: '15 May', dnum: '15', dow: 'Thu', note: '5 entries',
+      counts: [20, 40, 10, 5, 3], entries: null },
+    { date: '14 May', dnum: '14', dow: 'Wed', note: '4 entries',
+      counts: [16, 36, 9, 4, 2], entries: null },
+    { date: '13 May', dnum: '13', dow: 'Tue', note: '5 entries',
+      counts: [22, 46, 12, 6, 2], entries: null },
+    { date: '12 May', dnum: '12', dow: 'Mon', note: '6 entries',
+      counts: [24, 52, 14, 8, 3], entries: null },
+    { date: '11 May', dnum: '11', dow: 'Sun', note: 'no entries · day off', empty: true },
+    { date: '10 May', dnum: '10', dow: 'Sat', note: '4 entries',
+      counts: [14, 32, 8, 4, 1], entries: null },
+    { date: '09 May', dnum: '09', dow: 'Fri', note: '5 entries',
+      counts: [18, 40, 10, 5, 2], entries: null },
+    { date: '08 May', dnum: '08', dow: 'Thu', note: '5 entries',
+      counts: [16, 36, 9, 5, 2], entries: null },
+  ];
+
+  const historyApr = [
+    { date: '30 Apr', dnum: '30', dow: 'Wed', note: '5 entries', counts: [18,42,11,6,2], entries: null },
+    { date: '29 Apr', dnum: '29', dow: 'Tue', note: '6 entries', counts: [22,48,14,7,3], entries: null },
+    { date: '28 Apr', dnum: '28', dow: 'Mon', note: '6 entries', counts: [24,52,14,8,4], entries: null },
+    { date: '27 Apr', dnum: '27', dow: 'Sun', note: 'no entries · day off', empty: true },
+    { date: '26 Apr', dnum: '26', dow: 'Sat', note: '4 entries', counts: [14,30,8,4,1], entries: null },
+  ];
+
+  // ── HELPERS ────────────────────────────────────────────────
+  function sumKg(counts) {
+    return counts.reduce((s, n, i) => s + n * TYPES[i].kg, 0);
+  }
+  function sumBags(counts) {
+    return counts.reduce((s, n) => s + n, 0);
+  }
+  function fmt(n, digits) {
+    if (digits === undefined) digits = 0;
+    const v = Number(n);
+    if (Math.abs(v - Math.round(v)) < 0.05) return Math.round(v).toString();
+    return v.toFixed(digits);
+  }
+  function aggregate(entries) {
+    const c = [0,0,0,0,0];
+    entries.forEach(e => e.counts.forEach((n, i) => c[i] += n));
+    return c;
+  }
+
+  // ── COMPOSE ─────────────────────────────────────────────────
+  const MAX_ROWS = 4;
+
+  // available charcoal lots in warehouse (with current kg available)
+  const LOTS = [
+    { id: 'LOT-0041', label: 'BBQ Hardwood · Grade A', supplier: 'Al-Amin', available: 12400 },
+    { id: 'LOT-0044', label: 'BBQ Hardwood · Grade B', supplier: 'Sahara',  available:  9180 },
+    { id: 'LOT-0042', label: 'Shisha · Grade B',       supplier: 'Al-Amin', available:  8980 },
+    { id: 'LOT-0045', label: 'Shisha · Grade A',       supplier: 'Al-Amin', available:  4200 },
+    { id: 'LOT-0043', label: 'Restaurant Grade · A',   supplier: 'Sahara',  available:  3200 },
+  ];
+
+  // form state
+  let bagState = { typeIdx: -1, qty: 0 };
+  // charcoal rows: { lotIdx: -1|0..n, kg: number }
+  let charRows = [{ lotIdx: -1, kg: 0 }];
+
+  function renderBagSelect() {
+    const sel = document.getElementById('bagType');
+    sel.innerHTML = `<option value="-1" disabled ${bagState.typeIdx<0?'selected':''}>Select bag type…</option>` +
+      TYPES.map((t, i) =>
+        `<option value="${i}" ${bagState.typeIdx===i?'selected':''}>${t.label} bag</option>`
+      ).join('');
+  }
+
+  function renderCharRows() {
+    const box = document.getElementById('charRows');
+    box.innerHTML = charRows.map((row, idx) => {
+      const lot = row.lotIdx >= 0 ? LOTS[row.lotIdx] : null;
+      const opts = LOTS.map((l, i) =>
+        `<option value="${i}" ${row.lotIdx===i?'selected':''}>${l.label} · ${l.id}</option>`
+      ).join('');
+      return `
+        <div class="compose-row">
+          <div class="row-index">${idx + 1}</div>
+          <div class="row-field">
+            <span class="lbl">Charcoal lot · grade</span>
+            <select class="row-select" onchange="setCharLot(${idx}, this.value)">
+              <option value="-1" ${row.lotIdx<0?'selected':''} disabled>Select charcoal lot…</option>
+              ${opts}
+            </select>
+          </div>
+          <div class="row-field">
+            <span class="lbl">Weight used</span>
+            <div class="qty-shell">
+              <input class="row-qty" type="number" min="0" step="1" placeholder="0"
+                     value="${row.kg > 0 ? row.kg : ''}"
+                     oninput="setCharKg(${idx}, this.value)">
+              <span class="unit">kg</span>
+            </div>
+          </div>
+          <div class="row-field">
+            <span class="lbl">Stock left</span>
+            <div class="row-out ${lot ? '' : 'zero'}" style="background:${lot ? 'var(--surface2)' : 'var(--surface2)'};border-color:var(--border)">
+              <span class="o-lbl" style="color:${lot ? 'var(--text3)' : 'var(--text3)'};opacity:1">${lot ? 'after this entry' : 'pick a lot'}</span>
+              <span class="o-val" style="color:${lot ? 'var(--text)' : 'var(--text3)'}">
+                ${lot ? fmt(lot.available - row.kg, 0) + ' kg' : '—'}
+              </span>
+            </div>
+          </div>
+          <button class="row-remove" onclick="removeCharRow(${idx})" ${charRows.length===1?'disabled':''} title="Remove">
+            <i class="ti ti-x" style="font-size:15px"></i>
+          </button>
+        </div>
+      `;
+    }).join('');
+
+    const exp = document.getElementById('expandBtn');
+    const hint = document.getElementById('maxHint');
+    exp.disabled = charRows.length >= MAX_ROWS;
+    hint.textContent = `${charRows.length} of ${MAX_ROWS}`;
+
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function setCharLot(idx, v) {
+    charRows[idx].lotIdx = parseInt(v);
+    renderCharRows();
+    updateAll();
+  }
+  function setCharKg(idx, v) {
+    charRows[idx].kg = parseFloat(v) || 0;
+    // soft-update the stock-left for this row
+    const lot = charRows[idx].lotIdx >= 0 ? LOTS[charRows[idx].lotIdx] : null;
+    if (lot) {
+      const rowEl = document.querySelectorAll('#charRows .compose-row')[idx];
+      if (rowEl) rowEl.querySelector('.o-val').textContent = fmt(lot.available - charRows[idx].kg, 0) + ' kg';
+    }
+    updateAll();
+  }
+  function addCharRow() {
+    if (charRows.length >= MAX_ROWS) return;
+    charRows.push({ lotIdx: -1, kg: 0 });
+    renderCharRows();
+    updateAll();
+  }
+  function removeCharRow(idx) {
+    if (charRows.length === 1) return;
+    charRows.splice(idx, 1);
+    renderCharRows();
+    updateAll();
+  }
+
+  function getBagOutKg() {
+    const t = bagState.typeIdx >= 0 ? TYPES[bagState.typeIdx] : null;
+    return t ? bagState.qty * t.kg : 0;
+  }
+  function getCharInKg() {
+    return charRows.reduce((s, r) => s + (r.lotIdx >= 0 ? r.kg : 0), 0);
+  }
+
+  function updateAll() {
+    // pull current bag values from inputs (rendered statically)
+    bagState.typeIdx = parseInt(document.getElementById('bagType').value);
+    if (isNaN(bagState.typeIdx)) bagState.typeIdx = -1;
+    bagState.qty = parseInt(document.getElementById('bagQty').value) || 0;
+
+    const t = bagState.typeIdx >= 0 ? TYPES[bagState.typeIdx] : null;
+    const bagOut = getBagOutKg();
+    const charIn = getCharInKg();
+    const waste = charIn - bagOut;
+
+    // bag output cell
+    const bagOutEl = document.getElementById('bagOut');
+    bagOutEl.classList.toggle('zero', bagOut === 0);
+    bagOutEl.querySelector('.o-lbl').textContent = t ? `${t.kg} kg × ${bagState.qty || 0}` : 'waiting';
+    bagOutEl.querySelector('.o-val').textContent = fmt(bagOut, 1) + ' kg';
+
+    // entry total + weight (footer)
+    document.getElementById('entryBags').innerHTML =
+      `${bagState.qty || 0} <small style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace;font-weight:400">bags</small>`;
+    document.getElementById('entryKg').textContent = fmt(bagOut, 1) + ' kg';
+
+    // waste bar
+    document.getElementById('wIn').textContent = fmt(charIn, 0) + ' kg';
+    const lotsUsed = charRows.filter(r => r.lotIdx >= 0 && r.kg > 0).length;
+    document.getElementById('wInSub').textContent =
+      lotsUsed === 0 ? 'from warehouse'
+      : lotsUsed === 1 ? '1 lot' : `${lotsUsed} lots mixed`;
+
+    document.getElementById('wOut').textContent = fmt(bagOut, 1) + ' kg';
+    document.getElementById('wOutSub').textContent =
+      (bagState.qty || 0) + ' bag' + (bagState.qty === 1 ? '' : 's') + ' packed';
+
+    const wCell = document.getElementById('wWasteCell');
+    const wEl = document.getElementById('wWaste');
+    const pctEl = document.getElementById('wPct');
+    wCell.classList.remove('bad', 'neutral');
+    if (charIn === 0 && bagOut === 0) {
+      wEl.textContent = '— kg';
+      wCell.classList.add('neutral');
+      pctEl.style.display = 'none';
+    } else if (charIn === 0) {
+      wEl.textContent = '— kg';
+      wCell.classList.add('neutral');
+      pctEl.style.display = 'none';
+    } else {
+      const sign = waste < 0 ? '−' : '';
+      wEl.textContent = sign + fmt(Math.abs(waste), 1) + ' kg';
+      const pct = charIn > 0 ? (waste / charIn) * 100 : 0;
+      pctEl.style.display = 'inline-block';
+      pctEl.textContent = (waste >= 0 ? '' : '−') + Math.abs(pct).toFixed(1) + '% loss';
+      // flag as bad if waste > 5% OR negative (more out than in)
+      if (waste < 0 || pct > 5) wCell.classList.add('bad');
+    }
+
+    // enable add only if both sides have something valid
+    const canAdd = bagState.typeIdx >= 0 && bagState.qty > 0
+                && charRows.some(r => r.lotIdx >= 0 && r.kg > 0);
+    document.getElementById('addBtn').disabled = !canAdd;
+  }
+
+  function clearCompose() {
+    bagState = { typeIdx: -1, qty: 0 };
+    charRows = [{ lotIdx: -1, kg: 0 }];
+    document.getElementById('bagType').value = '-1';
+    document.getElementById('bagQty').value = '';
+    renderCharRows();
+    updateAll();
+  }
+
+  function addEntry() {
+    if (bagState.typeIdx < 0 || bagState.qty <= 0) return;
+    const validChar = charRows.filter(r => r.lotIdx >= 0 && r.kg > 0);
+    if (validChar.length === 0) return;
+
+    const counts = [0, 0, 0, 0, 0];
+    counts[bagState.typeIdx] = bagState.qty;
+
+    const charcoal = validChar.map(r => ({
+      id: LOTS[r.lotIdx].id, label: LOTS[r.lotIdx].label, kg: r.kg
+    }));
+    const charIn = getCharInKg();
+    const bagOut = getBagOutKg();
+    const waste = charIn - bagOut;
+
+    const now = new Date();
+    const time = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+
+    todayEntries.unshift({ time, counts, charcoal, charIn, bagOut, waste });
+    history[0].entries = todayEntries.slice();
+    history[0].counts = aggregate(todayEntries);
+
+    showToast(`Entry added · ${bagState.qty} × ${TYPES[bagState.typeIdx].label} · ${fmt(waste,1)} kg waste`);
+    clearCompose();
+    renderToday();
+  }
+
+  // ── TOAST ──────────────────────────────────────────────────
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    document.getElementById('toastMsg').textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.remove('show'), 2400);
+  }
+
+  // ── TODAY'S TABLE ──────────────────────────────────────────
+  function renderToday() {
+    const tbody = document.getElementById('todayRows');
+    if (todayEntries.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="7" class="empty">
+        <div style="padding:14px">No entries yet — add your first batch above</div>
+      </td></tr>`;
+    } else {
+      tbody.innerHTML = todayEntries.map((e, idx) => {
+        // bag chip — show the dominant type (since one entry = one bag type now)
+        const bagIdx = e.counts.findIndex(n => n > 0);
+        const bagQty = bagIdx >= 0 ? e.counts[bagIdx] : 0;
+        const bagLabel = bagIdx >= 0 ? TYPES[bagIdx].label : '—';
+        const bagOut = e.bagOut !== undefined ? e.bagOut : sumKg(e.counts);
+
+        // charcoal chips
+        const charChips = (e.charcoal || []).map(c =>
+          `<span class="qty-chip"><span class="q">${fmt(c.kg, 0)}</span> <span class="t">kg · ${c.label}</span></span>`
+        ).join('');
+        const charIn = e.charIn !== undefined ? e.charIn
+          : (e.charcoal ? e.charcoal.reduce((s, c) => s + c.kg, 0) : 0);
+        const waste = e.waste !== undefined ? e.waste : (charIn - bagOut);
+        const wastePct = charIn > 0 ? (waste / charIn) * 100 : 0;
+        const wasteColor = waste < 0 ? 'var(--red)' : wastePct > 5 ? 'var(--red)' : 'var(--accent2)';
+
+        return `<tr>
+          <td class="mono" style="color:var(--text2)">${e.time}</td>
+          <td>
+            <span class="qty-chip" style="background:var(--surface2);border-color:var(--border)">
+              <span class="q">${bagQty}</span> <span class="t">× ${bagLabel}</span>
+            </span>
+          </td>
+          <td>
+            ${charChips ? `<div class="qty-chips">${charChips}</div>`
+              : `<span style="color:var(--text3);font-family:'IBM Plex Mono',monospace;font-size:12px">— not recorded</span>`}
+          </td>
+          <td class="right num" style="font-weight:500;color:var(--text2)">${fmt(charIn, 0)} kg</td>
+          <td class="right num" style="color:var(--accent);font-weight:500">${fmt(bagOut, 1)} kg</td>
+          <td class="right num">
+            <span style="color:${wasteColor};font-weight:600">${fmt(waste, 1)} kg</span>
+            ${charIn > 0 ? `<div style="font-size:10.5px;color:var(--text3);font-weight:400;margin-top:1px">${wastePct.toFixed(1)}%</div>` : ''}
+          </td>
+          <td class="right">
+            <button class="icon-btn" title="Remove" onclick="removeEntry(${idx})" style="width:26px;height:26px;border-radius:5px;border:1px solid var(--border);background:var(--surface);cursor:pointer;color:var(--text2)">
+              <i class="ti ti-trash" style="font-size:13px"></i>
+            </button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    // footer roll-up: per-type bags + day total + total charcoal in + total waste
+    const totals = aggregate(todayEntries);
+    const totalBags = sumBags(totals);
+    const totalKg = sumKg(totals);
+    const totalCharIn = todayEntries.reduce((s, e) => s + (e.charIn || 0), 0);
+    const totalBagOut = todayEntries.reduce((s, e) => s + (e.bagOut !== undefined ? e.bagOut : sumKg(e.counts)), 0);
+    const totalWaste = totalCharIn - totalBagOut;
+    const totalPct = totalCharIn > 0 ? (totalWaste / totalCharIn) * 100 : 0;
+
+    document.getElementById('todayFoot').innerHTML =
+      TYPES.map((t, i) => `
+        <div class="cell">
+          <div class="lbl">${t.label}</div>
+          <div class="v">${totals[i] || 0}</div>
+        </div>
+      `).join('') +
+      `<div class="cell total" style="min-width:180px;border-left:1px solid var(--border)">
+        <div class="lbl">Day total</div>
+        <div class="v" style="color:var(--accent)">
+          ${totalBags} bags <span style="font-size:12px;color:var(--text3);font-weight:400">· ${fmt(totalKg,1)} kg</span>
+        </div>
+        ${totalCharIn > 0 ? `<div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace;margin-top:4px">
+          ${fmt(totalCharIn,0)} kg in · <span style="color:var(--accent2);font-weight:600">${fmt(totalWaste,1)} kg waste (${totalPct.toFixed(1)}%)</span>
+        </div>` : ''}
+      </div>`;
+
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function removeEntry(i) {
+    todayEntries.splice(i, 1);
+    history[0].entries = todayEntries.slice();
+    history[0].counts = aggregate(todayEntries);
+    renderToday();
+    showToast('Entry removed');
+  }
+
+  // ── VIEW SWITCH ────────────────────────────────────────────
+  function showView(name) {
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    const map = { today: 'viewToday', history: 'viewHistory', day: 'viewDay' };
+    document.getElementById(map[name]).classList.add('active');
+    const subs = {
+      today: "enter today's bags · by type",
+      history: 'past days · click any to drill in',
+      day: 'per-bag breakdown',
+    };
+    document.getElementById('topSub').textContent = subs[name];
+    window.scrollTo({ top: 0 });
+  }
+
+  // ── HISTORY ────────────────────────────────────────────────
+  function renderHistory() {
+    const render = (arr) => arr.map(d => {
+      if (d.empty) {
+        return `<div class="day-row empty-day">
+          <span class="dnum">${d.dnum}</span>
+          <span class="dlabel">${d.dow} ${d.date} <small>${d.note}</small></span>
+          <span></span><span></span><span></span>
+        </div>`;
+      }
+      const bags = sumBags(d.counts);
+      const kg = sumKg(d.counts);
+      return `<div class="day-row" onclick='openDay(${JSON.stringify(d).replace(/'/g, "&apos;")})'>
+        <span class="dnum">${d.dnum}</span>
+        <span class="dlabel">${d.dow} ${d.date} <small>${d.note}</small></span>
+        <span class="dqty">${bags} <small>bags</small></span>
+        <span class="dkg">${fmt(kg,1)} <small>kg</small></span>
+        <i class="ti ti-chevron-right chev" style="font-size:18px"></i>
+      </div>`;
+    }).join('');
+    document.getElementById('historyList').innerHTML = render(history);
+    document.getElementById('historyListApr').innerHTML = render(historyApr);
+    if (window.lucide) lucide.createIcons();
+  }
+
+  // ── DAY DETAIL ─────────────────────────────────────────────
+  function openDay(d) {
+    document.getElementById('dayTitle').textContent = `${d.dow} ${d.date} 2026`;
+    document.getElementById('daySub').textContent = d.note;
+
+    const totalBags = sumBags(d.counts);
+    const totalKg = sumKg(d.counts);
+    const entries = d.entries || [];
+
+    // KPI strip: per-type + total
+    document.getElementById('dayKpis').innerHTML =
+      TYPES.map((t, i) => `
+        <div class="cell">
+          <div class="lbl">${t.label}</div>
+          <div class="v">${d.counts[i] || 0}</div>
+          <div class="sub">${fmt((d.counts[i]||0) * t.kg, 1)} kg</div>
+        </div>
+      `).join('');
+
+    // breakdown bars
+    const maxCount = Math.max(...d.counts, 1);
+    document.getElementById('dayBreakdown').innerHTML = TYPES.map((t, i) => {
+      const n = d.counts[i] || 0;
+      const pct = (n / maxCount) * 100;
+      return `<div class="breakdown-row">
+        <span class="btype">${t.label} <small>· ${t.ref}</small></span>
+        <span class="bqty">${n} <small>×</small></span>
+        <div class="bbar"><div class="fill" style="width:${pct}%"></div></div>
+        <span class="bkg">${fmt(n * t.kg, 1)} kg</span>
+      </div>`;
+    }).join('') + `
+      <div class="breakdown-row" style="background:var(--surface2);font-weight:600">
+        <span class="btype" style="color:var(--text)">Total</span>
+        <span class="bqty">${totalBags}</span>
+        <div></div>
+        <span class="bkg" style="font-size:16px">${fmt(totalKg,1)} kg</span>
+      </div>`;
+
+    // entries timeline
+    if (entries.length === 0) {
+      document.getElementById('dayEntries').innerHTML = `
+        <div class="empty-state">
+          <i class="ti ti-archive"></i>
+          <div class="t">Detailed timeline not available</div>
+          <div class="s">only daily totals were recorded for this day</div>
+        </div>`;
+    } else {
+      document.getElementById('dayEntries').innerHTML =
+        `<div class="entry-row head">
+          <span>Time</span><span>Bag types</span><span class="right">Bags</span><span class="right">Weight</span>
+        </div>` +
+        entries.map(e => {
+          const chips = e.counts.map((n, i) =>
+            n > 0 ? `<span class="qty-chip"><span class="q">${n}</span> <span class="t">× ${TYPES[i].label}</span></span>` : ''
+          ).filter(Boolean).join('');
+          return `<div class="entry-row">
+            <span class="time">${e.time}</span>
+            <span><div class="chips">${chips}</div></span>
+            <span class="tot">${sumBags(e.counts)} <small>bags</small></span>
+            <span class="kg">${fmt(sumKg(e.counts),1)} kg</span>
+          </div>`;
+        }).join('');
+    }
+
+    showView('day');
+    if (window.lucide) lucide.createIcons();
+  }
+
+  // ── INIT ───────────────────────────────────────────────────
+  renderBagSelect();
+  renderCharRows();
+  updateAll();
+  renderToday();
+  renderHistory();
+
+  // live-update the clock pill in the compose head
+  function tickClock() {
+    const d = new Date();
+    const dows = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const stamp = `${dows[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]} · ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    const el = document.getElementById('nowStamp');
+    if (el) el.textContent = stamp;
+  }
+  // Keep the demo stamp static so the design stays consistent — comment out to live-update
+  // tickClock(); setInterval(tickClock, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Balances</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .ar { font-family: 'Noto Sans Arabic', 'IBM Plex Sans', sans-serif; }
+
+  /* HEADLINE — total owed */
+  .headline {
+    background: var(--text); color: #fff;
+    border-radius: var(--radius-lg);
+    padding: 24px 28px;
+    display: grid; grid-template-columns: 1fr auto auto; gap: 32px;
+    align-items: center;
+    margin-bottom: 18px;
+    position: relative; overflow: hidden;
+  }
+  .headline::after {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(circle at 85% 50%, rgba(180,83,9,0.20), transparent 55%);
+    pointer-events: none;
+  }
+  .headline-main { position: relative; }
+  .headline-lbl {
+    font-size: 11px; color: rgba(255,255,255,0.5); font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 8px;
+  }
+  .headline-val {
+    font-size: 48px; font-weight: 700; letter-spacing: -2px; line-height: 1;
+    color: #FCD34D;
+  }
+  .headline-sub {
+    font-size: 13px; color: rgba(255,255,255,0.65); font-family: 'IBM Plex Mono', monospace;
+    margin-top: 10px;
+  }
+  .headline-stat { position: relative; padding-left: 24px; border-left: 1px solid rgba(255,255,255,0.15); }
+  .headline-stat .v { font-size: 22px; font-weight: 600; letter-spacing: -0.5px; line-height: 1; }
+  .headline-stat .v.green { color: #86EFAC; }
+  .headline-stat .v.red   { color: #FCA5A5; }
+  .headline-stat .k {
+    font-size: 11px; color: rgba(255,255,255,0.5); font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase; letter-spacing: 0.7px; margin-top: 6px;
+  }
+
+  /* AGING CARD */
+  .aging-row {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px;
+    background: var(--border);
+  }
+  .aging-cell {
+    background: var(--surface); padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 4px;
+    cursor: pointer; transition: background 0.1s;
+  }
+  .aging-cell:hover { background: var(--surface2); }
+  .aging-cell.sel { background: var(--text); color: #fff; }
+  .aging-cell .bucket {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .aging-cell.sel .bucket { color: rgba(255,255,255,0.5); }
+  .aging-cell .v {
+    font-size: 22px; font-weight: 700; letter-spacing: -0.6px;
+    font-family: 'IBM Plex Sans', sans-serif; line-height: 1;
+  }
+  .aging-cell .count { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+  .aging-cell.sel .count { color: rgba(255,255,255,0.55); }
+  .aging-cell.warn .v { color: var(--accent2); }
+  .aging-cell.danger .v { color: var(--red); }
+  .aging-cell.ok .v { color: var(--accent); }
+
+  /* CONTROLS */
+  .controls {
+    display: flex; gap: 10px; align-items: center; margin-bottom: 14px;
+  }
+  .search-wrap { flex: 1; position: relative; max-width: 360px; }
+  .search-wrap i {
+    position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    font-size: 14px; color: var(--text3);
+  }
+  .search-wrap input {
+    width: 100%; padding: 9px 12px 9px 32px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 13px; font-family: 'IBM Plex Sans', sans-serif;
+    background: var(--surface);
+  }
+  .search-wrap input:focus { outline: none; border-color: var(--text); }
+
+  .seg {
+    display: inline-flex; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 2px;
+  }
+  .seg-opt {
+    padding: 6px 12px; font-size: 12.5px; color: var(--text2);
+    cursor: pointer; border-radius: 6px;
+  }
+  .seg-opt.sel { background: var(--text); color: #fff; }
+
+  /* CLIENT BALANCE TABLE */
+  .bal-row {
+    display: grid;
+    grid-template-columns: 40px 1.6fr 110px 110px 130px 130px 100px 110px;
+    gap: 12px; align-items: center;
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    cursor: pointer; transition: background 0.1s;
+  }
+  .bal-row:hover { background: #FAFAF8; }
+  .bal-row:last-child { border-bottom: none; }
+  .bal-row.head {
+    cursor: default;
+    background: var(--surface2);
+    padding: 8px 18px;
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .bal-row.head:hover { background: var(--surface2); }
+  .bal-row.head .right { text-align: right; }
+
+  .bal-av {
+    width: 36px; height: 36px; border-radius: 9px;
+    background: var(--surface2); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600;
+    border: 1px solid var(--border);
+  }
+  .bal-av.green { background: var(--accent-bg); color: var(--accent); border-color: #a7f3d0; }
+  .bal-av.blue  { background: var(--blue-bg);   color: var(--blue);   border-color: #c5d4f5; }
+  .bal-av.amber { background: var(--accent2-bg); color: var(--accent2); border-color: #fcd34d; }
+  .bal-av.red   { background: var(--red-bg);    color: var(--red);    border-color: #fca5a5; }
+
+  .bal-client { display: flex; flex-direction: column; gap: 2px; }
+  .bal-name { font-size: 13.5px; font-weight: 500; }
+  .bal-meta { font-size: 11.5px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+
+  .num { font-family: 'IBM Plex Mono', monospace; text-align: right; font-weight: 500; }
+  .balance-cell { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
+  .balance-cell.amber { color: var(--accent2); }
+  .balance-cell.red   { color: var(--red); }
+
+  .age-cell { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+  .age-bar {
+    width: 50px; height: 5px; background: var(--surface2); border-radius: 100px; overflow: hidden;
+  }
+  .age-bar .fill { height: 100%; border-radius: 100px; }
+  .age-bar .fill.ok { background: var(--accent); }
+  .age-bar .fill.warn { background: var(--accent2); }
+  .age-bar .fill.danger { background: var(--red); }
+  .age-days { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; font-weight: 500; }
+  .age-days.ok { color: var(--accent); }
+  .age-days.warn { color: var(--accent2); }
+  .age-days.danger { color: var(--red); }
+
+  .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+  .icon-btn {
+    width: 28px; height: 28px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface);
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text2); transition: all 0.1s; text-decoration: none;
+  }
+  .icon-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--text3); }
+  .icon-btn i { font-size: 14px; }
+  .icon-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .icon-btn.primary:hover { background: #155237; }
+
+  /* table foot */
+  .bal-foot {
+    padding: 11px 18px; background: var(--surface2);
+    border-top: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 40px 1.6fr 110px 110px 130px 130px 100px 110px;
+    gap: 12px; align-items: center;
+    font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text2);
+  }
+  .bal-foot .total {
+    font-size: 16px; font-weight: 700; color: var(--text);
+    letter-spacing: -0.3px; text-align: right;
+  }
+
+  /* SHARE BY TYPE — minibars */
+  .share-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 18px; border-bottom: 1px solid var(--border);
+    font-size: 12.5px;
+  }
+  .share-row:last-child { border-bottom: none; }
+  .share-name { width: 110px; color: var(--text2); }
+  .share-bar { flex: 1; height: 6px; background: var(--surface2); border-radius: 100px; overflow: hidden; }
+  .share-bar .fill { height: 100%; border-radius: 100px; }
+  .share-val { width: 80px; text-align: right; font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+  .share-pct { width: 50px; text-align: right; font-family: 'IBM Plex Mono', monospace; color: var(--text3); font-size: 11.5px; }
+
+  /* OLDEST */
+  .oldest-row {
+    padding: 10px 18px; display: grid; grid-template-columns: 1fr auto auto; gap: 12px;
+    align-items: center; border-bottom: 1px solid var(--border); font-size: 13px;
+  }
+  .oldest-row:last-child { border-bottom: none; }
+  .oldest-row .nm { font-weight: 500; }
+  .oldest-row .sub { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-top: 1px; }
+  .oldest-row .amt { font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 13.5px; color: var(--accent2); }
+  .oldest-row .age { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--red); white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="balances"></aside>
+
+<div class="main">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="page-title">Balances</span>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-sub">money clients owe us</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn"><i class="ti ti-send" style="font-size:15px"></i> Send reminders</button>
+      <a class="btn primary" href="payment.html" style="text-decoration:none;background:var(--accent);color:#fff;border-color:var(--accent)"><i class="ti ti-cash" style="font-size:15px"></i> Log payment</a>
+      <button class="btn"><i class="ti ti-download" style="font-size:15px"></i> Export CSV</button>
+      <a class="btn" href="invoice.html" target="_blank" style="text-decoration:none"><i class="ti ti-printer" style="font-size:15px"></i> Print all statements</a>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- HEADLINE -->
+    <div class="headline">
+      <div class="headline-main">
+        <div class="headline-lbl">total owed to us</div>
+        <div class="headline-val">$16,240</div>
+        <div class="headline-sub">across 15 clients · 22 open invoices · LBP equiv. 1.45B</div>
+      </div>
+      <div class="headline-stat">
+        <div class="v green">$4,820</div>
+        <div class="k">collected this month</div>
+      </div>
+      <div class="headline-stat">
+        <div class="v red">$3,420</div>
+        <div class="k">overdue · 5 clients</div>
+      </div>
+    </div>
+
+    <!-- AGING -->
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-head">
+        <div class="card-title"><i class="ti ti-clock"></i> Aging buckets · click to filter</div>
+        <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">days past invoice date</span>
+      </div>
+      <div class="aging-row">
+        <div class="aging-cell sel" onclick="selBucket(this)">
+          <span class="bucket">All open</span>
+          <span class="v">$16,240</span>
+          <span class="count">22 invoices · 15 clients</span>
+        </div>
+        <div class="aging-cell ok" onclick="selBucket(this)">
+          <span class="bucket">0 – 15 days</span>
+          <span class="v">$8,180</span>
+          <span class="count">on time · 9 invoices</span>
+        </div>
+        <div class="aging-cell warn" onclick="selBucket(this)">
+          <span class="bucket">16 – 30 days</span>
+          <span class="v">$4,640</span>
+          <span class="count">approaching · 6 invoices</span>
+        </div>
+        <div class="aging-cell danger" onclick="selBucket(this)">
+          <span class="bucket">31 – 60 days</span>
+          <span class="v">$2,420</span>
+          <span class="count">overdue · 4 invoices</span>
+        </div>
+        <div class="aging-cell danger" onclick="selBucket(this)">
+          <span class="bucket">60 + days</span>
+          <span class="v">$1,000</span>
+          <span class="count">very overdue · 3 invoices</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- TWO COLUMNS: by type + oldest -->
+    <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px;margin-bottom:18px">
+
+      <!-- BY TYPE -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-chart-bar"></i> Owed by client type</div>
+        </div>
+        <div class="share-row">
+          <span class="share-name">Restaurant</span>
+          <div class="share-bar"><div class="fill" style="width:42%;background:var(--blue)"></div></div>
+          <span class="share-val">$6,820</span>
+          <span class="share-pct">42%</span>
+        </div>
+        <div class="share-row">
+          <span class="share-name">Wholesale</span>
+          <div class="share-bar"><div class="fill" style="width:24%;background:var(--accent)"></div></div>
+          <span class="share-val">$3,940</span>
+          <span class="share-pct">24%</span>
+        </div>
+        <div class="share-row">
+          <span class="share-name">Export</span>
+          <div class="share-bar"><div class="fill" style="width:18%;background:var(--text)"></div></div>
+          <span class="share-val">$2,920</span>
+          <span class="share-pct">18%</span>
+        </div>
+        <div class="share-row">
+          <span class="share-name">Corporate</span>
+          <div class="share-bar"><div class="fill" style="width:9%;background:var(--accent2)"></div></div>
+          <span class="share-val">$1,460</span>
+          <span class="share-pct">9%</span>
+        </div>
+        <div class="share-row">
+          <span class="share-name">Shop</span>
+          <div class="share-bar"><div class="fill" style="width:5%;background:var(--text3)"></div></div>
+          <span class="share-val">$780</span>
+          <span class="share-pct">5%</span>
+        </div>
+        <div class="share-row">
+          <span class="share-name">Fill clients</span>
+          <div class="share-bar"><div class="fill" style="width:2%;background:#86EFAC"></div></div>
+          <span class="share-val">$320</span>
+          <span class="share-pct">2%</span>
+        </div>
+      </div>
+
+      <!-- OLDEST OUTSTANDING -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><i class="ti ti-alert-triangle" style="color:var(--red)"></i> Oldest unpaid</div>
+          <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">60+ days</span>
+        </div>
+        <div class="oldest-row">
+          <div>
+            <div class="nm">Hamra Supermarket</div>
+            <div class="sub">INV-0192 · issued 10 Jan 2026</div>
+          </div>
+          <div class="amt">$480.00</div>
+          <div class="age">132 days</div>
+        </div>
+        <div class="oldest-row">
+          <div>
+            <div class="nm">Beirut Wholesale Co.</div>
+            <div class="sub">INV-0204 · issued 18 Jan 2026</div>
+          </div>
+          <div class="amt">$320.00</div>
+          <div class="age">124 days</div>
+        </div>
+        <div class="oldest-row">
+          <div>
+            <div class="nm">Cedar Grill House</div>
+            <div class="sub">INV-0216 · issued 28 Jan 2026</div>
+          </div>
+          <div class="amt">$200.00</div>
+          <div class="age">114 days</div>
+        </div>
+        <div style="padding:11px 18px;background:var(--surface2);border-top:1px solid var(--border);font-size:12px;color:var(--text2);font-family:'IBM Plex Mono',monospace">
+          <a href="#" style="color:var(--red);text-decoration:none">Send overdue reminder to all 3 →</a>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- CONTROLS -->
+    <div class="controls">
+      <div class="search-wrap">
+        <i class="ti ti-search"></i>
+        <input type="text" placeholder="Search clients…">
+      </div>
+      <div class="seg">
+        <div class="seg-opt sel">All <span style="color:var(--text3);margin-left:4px">15</span></div>
+        <div class="seg-opt">Restaurant <span style="color:var(--text3);margin-left:4px">5</span></div>
+        <div class="seg-opt">Wholesale <span style="color:var(--text3);margin-left:4px">3</span></div>
+        <div class="seg-opt">Export <span style="color:var(--text3);margin-left:4px">2</span></div>
+        <div class="seg-opt">Corporate <span style="color:var(--text3);margin-left:4px">2</span></div>
+        <div class="seg-opt">Shop <span style="color:var(--text3);margin-left:4px">2</span></div>
+        <div class="seg-opt">Fill <span style="color:var(--text3);margin-left:4px">1</span></div>
+      </div>
+      <span style="margin-left:auto;font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">sort: oldest first</span>
+    </div>
+
+    <!-- CLIENT BALANCE TABLE -->
+    <div class="card">
+      <div class="bal-row head">
+        <span></span>
+        <span>Client</span>
+        <span>Type</span>
+        <span class="right">Currency</span>
+        <span class="right">Last payment</span>
+        <span class="right">Oldest invoice</span>
+        <span class="right">Balance</span>
+        <span class="right">Actions</span>
+      </div>
+
+      <!-- 1 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av red">HS</div>
+        <div class="bal-client">
+          <span class="bal-name">Hamra Supermarket</span>
+          <span class="bal-meta">+961 1 745 322 · since 2023</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">shop</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="color:var(--text3);font-size:12px">no payment yet</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill danger" style="width:100%"></div></div>
+          <span class="age-days danger">132 d</span>
+        </div>
+        <span class="balance-cell red">$2,140</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 2 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av blue">AR</div>
+        <div class="bal-client">
+          <span class="bal-name">Al Rawda Restaurant <span class="ar" style="color:var(--text3);font-weight:400" dir="rtl">· مطعم الروضة</span></span>
+          <span class="bal-meta">+961 71 234 567 · Hamra</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">restaurant</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">28 Apr · $420</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill warn" style="width:55%"></div></div>
+          <span class="age-days warn">41 d</span>
+        </div>
+        <span class="balance-cell amber">$840</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 3 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av amber">BB</div>
+        <div class="bal-client">
+          <span class="bal-name">Byblos BBQ Supply</span>
+          <span class="bal-meta">+961 9 442 080 · since 2022</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">wholesale</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">02 May · $800</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill warn" style="width:30%"></div></div>
+          <span class="age-days warn">23 d</span>
+        </div>
+        <span class="balance-cell amber">$2,100</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 4 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av">GE</div>
+        <div class="bal-client">
+          <span class="bal-name">Gulf Charcoal Exports</span>
+          <span class="bal-meta">Dubai · BL terms 30% / 70%</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">export</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">12 May · $4,200</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill warn" style="width:18%"></div></div>
+          <span class="age-days warn">18 d</span>
+        </div>
+        <span class="balance-cell amber">$2,920</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 5 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av red">CG</div>
+        <div class="bal-client">
+          <span class="bal-name">Cedar Grill House</span>
+          <span class="bal-meta">+961 70 998 211 · Jdeideh</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">restaurant</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">14 Feb · $180</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill danger" style="width:90%"></div></div>
+          <span class="age-days danger">114 d</span>
+        </div>
+        <span class="balance-cell red">$640</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 6 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av blue">CM</div>
+        <div class="bal-client">
+          <span class="bal-name">Chez Michel <span class="ar" style="color:var(--text3);font-weight:400" dir="rtl">· شيه ميشال</span></span>
+          <span class="bal-meta">+961 1 322 808 · Achrafieh</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">restaurant</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">15 May · $640</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill ok" style="width:12%"></div></div>
+          <span class="age-days ok">11 d</span>
+        </div>
+        <span class="balance-cell amber">$420</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 7 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av amber">BW</div>
+        <div class="bal-client">
+          <span class="bal-name">Beirut Wholesale Co.</span>
+          <span class="bal-meta">+961 1 209 110 · Bourj Hammoud</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">wholesale</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">14 Jan · $600</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill danger" style="width:96%"></div></div>
+          <span class="age-days danger">124 d</span>
+        </div>
+        <span class="balance-cell red">$1,840</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 8 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av blue">JG</div>
+        <div class="bal-client">
+          <span class="bal-name">Jal el Dib Grill</span>
+          <span class="bal-meta">+961 76 117 005 · since 2024</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">restaurant</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">08 May · $200</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill warn" style="width:20%"></div></div>
+          <span class="age-days warn">19 d</span>
+        </div>
+        <span class="balance-cell amber">$520</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 9 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av amber">JN</div>
+        <div class="bal-client">
+          <span class="bal-name">Jounieh Restaurant Network</span>
+          <span class="bal-meta">3 venues · corporate</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">corporate</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">04 May · $1,400</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill warn" style="width:22%"></div></div>
+          <span class="age-days warn">21 d</span>
+        </div>
+        <span class="balance-cell amber">$1,140</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 10 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av">DE</div>
+        <div class="bal-client">
+          <span class="bal-name">Damascus Export Trading</span>
+          <span class="bal-meta">Damascus · BL terms</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">export</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">06 May · $4,200</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill ok" style="width:15%"></div></div>
+          <span class="age-days ok">15 d</span>
+        </div>
+        <span class="balance-cell amber">$1,820</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 11 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av blue">MK</div>
+        <div class="bal-client">
+          <span class="bal-name">Mar Mikhael Grill <span class="ar" style="color:var(--text3);font-weight:400" dir="rtl">· شواية مار مخايل</span></span>
+          <span class="bal-meta">+961 71 822 408</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">restaurant</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">12 May · $180</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill ok" style="width:8%"></div></div>
+          <span class="age-days ok">9 d</span>
+        </div>
+        <span class="balance-cell amber">$360</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 12 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av green">TS</div>
+        <div class="bal-client">
+          <span class="bal-name">Tripoli Sahha Coal</span>
+          <span class="bal-meta">+961 6 432 110 · since 2023</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">wholesale</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">17 May · $500</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill ok" style="width:5%"></div></div>
+          <span class="age-days ok">5 d</span>
+        </div>
+        <span class="balance-cell amber">$320</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 13 -->
+      <div class="bal-row" onclick="window.location.href='fill-client-detail.html'">
+        <div class="bal-av green">SH</div>
+        <div class="bal-client">
+          <span class="bal-name">Al Sahha Catering <span class="ar" style="color:var(--text3);font-weight:400" dir="rtl">· الصحة للتموين</span></span>
+          <span class="bal-meta">FILL CLIENT · brings own bags</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">corporate · fill</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">22 Apr · $300</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill warn" style="width:25%"></div></div>
+          <span class="age-days warn">20 d</span>
+        </div>
+        <span class="balance-cell amber">$320</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="fill-client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 14 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av">SH2</div>
+        <div class="bal-client">
+          <span class="bal-name">Sidon Hardware &amp; Coal</span>
+          <span class="bal-meta">Sidon · LBP terms</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">shop</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">LBP</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">02 May · 22M LBP</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill warn" style="width:23%"></div></div>
+          <span class="age-days warn">22 d</span>
+        </div>
+        <span class="balance-cell amber">$300 <small style="font-weight:400;font-size:10px;color:var(--text3);font-family:'IBM Plex Mono',monospace;letter-spacing:0">≈ 27M LBP</small></span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <!-- 15 -->
+      <div class="bal-row" onclick="window.location.href='client-detail.html'">
+        <div class="bal-av amber">CM2</div>
+        <div class="bal-client">
+          <span class="bal-name">Casino Mar Mikhael</span>
+          <span class="bal-meta">corporate · venue</span>
+        </div>
+        <span style="font-size:12px;color:var(--text2)">corporate</span>
+        <span class="num" style="font-weight:400;color:var(--text2)">USD</span>
+        <span class="num" style="font-size:12px;color:var(--text2)">10 May · $200</span>
+        <div class="age-cell">
+          <div class="age-bar"><div class="fill ok" style="width:13%"></div></div>
+          <span class="age-days ok">13 d</span>
+        </div>
+        <span class="balance-cell amber">$320</span>
+        <div class="row-actions" onclick="event.stopPropagation()">
+          <a class="icon-btn" href="client-detail.html" title="View"><i class="ti ti-arrow-up-right"></i></a>
+          <a class="icon-btn" href="invoice.html" target="_blank" title="Print statement"><i class="ti ti-printer"></i></a>
+          <a class="icon-btn primary" href="payment.html" title="Log payment"><i class="ti ti-cash"></i></a>
+        </div>
+      </div>
+
+      <div class="bal-foot">
+        <span></span>
+        <span>15 clients with balance</span>
+        <span></span>
+        <span class="num" style="text-align:right">14 USD · 1 LBP</span>
+        <span></span>
+        <span style="text-align:right">avg 38 days</span>
+        <span class="total">$16,240</span>
+        <span></span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  function selBucket(el) {
+    el.parentElement.querySelectorAll('.aging-cell').forEach(c => c.classList.remove('sel'));
+    el.classList.add('sel');
+  }
+</script>
+</body>
+</html>

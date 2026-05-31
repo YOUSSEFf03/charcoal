@@ -1,0 +1,638 @@
+{
+  "info": {
+    "name": "Charcoal Business Accounting System",
+    "description": "Complete API collection for the Charcoal Business Accounting System. All routes require Bearer JWT from Clerk except /health and /webhooks/clerk.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "variable": [
+    { "key": "BASE_URL", "value": "http://localhost:3000/api/v1", "type": "string" },
+    { "key": "AUTH_TOKEN", "value": "YOUR_CLERK_JWT_HERE", "type": "string" },
+    { "key": "SUPPLIER_ID", "value": "supplier-001", "type": "string" },
+    { "key": "CONTAINER_ID", "value": "container-001", "type": "string" },
+    { "key": "LOT_ID", "value": "lot-001", "type": "string" },
+    { "key": "BAG_TYPE_ID", "value": "bagtype-2kg", "type": "string" },
+    { "key": "CLIENT_ID", "value": "client-001", "type": "string" },
+    { "key": "ORDER_ID", "value": "order-001", "type": "string" },
+    { "key": "INVOICE_ID", "value": "invoice-001", "type": "string" },
+    { "key": "SHIPMENT_ID", "value": "shipment-001", "type": "string" },
+    { "key": "TRIP_ID", "value": "trip-001", "type": "string" },
+    { "key": "WORKER_ID", "value": "worker-001", "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{AUTH_TOKEN}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/health", "host": ["{{BASE_URL}}"], "path": ["health"] }
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"status\":\"ok\",\"database\":\"connected\"}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/auth/me", "host": ["{{BASE_URL}}"], "path": ["auth", "me"] }
+          }
+        },
+        {
+          "name": "List Users (owner only)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/users", "host": ["{{BASE_URL}}"], "path": ["users"] }
+          }
+        },
+        {
+          "name": "Update User Role (owner only)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/users/{{USER_ID}}/role" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"role\":\"sales_rep\"}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Suppliers",
+      "item": [
+        {
+          "name": "List Suppliers",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/suppliers?page=1&limit=20", "host": ["{{BASE_URL}}"], "path": ["suppliers"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Get Supplier by ID",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/suppliers/{{SUPPLIER_ID}}" }
+          }
+        },
+        {
+          "name": "Create Supplier",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/suppliers" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Gulf Charcoal Trading\",\n  \"country\": \"UAE\",\n  \"contactPersons\": [{\"name\": \"Mohammed Al-Mansoori\", \"phone\": \"+971 50 000001\", \"role\": \"Sales Director\"}],\n  \"charcoalTypes\": [{\"type\": \"BBQ hardwood\", \"grade\": \"A\"}],\n  \"paymentTerms\": \"50% upfront, 50% on BL\",\n  \"leadTimeDays\": 30\n}"
+            }
+          }
+        },
+        {
+          "name": "Update Supplier",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/suppliers/{{SUPPLIER_ID}}" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"paymentTerms\": \"40% upfront, 60% on BL\", \"leadTimeDays\": 35}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Containers",
+      "item": [
+        {
+          "name": "List Containers",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/containers?page=1&limit=20" }
+          }
+        },
+        {
+          "name": "List Containers - Arrived",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/containers?status=arrived" }
+          }
+        },
+        {
+          "name": "Get Container (full details)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/containers/{{CONTAINER_ID}}" }
+          }
+        },
+        {
+          "name": "Create Container",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/containers" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"number\": \"CONT-2024-003\",\n  \"supplierId\": \"{{SUPPLIER_ID}}\",\n  \"status\": \"port\",\n  \"notes\": \"Arriving end of month\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Mark Container as Arrived (auto-creates lots)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/containers/{{CONTAINER_ID}}" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\": \"arrived\", \"arrivalDate\": \"2024-05-26\"}"
+            }
+          }
+        },
+        {
+          "name": "Add Container Expense",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/containers/{{CONTAINER_ID}}/expenses" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"description\": \"Late invoice — agent fees\", \"amount\": \"120.00\"}"
+            }
+          }
+        },
+        {
+          "name": "Get Container Expenses",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/containers/{{CONTAINER_ID}}/expenses" }
+          }
+        },
+        {
+          "name": "Add Product Line",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/containers/{{CONTAINER_ID}}/product-lines" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"charcoalType\": \"BBQ hardwood\",\n  \"grade\": \"A\",\n  \"supplierId\": \"{{SUPPLIER_ID}}\",\n  \"paidBags\": 800,\n  \"giftBags\": 20,\n  \"kgPerBag\": \"10.000\",\n  \"pricePerTon\": \"280.00\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Set Discount",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/containers/{{CONTAINER_ID}}/discount" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amount\": \"100.00\"}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Warehouse",
+      "item": [
+        {
+          "name": "Warehouse Summary",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/warehouse/summary" }
+          }
+        },
+        {
+          "name": "List Stock Lots",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/stock-lots?hasStock=true" }
+          }
+        },
+        {
+          "name": "Create Direct Stock Lot",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/stock-lots" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"charcoalType\": \"restaurant grade\",\n  \"grade\": \"B\",\n  \"supplierId\": \"{{SUPPLIER_ID}}\",\n  \"kgReceived\": \"2000.000\",\n  \"costPerKg\": \"0.2900\",\n  \"dateReceived\": \"2024-05-26\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List Bag Types",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/bag-types" }
+          }
+        },
+        {
+          "name": "Create Bag Type",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/bag-types" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"1.9kg bag\",\n  \"nominalKg\": \"1.900\",\n  \"costPerBag\": \"0.0800\",\n  \"workerRate\": \"0.0500\",\n  \"note\": \"Same physical bag as 2kg\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Packed Stock Summary",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/packed-stock/summary" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Packing Sessions",
+      "item": [
+        {
+          "name": "List Packing Sessions",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/packing-sessions?page=1&limit=20" }
+          }
+        },
+        {
+          "name": "Create Packing Session",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/packing-sessions" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lotId\": \"{{LOT_ID}}\",\n  \"mode\": \"stock\",\n  \"kgConsumed\": \"300.000\",\n  \"bagsOutput\": [\n    {\"bagTypeId\": \"{{BAG_TYPE_ID}}\", \"quantity\": 100},\n    {\"bagTypeId\": \"bagtype-5kg\", \"quantity\": 20}\n  ],\n  \"date\": \"2024-05-26\",\n  \"notes\": \"Morning shift\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create Session - With Negative Variance (needs note)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/packing-sessions" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lotId\": \"{{LOT_ID}}\",\n  \"mode\": \"stock\",\n  \"kgConsumed\": \"200.000\",\n  \"bagsOutput\": [{\"bagTypeId\": \"bagtype-10kg\", \"quantity\": 21}],\n  \"varianceNote\": \"Scale was off — recalibrated after session\",\n  \"date\": \"2024-05-26\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Clients",
+      "item": [
+        {
+          "name": "List Clients",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/clients?page=1&limit=20" }
+          }
+        },
+        {
+          "name": "CRM Overdue Clients",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/clients/overdue" }
+          }
+        },
+        {
+          "name": "Get Client",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/clients/{{CLIENT_ID}}" }
+          }
+        },
+        {
+          "name": "Create Client",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/clients" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Al-Nakheel Restaurant\",\n  \"type\": \"restaurant\",\n  \"currency\": \"USD\",\n  \"phones\": [{\"number\": \"+961 70 123456\", \"label\": \"mobile\", \"isActive\": true, \"dateAdded\": \"2024-05-26\"}],\n  \"preferredTypes\": [{\"charcoalType\": \"BBQ hardwood\", \"grade\": \"A\"}],\n  \"paymentTerms\": \"net 15\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Add Phone (never deleted)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/clients/{{CLIENT_ID}}/phones" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"number\": \"+961 1 999888\", \"label\": \"office\"}"
+            }
+          }
+        },
+        {
+          "name": "Get Client Balance",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/clients/{{CLIENT_ID}}/balance" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "item": [
+        {
+          "name": "List Orders",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/orders?page=1&limit=20" }
+          }
+        },
+        {
+          "name": "Get Order",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/orders/{{ORDER_ID}}" }
+          }
+        },
+        {
+          "name": "Create Order",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/orders" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clientId\": \"{{CLIENT_ID}}\",\n  \"charcoalType\": \"BBQ hardwood\",\n  \"grade\": \"A\",\n  \"totalKgRequested\": \"200.000\",\n  \"bagTypeId\": \"bagtype-10kg\",\n  \"pricePerBag\": \"8.50\",\n  \"bagLines\": [{\"bagTypeId\": \"bagtype-10kg\", \"quantity\": 20}],\n  \"notes\": \"Urgent delivery before weekend\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Delivery",
+      "item": [
+        {
+          "name": "List Shipments",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/shipments?page=1" }
+          }
+        },
+        {
+          "name": "Create Shipment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/shipments" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{ORDER_ID}}\",\n  \"address\": \"Mar Elias Street, Beirut\",\n  \"bags\": [{\"bagTypeId\": \"bagtype-10kg\", \"quantity\": 20}]\n}"
+            }
+          }
+        },
+        {
+          "name": "Driver - Log Actual Weight",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/shipments/{{SHIPMENT_ID}}/actual-weight" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"actualKg\": \"202.500\"}"
+            }
+          }
+        },
+        {
+          "name": "Driver - Confirm Delivery",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/shipments/{{SHIPMENT_ID}}/confirm-delivery" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deliveredAt\": \"2024-05-26T14:30:00.000Z\",\n  \"paymentMethod\": \"cash\",\n  \"paymentAmount\": \"170.00\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Receipt for Printing",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/shipments/{{SHIPMENT_ID}}/receipt" }
+          }
+        },
+        {
+          "name": "Driver - Log Return",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/shipments/{{SHIPMENT_ID}}/return" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bags\": [{\"bagTypeId\": \"bagtype-10kg\", \"quantity\": 3}],\n  \"reason\": \"Client refused — wrong grade\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create Driver Trip",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/driver-trips" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"driverId\": \"user-driver-001\",\n  \"shipmentIds\": [\"{{SHIPMENT_ID}}\"],\n  \"notes\": \"Beirut south route\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Complete Trip",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/driver-trips/{{TRIP_ID}}/complete" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fuelCost\": \"15.00\",\n  \"otherExpenses\": [{\"description\": \"Toll\", \"amount\": \"3.00\"}]\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Invoices",
+      "item": [
+        {
+          "name": "List Invoices",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/invoices?page=1" }
+          }
+        },
+        {
+          "name": "Create Invoice",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/invoices" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clientId\": \"{{CLIENT_ID}}\",\n  \"orderId\": \"{{ORDER_ID}}\",\n  \"currency\": \"USD\",\n  \"lines\": [{\"bagTypeId\": \"bagtype-10kg\", \"bagTypeName\": \"10kg bag\", \"qty\": 20, \"pricePerBag\": \"8.50\"}],\n  \"dueDate\": \"2024-06-26\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Issue Invoice",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{BASE_URL}}/invoices/{{INVOICE_ID}}/issue" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Payments",
+      "item": [
+        {
+          "name": "List Payments",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/payments?page=1" }
+          }
+        },
+        {
+          "name": "Log Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/payments" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clientId\": \"{{CLIENT_ID}}\",\n  \"invoiceId\": \"{{INVOICE_ID}}\",\n  \"amount\": \"170.00\",\n  \"currency\": \"USD\",\n  \"method\": \"cash\",\n  \"date\": \"2024-05-26\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Workers",
+      "item": [
+        {
+          "name": "List Workers (owner only)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/workers" }
+          }
+        },
+        {
+          "name": "Set Worker Rates",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/workers/{{WORKER_ID}}/rates" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ratesPerBagType\": [\n    {\"bagTypeId\": \"bagtype-2kg\", \"ratePerBag\": \"0.0500\"},\n    {\"bagTypeId\": \"bagtype-5kg\", \"ratePerBag\": \"0.0800\"},\n    {\"bagTypeId\": \"bagtype-10kg\", \"ratePerBag\": \"0.1200\"}\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Log Worker Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/workers/{{WORKER_ID}}/payments" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amount\": \"150.00\", \"date\": \"2024-05-31\", \"notes\": \"May settlement\"}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports",
+      "item": [
+        {
+          "name": "P&L Report (owner only)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/reports/profit-loss?dateFrom=2024-01-01&dateTo=2024-05-31" }
+          }
+        },
+        {
+          "name": "Stock Value Report",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/reports/stock-value" }
+          }
+        },
+        {
+          "name": "Variance Report",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/reports/variance?dateFrom=2024-01-01" }
+          }
+        },
+        {
+          "name": "Client Ledger",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/reports/client-ledger/{{CLIENT_ID}}" }
+          }
+        },
+        {
+          "name": "Worker Earnings (owner only)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/reports/worker-earnings/{{WORKER_ID}}" }
+          }
+        },
+        {
+          "name": "Physical Count — Get Items",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{BASE_URL}}/reports/physical-count" }
+          }
+        },
+        {
+          "name": "Physical Count — Submit Results",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{BASE_URL}}/reports/physical-count" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\"type\": \"lot\", \"id\": \"{{LOT_ID}}\", \"countedQty\": \"3150.000\", \"reason\": \"Dust and spillage at lot edges\"}\n  ]\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

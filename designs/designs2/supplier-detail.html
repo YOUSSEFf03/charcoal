@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Al-Amin Trading</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .ar { font-family: 'Noto Sans Arabic', 'IBM Plex Sans', sans-serif; }
+
+  /* hero */
+  .sup-hero { display: flex; align-items: flex-start; gap: 18px; }
+  .sup-mono {
+    width: 60px; height: 60px; border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 700; letter-spacing: -0.3px;
+  }
+  .sup-hero h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.5px; }
+
+  /* KPI strip */
+  .kpi-strip {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
+    min-width: 760px;
+  }
+
+  /* row */
+  .num { font-family: 'IBM Plex Mono', monospace; text-align: right; font-weight: 500; }
+  .num.green { color: var(--accent); }
+  .num.amber { color: var(--accent2); }
+  .num.red { color: var(--red); }
+
+  /* tables generic */
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table th {
+    text-align: left; padding: 9px 18px; font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 0.6px;
+    border-bottom: 1px solid var(--border); font-weight: 400;
+    background: var(--surface2);
+  }
+  .data-table td {
+    padding: 11px 18px; border-bottom: 1px solid var(--border);
+    font-size: 13px; vertical-align: middle;
+  }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tbody tr { transition: background 0.1s; }
+  .data-table tbody tr.clickable { cursor: pointer; }
+  .data-table tbody tr.clickable:hover { background: #FAFAF8; }
+  .data-table .right { text-align: right; }
+
+  .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+  .icon-btn {
+    width: 28px; height: 28px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface);
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text2); transition: all 0.1s; text-decoration: none;
+  }
+  .icon-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--text3); }
+  .icon-btn i { font-size: 14px; }
+
+  /* balance hero card (large) */
+  .balance-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 18px 20px;
+    display: flex; align-items: center; gap: 24px;
+    margin-bottom: 14px;
+  }
+  .balance-card .bcell { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+  .balance-card .bcell .lbl {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .balance-card .bcell .v {
+    font-family: 'IBM Plex Mono', monospace; font-size: 26px;
+    font-weight: 700; letter-spacing: -0.8px; line-height: 1.1;
+  }
+  .balance-card .bcell .v.amber { color: var(--accent2); }
+  .balance-card .bcell .v.green { color: var(--accent); }
+  .balance-card .bcell .sub {
+    font-size: 11.5px; color: var(--text3); font-family: 'IBM Plex Mono', monospace;
+  }
+  .balance-card .vline {
+    width: 1px; height: 60px; background: var(--border);
+  }
+  .balance-card .pay-action {
+    display: flex; flex-direction: column; gap: 6px; min-width: 200px;
+  }
+
+  /* charcoal types table */
+  .ctype-row {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr 110px 90px 100px 36px;
+    gap: 12px; align-items: center;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .ctype-row:last-child { border-bottom: none; }
+  .ctype-row.head {
+    background: var(--surface2);
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+    padding: 8px 18px;
+  }
+  .ctype-row.head .right { text-align: right; }
+  .ctype-row .type-name { font-weight: 600; font-size: 14px; }
+  .ctype-row .type-name small {
+    display: block; font-size: 11px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace; font-weight: 400; margin-top: 1px;
+  }
+  .grade-pill {
+    display: inline-block; padding: 2px 9px;
+    border-radius: 100px; font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px; font-weight: 600;
+  }
+  .grade-A { background: var(--accent-bg); color: var(--accent); }
+  .grade-B { background: var(--accent2-bg); color: var(--accent2); }
+  .grade-C { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
+
+  .price-cell {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 700;
+    font-size: 16px; text-align: right;
+  }
+  .price-cell small {
+    display: block; font-size: 10.5px; color: var(--text3);
+    font-weight: 400; margin-top: 1px;
+  }
+  .delta {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;
+    text-align: right; font-weight: 500;
+  }
+  .delta.up { color: var(--red); }
+  .delta.down { color: var(--accent); }
+  .delta.flat { color: var(--text3); }
+  .stock-cell {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+    text-align: right; font-size: 13px;
+  }
+
+  /* containers list */
+  .cont-row {
+    display: grid;
+    grid-template-columns: 100px 1fr 1.5fr 90px 110px 100px 70px;
+    gap: 12px; align-items: center;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px; cursor: pointer;
+  }
+  .cont-row:last-child { border-bottom: none; }
+  .cont-row:hover { background: #FAFAF8; }
+  .cont-row.head {
+    cursor: default; background: var(--surface2);
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+    padding: 8px 18px;
+  }
+  .cont-row.head .right { text-align: right; }
+  .cont-row.head:hover { background: var(--surface2); }
+  .cont-row .cdate {
+    font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text2);
+  }
+  .cont-row .cid { font-weight: 600; font-family: 'IBM Plex Mono', monospace; font-size: 13px; }
+  .cont-row .cid small {
+    display: block; font-size: 11px; color: var(--text3);
+    font-weight: 400; margin-top: 1px; font-family: 'IBM Plex Sans', sans-serif;
+  }
+
+  /* price history mini chart */
+  .ph-row {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 10px 18px; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .ph-row:last-child { border-bottom: none; }
+  .ph-date {
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+    color: var(--text2); width: 95px; flex-shrink: 0;
+  }
+  .ph-spec { flex: 1; }
+  .ph-spec strong { font-weight: 500; }
+  .ph-spec small {
+    font-size: 11px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace; margin-left: 6px;
+  }
+  .ph-change {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+    font-size: 14px;
+  }
+  .ph-change .arrow { font-size: 11px; margin: 0 4px; color: var(--text3); }
+  .ph-change.up { color: var(--red); }
+  .ph-change.down { color: var(--accent); }
+  .ph-by {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+    color: var(--text3);
+  }
+
+  /* contact / bank rows */
+  .info-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 18px; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .info-row:last-child { border-bottom: none; }
+  .info-row .lbl {
+    font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    min-width: 110px;
+  }
+  .info-row .val { font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
+  .info-row .copy {
+    margin-left: auto; padding: 4px 8px;
+    border: 1px solid var(--border); border-radius: 5px;
+    background: var(--surface); cursor: pointer;
+    font-size: 11px; color: var(--text3);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .info-row .copy:hover { background: var(--surface2); color: var(--text); }
+
+  /* activity */
+  .act-row { padding: 10px 18px; display: flex; gap: 11px; border-bottom: 1px solid var(--border); }
+  .act-row:last-child { border-bottom: none; }
+  .act-icon {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: var(--surface2); color: var(--text2);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .act-icon i { font-size: 13px; }
+  .act-icon.green { background: var(--accent-bg); color: var(--accent); }
+  .act-icon.amber { background: var(--accent2-bg); color: var(--accent2); }
+  .act-icon.blue { background: var(--blue-bg); color: var(--blue); }
+  .act-icon.red { background: var(--red-bg); color: var(--red); }
+  .act-text { font-size: 13px; line-height: 1.45; }
+  .act-text strong { font-weight: 500; }
+  .act-time { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-top: 2px; }
+
+  /* show-more foot */
+  .more-foot {
+    padding: 10px 14px; background: var(--surface2);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; color: var(--text3); font-family: 'IBM Plex Mono', monospace;
+  }
+  .btn-more {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: 12px; font-weight: 500;
+    font-family: 'IBM Plex Sans', sans-serif; cursor: pointer;
+  }
+  .btn-more:hover { background: var(--text); color: #fff; border-color: var(--text); }
+
+  /* export bar */
+  .export-bar {
+    display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;
+  }
+  .export-bar .lbl {
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .date-mini {
+    height: 30px; padding: 0 8px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); color: var(--text);
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px; outline: none;
+  }
+  .date-mini:focus { border-color: var(--text); }
+  .export-bar .arrow { font-size: 11px; color: var(--text3); }
+  .btn-export {
+    height: 30px; padding: 0 11px;
+    background: var(--accent); color: #fff;
+    border: 1px solid var(--accent); border-radius: 6px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    font-family: 'IBM Plex Sans', sans-serif;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .btn-export:hover { background: #155237; border-color: #155237; }
+  .card-head { flex-wrap: wrap; gap: 10px; row-gap: 8px; }
+
+  /* MODAL */
+  .modal-shade {
+    position: fixed; inset: 0; background: rgba(26,25,22,0.45);
+    display: none; align-items: center; justify-content: center;
+    z-index: 100; padding: 20px; backdrop-filter: blur(2px);
+  }
+  .modal-shade.show { display: flex; }
+  .modal {
+    background: var(--surface); border-radius: var(--radius-lg);
+    width: 100%; max-width: 620px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.25);
+  }
+  .modal-head {
+    padding: 16px 22px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .modal-head h2 {
+    font-size: 16px; font-weight: 600; letter-spacing: -0.2px;
+    display: flex; align-items: center; gap: 9px;
+  }
+  .modal-head h2 i { color: var(--text2); font-size: 18px; }
+  .modal-body { padding: 18px 22px; }
+  .modal-foot {
+    padding: 12px 22px; border-top: 1px solid var(--border);
+    background: var(--surface2);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .modal-foot .hint {
+    font-size: 11.5px; color: var(--text3); font-family: 'IBM Plex Mono', monospace;
+  }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .form-grid .full { grid-column: 1 / -1; }
+  .field-label {
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px;
+    display: block; margin-bottom: 4px; font-weight: 500;
+  }
+
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: #fff;
+    padding: 11px 18px; border-radius: var(--radius);
+    font-size: 13px; display: flex; align-items: center; gap: 8px;
+    opacity: 0; pointer-events: none; transition: all 0.25s;
+    z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast i { color: #6ee7b7; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="suppliers"></aside>
+
+<div class="main">
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="back-link" href="suppliers.html"><i class="ti ti-chevron-left"></i> All suppliers</a>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-title" id="topName">Al-Amin Trading</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn"><i class="ti ti-edit" style="font-size:15px"></i> Change info</button>
+      <button class="btn primary" onclick="openPay()"><i class="ti ti-cash" style="font-size:15px"></i> Pay supplier</button>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- HERO -->
+    <div class="page-header">
+      <div class="sup-hero">
+        <div class="sup-mono" id="heroMono" style="background:var(--accent-bg);color:var(--accent)">AA</div>
+        <div>
+          <h1 id="heroName">Al-Amin Trading</h1>
+          <div class="ar" id="heroNameAr" style="font-size:14px;color:var(--text2);margin-top:2px" dir="rtl">شركة الأمين للتجارة</div>
+          <div class="page-header-meta">
+            <span class="badge badge-green" id="heroTag">main supplier</span>
+            <span class="badge badge-gray" id="heroCur">USD</span>
+            <span class="meta-row"><i class="ti ti-map-pin"></i> <span id="heroLoc">Damascus, Syria</span></span>
+            <span class="meta-row"><i class="ti ti-calendar"></i> with us since Feb 2022</span>
+            <span class="meta-row"><i class="ti ti-truck-delivery"></i> pays in 30 days · by sea or land</span>
+          </div>
+        </div>
+      </div>
+      <div class="kpi-strip">
+        <div class="kpi-tile amber">
+          <div class="kpi-tile-label">We owe them</div>
+          <div class="kpi-tile-value" id="kpiOwe">$8,420</div>
+          <div class="kpi-tile-sub">2 unpaid bills</div>
+        </div>
+        <div class="kpi-tile">
+          <div class="kpi-tile-label">Bought this year</div>
+          <div class="kpi-tile-value">$42,180</div>
+          <div class="kpi-tile-sub">14 shipments</div>
+        </div>
+        <div class="kpi-tile">
+          <div class="kpi-tile-label">Average price per kg</div>
+          <div class="kpi-tile-value">$0.62</div>
+          <div class="kpi-tile-sub">for BBQ Grade A</div>
+        </div>
+        <div class="kpi-tile">
+          <div class="kpi-tile-label">Last shipment</div>
+          <div class="kpi-tile-value">14d ago</div>
+          <div class="kpi-tile-sub">LOT-0044 · 20 tons</div>
+        </div>
+        <div class="kpi-tile green">
+          <div class="kpi-tile-label">Paid on time</div>
+          <div class="kpi-tile-value">96%</div>
+          <div class="kpi-tile-sub">last 12 months</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BALANCE CARD with Make-payment button -->
+    <div class="balance-card">
+      <div class="bcell">
+        <span class="lbl">Money we still owe</span>
+        <span class="v amber" id="balOpen">$8,420.00</span>
+        <span class="sub">2 bills open · oldest from 22 Apr</span>
+      </div>
+      <div class="vline"></div>
+      <div class="bcell">
+        <span class="lbl">Money paid this year</span>
+        <span class="v green" id="balPaid">$33,760.00</span>
+        <span class="sub">12 payments · 96% on time</span>
+      </div>
+      <div class="vline"></div>
+      <div class="bcell">
+        <span class="lbl">Average wait to pay</span>
+        <span class="v">3.2 days</span>
+        <span class="sub">they give us 30 days</span>
+      </div>
+      <div class="vline"></div>
+      <div class="pay-action">
+        <button class="btn green" onclick="openPay()" style="height:42px;font-size:14px;font-weight:600;justify-content:center"><i class="ti ti-cash" style="font-size:16px"></i> Pay supplier</button>
+        <span style="font-size:11px;color:var(--text3);text-align:center;font-family:'IBM Plex Mono',monospace">USD · LBP · wire · cash</span>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:14px">
+
+      <div class="stack">
+
+        <!-- CHARCOAL TYPES & CURRENT PRICES -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-flame"></i> What we buy &amp; today's prices
+              <span style="font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace" id="typesCount">4 types right now</span>
+            </div>
+            <span style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">price the supplier asks · USD per kg</span>
+          </div>
+          <div class="ctype-row head">
+            <span>Charcoal type</span>
+            <span>Grade</span>
+            <span class="right">Today $/kg</span>
+            <span class="right">vs last price</span>
+            <span class="right">In our warehouse</span>
+            <span></span>
+          </div>
+          <div id="typesBody"></div>
+        </div>
+
+        <!-- CONTAINERS RECEIVED -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-ship"></i> Shipments we got
+              <span style="font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace" id="contCount">14 shipments · 168 tons</span>
+            </div>
+            <div class="export-bar">
+              <span class="lbl">Save as Excel</span>
+              <input class="date-mini" type="date" id="contFrom">
+              <span class="arrow">→</span>
+              <input class="date-mini" type="date" id="contTo">
+              <button class="btn-more" onclick="setPreset('cont','30d')">Last 30 days</button>
+              <button class="btn-more" onclick="setPreset('cont','ytd')">This year</button>
+              <button class="btn-export" onclick="exportRange('cont')"><i class="ti ti-table-export"></i> Download</button>
+            </div>
+          </div>
+          <div class="cont-row head">
+            <span>When it came</span>
+            <span>Shipment ID</span>
+            <span>What was inside</span>
+            <span class="right">Tons</span>
+            <span class="right">What we paid</span>
+            <span>Status</span>
+            <span></span>
+          </div>
+          <div id="contBody"></div>
+          <div class="more-foot">
+            <span id="contStatus">showing 5 of 14 shipments</span>
+            <button class="btn-more" id="contMoreBtn" onclick="loadMore('cont')"><i class="ti ti-chevron-down" style="font-size:14px"></i> Show 10 more</button>
+          </div>
+        </div>
+
+        <!-- PRICE HISTORY -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-trending-up"></i> Price changes over time
+              <span style="font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace">every time the price changed</span>
+            </div>
+            <span style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace" id="priceCount">8 changes since 2024</span>
+          </div>
+          <div id="priceBody"></div>
+        </div>
+
+        <!-- PAYMENTS HISTORY -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-cash"></i> Money we sent
+              <span style="font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace" id="payCount">12 payments · $33,760</span>
+            </div>
+            <div class="export-bar">
+              <span class="lbl">Save as Excel</span>
+              <input class="date-mini" type="date" id="payFrom">
+              <span class="arrow">→</span>
+              <input class="date-mini" type="date" id="payTo">
+              <button class="btn-more" onclick="setPreset('pay','30d')">Last 30 days</button>
+              <button class="btn-more" onclick="setPreset('pay','ytd')">This year</button>
+              <button class="btn-export" onclick="exportRange('pay')"><i class="ti ti-table-export"></i> Download</button>
+            </div>
+          </div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style="width:120px">Date</th>
+                <th style="width:110px">How paid</th>
+                <th>For which shipment</th>
+                <th>Who paid</th>
+                <th class="right" style="width:110px">Amount</th>
+              </tr>
+            </thead>
+            <tbody id="payBody"></tbody>
+          </table>
+          <div class="more-foot">
+            <span id="payStatus">showing 5 of 12 payments</span>
+            <button class="btn-more" id="payMoreBtn" onclick="loadMore('pay')"><i class="ti ti-chevron-down" style="font-size:14px"></i> Show 10 more</button>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="stack">
+
+        <!-- CONTACTS -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-users"></i> People to talk to</div>
+            <button class="card-action"><i class="ti ti-plus" style="font-size:13px"></i> Add</button>
+          </div>
+          <div class="info-row">
+            <div style="width:32px;height:32px;border-radius:50%;background:var(--surface2);color:var(--text);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">KA</div>
+            <div>
+              <div style="font-weight:500">Khalid Al-Amin</div>
+              <div style="font-size:11px;color:var(--text3)">Owner · main contact</div>
+            </div>
+            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--text2)">+963 11 234 5678</span>
+          </div>
+          <div class="info-row">
+            <div style="width:32px;height:32px;border-radius:50%;background:var(--surface2);color:var(--text);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">FA</div>
+            <div>
+              <div style="font-weight:500">Fatima Al-Amin</div>
+              <div style="font-size:11px;color:var(--text3)">Accounting · invoices</div>
+            </div>
+            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--text2)">+963 11 234 5679</span>
+          </div>
+        </div>
+
+        <!-- BANK DETAILS -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-building-bank"></i> Bank details (where we send money)</div>
+            <button class="card-action">Edit</button>
+          </div>
+          <div class="info-row">
+            <span class="lbl">Bank</span>
+            <span class="val">Bank of Syria</span>
+            <button class="copy" onclick="copyText('Bank of Syria')">copy</button>
+          </div>
+          <div class="info-row">
+            <span class="lbl">Account #</span>
+            <span class="val">0012 3456 7890 1234</span>
+            <button class="copy" onclick="copyText('001234567890')">copy</button>
+          </div>
+          <div class="info-row">
+            <span class="lbl">IBAN</span>
+            <span class="val">SY12 3456 7890 1234 5678</span>
+            <button class="copy" onclick="copyText('SY1234567890123456')">copy</button>
+          </div>
+          <div class="info-row">
+            <span class="lbl">SWIFT</span>
+            <span class="val">BOSYSY11</span>
+            <button class="copy" onclick="copyText('BOSYSY11')">copy</button>
+          </div>
+        </div>
+
+        <!-- ACTIVITY -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-activity"></i> What happened recently</div>
+          </div>
+          <div id="activityBody" style="max-height:340px;overflow-y:auto"></div>
+        </div>
+
+        <!-- NOTES -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-notes"></i> Notes</div>
+            <button class="card-action">Edit</button>
+          </div>
+          <div style="padding:14px 18px;font-size:13px;line-height:1.55">
+            <div class="ar" dir="rtl" style="font-size:13.5px">يفضلون الدفع عبر الحوالة البنكية. يقبلون الدفع المؤجل حتى 45 يوماً للزبائن الدائمين.</div>
+            <div style="color:var(--text3);font-style:italic;margin-top:4px;font-size:12.5px">Prefer bank wire. Net 45 available for long-time customers.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ════════════ MODAL · MAKE PAYMENT ════════════ -->
+<div class="modal-shade" id="payModal" onclick="if (event.target === this) closeModal('payModal')">
+  <div class="modal">
+    <div class="modal-head">
+      <h2><i class="ti ti-cash"></i> Pay <span id="payToName">Al-Amin Trading</span></h2>
+      <button class="icon-btn" onclick="closeModal('payModal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div>
+          <span class="field-label">When you paid</span>
+          <input class="input" type="date" id="payDate">
+        </div>
+        <div>
+          <span class="field-label">How you paid</span>
+          <select class="select" id="payMethod">
+            <option>bank transfer</option>
+            <option>cash</option>
+            <option>whish</option>
+            <option>omt</option>
+            <option>cheque</option>
+          </select>
+        </div>
+        <div class="full">
+          <span class="field-label">Which shipment / bill is this for</span>
+          <select class="select" id="payApply">
+            <option>INV-S-0042 · LOT-0044 · $4,800 still owed</option>
+            <option>INV-S-0041 · LOT-0042 · $3,620 still owed</option>
+            <option>— not for a specific bill —</option>
+          </select>
+        </div>
+        <div>
+          <span class="field-label">How much</span>
+          <input class="input num" type="number" id="payAmt" placeholder="0.00" oninput="updatePayPreview()">
+        </div>
+        <div>
+          <span class="field-label">Currency</span>
+          <select class="select" id="payCur" onchange="updatePayPreview()">
+            <option>USD</option>
+            <option>EUR</option>
+            <option>LBP</option>
+          </select>
+        </div>
+        <div>
+          <span class="field-label">Who sent the money</span>
+          <select class="select" id="payBy">
+            <option>Khalil Abi Nader (owner)</option>
+            <option>Rita Salameh (accounts)</option>
+          </select>
+        </div>
+        <div>
+          <span class="field-label">From which account</span>
+          <select class="select" id="payFromAcct">
+            <option>BLOM Bank · main USD</option>
+            <option>Bank Audi · LBP</option>
+            <option>Petty cash</option>
+          </select>
+        </div>
+        <div class="full">
+          <span class="field-label">Note or reference (optional)</span>
+          <input class="input" id="payRef" placeholder="e.g. wire ref, cheque number">
+        </div>
+      </div>
+
+      <div style="margin-top:14px;padding:11px 14px;background:var(--accent-bg);border:1px solid #a7f3d0;border-radius:var(--radius);display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:12px;color:var(--accent)">
+          <strong>After this payment we will still owe</strong>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text3);margin-top:2px">we owe $8,420 right now</div>
+        </div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:700;color:var(--accent2)" id="payRemain">$8,420.00</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint">payment #PAY-S-0013</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeModal('payModal')">Cancel</button>
+        <button class="btn green" onclick="savePay()"><i class="ti ti-check" style="font-size:15px"></i> Save payment</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><i class="ti ti-check-circle"></i><span id="toastMsg">Saved</span></div>
+
+<script>
+  // ── SUPPLIERS LOOKUP ──────────────────────────────────────
+  const SUPPLIERS = {
+    alamin: {
+      name: 'Al-Amin Trading',
+      nameAr: 'شركة الأمين للتجارة',
+      location: 'Damascus, Syria',
+      currency: 'USD',
+      tag: 'primary supplier',
+      tagClass: 'badge-green',
+      initials: 'AA',
+      avatarBg: 'var(--accent-bg)',
+      avatarFg: 'var(--accent)',
+      open: 8420,
+      paidYtd: 33760,
+    },
+    sahara: {
+      name: 'Sahara Export',
+      nameAr: 'صحارى للتصدير',
+      location: 'Alexandria, Egypt',
+      currency: 'USD',
+      tag: 'secondary',
+      tagClass: 'badge-amber',
+      initials: 'SE',
+      avatarBg: 'var(--accent2-bg)',
+      avatarFg: 'var(--accent2)',
+      open: 2300,
+      paidYtd: 18420,
+    },
+    gulf: {
+      name: 'Gulf Charcoal Co.',
+      nameAr: 'شركة الخليج للفحم',
+      location: 'Dubai, UAE',
+      currency: 'USD',
+      tag: 'occasional',
+      tagClass: 'badge-blue',
+      initials: 'GC',
+      avatarBg: 'var(--blue-bg)',
+      avatarFg: 'var(--blue)',
+      open: 0,
+      paidYtd: 12400,
+    },
+  };
+  const params = new URLSearchParams(location.search);
+  const sid = params.get('id') || 'alamin';
+  const supplier = SUPPLIERS[sid] || SUPPLIERS.alamin;
+
+  // ── DATA ──────────────────────────────────────────────────
+  const CHAR_TYPES = [
+    { type: 'BBQ Hardwood',     grade: 'A', price: 0.62, last: 0.58, stock: 12400 },
+    { type: 'BBQ Hardwood',     grade: 'B', price: 0.48, last: 0.50, stock:  9180 },
+    { type: 'Shisha',           grade: 'B', price: 0.74, last: 0.74, stock:  8980 },
+    { type: 'Restaurant Grade', grade: 'A', price: 0.82, last: 0.78, stock:  3200 },
+  ];
+
+  const CONTAINERS = [
+    { id: 'CONT-2026-014', date: '08 May 2026', contents: 'BBQ Hardwood A (20t) · Shisha B (5t)', tons: 25, cost: 14800, status: 'received' },
+    { id: 'CONT-2026-011', date: '14 Apr 2026', contents: 'BBQ Hardwood A (20t)', tons: 20, cost: 11600, status: 'received' },
+    { id: 'CONT-2026-009', date: '01 Apr 2026', contents: 'BBQ Hardwood B (15t) · Restaurant A (5t)', tons: 20, cost: 11200, status: 'received' },
+    { id: 'CONT-2026-006', date: '18 Mar 2026', contents: 'Shisha B (12t) · BBQ A (8t)', tons: 20, cost: 12640, status: 'received' },
+    { id: 'CONT-2026-003', date: '02 Feb 2026', contents: 'BBQ Hardwood A (20t)', tons: 20, cost: 11200, status: 'received' },
+    { id: 'CONT-2026-001', date: '12 Jan 2026', contents: 'BBQ Hardwood A (15t) · Restaurant A (5t)', tons: 20, cost: 11900, status: 'received' },
+    { id: 'CONT-2025-082', date: '14 Dec 2025', contents: 'Shisha B (18t)', tons: 18, cost: 13320, status: 'received' },
+    { id: 'CONT-2025-076', date: '22 Nov 2025', contents: 'BBQ Hardwood A (20t)', tons: 20, cost: 11200, status: 'received' },
+    { id: 'CONT-2025-068', date: '03 Nov 2025', contents: 'BBQ Hardwood B (15t)', tons: 15, cost: 7200, status: 'received' },
+    { id: 'CONT-2025-061', date: '14 Oct 2025', contents: 'Shisha B (12t) · BBQ B (8t)', tons: 20, cost: 12480, status: 'received' },
+    { id: 'CONT-2025-052', date: '26 Sep 2025', contents: 'Restaurant A (20t)', tons: 20, cost: 15600, status: 'received' },
+    { id: 'CONT-2025-044', date: '02 Sep 2025', contents: 'BBQ Hardwood A (20t)', tons: 20, cost: 11200, status: 'received' },
+    { id: 'CONT-2025-037', date: '13 Aug 2025', contents: 'BBQ Hardwood A (15t) · Shisha B (5t)', tons: 20, cost: 11600, status: 'received' },
+    { id: 'CONT-2025-031', date: '20 Jul 2025', contents: 'Restaurant A (15t) · BBQ A (5t)', tons: 20, cost: 13900, status: 'received' },
+  ];
+
+  const PRICE_HISTORY = [
+    { date: '02 May 2026', type: 'BBQ Hardwood', grade: 'A', from: 0.58, to: 0.62, by: 'Khalid Al-Amin' },
+    { date: '02 May 2026', type: 'Restaurant Grade', grade: 'A', from: 0.78, to: 0.82, by: 'Khalid Al-Amin' },
+    { date: '18 Mar 2026', type: 'BBQ Hardwood', grade: 'B', from: 0.50, to: 0.48, by: 'Khalid Al-Amin' },
+    { date: '12 Jan 2026', type: 'Shisha', grade: 'B', from: 0.70, to: 0.74, by: 'Khalid Al-Amin' },
+    { date: '14 Dec 2025', type: 'BBQ Hardwood', grade: 'A', from: 0.55, to: 0.58, by: 'Khalid Al-Amin' },
+    { date: '20 Jul 2025', type: 'BBQ Hardwood', grade: 'A', from: 0.52, to: 0.55, by: 'Khalid Al-Amin' },
+    { date: '14 Apr 2025', type: 'Restaurant Grade', grade: 'A', from: 0.74, to: 0.78, by: 'Khalid Al-Amin' },
+    { date: '01 Feb 2025', type: 'BBQ Hardwood', grade: 'A', from: 0.50, to: 0.52, by: 'Khalid Al-Amin' },
+  ];
+
+  const PAYMENTS = [
+    { date: '12 May 2026', method: 'bank wire', ref: 'CONT-2026-011', by: 'Khalil', acct: 'BLOM USD', amount: 11600 },
+    { date: '22 Apr 2026', method: 'bank wire', ref: 'CONT-2026-009', by: 'Khalil', acct: 'BLOM USD', amount: 11200 },
+    { date: '08 Apr 2026', method: 'bank wire', ref: 'CONT-2026-006', by: 'Rita',   acct: 'BLOM USD', amount: 6320, note: 'partial' },
+    { date: '14 Feb 2026', method: 'bank wire', ref: 'CONT-2026-003', by: 'Khalil', acct: 'BLOM USD', amount: 11200 },
+    { date: '24 Jan 2026', method: 'bank wire', ref: 'CONT-2026-001', by: 'Khalil', acct: 'BLOM USD', amount: 11900 },
+    { date: '28 Dec 2025', method: 'bank wire', ref: 'CONT-2025-082', by: 'Khalil', acct: 'BLOM USD', amount: 13320 },
+    { date: '06 Dec 2025', method: 'bank wire', ref: 'CONT-2025-076', by: 'Khalil', acct: 'BLOM USD', amount: 11200 },
+    { date: '15 Nov 2025', method: 'bank wire', ref: 'CONT-2025-068', by: 'Rita',   acct: 'BLOM USD', amount: 7200 },
+    { date: '28 Oct 2025', method: 'bank wire', ref: 'CONT-2025-061', by: 'Khalil', acct: 'BLOM USD', amount: 12480 },
+    { date: '10 Oct 2025', method: 'bank wire', ref: 'CONT-2025-052', by: 'Khalil', acct: 'BLOM USD', amount: 15600 },
+    { date: '14 Sep 2025', method: 'bank wire', ref: 'CONT-2025-044', by: 'Rita',   acct: 'BLOM USD', amount: 11200 },
+    { date: '26 Aug 2025', method: 'bank wire', ref: 'CONT-2025-037', by: 'Khalil', acct: 'BLOM USD', amount: 11600 },
+  ];
+
+  const ACTIVITY = [
+    { kind: 'blue',  ic: 'ti-ship',     text: '<strong>CONT-2026-014</strong> arrived — 25 tons',                          when: '08 May · 14:20' },
+    { kind: 'green', ic: 'ti-cash',     text: 'Wire payment <strong>$11,600</strong> sent for CONT-2026-011',              when: '12 May · 09:14 · Khalil' },
+    { kind: 'amber', ic: 'ti-trending-up', text: 'Price update — <strong>BBQ A: $0.58 → $0.62/kg</strong>',                when: '02 May · 11:08' },
+    { kind: 'green', ic: 'ti-cash',     text: 'Wire payment <strong>$11,200</strong> sent for CONT-2026-009',              when: '22 Apr · 16:42 · Khalil' },
+    { kind: '',      ic: 'ti-edit',     text: 'Contact added: <strong>Fatima Al-Amin (accounting)</strong>',                when: '15 Dec 2025' },
+  ];
+
+  // state
+  const $ = id => document.getElementById(id);
+  const INITIAL = 5;
+  const STEP = 10;
+  const shown = { cont: INITIAL, pay: INITIAL };
+
+  function fmt(n) { return '$' + Math.abs(+n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',') * (n < 0 ? -1 : 1); }
+  function money(n) {
+    const v = +n || 0;
+    const neg = v < 0 ? '−' : '';
+    return neg + '$' + Math.abs(v).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+  function showToast(msg) {
+    const t = $('toast'); $('toastMsg').textContent = msg;
+    t.classList.add('show'); clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.remove('show'), 2400);
+  }
+  function copyText(s) {
+    navigator.clipboard?.writeText(s).then(() => showToast(`copied "${s}"`));
+  }
+
+  // ── HERO ──────────────────────────────────────────────────
+  function renderHero() {
+    $('topName').textContent = supplier.name;
+    $('heroName').textContent = supplier.name;
+    $('heroNameAr').textContent = supplier.nameAr;
+    $('heroLoc').textContent = supplier.location;
+    $('heroCur').textContent = supplier.currency;
+    $('heroTag').textContent = supplier.tag;
+    $('heroTag').className = 'badge ' + supplier.tagClass;
+    $('heroMono').textContent = supplier.initials;
+    $('heroMono').style.background = supplier.avatarBg;
+    $('heroMono').style.color = supplier.avatarFg;
+    $('balOpen').textContent = money(supplier.open);
+    $('balPaid').textContent = money(supplier.paidYtd);
+    $('kpiOwe').textContent = '$' + (supplier.open / 1000).toFixed(1) + 'k';
+    $('payToName').textContent = supplier.name;
+    document.title = `Ember — ${supplier.name}`;
+  }
+
+  // ── CHARCOAL TYPES ────────────────────────────────────────
+  function renderTypes() {
+    $('typesBody').innerHTML = CHAR_TYPES.map(t => {
+      const delta = t.price - t.last;
+      const dCls = Math.abs(delta) < 0.001 ? 'flat' : delta > 0 ? 'up' : 'down';
+      const arrow = Math.abs(delta) < 0.001 ? '—' : delta > 0 ? '↑' : '↓';
+      const gradeCls = 'grade-' + t.grade;
+      return `
+        <div class="ctype-row">
+          <span class="type-name">${t.type} <small>per kg · ex-supplier</small></span>
+          <span><span class="grade-pill ${gradeCls}">Grade ${t.grade}</span></span>
+          <span class="price-cell">$${t.price.toFixed(2)} <small>was $${t.last.toFixed(2)}</small></span>
+          <span class="delta ${dCls}">${arrow} ${delta === 0 ? '0' : (delta > 0 ? '+' : '−') + '$' + Math.abs(delta).toFixed(2)}</span>
+          <span class="stock-cell">${t.stock.toLocaleString()} <small style="display:block;font-size:10px;color:var(--text3);font-weight:400;margin-top:1px">kg in stock</small></span>
+          <span class="row-actions"><a class="icon-btn" href="warehouse.html" title="View"><i class="ti ti-arrow-up-right"></i></a></span>
+        </div>
+      `;
+    }).join('');
+    $('typesCount').textContent = `${CHAR_TYPES.length} types in effect`;
+    if (window.lucide) lucide.createIcons();
+  }
+
+  // ── CONTAINERS ────────────────────────────────────────────
+  function renderContainers() {
+    const rows = CONTAINERS.slice(0, shown.cont).map(c => `
+      <div class="cont-row" onclick="window.location.href='container-detail.html'">
+        <span class="cdate">${c.date.split(' ').slice(0,2).join(' ')}</span>
+        <span class="cid">${c.id}</span>
+        <span style="font-size:12.5px;color:var(--text2)">${c.contents}</span>
+        <span class="num">${c.tons}t</span>
+        <span class="num" style="font-weight:600">${money(c.cost)}</span>
+        <span><span class="badge badge-green">${c.status}</span></span>
+        <span class="row-actions">
+          <a class="icon-btn" href="container-detail.html" onclick="event.stopPropagation()" title="View"><i class="ti ti-arrow-up-right"></i></a>
+        </span>
+      </div>
+    `).join('');
+    $('contBody').innerHTML = rows;
+    updateMoreFoot('cont', CONTAINERS.length, 'container');
+    if (window.lucide) lucide.createIcons();
+  }
+
+  // ── PRICE HISTORY ─────────────────────────────────────────
+  function renderPriceHistory() {
+    $('priceBody').innerHTML = PRICE_HISTORY.map(p => {
+      const diff = p.to - p.from;
+      const pct = (diff / p.from) * 100;
+      const cls = diff > 0 ? 'up' : 'down';
+      return `
+        <div class="ph-row">
+          <span class="ph-date">${p.date}</span>
+          <div class="ph-spec">
+            <strong>${p.type}</strong> <small>Grade ${p.grade}</small>
+          </div>
+          <div class="ph-change ${cls}">
+            $${p.from.toFixed(2)}
+            <span class="arrow">→</span>
+            $${p.to.toFixed(2)}
+            <span style="margin-left:6px;font-size:11px">(${diff > 0 ? '+' : ''}${pct.toFixed(1)}%)</span>
+          </div>
+          <span class="ph-by">${p.by}</span>
+        </div>
+      `;
+    }).join('');
+    $('priceCount').textContent = `${PRICE_HISTORY.length} changes`;
+  }
+
+  // ── PAYMENTS ──────────────────────────────────────────────
+  function renderPayments() {
+    $('payBody').innerHTML = PAYMENTS.slice(0, shown.pay).map(p => `
+      <tr>
+        <td class="mono">${p.date}</td>
+        <td><span class="badge badge-gray">${p.method}</span></td>
+        <td>
+          <span class="mono" style="font-family:'IBM Plex Mono',monospace;font-size:12px">${p.ref}</span>
+          ${p.note ? `<span style="font-size:11px;color:var(--text3);margin-left:4px">${p.note}</span>` : ''}
+        </td>
+        <td>${p.by} <span style="font-size:11px;color:var(--text3);margin-left:3px">${p.acct}</span></td>
+        <td class="right num" style="font-weight:600;color:var(--red)">−${money(p.amount).replace('−','')}</td>
+      </tr>
+    `).join('');
+    const tot = PAYMENTS.reduce((s, p) => s + p.amount, 0);
+    $('payCount').textContent = `${PAYMENTS.length} payments · ${money(tot)}`;
+    updateMoreFoot('pay', PAYMENTS.length, 'payment');
+  }
+
+  // ── ACTIVITY ──────────────────────────────────────────────
+  function renderActivity() {
+    $('activityBody').innerHTML = ACTIVITY.map(a => `
+      <div class="act-row">
+        <div class="act-icon ${a.kind}"><i class="ti ${a.ic}"></i></div>
+        <div>
+          <div class="act-text">${a.text}</div>
+          <div class="act-time">${a.when}</div>
+        </div>
+      </div>
+    `).join('');
+    if (window.lucide) lucide.createIcons();
+  }
+
+  // ── SHOW-MORE FOOT ────────────────────────────────────────
+  function updateMoreFoot(key, total, noun) {
+    const statusEl = $(key + 'Status');
+    const btn = $(key + 'MoreBtn');
+    const visible = Math.min(shown[key], total);
+    statusEl.textContent = `showing ${visible} of ${total} ${noun}${total === 1 ? '' : 's'}`;
+    if (visible >= total) {
+      if (shown[key] > INITIAL) {
+        btn.innerHTML = `<i class="ti ti-chevron-up" style="font-size:14px"></i> Show less`;
+        btn.style.display = '';
+      } else {
+        btn.style.display = 'none';
+      }
+    } else {
+      const remaining = total - visible;
+      const next = Math.min(STEP, remaining);
+      btn.innerHTML = `<i class="ti ti-chevron-down" style="font-size:14px"></i> Show ${next} more`;
+      btn.style.display = '';
+    }
+    if (window.lucide) lucide.createIcons();
+  }
+  function loadMore(key) {
+    const totalMap = { cont: CONTAINERS.length, pay: PAYMENTS.length };
+    const total = totalMap[key];
+    if (shown[key] >= total) shown[key] = INITIAL;
+    else shown[key] = Math.min(shown[key] + STEP, total);
+    if (key === 'cont') renderContainers();
+    else renderPayments();
+  }
+
+  // ── EXPORT ────────────────────────────────────────────────
+  const MONTH_IDX = { Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11 };
+  function parseRowDate(s) {
+    const m = s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
+    return m ? new Date(parseInt(m[3]), MONTH_IDX[m[2]], parseInt(m[1])) : null;
+  }
+  function isoToDate(s) { return s ? new Date(s + 'T00:00:00') : null; }
+  function setPreset(section, kind) {
+    const today = new Date(); let from;
+    if (kind === '30d') { from = new Date(); from.setDate(today.getDate() - 30); }
+    else { from = new Date(today.getFullYear(), 0, 1); }
+    const map = { cont: ['contFrom','contTo'], pay: ['payFrom','payTo'] };
+    const [a,b] = map[section];
+    $(a).value = from.toISOString().slice(0,10);
+    $(b).value = today.toISOString().slice(0,10);
+  }
+  function exportRange(section) {
+    if (typeof XLSX === 'undefined') { showToast('Excel library still loading'); return; }
+    const map = { cont: { data: CONTAINERS, label: 'Containers', from:'contFrom', to:'contTo' },
+                  pay:  { data: PAYMENTS,   label: 'Payments',   from:'payFrom', to:'payTo' } };
+    const cfg = map[section];
+    const fromD = isoToDate($(cfg.from).value);
+    const toD = isoToDate($(cfg.to).value);
+    if (!fromD && !toD) { showToast('Pick a date range first'); return; }
+    if (fromD && toD && fromD > toD) { showToast('"From" must be before "To"'); return; }
+    const filtered = cfg.data.filter(r => {
+      const d = parseRowDate(r.date); if (!d) return false;
+      if (fromD && d < fromD) return false;
+      if (toD && d > toD) return false;
+      return true;
+    });
+    if (filtered.length === 0) { showToast('No rows in that range'); return; }
+
+    let aoa = [];
+    if (section === 'cont') {
+      aoa.push(['Arrived','Container ID','Contents','Tons','Cost (USD)','Status']);
+      filtered.forEach(c => aoa.push([c.date, c.id, c.contents, c.tons, c.cost, c.status]));
+      const tot = filtered.reduce((s,c)=>s+c.cost,0);
+      const totT = filtered.reduce((s,c)=>s+c.tons,0);
+      aoa.push(['','','TOTAL', totT, tot, '']);
+    } else {
+      aoa.push(['Date','Method','Reference','Sent by','Account','Amount (USD)']);
+      filtered.forEach(p => aoa.push([p.date, p.method, p.ref, p.by, p.acct, p.amount]));
+      const tot = filtered.reduce((s,p)=>s+p.amount,0);
+      aoa.push(['','','','','TOTAL', tot]);
+    }
+    const fromStr = fromD ? fromD.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }) : 'beginning';
+    const toStr = toD ? toD.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }) : 'today';
+    aoa = [[`${supplier.name} — ${cfg.label}`], [`Range: ${fromStr} → ${toStr}`], [`${filtered.length} rows`], []].concat(aoa);
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = aoa[4].map(() => ({ wch: 16 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, cfg.label);
+    const slug = supplier.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    XLSX.writeFile(wb, `${slug}-${section}-${new Date().toISOString().slice(0,10)}.xlsx`);
+    showToast(`Exported ${filtered.length} ${section === 'cont' ? 'containers' : 'payments'}`);
+  }
+
+  // ── PAY MODAL ─────────────────────────────────────────────
+  function openPay() {
+    $('payDate').value = new Date().toISOString().slice(0,10);
+    $('payAmt').value = '';
+    $('payRef').value = '';
+    updatePayPreview();
+    $('payModal').classList.add('show');
+    if (window.lucide) lucide.createIcons();
+  }
+  function closeModal(id) { $(id).classList.remove('show'); }
+  function updatePayPreview() {
+    const amt = parseFloat($('payAmt').value) || 0;
+    const remain = supplier.open - amt;
+    $('payRemain').textContent = money(remain);
+    $('payRemain').style.color = remain > 0 ? 'var(--accent2)' : (remain < 0 ? 'var(--red)' : 'var(--accent)');
+  }
+  function savePay() {
+    const amt = parseFloat($('payAmt').value);
+    if (!amt || amt <= 0) { showToast('Enter amount'); return; }
+    const newP = {
+      date: new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }),
+      method: $('payMethod').value, ref: $('payRef').value || $('payApply').value.split('·')[1]?.trim() || 'on account',
+      by: $('payBy').value.replace(/\s*\(.+\)$/, ''),
+      acct: $('payFromAcct').value, amount: amt,
+    };
+    PAYMENTS.unshift(newP);
+    supplier.open = Math.max(0, supplier.open - amt);
+    supplier.paidYtd += amt;
+    ACTIVITY.unshift({ kind: 'green', ic: 'ti-cash', text: `Payment <strong>${money(amt)}</strong> sent · ${newP.method}`, when: 'just now · ' + newP.by });
+    renderHero(); renderPayments(); renderActivity();
+    closeModal('payModal');
+    showToast(`Payment ${money(amt)} recorded`);
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') document.querySelectorAll('.modal-shade.show').forEach(m => m.classList.remove('show'));
+  });
+
+  // ── INIT ──────────────────────────────────────────────────
+  renderHero();
+  renderTypes();
+  renderContainers();
+  renderPriceHistory();
+  renderPayments();
+  renderActivity();
+  setPreset('cont', 'ytd');
+  setPreset('pay', 'ytd');
+</script>
+</body>
+</html>

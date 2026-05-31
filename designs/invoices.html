@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Invoices & Payments</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:#F5F4F0; --surface:#FFFFFF; --surface2:#F0EEE9;
+    --border:#E4E1D9; --border2:#D4D0C8;
+    --text:#1A1916; --text2:#6B6860; --text3:#9B9890;
+    --accent:#1D6B4A; --accent-bg:#EAF5EF;
+    --accent2:#B45309; --accent2-bg:#FEF3C7;
+    --red:#C0392B; --red-bg:#FEF2F2;
+    --blue:#1D4ED8; --blue-bg:#EFF6FF;
+    --sidebar-w:220px; --radius:8px; --radius-lg:12px;
+  }
+  body { font-family:'IBM Plex Sans',sans-serif; background:var(--bg); color:var(--text); font-size:14px; line-height:1.5; min-height:100vh; display:flex; }
+
+  /* SIDEBAR */
+  .sidebar { width:var(--sidebar-w); min-height:100vh; background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; position:fixed; top:0; left:0; bottom:0; z-index:10; }
+  .sidebar-logo { padding:20px 18px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+  .logo-mark { width:30px; height:30px; background:var(--text); border-radius:7px; display:flex; align-items:center; justify-content:center; }
+  .logo-mark i { color:#fff; font-size:16px; }
+  .logo-text { font-size:15px; font-weight:600; letter-spacing:-0.3px; }
+  .logo-sub { font-size:10px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+  .sidebar-section { padding:16px 10px 4px; }
+  .sidebar-section-label { font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:1px; padding:0 8px; margin-bottom:4px; }
+  .nav-item { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; color:var(--text2); font-size:13.5px; font-weight:400; transition:background 0.1s,color 0.1s; text-decoration:none; }
+  .nav-item:hover { background:var(--surface2); color:var(--text); }
+  .nav-item.active { background:var(--text); color:#fff; }
+  .nav-item.active i { color:#fff; }
+  .nav-item i { font-size:16px; color:var(--text3); }
+  .nav-item:hover i { color:var(--text); }
+  .nav-badge { margin-left:auto; font-size:10px; font-family:'IBM Plex Mono',monospace; background:var(--red); color:#fff; border-radius:100px; padding:1px 6px; font-weight:500; }
+  .nav-badge.amber { background:var(--accent2); }
+  .sidebar-bottom { margin-top:auto; padding:12px 10px; border-top:1px solid var(--border); }
+  .user-row { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; }
+  .user-row:hover { background:var(--surface2); }
+  .avatar-sm { width:28px; height:28px; border-radius:50%; background:var(--text); color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; flex-shrink:0; }
+  .user-name { font-size:13px; font-weight:500; }
+  .user-role { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+
+  /* MAIN */
+  .main { margin-left:var(--sidebar-w); flex:1; display:flex; flex-direction:column; min-height:100vh; }
+  .topbar { background:var(--surface); border-bottom:1px solid var(--border); padding:0 28px; height:56px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; position:sticky; top:0; z-index:5; }
+  .page-title { font-size:15px; font-weight:600; letter-spacing:-0.2px; }
+  .topbar-right { display:flex; align-items:center; gap:8px; }
+  .btn { display:flex; align-items:center; gap:6px; padding:7px 12px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text2); transition:all 0.1s; }
+  .btn:hover { background:var(--surface2); color:var(--text); }
+  .btn.primary { background:var(--text); color:#fff; border-color:var(--text); }
+  .btn.primary:hover { background:#2d2b28; }
+  .btn.green { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .btn.green:hover { background:#155237; }
+
+  /* TABS */
+  .tabs { display:flex; gap:2px; padding:0 28px; background:var(--surface); border-bottom:1px solid var(--border); }
+  .tab { padding:12px 16px; font-size:13px; font-weight:500; color:var(--text3); cursor:pointer; border-bottom:2px solid transparent; transition:all 0.1s; display:flex; align-items:center; gap:7px; }
+  .tab:hover { color:var(--text2); }
+  .tab.active { color:var(--text); border-bottom-color:var(--text); }
+  .tab-count { font-size:11px; font-family:'IBM Plex Mono',monospace; background:var(--surface2); color:var(--text2); padding:1px 6px; border-radius:100px; }
+  .tab.active .tab-count { background:var(--text); color:#fff; }
+  .tab-count.red { background:var(--red-bg); color:var(--red); }
+  .tab.active .tab-count.red { background:var(--red); color:#fff; }
+
+  .content { padding:24px 28px; flex:1; }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  .fade-up { animation:fadeUp 0.3s ease both; }
+
+  /* KPI ROW */
+  .kpi-row { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px; }
+  .kpi { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px 18px; animation:fadeUp 0.3s ease both; }
+  .kpi-label { font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+  .kpi-value { font-size:24px; font-weight:600; letter-spacing:-1px; line-height:1; margin-bottom:4px; }
+  .kpi-sub { font-size:12px; color:var(--text3); }
+
+  /* BADGE */
+  .badge { font-size:11px; font-family:'IBM Plex Mono',monospace; padding:2px 8px; border-radius:100px; font-weight:500; white-space:nowrap; }
+  .badge-green  { background:var(--accent-bg); color:var(--accent); }
+  .badge-amber  { background:var(--accent2-bg); color:var(--accent2); }
+  .badge-red    { background:var(--red-bg); color:var(--red); }
+  .badge-blue   { background:var(--blue-bg); color:var(--blue); }
+  .badge-gray   { background:var(--surface2); color:var(--text2); }
+
+  /* FILTERS */
+  .filters { display:flex; align-items:center; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
+  .filter-input { display:flex; align-items:center; gap:7px; padding:7px 12px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); font-size:13px; flex:1; max-width:280px; }
+  .filter-input i { color:var(--text3); font-size:15px; }
+  .filter-input input { border:none; outline:none; background:transparent; font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text); width:100%; }
+  .filter-input input::placeholder { color:var(--text3); }
+  .filter-select { padding:7px 12px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text2); cursor:pointer; outline:none; }
+  .filter-sep { flex:1; }
+
+  /* INVOICE TABLE */
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:14px; }
+  .data-table { width:100%; border-collapse:collapse; }
+  .data-table th { text-align:left; padding:9px 18px; font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:0.6px; border-bottom:1px solid var(--border); font-weight:400; background:var(--surface2); }
+  .data-table td { padding:11px 18px; border-bottom:1px solid var(--border); font-size:13px; vertical-align:middle; }
+  .data-table tr:last-child td { border-bottom:none; }
+  .data-table tbody tr { cursor:pointer; transition:background 0.1s; }
+  .data-table tbody tr:hover { background:#FAFAF8; }
+
+  /* PROGRESS BAR for partial payment */
+  .pay-bar { height:4px; background:var(--surface2); border-radius:100px; overflow:hidden; margin-top:4px; width:80px; }
+  .pay-bar-fill { height:100%; border-radius:100px; background:var(--accent); }
+
+  /* INVOICE PANEL */
+  .inv-panel { display:none; position:fixed; right:0; top:0; bottom:0; width:500px; background:var(--surface); border-left:1px solid var(--border); z-index:20; flex-direction:column; box-shadow:-4px 0 24px rgba(0,0,0,0.1); }
+  .inv-panel.open { display:flex; animation:slideIn 0.2s ease; }
+  @keyframes slideIn { from{transform:translateX(20px);opacity:0} to{transform:translateX(0);opacity:1} }
+  .panel-head { padding:18px 20px 14px; border-bottom:1px solid var(--border); }
+  .panel-close-btn { float:right; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; color:var(--text2); }
+  .panel-tabs { display:flex; border-bottom:1px solid var(--border); }
+  .panel-tab { padding:10px 14px; font-size:12px; font-weight:500; color:var(--text3); cursor:pointer; border-bottom:2px solid transparent; transition:all 0.1s; }
+  .panel-tab:hover { color:var(--text2); }
+  .panel-tab.active { color:var(--text); border-bottom-color:var(--text); }
+  .panel-body { flex:1; overflow-y:auto; }
+  .panel-section { padding:16px 20px; border-bottom:1px solid var(--border); }
+  .panel-section-label { font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; }
+  .panel-row { display:flex; justify-content:space-between; align-items:baseline; padding:5px 0; font-size:13px; border-bottom:1px solid var(--border); }
+  .panel-row:last-child { border-bottom:none; }
+  .panel-row-label { color:var(--text2); }
+  .panel-row-value { font-weight:500; font-family:'IBM Plex Mono',monospace; font-size:12px; }
+  .panel-footer { padding:14px 20px; display:flex; gap:8px; border-top:1px solid var(--border); }
+  .panel-btn { flex:1; padding:9px; border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Sans',sans-serif; cursor:pointer; font-weight:500; transition:all 0.1s; border:1px solid; display:flex; align-items:center; justify-content:center; gap:6px; }
+  .pbtn-ghost { background:var(--surface); border-color:var(--border); color:var(--text2); }
+  .pbtn-ghost:hover { background:var(--surface2); }
+  .pbtn-green { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .pbtn-green:hover { background:#155237; }
+  .pbtn-primary { background:var(--text); border-color:var(--text); color:#fff; }
+  .pbtn-primary:hover { background:#2d2b28; }
+
+  /* INVOICE PREVIEW (inside panel) */
+  .inv-preview { margin:0 20px 16px; border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; }
+  .inv-preview-head { padding:16px; background:var(--surface2); border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:flex-start; }
+  .inv-company { font-size:15px; font-weight:600; }
+  .inv-num { font-size:12px; font-family:'IBM Plex Mono',monospace; color:var(--text3); margin-top:2px; }
+  .inv-client-block { text-align:right; font-size:12px; color:var(--text2); }
+  .inv-client-name { font-size:14px; font-weight:600; color:var(--text); }
+  .inv-lines-head { display:grid; grid-template-columns:2fr 1fr 1fr 1fr; gap:8px; padding:8px 16px; background:var(--surface2); border-bottom:1px solid var(--border); font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; }
+  .inv-line { display:grid; grid-template-columns:2fr 1fr 1fr 1fr; gap:8px; padding:9px 16px; border-bottom:1px solid var(--border); font-size:13px; align-items:center; }
+  .inv-line:last-child { border-bottom:none; }
+  .inv-line-name { font-weight:500; }
+  .inv-line-mono { font-family:'IBM Plex Mono',monospace; }
+  .inv-totals { padding:12px 16px; background:var(--surface2); border-top:1px solid var(--border); }
+  .inv-total-row { display:flex; justify-content:space-between; font-size:13px; padding:3px 0; }
+  .inv-total-row.big { font-size:15px; font-weight:600; padding-top:8px; margin-top:4px; border-top:1px solid var(--border); }
+  .inv-total-mono { font-family:'IBM Plex Mono',monospace; font-weight:600; }
+
+  /* PAYMENT HISTORY in panel */
+  .pay-hist-row { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); font-size:13px; }
+  .pay-hist-row:last-child { border-bottom:none; }
+  .pay-icon { width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:13px; flex-shrink:0; }
+  .pay-info { flex:1; }
+  .pay-info strong { font-weight:500; display:block; margin-bottom:1px; }
+  .pay-info span { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+  .pay-amount-col { text-align:right; }
+  .pay-usd { font-family:'IBM Plex Mono',monospace; font-weight:600; color:var(--accent); }
+  .pay-lbp { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+
+  /* BALANCE BAR */
+  .balance-bar { margin:0 20px 14px; background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius-lg); padding:14px 16px; }
+  .bb-row { display:flex; justify-content:space-between; font-size:13px; padding:3px 0; }
+  .bb-mono { font-family:'IBM Plex Mono',monospace; font-weight:600; }
+  .bb-progress { height:6px; background:var(--border); border-radius:100px; overflow:hidden; margin:10px 0 4px; }
+  .bb-fill { height:100%; border-radius:100px; background:var(--accent); transition:width 0.4s ease; }
+  .bb-labels { display:flex; justify-content:space-between; font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); }
+
+  /* LOG PAYMENT MODAL */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:40; align-items:center; justify-content:center; }
+  .modal-overlay.open { display:flex; }
+  .modal { background:var(--surface); border-radius:var(--radius-lg); border:1px solid var(--border); width:460px; box-shadow:0 8px 40px rgba(0,0,0,0.12); animation:fadeUp 0.2s ease; }
+  .modal-head { padding:18px 20px; border-bottom:1px solid var(--border); display:flex; align-items:flex-start; justify-content:space-between; }
+  .modal-title { font-size:15px; font-weight:600; }
+  .modal-body { padding:20px; }
+  .modal-footer { padding:14px 20px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; }
+  .close-btn { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; color:var(--text2); }
+  .form-label { font-size:12px; font-weight:500; color:var(--text2); margin-bottom:5px; display:block; }
+  .form-input { width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text); outline:none; background:var(--surface); transition:border-color 0.15s; margin-bottom:14px; }
+  .form-input:focus { border-color:var(--text); }
+  .form-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+
+  /* SPLIT BOX */
+  .split-box { background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:14px; margin-bottom:14px; }
+  .split-row { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .split-row:last-child { margin-bottom:0; }
+  .split-label { font-size:12px; font-weight:600; font-family:'IBM Plex Mono',monospace; min-width:40px; }
+  .split-input { flex:1; padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius); font-size:15px; font-family:'IBM Plex Mono',monospace; outline:none; background:var(--surface); text-align:right; }
+  .split-input:focus { border-color:var(--text); }
+  .split-curr { font-size:12px; color:var(--text2); font-family:'IBM Plex Mono',monospace; min-width:28px; font-weight:500; }
+  .split-eq { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; min-width:80px; text-align:right; }
+
+  .total-recv-bar { border-radius:var(--radius); padding:10px 14px; display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+  .total-recv-bar.ok    { background:var(--accent-bg); border:1px solid #a7f3d0; }
+  .total-recv-bar.short { background:var(--accent2-bg); border:1px solid #fcd34d; }
+  .total-recv-bar.over  { background:var(--accent-bg); border:1px solid #a7f3d0; }
+  .total-recv-bar.none  { background:var(--surface2); border:1px solid var(--border); }
+
+  .method-pills { display:flex; gap:8px; margin-bottom:14px; }
+  .method-pill { flex:1; padding:8px; border:1px solid var(--border); border-radius:var(--radius); text-align:center; cursor:pointer; font-size:13px; font-weight:500; transition:all 0.1s; background:var(--surface); color:var(--text2); }
+  .method-pill:hover { background:var(--surface2); }
+  .method-pill.sel { background:var(--text); color:#fff; border-color:var(--text); }
+
+  /* REMAINING INDICATOR */
+  .remaining-box { background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:10px 14px; margin-bottom:14px; display:flex; justify-content:space-between; font-size:13px; }
+  .remaining-box.zero { background:var(--accent-bg); border-color:#a7f3d0; }
+  .remaining-label { color:var(--text2); }
+  .remaining-val { font-family:'IBM Plex Mono',monospace; font-weight:600; }
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark"><i class="ti ti-flame"></i></div>
+    <div><div class="logo-text">Ember</div><div class="logo-sub">charcoal system</div></div>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Overview</div>
+    <a class="nav-item"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
+    <a class="nav-item"><i class="ti ti-chart-bar"></i> Reports</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Stock</div>
+    <a class="nav-item"><i class="ti ti-ship"></i> Containers</a>
+    <a class="nav-item"><i class="ti ti-building-warehouse"></i> Warehouse</a>
+    <a class="nav-item"><i class="ti ti-tools"></i> Packing</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Sales</div>
+    <a class="nav-item"><i class="ti ti-users"></i> Clients <span class="nav-badge amber">3</span></a>
+    <a class="nav-item"><i class="ti ti-file-invoice"></i> Orders</a>
+    <a class="nav-item"><i class="ti ti-truck"></i> Delivery</a>
+    <a class="nav-item"><i class="ti ti-building-store"></i> Warehouse sales</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Finance</div>
+    <a class="nav-item active"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item"><i class="ti ti-cash"></i> Payments</a>
+    <a class="nav-item"><i class="ti ti-calculator"></i> Cash handover</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item"><i class="ti ti-settings"></i> Settings</a>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="user-row">
+      <div class="avatar-sm">KA</div>
+      <div><div class="user-name">Khalil Abi Nader</div><div class="user-role">owner</div></div>
+    </div>
+  </div>
+</aside>
+
+<div class="main">
+  <header class="topbar">
+    <span class="page-title">Invoices & Payments</span>
+    <div class="topbar-right">
+      <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">Rate: 89,550 LL/$</span>
+      <button class="btn"><i class="ti ti-download" style="font-size:15px"></i> Export</button>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('invoices',this)">
+      <i class="ti ti-receipt" style="font-size:14px"></i> Invoices
+      <span class="tab-count">42</span>
+    </div>
+    <div class="tab" onclick="showTab('payments',this)">
+      <i class="ti ti-cash" style="font-size:14px"></i> Payments
+      <span class="tab-count">38</span>
+    </div>
+    <div class="tab" onclick="showTab('outstanding',this)">
+      <i class="ti ti-alert-circle" style="font-size:14px"></i> Outstanding
+      <span class="tab-count red">12</span>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- KPI ROW -->
+    <div class="kpi-row">
+      <div class="kpi" style="animation-delay:0.05s">
+        <div class="kpi-label">Total invoiced (May)</div>
+        <div class="kpi-value">$38,450</div>
+        <div class="kpi-sub">24 invoices issued</div>
+      </div>
+      <div class="kpi" style="animation-delay:0.1s">
+        <div class="kpi-label">Total collected</div>
+        <div class="kpi-value" style="color:var(--accent)">$23,630</div>
+        <div class="kpi-sub">cash + Whish + OMT</div>
+      </div>
+      <div class="kpi" style="animation-delay:0.15s">
+        <div class="kpi-label">Outstanding</div>
+        <div class="kpi-value" style="color:var(--accent2)">$14,820</div>
+        <div class="kpi-sub">12 invoices unpaid</div>
+      </div>
+      <div class="kpi" style="animation-delay:0.2s">
+        <div class="kpi-label">Overdue</div>
+        <div class="kpi-value" style="color:var(--red)">$3,260</div>
+        <div class="kpi-sub">3 clients past terms</div>
+      </div>
+    </div>
+
+    <!-- INVOICES TAB -->
+    <div id="tab-invoices" class="fade-up">
+      <div class="filters">
+        <div class="filter-input">
+          <i class="ti ti-search"></i>
+          <input type="text" placeholder="Search invoice, client…">
+        </div>
+        <select class="filter-select">
+          <option>All statuses</option>
+          <option>Draft</option>
+          <option>Issued</option>
+          <option>Partially paid</option>
+          <option>Paid</option>
+          <option>Cancelled</option>
+        </select>
+        <select class="filter-select">
+          <option>All currencies</option>
+          <option>USD</option>
+          <option>LBP</option>
+        </select>
+        <select class="filter-select">
+          <option>This month</option>
+          <option>Last month</option>
+          <option>All time</option>
+        </select>
+        <div class="filter-sep"></div>
+        <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">42 invoices</span>
+      </div>
+
+      <div class="card">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Invoice</th>
+              <th>Client</th>
+              <th>Issued</th>
+              <th>Total</th>
+              <th>Paid</th>
+              <th>Balance</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr onclick="openInvPanel('rawda')">
+              <td>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500">INV-0338</div>
+                <div style="font-size:11px;color:var(--text3)">auto · delivery</div>
+              </td>
+              <td>
+                <div style="font-weight:500">Al Rawda Restaurant</div>
+                <div style="font-size:11px;color:var(--text3)">restaurant</div>
+              </td>
+              <td style="color:var(--text2)">7 May 2026</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$840.00</td>
+              <td>
+                <div style="font-family:'IBM Plex Mono',monospace;color:var(--red)">$0.00</div>
+                <div class="pay-bar"><div class="pay-bar-fill" style="width:0%"></div></div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--red)">$840.00</td>
+              <td><span class="badge badge-red">Overdue</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+            <tr onclick="openInvPanel('byblos')">
+              <td>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500">INV-0337</div>
+                <div style="font-size:11px;color:var(--text3)">auto · delivery</div>
+              </td>
+              <td>
+                <div style="font-weight:500">Byblos BBQ Supply</div>
+                <div style="font-size:11px;color:var(--text3)">wholesale</div>
+              </td>
+              <td style="color:var(--text2)">18 May 2026</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$2,100.00</td>
+              <td>
+                <div style="font-family:'IBM Plex Mono',monospace;color:var(--accent2)">$0.00</div>
+                <div class="pay-bar"><div class="pay-bar-fill" style="width:0%"></div></div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--accent2)">$2,100.00</td>
+              <td><span class="badge badge-amber">Issued</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+            <tr onclick="openInvPanel('cedar')">
+              <td>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500">INV-0336</div>
+                <div style="font-size:11px;color:var(--text3)">auto · delivery</div>
+              </td>
+              <td>
+                <div style="font-weight:500">Cedar Grill House</div>
+                <div style="font-size:11px;color:var(--text3)">restaurant</div>
+              </td>
+              <td style="color:var(--text2)">19 May 2026</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$480.00</td>
+              <td>
+                <div style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">$240.00</div>
+                <div class="pay-bar"><div class="pay-bar-fill" style="width:50%"></div></div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--accent2)">$240.00</td>
+              <td><span class="badge badge-blue">Partial</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+            <tr onclick="openInvPanel('gulf')">
+              <td>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500">INV-0335</div>
+                <div style="font-size:11px;color:var(--text3)">auto · delivery</div>
+              </td>
+              <td>
+                <div style="font-weight:500">Gulf Charcoal Exports</div>
+                <div style="font-size:11px;color:var(--text3)">export</div>
+              </td>
+              <td style="color:var(--text2)">18 May 2026</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500">$5,400.00</td>
+              <td>
+                <div style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">$5,400.00</div>
+                <div class="pay-bar"><div class="pay-bar-fill" style="width:100%"></div></div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--accent)">$0.00</td>
+              <td><span class="badge badge-green">Paid</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+            <tr onclick="openInvPanel('hamra')">
+              <td>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500">INV-0334</div>
+                <div style="font-size:11px;color:var(--text3)">auto · delivery</div>
+              </td>
+              <td>
+                <div style="font-weight:500">Hamra Supermarket</div>
+                <div style="font-size:11px;color:var(--text3)">shop · LBP</div>
+              </td>
+              <td style="color:var(--text2)">17 May 2026</td>
+              <td>
+                <div style="font-family:'IBM Plex Mono',monospace;font-weight:500">42,984,000 LL</div>
+                <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">≈ $480</div>
+              </td>
+              <td>
+                <div style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">42,984,000 LL</div>
+                <div class="pay-bar"><div class="pay-bar-fill" style="width:100%"></div></div>
+              </td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">0 LL</td>
+              <td><span class="badge badge-green">Paid</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+          </tbody>
+        </table>
+        <div style="padding:10px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:space-between">
+          <span style="font-size:12px;color:var(--text3)">Showing 5 of 42 invoices</span>
+          <button style="font-size:12px;color:var(--text3);background:none;border:none;cursor:pointer">Show all →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAYMENTS TAB -->
+    <div id="tab-payments" style="display:none" class="fade-up">
+      <div class="card">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Client</th>
+              <th>Invoice</th>
+              <th>Amount USD</th>
+              <th>Amount LBP</th>
+              <th>Total (USD eq.)</th>
+              <th>Method</th>
+              <th>Logged by</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="color:var(--text2)">21 May 2026</td>
+              <td><div style="font-weight:500">Gulf Charcoal Exports</div></td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">INV-0335</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500;color:var(--accent)">$5,400.00</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">—</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600">$5,400.00</td>
+              <td><span class="badge badge-gray">Cash</span></td>
+              <td style="font-size:12px;color:var(--text2)">Khalil</td>
+            </tr>
+            <tr>
+              <td style="color:var(--text2)">20 May 2026</td>
+              <td><div style="font-weight:500">Cedar Grill House</div></td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">INV-0336</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500;color:var(--accent)">$80.00</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">14,328,000 LL</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600">$240.00</td>
+              <td><span class="badge badge-green">Whish</span></td>
+              <td style="font-size:12px;color:var(--text2)">Accountant</td>
+            </tr>
+            <tr>
+              <td style="color:var(--text2)">19 May 2026</td>
+              <td><div style="font-weight:500">Hamra Supermarket</div></td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">INV-0334</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">—</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500;color:var(--accent)">42,984,000 LL</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600">$480.00</td>
+              <td><span class="badge badge-gray">Cash</span></td>
+              <td style="font-size:12px;color:var(--text2)">Mohammed (driver)</td>
+            </tr>
+            <tr>
+              <td style="color:var(--text2)">18 May 2026</td>
+              <td><div style="font-weight:500">Byblos BBQ Supply</div></td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text3)">INV-0330</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:500;color:var(--accent)">$1,200.00</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">—</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600">$1,200.00</td>
+              <td><span class="badge badge-blue">OMT</span></td>
+              <td style="font-size:12px;color:var(--text2)">Accountant</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- OUTSTANDING TAB -->
+    <div id="tab-outstanding" style="display:none" class="fade-up">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px 18px">
+          <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace;margin-bottom:4px">TOTAL OUTSTANDING</div>
+          <div style="font-size:24px;font-weight:600;letter-spacing:-1px;color:var(--accent2)">$14,820</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">12 open invoices</div>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px 18px">
+          <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace;margin-bottom:4px">OVERDUE</div>
+          <div style="font-size:24px;font-weight:600;letter-spacing:-1px;color:var(--red)">$3,260</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">3 invoices past terms</div>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px 18px">
+          <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace;margin-bottom:4px">IN LBP EQUIV.</div>
+          <div style="font-size:20px;font-weight:600;letter-spacing:-0.5px">1,327,221,000</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">at 89,550 LL/$</div>
+        </div>
+      </div>
+      <div class="card">
+        <table class="data-table">
+          <thead>
+            <tr><th>Client</th><th>Invoice</th><th>Issued</th><th>Total</th><th>Paid</th><th>Remaining</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr onclick="openInvPanel('rawda')">
+              <td><div style="font-weight:500">Al Rawda Restaurant</div></td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px">INV-0338</td>
+              <td style="color:var(--text2)">7 May</td>
+              <td style="font-family:'IBM Plex Mono',monospace">$840</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">$0</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--red)">$840</td>
+              <td><span class="badge badge-red">Overdue</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+            <tr onclick="openInvPanel('byblos')">
+              <td><div style="font-weight:500">Byblos BBQ Supply</div></td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px">INV-0337</td>
+              <td style="color:var(--text2)">18 May</td>
+              <td style="font-family:'IBM Plex Mono',monospace">$2,100</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">$0</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--accent2)">$2,100</td>
+              <td><span class="badge badge-amber">Issued</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+            <tr onclick="openInvPanel('cedar')">
+              <td><div style="font-weight:500">Cedar Grill House</div></td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-size:12px">INV-0336</td>
+              <td style="color:var(--text2)">19 May</td>
+              <td style="font-family:'IBM Plex Mono',monospace">$480</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">$240</td>
+              <td style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--accent2)">$240</td>
+              <td><span class="badge badge-blue">Partial</span></td>
+              <td><i class="ti ti-chevron-right" style="color:var(--text3)"></i></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- INVOICE DETAIL PANEL -->
+<div class="inv-panel" id="invPanel">
+  <div class="panel-head">
+    <button class="panel-close-btn" onclick="closeInvPanel()">✕ Close</button>
+    <div style="margin-top:8px">
+      <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);margin-bottom:3px">INV-0338 · auto-generated · 7 May 2026</div>
+      <div style="font-size:17px;font-weight:600;letter-spacing:-0.3px">Al Rawda Restaurant</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+        <span class="badge badge-red">Overdue</span>
+        <span style="font-size:12px;color:var(--text2)">USD · Net 30</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-tabs">
+    <div class="panel-tab active" onclick="switchPTab('invoice',this)">Invoice</div>
+    <div class="panel-tab" onclick="switchPTab('payments',this)">Payments</div>
+  </div>
+
+  <div class="panel-body">
+
+    <!-- INVOICE VIEW -->
+    <div id="ptab-invoice">
+      <!-- Balance bar -->
+      <div class="balance-bar">
+        <div class="bb-row">
+          <span style="color:var(--text2)">Invoice total</span>
+          <span class="bb-mono">$840.00</span>
+        </div>
+        <div class="bb-row">
+          <span style="color:var(--accent)">Paid so far</span>
+          <span class="bb-mono" style="color:var(--accent)">$0.00</span>
+        </div>
+        <div class="bb-progress"><div class="bb-fill" id="bbFill" style="width:0%"></div></div>
+        <div class="bb-labels"><span>$0 paid</span><span id="bbPct">0% paid</span><span>$840 total</span></div>
+        <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:14px">
+          <span style="font-weight:600">Balance due</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--red)" id="balanceDue">$840.00</span>
+        </div>
+      </div>
+
+      <!-- Invoice preview -->
+      <div class="inv-preview">
+        <div class="inv-preview-head">
+          <div>
+            <div class="inv-company">Ember Charcoal Co.</div>
+            <div class="inv-num">INV-0338 · 7 May 2026</div>
+          </div>
+          <div class="inv-client-block">
+            <div class="inv-client-name">Al Rawda Restaurant</div>
+            <div>Hamra, Beirut</div>
+            <div style="margin-top:4px;color:var(--accent2)">Due: 6 Jun 2026 (Net 30)</div>
+          </div>
+        </div>
+        <div class="inv-lines-head">
+          <span>Item</span><span>Qty</span><span>Price</span><span>Total</span>
+        </div>
+        <div class="inv-line">
+          <div class="inv-line-name">BBQ Hardwood A · 2kg bag</div>
+          <div class="inv-line-mono">80</div>
+          <div class="inv-line-mono">$2.80</div>
+          <div class="inv-line-mono">$224.00</div>
+        </div>
+        <div class="inv-line">
+          <div class="inv-line-name">BBQ Hardwood A · 5kg bag</div>
+          <div class="inv-line-mono">20</div>
+          <div class="inv-line-mono">$2.80</div>
+          <div class="inv-line-mono">$56.00</div>
+        </div>
+        <div class="inv-line">
+          <div class="inv-line-name">BBQ Hardwood A · 10kg bag</div>
+          <div class="inv-line-mono">20</div>
+          <div class="inv-line-mono">$2.80</div>
+          <div class="inv-line-mono">$560.00</div>
+        </div>
+        <div class="inv-totals">
+          <div class="inv-total-row"><span style="color:var(--text2)">Subtotal</span><span class="inv-total-mono">$840.00</span></div>
+          <div class="inv-total-row big"><span>Total</span><span class="inv-total-mono">$840.00 USD</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAYMENTS VIEW -->
+    <div id="ptab-payments" style="display:none">
+      <div class="panel-section">
+        <div class="panel-section-label">Payment history</div>
+        <div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">
+          <i class="ti ti-cash" style="font-size:32px;display:block;margin-bottom:8px;opacity:0.3"></i>
+          No payments received yet
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="panel-footer">
+    <button class="panel-btn pbtn-ghost"><i class="ti ti-printer" style="font-size:13px"></i> Print invoice</button>
+    <button class="panel-btn pbtn-green" onclick="openPayModal()"><i class="ti ti-cash" style="font-size:13px"></i> Log payment</button>
+  </div>
+</div>
+
+<!-- LOG PAYMENT MODAL -->
+<div class="modal-overlay" id="payModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Log payment — INV-0338</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px">
+          Al Rawda Restaurant · Outstanding: <strong style="color:var(--red)">$840.00</strong>
+        </div>
+      </div>
+      <button class="close-btn" onclick="closePayModal()">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <div class="form-row" style="margin-bottom:14px">
+        <div>
+          <label class="form-label">Payment date</label>
+          <input class="form-input" type="date" value="2026-05-21" style="margin:0">
+        </div>
+        <div>
+          <label class="form-label">Logged by</label>
+          <select class="form-input" style="margin:0">
+            <option>Khalil (owner)</option>
+            <option>Accountant</option>
+            <option>Mohammed (driver)</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="form-label">Amount received <span style="font-weight:400;color:var(--text3)">(USD, LBP, or split)</span></label>
+      <div class="split-box">
+        <div class="split-row">
+          <span class="split-label">USD</span>
+          <input class="split-input" type="number" placeholder="0.00" id="payUsd" oninput="calcPayTotal()">
+          <span class="split-curr">$</span>
+          <span class="split-eq" id="payUsdEq"></span>
+        </div>
+        <div style="text-align:center;font-size:11px;color:var(--text3);padding:2px 0">+ optional</div>
+        <div class="split-row">
+          <span class="split-label">LBP</span>
+          <input class="split-input" type="number" placeholder="0" id="payLbp" oninput="calcPayTotal()">
+          <span class="split-curr">LL</span>
+          <span class="split-eq" id="payLbpEq"></span>
+        </div>
+      </div>
+
+      <div class="total-recv-bar none" id="payTotalBar">
+        <span id="payTotalLabel">Enter amount above</span>
+        <span id="payTotalVal" style="font-family:'IBM Plex Mono',monospace;font-weight:600">—</span>
+      </div>
+
+      <div class="remaining-box" id="remainBox">
+        <span class="remaining-label">Remaining after this payment</span>
+        <span class="remaining-val" id="remainVal">$840.00</span>
+      </div>
+
+      <label class="form-label">Payment method</label>
+      <div class="method-pills">
+        <div class="method-pill sel" onclick="selMethod(this)">Cash</div>
+        <div class="method-pill" onclick="selMethod(this)">Whish</div>
+        <div class="method-pill" onclick="selMethod(this)">OMT</div>
+      </div>
+
+      <label class="form-label">Notes (optional)</label>
+      <input class="form-input" type="text" placeholder="e.g. paid by owner Georges on delivery" style="margin-bottom:0">
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closePayModal()">Cancel</button>
+      <button class="btn green" onclick="closePayModal()"><i class="ti ti-check" style="font-size:14px"></i> Confirm payment</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const RATE = 89550;
+  const INV_TOTAL = 840;
+
+  function showTab(name, el) {
+    ['invoices','payments','outstanding'].forEach(t => {
+      const tab = document.getElementById('tab-'+t);
+      if (tab) tab.style.display = t===name ? 'block' : 'none';
+    });
+    document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+    if (el) el.classList.add('active');
+  }
+
+  function openInvPanel(client) {
+    document.getElementById('invPanel').classList.add('open');
+  }
+
+  function closeInvPanel() {
+    document.getElementById('invPanel').classList.remove('open');
+  }
+
+  function switchPTab(name, el) {
+    ['invoice','payments'].forEach(t => {
+      const tab = document.getElementById('ptab-'+t);
+      if (tab) tab.style.display = t===name ? 'block' : 'none';
+    });
+    document.querySelectorAll('.panel-tab').forEach(t => t.classList.remove('active'));
+    if (el) el.classList.add('active');
+  }
+
+  function openPayModal() {
+    document.getElementById('payModal').classList.add('open');
+  }
+
+  function closePayModal() {
+    document.getElementById('payModal').classList.remove('open');
+  }
+
+  function selMethod(el) {
+    document.querySelectorAll('.method-pill').forEach(p => p.classList.remove('sel'));
+    el.classList.add('sel');
+  }
+
+  function calcPayTotal() {
+    const usd = parseFloat(document.getElementById('payUsd').value) || 0;
+    const lbp = parseFloat(document.getElementById('payLbp').value) || 0;
+    const lbpAsUsd = lbp / RATE;
+    const total = usd + lbpAsUsd;
+
+    document.getElementById('payUsdEq').textContent = usd > 0 ? '= $'+usd.toFixed(2) : '';
+    document.getElementById('payLbpEq').textContent = lbp > 0 ? '≈ $'+lbpAsUsd.toFixed(2) : '';
+
+    const bar   = document.getElementById('payTotalBar');
+    const label = document.getElementById('payTotalLabel');
+    const val   = document.getElementById('payTotalVal');
+    const remain= document.getElementById('remainVal');
+    const rBox  = document.getElementById('remainBox');
+
+    if (total === 0) {
+      bar.className = 'total-recv-bar none';
+      label.textContent = 'Enter amount above';
+      val.textContent = '—';
+      remain.textContent = '$' + INV_TOTAL.toFixed(2);
+      rBox.className = 'remaining-box';
+      return;
+    }
+
+    const left = INV_TOTAL - total;
+    val.textContent = '$' + total.toFixed(2) + ' total';
+
+    if (total >= INV_TOTAL) {
+      bar.className = 'total-recv-bar ok';
+      label.textContent = total > INV_TOTAL ? 'Over-payment — excess noted' : 'Fully covers invoice ✓';
+      remain.textContent = left <= 0 ? 'Fully paid ✓' : '$' + left.toFixed(2);
+      rBox.className = left <= 0 ? 'remaining-box zero' : 'remaining-box';
+    } else {
+      bar.className = 'total-recv-bar short';
+      label.textContent = 'Partial — $' + left.toFixed(2) + ' remains on account';
+      remain.textContent = '$' + left.toFixed(2) + ' remaining';
+      rBox.className = 'remaining-box';
+    }
+
+    // Update balance bar in panel
+    const pct = Math.min(100, (total / INV_TOTAL) * 100);
+    document.getElementById('bbFill').style.width = pct + '%';
+    document.getElementById('bbPct').textContent = pct.toFixed(0) + '% paid';
+    document.getElementById('balanceDue').textContent = '$' + Math.max(0, left).toFixed(2);
+  }
+
+  document.getElementById('payModal').addEventListener('click', function(e) {
+    if (e.target === this) closePayModal();
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Log payment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .ar { font-family: 'Noto Sans Arabic', 'IBM Plex Sans', sans-serif; }
+
+  /* hero */
+  .pay-hero {
+    background: var(--text); color: #fff;
+    border-radius: var(--radius-lg);
+    padding: 22px 26px;
+    display: grid; grid-template-columns: auto 1fr auto auto; gap: 26px;
+    align-items: center; margin-bottom: 18px;
+    position: relative; overflow: hidden;
+  }
+  .pay-hero::after {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(circle at 85% 50%, rgba(29,107,74,0.20), transparent 55%);
+    pointer-events: none;
+  }
+  .pay-hero .mono {
+    width: 52px; height: 52px; border-radius: 12px;
+    background: rgba(255,255,255,0.08); color: #FCD34D;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 600;
+    border: 1px solid rgba(255,255,255,0.12);
+    position: relative;
+  }
+  .pay-hero h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; position: relative; }
+  .pay-hero h1 small {
+    display: block; font-size: 12px; font-weight: 400;
+    color: rgba(255,255,255,0.55); margin-top: 2px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .hero-stat { position: relative; padding-left: 22px; border-left: 1px solid rgba(255,255,255,0.15); }
+  .hero-stat .v { font-size: 22px; font-weight: 600; letter-spacing: -0.5px; line-height: 1; }
+  .hero-stat .v.amber { color: #FCD34D; }
+  .hero-stat .v.green { color: #86EFAC; }
+  .hero-stat .k {
+    font-size: 11px; color: rgba(255,255,255,0.55);
+    font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.7px;
+    margin-top: 5px;
+  }
+
+  /* AMOUNT INPUT — big */
+  .amount-card {
+    background: var(--surface); border: 1.5px solid var(--border);
+    border-radius: var(--radius-lg); padding: 22px 24px;
+    transition: border-color 0.15s;
+  }
+  .amount-card:focus-within { border-color: var(--text); }
+  .amount-label {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px;
+    margin-bottom: 14px;
+  }
+  .amount-row { display: flex; align-items: baseline; gap: 14px; }
+  .amount-sym { font-size: 36px; font-weight: 500; color: var(--text3); }
+  .amount-input {
+    flex: 1; border: none; outline: none; background: transparent;
+    font-size: 64px; font-weight: 700; font-family: 'IBM Plex Sans', sans-serif;
+    letter-spacing: -2.5px; line-height: 1; color: var(--text); width: 100%;
+  }
+  .amount-input::placeholder { color: var(--border2); }
+  .amount-curr {
+    display: inline-flex; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 2px; gap: 2px;
+  }
+  .amount-curr .opt {
+    padding: 7px 14px; font-size: 13px; font-weight: 500;
+    border-radius: 6px; cursor: pointer; color: var(--text2);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .amount-curr .opt.sel { background: var(--text); color: #fff; }
+
+  .amount-foot {
+    margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);
+    display: flex; gap: 24px; font-size: 12.5px; color: var(--text2);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .amount-foot .lbl { color: var(--text3); margin-right: 4px; }
+  .amount-foot .val { font-weight: 600; }
+  .amount-foot .val.green { color: var(--accent); }
+  .amount-foot .val.amber { color: var(--accent2); }
+
+  /* preset chips */
+  .preset-row {
+    display: flex; gap: 8px; margin-top: 12px;
+  }
+  .preset {
+    padding: 7px 12px; border: 1px solid var(--border);
+    border-radius: 100px; cursor: pointer; background: var(--surface);
+    font-size: 12px; color: var(--text2); font-family: 'IBM Plex Mono', monospace;
+    transition: all 0.1s;
+  }
+  .preset:hover { border-color: var(--text); color: var(--text); }
+
+  /* field cards */
+  .field-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 16px 18px;
+  }
+  .field-card-head {
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px;
+    margin-bottom: 12px;
+  }
+
+  /* method pills */
+  .method-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  }
+  .method {
+    padding: 14px 12px; border: 1.5px solid var(--border);
+    border-radius: var(--radius); background: var(--surface);
+    cursor: pointer; transition: all 0.1s;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  .method:hover { border-color: var(--text3); }
+  .method.sel { background: var(--text); color: #fff; border-color: var(--text); }
+  .method i { font-size: 22px; color: var(--text2); transition: color 0.1s; }
+  .method.sel i { color: #fff; }
+  .method .nm { font-size: 13.5px; font-weight: 600; }
+  .method .sub { font-size: 10.5px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+  .method.sel .sub { color: rgba(255,255,255,0.6); }
+
+  /* APPLY TO INVOICES — table */
+  .apply-row {
+    display: grid;
+    grid-template-columns: 28px 100px 1fr 100px 100px 110px;
+    gap: 12px; align-items: center;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .apply-row:last-child { border-bottom: none; }
+  .apply-row.head {
+    background: var(--surface2); padding: 7px 16px;
+    font-size: 10.5px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .apply-row.head .right { text-align: right; }
+  .apply-row.sel { background: var(--accent-bg); }
+
+  .check {
+    width: 18px; height: 18px; border-radius: 5px;
+    border: 1.5px solid var(--border2); background: var(--surface);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: all 0.1s;
+  }
+  .check.on { background: var(--accent); border-color: var(--accent); }
+  .check.on::after {
+    content: ""; width: 5px; height: 9px;
+    border: solid #fff; border-width: 0 2px 2px 0;
+    transform: rotate(45deg) translateY(-1px);
+  }
+  .inv-id { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text2); }
+  .inv-due { font-size: 11px; color: var(--text3); margin-top: 1px; font-family: 'IBM Plex Mono', monospace; }
+  .num { font-family: 'IBM Plex Mono', monospace; text-align: right; font-weight: 500; }
+
+  .apply-input {
+    width: 100%; padding: 7px 10px;
+    border: 1px solid var(--border2); border-radius: var(--radius);
+    font-family: 'IBM Plex Mono', monospace; font-size: 13px;
+    text-align: right; background: var(--surface); outline: none;
+  }
+  .apply-input:focus { border-color: var(--text); }
+  .apply-input:disabled { color: var(--text3); background: var(--surface2); }
+
+  .age-pill {
+    font-size: 10px; font-family: 'IBM Plex Mono', monospace;
+    padding: 2px 7px; border-radius: 100px; font-weight: 500;
+    display: inline-block;
+  }
+  .age-pill.ok { background: var(--accent-bg); color: var(--accent); }
+  .age-pill.warn { background: var(--accent2-bg); color: var(--accent2); }
+  .age-pill.danger { background: var(--red-bg); color: var(--red); }
+
+  .apply-foot {
+    padding: 11px 16px; background: var(--surface2);
+    border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12.5px; color: var(--text2); font-family: 'IBM Plex Mono', monospace;
+  }
+  .apply-foot .total { font-size: 16px; font-weight: 700; color: var(--text); letter-spacing: -0.3px; }
+
+  /* receipt-style summary card */
+  .receipt {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden;
+    position: sticky; top: 76px;
+  }
+  .receipt-head {
+    background: var(--surface2); padding: 13px 18px;
+    font-size: 12px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text2); text-transform: uppercase; letter-spacing: 1px;
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between;
+  }
+  .receipt-head .id { color: var(--text3); }
+  .receipt-body { padding: 18px; }
+  .r-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; }
+  .r-row .lbl { color: var(--text2); }
+  .r-row .val { font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
+  .r-divider { height: 1px; background: var(--border); margin: 10px 0; border: none; border-top: 1px dashed var(--border2); }
+  .r-row.big { font-size: 17px; font-weight: 700; }
+  .r-row.big .val { font-weight: 700; }
+  .r-row.green .val { color: var(--accent); }
+  .r-row.amber .val { color: var(--accent2); }
+
+  .balance-bar {
+    margin: 14px 18px 0;
+    height: 22px; background: var(--surface2); border-radius: 6px;
+    overflow: hidden; position: relative;
+  }
+  .balance-bar .fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: linear-gradient(90deg, var(--accent), #86EFAC);
+    width: 33%;
+  }
+  .balance-bar .lbl {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 11.5px; font-weight: 600; color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  /* final actions */
+  .save-row {
+    padding: 16px 18px; border-top: 1px solid var(--border);
+    background: #FAFAF8;
+    display: flex; gap: 8px;
+  }
+  .save-row .btn { flex: 1; justify-content: center; }
+  .btn.big { padding: 11px 16px; font-size: 14px; font-weight: 600; }
+  .btn.green { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.green:hover { background: #155237; }
+
+  /* notes input */
+  .notes-input {
+    width: 100%; padding: 11px 12px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 13px; font-family: 'IBM Plex Sans', sans-serif;
+    background: var(--surface); resize: vertical; min-height: 70px;
+    outline: none; transition: border-color 0.1s;
+  }
+  .notes-input:focus { border-color: var(--text); }
+
+  .date-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  /* client switcher */
+  .client-switch {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 12px 16px;
+    display: flex; align-items: center; gap: 14px;
+    cursor: pointer; transition: border-color 0.15s;
+    margin-bottom: 14px;
+  }
+  .client-switch:hover { border-color: var(--text3); }
+  .switch-av {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: var(--blue-bg); color: var(--blue);
+    border: 1px solid #c5d4f5;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 600;
+  }
+  .switch-info { flex: 1; }
+  .switch-name { font-size: 14.5px; font-weight: 600; }
+  .switch-meta { font-size: 12px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+  .switch-balance {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 18px; font-weight: 700; color: var(--accent2);
+  }
+  .switch-balance .small { font-size: 11px; color: var(--text3); font-weight: 400; display: block; text-align: right; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="balances"></aside>
+
+<div class="main">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="back-link" href="balances.html"><i class="ti ti-chevron-left"></i> Balances</a>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-title">Log payment</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn"><i class="ti ti-history" style="font-size:15px"></i> Recent payments</button>
+      <a class="btn" href="balances.html" style="text-decoration:none">Cancel</a>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- HERO -->
+    <div class="pay-hero">
+      <div class="mono"><i class="ti ti-cash" style="font-size:22px"></i></div>
+      <h1>
+        New payment
+        <small>logged 22 May 2026 · 14:42 · by Khalil (owner)</small>
+      </h1>
+      <div class="hero-stat">
+        <div class="v amber">$16,240</div>
+        <div class="k">total owed to us</div>
+      </div>
+      <div class="hero-stat">
+        <div class="v green">$4,820</div>
+        <div class="k">collected this month</div>
+      </div>
+    </div>
+
+    <!-- CLIENT SWITCH -->
+    <div class="client-switch">
+      <div class="switch-av">AR</div>
+      <div class="switch-info">
+        <div class="switch-name">Al Rawda Restaurant <span class="ar" style="font-weight:400;color:var(--text3);font-size:13px" dir="rtl">· مطعم الروضة</span></div>
+        <div class="switch-meta">restaurant · Hamra · USD · +961 71 234 567</div>
+      </div>
+      <div class="switch-balance">
+        $840.00
+        <span class="small">outstanding</span>
+      </div>
+      <button class="btn"><i class="ti ti-refresh" style="font-size:14px"></i> Change client</button>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.7fr 1fr;gap:14px;align-items:start">
+
+      <div class="stack">
+
+        <!-- AMOUNT -->
+        <div class="amount-card">
+          <div class="amount-label">amount received</div>
+          <div class="amount-row">
+            <span class="amount-sym">$</span>
+            <input class="amount-input" id="amt" type="number" value="500" step="0.01" oninput="recalc()">
+            <div class="amount-curr" id="currPicker">
+              <div class="opt sel" onclick="pickCurr(this,'USD')">USD</div>
+              <div class="opt" onclick="pickCurr(this,'LBP')">LBP</div>
+            </div>
+          </div>
+          <div class="preset-row">
+            <span class="preset" onclick="setAmt(420)">$420 · INV-0341</span>
+            <span class="preset" onclick="setAmt(840)">$840 · full balance</span>
+            <span class="preset" onclick="setAmt(100)">$100</span>
+            <span class="preset" onclick="setAmt(200)">$200</span>
+            <span class="preset" onclick="setAmt(500)">$500</span>
+          </div>
+          <div class="amount-foot">
+            <span><span class="lbl">applying to</span> <span class="val green" id="appliedAmt">$500.00</span></span>
+            <span><span class="lbl">over-payment</span> <span class="val" id="overAmt" style="color:var(--text3)">$0.00</span></span>
+            <span style="margin-left:auto"><span class="lbl">after this</span> <span class="val amber" id="remainingAmt">$340.00 remaining</span></span>
+          </div>
+        </div>
+
+        <!-- METHOD -->
+        <div class="field-card">
+          <div class="field-card-head">payment method</div>
+          <div class="method-grid">
+            <div class="method sel" onclick="selMethod(this)">
+              <i class="ti ti-cash"></i>
+              <span class="nm">Cash</span>
+              <span class="sub">most common</span>
+            </div>
+            <div class="method" onclick="selMethod(this)">
+              <i class="ti ti-device-mobile"></i>
+              <span class="nm">Whish</span>
+              <span class="sub">mobile transfer</span>
+            </div>
+            <div class="method" onclick="selMethod(this)">
+              <i class="ti ti-send"></i>
+              <span class="nm">OMT</span>
+              <span class="sub">money transfer</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- APPLY TO INVOICES -->
+        <div class="field-card" style="padding:0">
+          <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-size:13px;font-weight:600">Apply to invoices</div>
+              <div style="font-size:11.5px;color:var(--text3);font-family:'IBM Plex Mono',monospace;margin-top:2px">payment is split oldest-first by default · adjust amounts if needed</div>
+            </div>
+            <div style="display:flex;gap:6px">
+              <button class="btn" style="font-size:12px;padding:5px 10px" onclick="autoApply('oldest')"><i class="ti ti-arrows-diff" style="font-size:12px"></i> Oldest first</button>
+              <button class="btn" style="font-size:12px;padding:5px 10px" onclick="autoApply('balance')"><i class="ti ti-credit-card" style="font-size:12px"></i> Apply to balance</button>
+            </div>
+          </div>
+
+          <div class="apply-row head">
+            <span></span>
+            <span>Invoice</span>
+            <span>Order / item</span>
+            <span class="right">Outstanding</span>
+            <span class="right">Age</span>
+            <span class="right">Apply</span>
+          </div>
+
+          <div class="apply-row sel">
+            <div class="check on" onclick="toggleCheck(this)"></div>
+            <div>
+              <div class="inv-id">INV-0314</div>
+              <div class="inv-due">issued 31 Mar · due 15 Apr</div>
+            </div>
+            <div>ORD-0314 · 100×2kg + 40×5kg + 12×10kg</div>
+            <div class="num">$560.00</div>
+            <div style="text-align:right"><span class="age-pill danger">52 d</span></div>
+            <input class="apply-input" type="number" value="500" step="0.01" oninput="recalc()">
+          </div>
+
+          <div class="apply-row">
+            <div class="check" onclick="toggleCheck(this)"></div>
+            <div>
+              <div class="inv-id">INV-0329</div>
+              <div class="inv-due">issued 12 Apr · due 27 Apr</div>
+            </div>
+            <div>ORD-0329 · 80×2kg + 20×5kg · partial paid $160</div>
+            <div class="num">$120.00</div>
+            <div style="text-align:right"><span class="age-pill warn">40 d</span></div>
+            <input class="apply-input" type="number" value="0" step="0.01" disabled>
+          </div>
+
+          <div class="apply-row">
+            <div class="check" onclick="toggleCheck(this)"></div>
+            <div>
+              <div class="inv-id">INV-0341</div>
+              <div class="inv-due">issued 25 Apr · due 10 May</div>
+            </div>
+            <div>ORD-0341 · 120×2kg + 30×5kg · partial paid $280</div>
+            <div class="num">$140.00</div>
+            <div style="text-align:right"><span class="age-pill ok">12 d</span></div>
+            <input class="apply-input" type="number" value="0" step="0.01" disabled>
+          </div>
+
+          <div class="apply-row">
+            <div class="check" onclick="toggleCheck(this)"></div>
+            <div>
+              <div class="inv-id">INV-0358</div>
+              <div class="inv-due">issued 18 May · due 02 Jun</div>
+            </div>
+            <div>ORD-0358 · 60×2kg · upcoming</div>
+            <div class="num">$20.00</div>
+            <div style="text-align:right"><span class="age-pill ok">4 d</span></div>
+            <input class="apply-input" type="number" value="0" step="0.01" disabled>
+          </div>
+
+          <div class="apply-foot">
+            <span>4 open invoices · $840 outstanding</span>
+            <span class="total" id="applyTotal">Applied $500.00</span>
+          </div>
+        </div>
+
+        <!-- DATE + NOTES -->
+        <div class="field-card">
+          <div class="field-card-head">date &amp; reference</div>
+          <div class="date-grid">
+            <div class="field">
+              <label class="field-label">Payment date</label>
+              <input class="input" type="date" value="2026-05-22">
+            </div>
+            <div class="field">
+              <label class="field-label">Reference (OMT / Whish #)</label>
+              <input class="input" type="text" placeholder="optional · OMT-883920">
+            </div>
+          </div>
+          <div style="margin-top:12px">
+            <label class="field-label" style="display:block;margin-bottom:6px">Notes (Arabic supported)</label>
+            <textarea class="notes-input" placeholder="e.g. paid to driver Joseph on delivery"></textarea>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- RECEIPT SIDE -->
+      <div class="receipt">
+        <div class="receipt-head">
+          <span>Payment summary</span>
+          <span class="id">PAY-0341</span>
+        </div>
+
+        <div class="receipt-body">
+          <div class="r-row"><span class="lbl">Client</span><span class="val">Al Rawda Restaurant</span></div>
+          <div class="r-row"><span class="lbl">Date</span><span class="val">22 May 2026</span></div>
+          <div class="r-row"><span class="lbl">Method</span><span class="val" id="rMethod">Cash</span></div>
+          <div class="r-row"><span class="lbl">Logged by</span><span class="val">Khalil (owner)</span></div>
+          <hr class="r-divider">
+
+          <div class="r-row"><span class="lbl">Balance before</span><span class="val">$840.00</span></div>
+          <div class="r-row green"><span class="lbl">− Payment received</span><span class="val" id="rPay">$500.00</span></div>
+          <hr class="r-divider">
+          <div class="r-row big amber"><span class="lbl">Balance after</span><span class="val" id="rRemaining">$340.00</span></div>
+        </div>
+
+        <div class="balance-bar">
+          <div class="fill" id="payBar" style="width:60%"></div>
+          <div class="lbl"><span id="payBarPct">60%</span> of balance paid</div>
+        </div>
+
+        <div style="padding:12px 18px;font-size:11.5px;color:var(--text3);font-family:'IBM Plex Mono',monospace;line-height:1.5">
+          <strong style="color:var(--text);font-family:'IBM Plex Sans',sans-serif;font-weight:600">Applied to</strong>
+          <div style="margin-top:4px">INV-0314 · $500.00</div>
+        </div>
+
+        <div class="save-row">
+          <button class="btn"><i class="ti ti-printer" style="font-size:14px"></i> Print receipt</button>
+          <button class="btn green big"><i class="ti ti-check" style="font-size:15px"></i> Save payment</button>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const BALANCE = 840;
+  function setAmt(v) {
+    document.getElementById('amt').value = v;
+    recalc();
+  }
+  function recalc() {
+    const v = parseFloat(document.getElementById('amt').value) || 0;
+    document.getElementById('appliedAmt').textContent = '$' + Math.min(v, BALANCE).toFixed(2);
+    document.getElementById('overAmt').textContent = '$' + Math.max(0, v - BALANCE).toFixed(2);
+    document.getElementById('remainingAmt').textContent = '$' + Math.max(0, BALANCE - v).toFixed(2) + ' remaining';
+    document.getElementById('rPay').textContent = '$' + v.toFixed(2);
+    document.getElementById('rRemaining').textContent = '$' + Math.max(0, BALANCE - v).toFixed(2);
+    document.getElementById('applyTotal').textContent = 'Applied $' + Math.min(v, BALANCE).toFixed(2);
+    const pct = Math.min(100, (v / BALANCE) * 100);
+    document.getElementById('payBar').style.width = pct + '%';
+    document.getElementById('payBarPct').textContent = Math.round(pct) + '%';
+  }
+  function pickCurr(el, c) {
+    el.parentElement.querySelectorAll('.opt').forEach(o => o.classList.remove('sel'));
+    el.classList.add('sel');
+  }
+  function selMethod(el) {
+    el.parentElement.querySelectorAll('.method').forEach(m => m.classList.remove('sel'));
+    el.classList.add('sel');
+    document.getElementById('rMethod').textContent = el.querySelector('.nm').textContent;
+  }
+  function toggleCheck(el) {
+    el.classList.toggle('on');
+    const row = el.closest('.apply-row');
+    row.classList.toggle('sel');
+    const input = row.querySelector('.apply-input');
+    input.disabled = !el.classList.contains('on');
+    if (!el.classList.contains('on')) input.value = 0;
+  }
+  function autoApply(mode) { /* placeholder */ }
+</script>
+</body>
+</html>

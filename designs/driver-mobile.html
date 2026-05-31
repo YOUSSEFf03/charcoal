@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Ember — Driver</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:#F5F4F0; --surface:#FFFFFF; --surface2:#F0EEE9;
+    --border:#E4E1D9; --border2:#D4D0C8;
+    --text:#1A1916; --text2:#6B6860; --text3:#9B9890;
+    --accent:#1D6B4A; --accent-bg:#EAF5EF;
+    --accent2:#B45309; --accent2-bg:#FEF3C7;
+    --red:#C0392B; --red-bg:#FEF2F2;
+    --blue:#1D4ED8; --blue-bg:#EFF6FF;
+    --radius:10px; --radius-lg:16px;
+  }
+
+  body {
+    font-family:'IBM Plex Sans',sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    font-size:14px;
+    min-height:100vh;
+    display:flex;
+    justify-content:center;
+    align-items:flex-start;
+  }
+
+  /* PHONE SHELL */
+  .phone {
+    width:100%;
+    max-width:420px;
+    min-height:100vh;
+    background:var(--bg);
+    display:flex;
+    flex-direction:column;
+    position:relative;
+  }
+
+  /* TOP BAR */
+  .topbar {
+    background:var(--surface);
+    border-bottom:1px solid var(--border);
+    padding:14px 18px 12px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    position:sticky;
+    top:0;
+    z-index:10;
+  }
+  .topbar-left { display:flex; align-items:center; gap:10px; }
+  .back-btn {
+    width:34px; height:34px; border-radius:9px;
+    background:var(--surface2); border:1px solid var(--border);
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; flex-shrink:0;
+  }
+  .topbar-title { font-size:15px; font-weight:600; letter-spacing:-0.2px; }
+  .topbar-sub { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+  .driver-av {
+    width:32px; height:32px; border-radius:50%;
+    background:var(--blue-bg); color:var(--blue);
+    display:flex; align-items:center; justify-content:center;
+    font-size:12px; font-weight:600;
+  }
+
+  /* SCREENS */
+  .screen { display:none; flex-direction:column; flex:1; }
+  .screen.active { display:flex; animation:fadeUp 0.25s ease; }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+
+  /* CONTENT AREA */
+  .content { padding:18px; flex:1; overflow-y:auto; }
+
+  /* BADGE */
+  .badge { font-size:11px; font-family:'IBM Plex Mono',monospace; padding:2px 8px; border-radius:100px; font-weight:500; white-space:nowrap; }
+  .badge-green  { background:var(--accent-bg); color:var(--accent); }
+  .badge-amber  { background:var(--accent2-bg); color:var(--accent2); }
+  .badge-red    { background:var(--red-bg); color:var(--red); }
+  .badge-blue   { background:var(--blue-bg); color:var(--blue); }
+  .badge-gray   { background:var(--surface2); color:var(--text2); }
+
+  /* SECTION LABEL */
+  .sec-label {
+    font-size:11px; font-family:'IBM Plex Mono',monospace;
+    color:var(--text3); text-transform:uppercase; letter-spacing:1px;
+    margin-bottom:10px;
+  }
+
+  /* TRIP SUMMARY CARD */
+  .trip-summary {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--radius-lg); padding:16px;
+    margin-bottom:16px;
+  }
+  .ts-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+  .ts-id { font-size:12px; font-family:'IBM Plex Mono',monospace; color:var(--text3); }
+  .ts-stats { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .ts-stat { background:var(--surface2); border-radius:var(--radius); padding:10px 12px; text-align:center; }
+  .ts-stat-val { font-size:18px; font-weight:600; letter-spacing:-0.5px; line-height:1; margin-bottom:3px; }
+  .ts-stat-lbl { font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; }
+
+  /* PROGRESS BAR */
+  .progress-bar { height:5px; background:var(--surface2); border-radius:100px; overflow:hidden; margin-top:12px; }
+  .progress-fill { height:100%; border-radius:100px; background:var(--accent); transition:width 0.5s ease; }
+
+  /* STOP CARDS */
+  .stop-card {
+    background:var(--surface); border:2px solid var(--border);
+    border-radius:var(--radius-lg); overflow:hidden;
+    margin-bottom:12px; cursor:pointer;
+    transition:border-color 0.15s, box-shadow 0.15s;
+  }
+  .stop-card.active-stop { border-color:var(--blue); box-shadow:0 0 0 3px rgba(29,78,216,0.1); }
+  .stop-card.done-stop { border-color:var(--accent); opacity:0.7; }
+
+  .stop-head {
+    padding:14px 16px;
+    display:flex; align-items:flex-start; gap:12px;
+  }
+  .stop-num {
+    width:28px; height:28px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:12px; font-weight:600; flex-shrink:0;
+    margin-top:1px;
+  }
+  .stop-num.pending { background:var(--surface2); color:var(--text3); border:1.5px solid var(--border); }
+  .stop-num.active  { background:var(--blue); color:#fff; }
+  .stop-num.done    { background:var(--accent); color:#fff; }
+
+  .stop-info { flex:1; }
+  .stop-client { font-size:14px; font-weight:600; margin-bottom:2px; }
+  .stop-addr { font-size:12px; color:var(--text2); margin-bottom:6px; }
+  .stop-bags { display:flex; gap:6px; flex-wrap:wrap; }
+  .bag-pill { font-size:11px; font-family:'IBM Plex Mono',monospace; background:var(--surface2); border:1px solid var(--border); border-radius:5px; padding:2px 8px; color:var(--text2); }
+
+  .stop-right { text-align:right; flex-shrink:0; }
+  .stop-kg { font-size:12px; font-family:'IBM Plex Mono',monospace; color:var(--text2); }
+  .stop-inv { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; margin-top:2px; }
+
+  /* DELIVER CTA (on active stop) */
+  .deliver-cta {
+    padding:12px 16px;
+    border-top:1px solid var(--border);
+    background:var(--blue-bg);
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .deliver-cta-text { font-size:12px; color:var(--blue); font-weight:500; }
+  .deliver-btn {
+    padding:8px 16px; background:var(--blue); color:#fff;
+    border:none; border-radius:var(--radius);
+    font-size:13px; font-weight:600; font-family:'IBM Plex Sans',sans-serif;
+    cursor:pointer; display:flex; align-items:center; gap:6px;
+  }
+
+  /* DONE OVERLAY on stop */
+  .done-row {
+    padding:10px 16px;
+    border-top:1px solid var(--border);
+    background:var(--accent-bg);
+    display:flex; align-items:center; gap:8px;
+    font-size:12px; color:var(--accent);
+  }
+
+  /* BOTTOM BUTTON */
+  .bottom-btn {
+    padding:16px 18px;
+    background:var(--surface);
+    border-top:1px solid var(--border);
+    position:sticky; bottom:0;
+  }
+  .main-btn {
+    width:100%; padding:15px;
+    background:var(--text); color:#fff;
+    border:none; border-radius:var(--radius-lg);
+    font-size:15px; font-weight:600; font-family:'IBM Plex Sans',sans-serif;
+    cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;
+    transition:background 0.15s;
+  }
+  .main-btn:hover { background:#2d2b28; }
+  .main-btn.blue { background:var(--blue); }
+  .main-btn.blue:hover { background:#1e40af; }
+  .main-btn.green { background:var(--accent); }
+  .main-btn.green:hover { background:#155237; }
+  .main-btn.amber { background:var(--accent2); }
+  .main-btn:disabled { background:var(--border); color:var(--text3); cursor:not-allowed; }
+
+  /* DELIVERY CONFIRM SCREEN */
+  .confirm-header {
+    background:var(--surface); border-bottom:1px solid var(--border);
+    padding:16px 18px;
+  }
+  .confirm-client { font-size:17px; font-weight:600; letter-spacing:-0.3px; margin-bottom:2px; }
+  .confirm-addr { font-size:13px; color:var(--text2); }
+
+  .order-lines { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:14px; }
+  .order-line { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border); font-size:13px; }
+  .order-line:last-child { border-bottom:none; }
+  .order-line-name { font-weight:500; }
+  .order-line-qty { font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--text2); }
+  .order-line-total { font-family:'IBM Plex Mono',monospace; font-weight:600; }
+
+  /* KG INPUT */
+  .kg-card { background:var(--surface); border:1.5px solid var(--border); border-radius:var(--radius-lg); padding:18px; margin-bottom:14px; transition:border-color 0.15s; }
+  .kg-card:focus-within { border-color:var(--text); }
+  .kg-card-label { font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
+  .kg-input { font-size:42px; font-weight:600; font-family:'IBM Plex Mono',monospace; letter-spacing:-2px; line-height:1; width:100%; border:none; outline:none; background:transparent; text-align:center; color:var(--text); }
+  .kg-unit { font-size:14px; color:var(--text3); text-align:center; margin-top:4px; }
+  .kg-nominal { font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-align:center; margin-top:6px; }
+
+  /* PAYMENT SECTION */
+  .pay-section { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:14px; }
+  .pay-section-head { padding:12px 16px; background:var(--surface2); border-bottom:1px solid var(--border); font-size:13px; font-weight:600; display:flex; align-items:center; gap:7px; }
+  .pay-section-body { padding:14px 16px; }
+
+  .big-amount-input {
+    width:100%; padding:12px 14px;
+    border:1.5px solid var(--border); border-radius:var(--radius);
+    font-size:24px; font-family:'IBM Plex Mono',monospace; font-weight:600;
+    text-align:right; outline:none; background:var(--surface);
+    transition:border-color 0.15s; margin-bottom:10px;
+  }
+  .big-amount-input:focus { border-color:var(--text); }
+
+  /* SPLIT PAYMENT */
+  .split-row { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .split-row:last-child { margin-bottom:0; }
+  .split-lbl { font-size:12px; font-weight:600; font-family:'IBM Plex Mono',monospace; min-width:40px; }
+  .split-inp { flex:1; padding:10px 12px; border:1.5px solid var(--border); border-radius:var(--radius); font-size:16px; font-family:'IBM Plex Mono',monospace; outline:none; background:var(--surface); text-align:right; transition:border-color 0.15s; }
+  .split-inp:focus { border-color:var(--text); }
+  .split-curr { font-size:12px; color:var(--text2); font-family:'IBM Plex Mono',monospace; min-width:28px; font-weight:500; }
+  .split-eq { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; min-width:70px; text-align:right; }
+
+  .total-recv-bar { border-radius:var(--radius); padding:10px 14px; display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; font-size:13px; }
+  .total-recv-bar.ok    { background:var(--accent-bg); border:1px solid #a7f3d0; color:var(--accent); }
+  .total-recv-bar.short { background:var(--accent2-bg); border:1px solid #fcd34d; color:var(--accent2); }
+  .total-recv-bar.none  { background:var(--surface2); border:1px solid var(--border); color:var(--text3); }
+  .total-recv-val { font-family:'IBM Plex Mono',monospace; font-weight:600; }
+
+  /* METHOD PILLS */
+  .method-pills { display:flex; gap:8px; margin-bottom:14px; }
+  .method-pill { flex:1; padding:10px 8px; border:1.5px solid var(--border); border-radius:var(--radius); text-align:center; cursor:pointer; font-size:13px; font-weight:500; transition:all 0.1s; background:var(--surface); color:var(--text2); }
+  .method-pill.sel { background:var(--text); color:#fff; border-color:var(--text); }
+
+  /* ACCOUNT TOGGLE */
+  .account-row { display:flex; align-items:center; gap:10px; padding:10px 14px; background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:14px; }
+  .account-lbl { flex:1; font-size:13px; color:var(--text2); }
+  .toggle { width:40px; height:22px; border-radius:100px; background:var(--border); cursor:pointer; position:relative; transition:background 0.15s; flex-shrink:0; }
+  .toggle.on { background:var(--accent); }
+  .toggle-knob { position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:#fff; transition:transform 0.15s; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
+  .toggle.on .toggle-knob { transform:translateX(18px); }
+
+  /* RECEIPT */
+  .receipt-wrap { background:var(--surface); border-radius:var(--radius-lg); border:1px solid var(--border); overflow:hidden; margin-bottom:14px; }
+  .receipt-preview { padding:18px; font-family:'IBM Plex Mono',monospace; font-size:12px; line-height:1.8; background:#fff; }
+  .rp-title { font-size:14px; font-weight:600; text-align:center; margin-bottom:2px; }
+  .rp-sub { font-size:11px; color:var(--text3); text-align:center; margin-bottom:12px; }
+  .rp-divider { border:none; border-top:1px dashed var(--border2); margin:8px 0; }
+  .rp-row { display:flex; justify-content:space-between; font-size:11px; padding:1px 0; }
+  .rp-row.total { font-weight:600; font-size:12px; border-top:1px dashed var(--border2); padding-top:6px; margin-top:4px; }
+  .rp-row.paid { color:var(--accent); font-weight:600; }
+  .rp-row.balance { color:var(--accent2); }
+  .rp-sig { margin-top:16px; font-size:11px; color:var(--text3); }
+  .rp-sig-line { border-top:1px solid var(--text3); margin-top:20px; padding-top:3px; }
+  .receipt-actions { display:flex; gap:10px; padding:12px 14px; border-top:1px solid var(--border); }
+  .receipt-btn { flex:1; padding:10px; border-radius:var(--radius); font-size:13px; font-weight:600; font-family:'IBM Plex Sans',sans-serif; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px; border:1.5px solid; transition:all 0.15s; }
+  .receipt-btn.print { background:var(--text); color:#fff; border-color:var(--text); }
+  .receipt-btn.skip { background:var(--surface); color:var(--text2); border-color:var(--border); }
+
+  /* EXPENSES SCREEN */
+  .exp-row { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .exp-desc-inp { flex:1; padding:10px 12px; border:1.5px solid var(--border); border-radius:var(--radius); font-size:14px; font-family:'IBM Plex Sans',sans-serif; outline:none; background:var(--surface); transition:border-color 0.15s; }
+  .exp-desc-inp:focus { border-color:var(--text); }
+  .exp-amt-inp { width:90px; padding:10px 10px; border:1.5px solid var(--border); border-radius:var(--radius); font-size:14px; font-family:'IBM Plex Mono',monospace; text-align:right; outline:none; background:var(--surface); transition:border-color 0.15s; }
+  .exp-amt-inp:focus { border-color:var(--text); }
+  .exp-del { width:34px; height:42px; border-radius:var(--radius); border:1.5px solid var(--border); background:transparent; cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--text3); flex-shrink:0; }
+  .exp-del:hover { background:var(--red-bg); border-color:#fca5a5; color:var(--red); }
+
+  /* SUCCESS */
+  .success-icon { width:72px; height:72px; border-radius:50%; background:var(--accent-bg); border:2px solid #a7f3d0; display:flex; align-items:center; justify-content:center; font-size:36px; margin:0 auto 16px; animation:popIn 0.4s cubic-bezier(0.34,1.56,0.64,1); }
+  @keyframes popIn { from{transform:scale(0);opacity:0} to{transform:scale(1);opacity:1} }
+
+  /* LOGIN SCREEN */
+  .login-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; padding:32px 24px; }
+  .login-logo { width:60px; height:60px; background:var(--text); border-radius:16px; display:flex; align-items:center; justify-content:center; margin-bottom:20px; }
+  .login-logo i { color:#fff; font-size:30px; }
+  .login-title { font-size:22px; font-weight:600; letter-spacing:-0.5px; margin-bottom:4px; }
+  .login-sub { font-size:14px; color:var(--text2); margin-bottom:32px; text-align:center; }
+  .driver-pick { width:100%; }
+  .driver-option { display:flex; align-items:center; gap:12px; padding:14px 16px; background:var(--surface); border:1.5px solid var(--border); border-radius:var(--radius-lg); margin-bottom:10px; cursor:pointer; transition:all 0.15s; }
+  .driver-option:hover { border-color:var(--border2); box-shadow:0 2px 8px rgba(0,0,0,0.06); }
+  .do-avatar { width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600; flex-shrink:0; }
+  .do-info { flex:1; }
+  .do-name { font-size:14px; font-weight:600; }
+  .do-role { font-size:12px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+</style>
+</head>
+<body>
+<div class="phone">
+
+  <!-- ══ LOGIN / DRIVER SELECT ══ -->
+  <div id="screen-login" class="screen active" style="display:flex">
+    <div class="login-wrap">
+      <div class="login-logo"><i class="ti ti-flame"></i></div>
+      <div class="login-title">Ember Driver</div>
+      <div class="login-sub">Select your name to start your shift</div>
+      <div class="driver-pick">
+        <div class="driver-option" onclick="startTrip('MK','Mohammed Khalil')">
+          <div class="do-avatar" style="background:var(--blue-bg);color:var(--blue)">MK</div>
+          <div class="do-info">
+            <div class="do-name">Mohammed Khalil</div>
+            <div class="do-role">driver · 3 stops today</div>
+          </div>
+          <i class="ti ti-arrow-right" style="color:var(--text3)"></i>
+        </div>
+        <div class="driver-option" onclick="startTrip('AH','Ahmad Hassan')">
+          <div class="do-avatar" style="background:var(--accent2-bg);color:var(--accent2)">AH</div>
+          <div class="do-info">
+            <div class="do-name">Ahmad Hassan</div>
+            <div class="do-role">driver · 2 stops today</div>
+          </div>
+          <i class="ti ti-arrow-right" style="color:var(--text3)"></i>
+        </div>
+        <div class="driver-option" onclick="startTrip('JN','Joseph Nasr')">
+          <div class="do-avatar" style="background:var(--surface2);color:var(--text2)">JN</div>
+          <div class="do-info">
+            <div class="do-name">Joseph Nasr</div>
+            <div class="do-role">driver · 0 stops today</div>
+          </div>
+          <i class="ti ti-arrow-right" style="color:var(--text3)"></i>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ TRIP VIEW ══ -->
+  <div id="screen-trip" class="screen">
+    <div class="topbar">
+      <div class="topbar-left">
+        <div>
+          <div class="topbar-title" id="tripDriverName">Mohammed Khalil</div>
+          <div class="topbar-sub">Thursday 21 May 2026</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="back-btn" onclick="goToScreen('expenses')" title="Log expenses"><i class="ti ti-gas-station" style="font-size:16px;color:var(--text2)"></i></button>
+        <div class="driver-av" id="tripDriverAv">MK</div>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- TRIP SUMMARY -->
+      <div class="trip-summary">
+        <div class="ts-header">
+          <span class="ts-id">TRP-0091</span>
+          <span class="badge badge-blue">In progress</span>
+        </div>
+        <div class="ts-stats">
+          <div class="ts-stat">
+            <div class="ts-stat-val">3</div>
+            <div class="ts-stat-lbl">Stops</div>
+          </div>
+          <div class="ts-stat">
+            <div class="ts-stat-val" style="color:var(--accent)">1</div>
+            <div class="ts-stat-lbl">Done</div>
+          </div>
+          <div class="ts-stat">
+            <div class="ts-stat-val">890 kg</div>
+            <div class="ts-stat-lbl">Total load</div>
+          </div>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width:33%"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3)">
+          <span>1 of 3 delivered</span>
+          <span>33%</span>
+        </div>
+      </div>
+
+      <p class="sec-label">Delivery stops</p>
+
+      <!-- STOP 1 — DONE -->
+      <div class="stop-card done-stop">
+        <div class="stop-head">
+          <div class="stop-num done"><i class="ti ti-check" style="font-size:12px"></i></div>
+          <div class="stop-info">
+            <div class="stop-client">Al Rawda Restaurant</div>
+            <div class="stop-addr"><i class="ti ti-map-pin" style="font-size:11px"></i> Hamra, Beirut</div>
+            <div class="stop-bags">
+              <span class="bag-pill">80×2kg</span>
+              <span class="bag-pill">20×5kg</span>
+            </div>
+          </div>
+          <div class="stop-right">
+            <span class="badge badge-green">Delivered</span>
+            <div class="stop-kg">262 kg actual</div>
+            <div class="stop-inv">$840 paid</div>
+          </div>
+        </div>
+        <div class="done-row">
+          <i class="ti ti-check-circle" style="font-size:15px"></i>
+          Delivered 08:52 · Receipt printed · $840 cash collected
+        </div>
+      </div>
+
+      <!-- STOP 2 — ACTIVE -->
+      <div class="stop-card active-stop" onclick="goToConfirm(2)">
+        <div class="stop-head">
+          <div class="stop-num active">2</div>
+          <div class="stop-info">
+            <div class="stop-client">Chez Michel</div>
+            <div class="stop-addr"><i class="ti ti-map-pin" style="font-size:11px"></i> Achrafieh, Beirut</div>
+            <div class="stop-bags">
+              <span class="bag-pill">50×2kg</span>
+              <span class="bag-pill">10×5kg</span>
+            </div>
+          </div>
+          <div class="stop-right">
+            <span class="badge badge-blue">Next stop</span>
+            <div class="stop-kg">150 kg nom.</div>
+            <div class="stop-inv">INV-0339</div>
+          </div>
+        </div>
+        <div class="deliver-cta">
+          <span class="deliver-cta-text">Tap to confirm delivery</span>
+          <button class="deliver-btn" onclick="goToConfirm(2)">
+            <i class="ti ti-truck" style="font-size:14px"></i> Deliver
+          </button>
+        </div>
+      </div>
+
+      <!-- STOP 3 — PENDING -->
+      <div class="stop-card">
+        <div class="stop-head">
+          <div class="stop-num pending">3</div>
+          <div class="stop-info">
+            <div class="stop-client">Cedar Grill House</div>
+            <div class="stop-addr"><i class="ti ti-map-pin" style="font-size:11px"></i> Jdeideh</div>
+            <div class="stop-bags">
+              <span class="bag-pill">120×2kg</span>
+            </div>
+          </div>
+          <div class="stop-right">
+            <span class="badge badge-gray">Pending</span>
+            <div class="stop-kg">240 kg nom.</div>
+            <div class="stop-inv">INV-0340</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══ DELIVERY CONFIRM SCREEN ══ -->
+  <div id="screen-confirm" class="screen">
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="back-btn" onclick="goToScreen('trip')"><i class="ti ti-arrow-left" style="font-size:16px;color:var(--text2)"></i></div>
+        <div>
+          <div class="topbar-title">Confirm delivery</div>
+          <div class="topbar-sub">Stop 2 of 3</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="content" style="padding-bottom:100px">
+
+      <!-- CLIENT HEADER -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:14px">
+        <div style="font-size:16px;font-weight:600;margin-bottom:3px">Chez Michel</div>
+        <div style="font-size:13px;color:var(--text2);display:flex;align-items:center;gap:5px">
+          <i class="ti ti-map-pin" style="font-size:13px"></i> Achrafieh, Beirut
+        </div>
+        <div style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace;margin-top:4px">INV-0339 · 50×2kg bag + 10×5kg bag</div>
+      </div>
+
+      <!-- ORDER LINES -->
+      <p class="sec-label">Items to deliver</p>
+      <div class="order-lines">
+        <div class="order-line">
+          <div>
+            <div class="order-line-name">2 kg bag</div>
+            <div style="font-size:11px;color:var(--text3)">BBQ Hardwood Grade A</div>
+          </div>
+          <div class="order-line-qty">50 bags</div>
+          <div class="order-line-total">$140.00</div>
+        </div>
+        <div class="order-line">
+          <div>
+            <div class="order-line-name">5 kg bag</div>
+            <div style="font-size:11px;color:var(--text3)">BBQ Hardwood Grade A</div>
+          </div>
+          <div class="order-line-qty">10 bags</div>
+          <div class="order-line-total">$140.00</div>
+        </div>
+        <div style="padding:10px 16px;background:var(--surface2);display:flex;justify-content:space-between;font-size:14px;font-weight:600">
+          <span>Invoice total</span>
+          <span style="font-family:'IBM Plex Mono',monospace">$280.00</span>
+        </div>
+      </div>
+
+      <!-- ACTUAL WEIGHT -->
+      <p class="sec-label">Actual weight loaded</p>
+      <div class="kg-card">
+        <div class="kg-card-label">Weigh the load before delivery</div>
+        <input class="kg-input" type="number" id="actualKg" placeholder="0" inputmode="decimal" oninput="updateReceipt()">
+        <div class="kg-unit">kilograms</div>
+        <div class="kg-nominal">Nominal: 150 kg (50×2 + 10×5)</div>
+      </div>
+
+      <!-- PAYMENT -->
+      <p class="sec-label">Payment collected</p>
+      <div class="pay-section">
+        <div class="pay-section-head">
+          <i class="ti ti-cash" style="font-size:14px;color:var(--text2)"></i>
+          Amount received — USD, LBP, or split
+        </div>
+        <div class="pay-section-body">
+          <div style="background:var(--surface2);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;display:flex;justify-content:space-between;font-size:12px;color:var(--text2)">
+            <span>Invoice total</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-weight:600">$280.00</span>
+          </div>
+
+          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:12px">
+            <div class="split-row">
+              <span class="split-lbl">USD</span>
+              <input class="split-inp" type="number" inputmode="decimal" placeholder="0.00" id="payUsd" oninput="calcPay()">
+              <span class="split-curr">$</span>
+              <span class="split-eq" id="usdEq"></span>
+            </div>
+            <div style="text-align:center;font-size:11px;color:var(--text3);padding:2px 0">+ optional</div>
+            <div class="split-row">
+              <span class="split-lbl">LBP</span>
+              <input class="split-inp" type="number" inputmode="decimal" placeholder="0" id="payLbp" oninput="calcPay()">
+              <span class="split-curr">LL</span>
+              <span class="split-eq" id="lbpEq"></span>
+            </div>
+          </div>
+
+          <div class="total-recv-bar none" id="payBar">
+            <span id="payBarLabel">Enter amount received</span>
+            <span class="total-recv-val" id="payBarVal">—</span>
+          </div>
+
+          <div class="account-row">
+            <span class="account-lbl">Goes on account (pay later)</span>
+            <div class="toggle" id="accountToggle" onclick="toggleAccount(this)">
+              <div class="toggle-knob"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- METHOD -->
+      <p class="sec-label">Payment method</p>
+      <div class="method-pills">
+        <div class="method-pill sel" onclick="selMethod(this)">Cash</div>
+        <div class="method-pill" onclick="selMethod(this)">Whish</div>
+        <div class="method-pill" onclick="selMethod(this)">OMT</div>
+      </div>
+
+      <!-- RECEIPT PREVIEW -->
+      <p class="sec-label">Receipt preview</p>
+      <div class="receipt-wrap">
+        <div class="receipt-preview">
+          <div class="rp-title">EMBER CHARCOAL CO.</div>
+          <div class="rp-sub">Delivery Receipt</div>
+          <hr class="rp-divider">
+          <div class="rp-row"><span>Date</span><span>21 May 2026 09:41</span></div>
+          <div class="rp-row"><span>Receipt #</span><span>INV-0339</span></div>
+          <div class="rp-row"><span>Client</span><span>Chez Michel</span></div>
+          <div class="rp-row"><span>Address</span><span>Achrafieh, Beirut</span></div>
+          <div class="rp-row"><span>Driver</span><span>Mohammed Khalil</span></div>
+          <hr class="rp-divider">
+          <div class="rp-row"><span>50 × 2kg bag</span><span>$140.00</span></div>
+          <div class="rp-row"><span>10 × 5kg bag</span><span>$140.00</span></div>
+          <hr class="rp-divider">
+          <div class="rp-row total"><span>TOTAL</span><span>$280.00</span></div>
+          <div class="rp-row paid" id="receipt-paid"><span>COLLECTED</span><span id="receipt-paid-val">—</span></div>
+          <div class="rp-row balance" id="receipt-balance" style="display:none"><span>ON ACCOUNT</span><span id="receipt-balance-val">—</span></div>
+          <div class="rp-sig">
+            <div class="rp-sig-line">Client signature</div>
+          </div>
+        </div>
+        <div class="receipt-actions">
+          <button class="receipt-btn print" onclick="printAndConfirm()">
+            <i class="ti ti-printer" style="font-size:15px"></i> Print & confirm
+          </button>
+          <button class="receipt-btn skip" onclick="goToSuccess()">
+            Skip print
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══ SUCCESS SCREEN ══ -->
+  <div id="screen-success" class="screen">
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="back-btn" onclick="goToScreen('trip')"><i class="ti ti-arrow-left" style="font-size:16px;color:var(--text2)"></i></div>
+        <div class="topbar-title">Delivery confirmed</div>
+      </div>
+    </div>
+    <div class="content" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;flex:1;padding:32px 24px">
+      <div class="success-icon"><i class="ti ti-check" style="color:var(--accent);font-size:36px"></i></div>
+      <div style="font-size:20px;font-weight:600;margin-bottom:6px">Stop 2 confirmed</div>
+      <div style="font-size:14px;color:var(--text2);margin-bottom:28px">Chez Michel — Achrafieh · Receipt printed</div>
+
+      <div style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;margin-bottom:24px">
+        <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px">
+          <span style="color:var(--text2)">Bags delivered</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:600">60 bags</span>
+        </div>
+        <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px">
+          <span style="color:var(--text2)">Actual weight</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:600" id="succ-kg">— kg</span>
+        </div>
+        <div style="padding:12px 16px;display:flex;justify-content:space-between;font-size:13px">
+          <span style="color:var(--text2)">Collected</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--accent)" id="succ-collected">—</span>
+        </div>
+      </div>
+
+      <div style="width:100%;background:var(--accent-bg);border:1px solid #a7f3d0;border-radius:var(--radius-lg);padding:14px;margin-bottom:24px;font-size:13px;color:var(--accent)">
+        <strong>1 stop remaining</strong> — Cedar Grill House, Jdeideh
+      </div>
+
+      <button class="main-btn blue" style="width:100%" onclick="goToScreen('trip')">
+        <i class="ti ti-arrow-right" style="font-size:15px"></i> Continue to next stop
+      </button>
+    </div>
+  </div>
+
+  <!-- ══ EXPENSES SCREEN ══ -->
+  <div id="screen-expenses" class="screen">
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="back-btn" onclick="goToScreen('trip')"><i class="ti ti-arrow-left" style="font-size:16px;color:var(--text2)"></i></div>
+        <div>
+          <div class="topbar-title">Trip expenses</div>
+          <div class="topbar-sub">Kept from cash collected</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="content" style="padding-bottom:100px">
+      <p class="sec-label">Fuel & road costs</p>
+
+      <div id="expList">
+        <div class="exp-row">
+          <input class="exp-desc-inp" type="text" value="Fuel" placeholder="Description">
+          <input class="exp-amt-inp" type="number" value="45" placeholder="0">
+          <span style="font-size:12px;color:var(--text3)">$</span>
+          <button class="exp-del" onclick="this.closest('.exp-row').remove();calcExpTotal()"><i class="ti ti-x" style="font-size:12px"></i></button>
+        </div>
+        <div class="exp-row">
+          <input class="exp-desc-inp" type="text" value="Toll fees" placeholder="Description">
+          <input class="exp-amt-inp" type="number" value="12" placeholder="0">
+          <span style="font-size:12px;color:var(--text3)">$</span>
+          <button class="exp-del" onclick="this.closest('.exp-row').remove();calcExpTotal()"><i class="ti ti-x" style="font-size:12px"></i></button>
+        </div>
+      </div>
+
+      <button style="display:flex;align-items:center;gap:7px;font-size:13px;color:var(--accent);background:none;border:none;cursor:pointer;padding:6px 0;font-family:'IBM Plex Sans',sans-serif;font-weight:500;margin-bottom:20px" onclick="addExpRow()">
+        <i class="ti ti-plus" style="font-size:15px"></i> Add expense
+      </button>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border)">
+          <span style="color:var(--text2)">Total collected today</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--accent)">$840.00</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border)">
+          <span style="color:var(--text2)">Total expenses</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--accent2)" id="expTotalDisplay">$57.00</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:600;padding-top:8px;margin-top:4px;border-top:1px solid var(--border)">
+          <span>To hand over</span>
+          <span style="font-family:'IBM Plex Mono',monospace" id="handoverDisplay">$783.00</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom-btn">
+      <button class="main-btn green" onclick="goToScreen('trip')">
+        <i class="ti ti-check" style="font-size:15px"></i> Save expenses & go back
+      </button>
+    </div>
+  </div>
+
+</div><!-- /phone -->
+
+<script>
+  const RATE = 89550;
+  let driverName = '';
+  let driverInitials = '';
+
+  function startTrip(initials, name) {
+    driverName = name;
+    driverInitials = initials;
+    document.getElementById('tripDriverName').textContent = name;
+    document.getElementById('tripDriverAv').textContent = initials;
+    goToScreen('trip');
+  }
+
+  function goToScreen(name) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    const s = document.getElementById('screen-'+name);
+    if (s) s.classList.add('active');
+    window.scrollTo(0,0);
+  }
+
+  function goToConfirm(stopNum) {
+    goToScreen('confirm');
+  }
+
+  function calcPay() {
+    const usd = parseFloat(document.getElementById('payUsd').value) || 0;
+    const lbp = parseFloat(document.getElementById('payLbp').value) || 0;
+    const lbpAsUsd = lbp / RATE;
+    const total = usd + lbpAsUsd;
+    const invoiceTotal = 280;
+    const diff = total - invoiceTotal;
+
+    document.getElementById('usdEq').textContent = usd > 0 ? '=$'+usd.toFixed(2) : '';
+    document.getElementById('lbpEq').textContent = lbp > 0 ? '≈$'+lbpAsUsd.toFixed(2) : '';
+
+    const bar = document.getElementById('payBar');
+    const lbl = document.getElementById('payBarLabel');
+    const val = document.getElementById('payBarVal');
+
+    if (total === 0) {
+      bar.className = 'total-recv-bar none';
+      lbl.textContent = 'Enter amount received';
+      val.textContent = '—';
+    } else if (total >= invoiceTotal) {
+      bar.className = 'total-recv-bar ok';
+      lbl.textContent = diff > 0 ? 'Over by $'+diff.toFixed(2) : 'Full payment ✓';
+      val.textContent = '$'+total.toFixed(2);
+    } else {
+      bar.className = 'total-recv-bar short';
+      lbl.textContent = '$'+(invoiceTotal-total).toFixed(2)+' will go on account';
+      val.textContent = '$'+total.toFixed(2);
+    }
+
+    updateReceipt();
+  }
+
+  function toggleAccount(el) {
+    el.classList.toggle('on');
+    updateReceipt();
+  }
+
+  function updateReceipt() {
+    const usd = parseFloat(document.getElementById('payUsd').value) || 0;
+    const lbp = parseFloat(document.getElementById('payLbp').value) || 0;
+    const total = usd + (lbp / RATE);
+    const invoiceTotal = 280;
+    const onAccount = document.getElementById('accountToggle').classList.contains('on');
+    const paidEl = document.getElementById('receipt-paid');
+    const paidVal = document.getElementById('receipt-paid-val');
+    const balEl = document.getElementById('receipt-balance');
+    const balVal = document.getElementById('receipt-balance-val');
+
+    if (onAccount) {
+      paidVal.textContent = '$0.00';
+      balEl.style.display = 'flex';
+      balVal.textContent = '$280.00';
+    } else if (total > 0) {
+      paidVal.textContent = '$'+total.toFixed(2);
+      const rem = invoiceTotal - total;
+      if (rem > 0) {
+        balEl.style.display = 'flex';
+        balVal.textContent = '$'+rem.toFixed(2);
+      } else {
+        balEl.style.display = 'none';
+      }
+    } else {
+      paidVal.textContent = '—';
+      balEl.style.display = 'none';
+    }
+  }
+
+  function selMethod(el) {
+    el.parentElement.querySelectorAll('.method-pill').forEach(p => p.classList.remove('sel'));
+    el.classList.add('sel');
+  }
+
+  function printAndConfirm() {
+    goToSuccess();
+  }
+
+  function goToSuccess() {
+    const kg = document.getElementById('actualKg').value || '148';
+    const usd = parseFloat(document.getElementById('payUsd').value) || 0;
+    const lbp = parseFloat(document.getElementById('payLbp').value) || 0;
+    const total = usd + (lbp / RATE);
+    document.getElementById('succ-kg').textContent = kg + ' kg';
+    document.getElementById('succ-collected').textContent = total > 0 ? '$'+total.toFixed(2)+' collected' : 'On account';
+    goToScreen('success');
+  }
+
+  function addExpRow() {
+    const list = document.getElementById('expList');
+    const div = document.createElement('div');
+    div.className = 'exp-row';
+    div.innerHTML = `
+      <input class="exp-desc-inp" type="text" placeholder="Description">
+      <input class="exp-amt-inp" type="number" placeholder="0" oninput="calcExpTotal()">
+      <span style="font-size:12px;color:var(--text3)">$</span>
+      <button class="exp-del" onclick="this.closest('.exp-row').remove();calcExpTotal()"><i class="ti ti-x" style="font-size:12px"></i></button>
+    `;
+    list.appendChild(div);
+    div.querySelector('.exp-desc-inp').focus();
+    calcExpTotal();
+  }
+
+  function calcExpTotal() {
+    let total = 0;
+    document.querySelectorAll('.exp-amt-inp').forEach(i => { total += parseFloat(i.value)||0; });
+    document.getElementById('expTotalDisplay').textContent = '$'+total.toFixed(2);
+    document.getElementById('handoverDisplay').textContent = '$'+(840-total).toFixed(2);
+  }
+</script>
+</body>
+</html>

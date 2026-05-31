@@ -1,0 +1,1332 @@
+openapi: "3.0.3"
+info:
+  title: Charcoal Business Accounting System API
+  version: "1.0.0"
+  description: |
+    REST API for a charcoal import, warehousing, and distribution business in Lebanon.
+
+    Authentication: Clerk JWT via `Authorization: Bearer <token>`
+    Roles: owner | accountant | sales_rep | worker | driver
+
+    All monetary values are decimal strings to avoid floating-point precision issues.
+    Timestamps are ISO 8601. Dates are YYYY-MM-DD.
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local development
+  - url: https://charcoal-system.up.railway.app/api/v1
+    description: Production
+
+tags:
+  - name: health
+  - name: auth
+  - name: suppliers
+  - name: containers
+  - name: warehouse
+  - name: packing
+  - name: clients
+  - name: orders
+  - name: delivery
+  - name: invoices
+  - name: payments
+  - name: workers
+  - name: reports
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Clerk JWT token
+
+  schemas:
+    Error:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          enum: [UNAUTHORIZED, FORBIDDEN, NOT_FOUND, VALIDATION_ERROR, CONSTRAINT_VIOLATION, CONFLICT, INTERNAL_ERROR]
+        details:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+
+    Pagination:
+      type: object
+      required: [total, page, limit]
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+
+    Role:
+      type: string
+      enum: [owner, accountant, sales_rep, worker, driver]
+
+    Currency:
+      type: string
+      enum: [USD, LBP]
+
+    ContainerStatus:
+      type: string
+      enum: [port, transit, arrived]
+
+    OrderStatus:
+      type: string
+      enum: [draft, confirmed, partially_delivered, delivered, invoiced, paid]
+
+    ShipmentStatus:
+      type: string
+      enum: [pending, loaded, delivered, returned]
+
+    TripStatus:
+      type: string
+      enum: [planned, in_progress, completed]
+
+    InvoiceStatus:
+      type: string
+      enum: [draft, issued, partially_paid, paid, cancelled]
+
+    PaymentMethod:
+      type: string
+      enum: [cash, whish, omt]
+
+    ExitType:
+      type: string
+      enum: [order, walk_in, sample, gift, internal, client_bags_fill]
+
+    ClientType:
+      type: string
+      enum: [restaurant, shop, wholesale, walk_in, corporate, export]
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clerkId: { type: string }
+        email: { type: string, format: email }
+        name: { type: string, description: "Arabic supported" }
+        role: { $ref: '#/components/schemas/Role' }
+        phone: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    ContactPerson:
+      type: object
+      required: [name, phone, role]
+      properties:
+        name: { type: string, description: "Arabic supported" }
+        phone: { type: string }
+        role: { type: string }
+
+    Supplier:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, description: "Arabic supported" }
+        country: { type: string }
+        contactPersons:
+          type: array
+          items: { $ref: '#/components/schemas/ContactPerson' }
+        charcoalTypes:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string }
+              grade: { type: string }
+        bankDetails:
+          type: object
+          properties:
+            bankName: { type: string }
+            accountNumber: { type: string }
+            iban: { type: string }
+            swift: { type: string }
+        paymentTerms: { type: string }
+        leadTimeDays: { type: integer }
+        notes: { type: string, description: "Arabic supported" }
+        createdAt: { type: string, format: date-time }
+
+    ContainerProductLineComputed:
+      type: object
+      properties:
+        tonnage: { type: string }
+        baseCost: { type: string }
+        expenseShare: { type: string }
+        discountShare: { type: string }
+        expensePerTon: { type: string }
+        discountPerTon: { type: string }
+        allInCostPerTon: { type: string }
+        allInCostPerKg: { type: string, description: "Hidden from sales_rep" }
+
+    ContainerProductLine:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        containerId: { type: string, format: uuid }
+        charcoalType: { type: string }
+        grade: { type: string }
+        supplierId: { type: string, format: uuid }
+        paidBags: { type: integer }
+        giftBags: { type: integer }
+        kgPerBag: { type: string, description: "Reference only — not used in cost calculations" }
+        pricePerTon: { type: string }
+        computed: { $ref: '#/components/schemas/ContainerProductLineComputed' }
+
+    ContainerExpense:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        containerId: { type: string, format: uuid }
+        description: { type: string, description: "Arabic supported" }
+        amount: { type: string, description: "USD decimal string" }
+        addedById: { type: string, format: uuid }
+        addedAt: { type: string, format: date-time }
+
+    ContainerDiscount:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        containerId: { type: string, format: uuid }
+        amount: { type: string }
+
+    ContainerTotals:
+      type: object
+      properties:
+        totalTonnage: { type: string }
+        totalProductCost: { type: string }
+        totalExpenses: { type: string }
+        totalDiscount: { type: string }
+        averageCostPerTon: { type: string }
+        averageCostPerKg: { type: string }
+
+    Container:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string }
+        supplierId: { type: string, format: uuid }
+        supplier: { $ref: '#/components/schemas/Supplier' }
+        status: { $ref: '#/components/schemas/ContainerStatus' }
+        arrivalDate: { type: string, format: date }
+        notes: { type: string, description: "Arabic supported" }
+        createdById: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        productLines:
+          type: array
+          items: { $ref: '#/components/schemas/ContainerProductLine' }
+        expenses:
+          type: array
+          items: { $ref: '#/components/schemas/ContainerExpense' }
+        discount: { $ref: '#/components/schemas/ContainerDiscount' }
+        totals: { $ref: '#/components/schemas/ContainerTotals' }
+
+    StockLot:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        charcoalType: { type: string }
+        grade: { type: string }
+        supplierId: { type: string, format: uuid }
+        kgReceived: { type: string }
+        kgRemaining: { type: string }
+        costPerKg: { type: string, description: "Hidden from sales_rep and worker" }
+        source:
+          type: string
+          enum: [container, direct]
+        containerId: { type: string, format: uuid, nullable: true }
+        dateReceived: { type: string, format: date }
+        notes: { type: string }
+
+    BagType:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        nominalKg: { type: string }
+        costPerBag: { type: string }
+        workerRate: { type: string }
+        note: { type: string }
+
+    PackedStock:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        lotId: { type: string, format: uuid }
+        bagTypeId: { type: string, format: uuid }
+        quantity: { type: integer }
+        sessionId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+
+    PackingSession:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        lotId: { type: string, format: uuid }
+        workerId: { type: string, format: uuid }
+        mode:
+          type: string
+          enum: [stock, order]
+        orderId: { type: string, format: uuid, nullable: true }
+        kgConsumed: { type: string }
+        bagsOutput:
+          type: array
+          items:
+            type: object
+            properties:
+              bagTypeId: { type: string, format: uuid }
+              quantity: { type: integer }
+        kgOutputTotal: { type: string }
+        varianceKg: { type: string }
+        varianceNote: { type: string, nullable: true }
+        sessionEarnings: { type: string }
+        date: { type: string, format: date }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+
+    ClientPhone:
+      type: object
+      properties:
+        number: { type: string }
+        label:
+          type: string
+          enum: [mobile, office, whatsapp]
+        isActive: { type: boolean }
+        dateAdded: { type: string, format: date }
+
+    Client:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, description: "Arabic supported" }
+        type: { $ref: '#/components/schemas/ClientType' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        phones:
+          type: array
+          items: { $ref: '#/components/schemas/ClientPhone' }
+        preferredTypes:
+          type: array
+          items:
+            type: object
+            properties:
+              charcoalType: { type: string }
+              grade: { type: string }
+        avgOrderDays: { type: string, nullable: true }
+        lastOrderDate: { type: string, format: date, nullable: true }
+        paymentTerms: { type: string }
+        notes: { type: string, description: "Arabic supported" }
+        balance: { type: string, description: "Computed: Σ invoices - Σ payments" }
+        createdAt: { type: string, format: date-time }
+
+    ClientOrder:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        charcoalType: { type: string }
+        grade: { type: string }
+        totalKgRequested: { type: string }
+        bagTypeId: { type: string, format: uuid, nullable: true }
+        pricePerBag: { type: string, description: "Entered at time of sale — no pre-set list" }
+        currency: { $ref: '#/components/schemas/Currency' }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        createdById: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        notes: { type: string, description: "Arabic supported" }
+
+    ShipmentBag:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        shipmentId: { type: string, format: uuid }
+        bagTypeId: { type: string, format: uuid }
+        quantity: { type: integer }
+
+    Shipment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        orderId: { type: string, format: uuid }
+        tripId: { type: string, format: uuid, nullable: true }
+        address: { type: string, description: "Arabic supported" }
+        nominalKg: { type: string }
+        actualKg: { type: string, nullable: true, description: "Set by driver at loading. Reconciliation only — billing uses bag count." }
+        status: { $ref: '#/components/schemas/ShipmentStatus' }
+        deliveredAt: { type: string, format: date-time, nullable: true }
+        bags:
+          type: array
+          items: { $ref: '#/components/schemas/ShipmentBag' }
+
+    DriverTrip:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        driverId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/TripStatus' }
+        fuelCost: { type: string, nullable: true }
+        otherExpenses:
+          type: array
+          items:
+            type: object
+            properties:
+              description: { type: string }
+              amount: { type: string }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+
+    StockExit:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        packedStockId: { type: string, format: uuid }
+        bagTypeId: { type: string, format: uuid }
+        quantity: { type: integer }
+        exitType: { $ref: '#/components/schemas/ExitType' }
+        reason: { type: string, nullable: true, description: "Arabic supported" }
+        recipient: { type: string, nullable: true, description: "Arabic supported" }
+        orderId: { type: string, format: uuid, nullable: true }
+        loggedById: { type: string, format: uuid }
+        date: { type: string, format: date }
+
+    InvoiceLineItem:
+      type: object
+      properties:
+        bagTypeId: { type: string, format: uuid }
+        bagTypeName: { type: string }
+        qty: { type: integer }
+        pricePerBag: { type: string }
+        lineTotal: { type: string }
+
+    Invoice:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        orderId: { type: string, format: uuid, nullable: true }
+        clientId: { type: string, format: uuid }
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/InvoiceLineItem' }
+        subtotal: { type: string }
+        total: { type: string }
+        currency: { $ref: '#/components/schemas/Currency' }
+        status: { $ref: '#/components/schemas/InvoiceStatus' }
+        paidAmount: { type: string }
+        issuedAt: { type: string, format: date-time, nullable: true }
+        dueDate: { type: string, format: date, nullable: true }
+
+    Payment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        invoiceId: { type: string, format: uuid, nullable: true }
+        amount: { type: string }
+        currency: { $ref: '#/components/schemas/Currency' }
+        method: { $ref: '#/components/schemas/PaymentMethod' }
+        date: { type: string, format: date }
+        loggedById: { type: string, format: uuid }
+        notes: { type: string, description: "Arabic supported" }
+
+    Worker:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, description: "Arabic supported" }
+        phone: { type: string }
+        ratesPerBagType:
+          type: array
+          items:
+            type: object
+            properties:
+              bagTypeId: { type: string, format: uuid }
+              ratePerBag: { type: string }
+        totalBagsPacked:
+          type: array
+          items:
+            type: object
+            properties:
+              bagTypeId: { type: string, format: uuid }
+              count: { type: integer }
+        totalEarned: { type: string }
+        totalPaid: { type: string }
+        totalOwed: { type: string, description: "Computed: totalEarned - totalPaid" }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: System healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  database: { type: string }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Get current user
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /suppliers:
+    get:
+      tags: [suppliers]
+      summary: List suppliers
+      description: "Roles: all"
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20 }
+        - in: query
+          name: search
+          schema: { type: string }
+      responses:
+        '200':
+          description: Paginated suppliers
+    post:
+      tags: [suppliers]
+      summary: Create supplier
+      description: "Roles: owner, accountant"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, country]
+              properties:
+                name: { type: string }
+                country: { type: string }
+                contactPersons:
+                  type: array
+                  items: { $ref: '#/components/schemas/ContactPerson' }
+                charcoalTypes:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type: { type: string }
+                      grade: { type: string }
+                bankDetails:
+                  type: object
+                paymentTerms: { type: string }
+                leadTimeDays: { type: integer }
+                notes: { type: string }
+      responses:
+        '201':
+          description: Created supplier
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /suppliers/{id}:
+    get:
+      tags: [suppliers]
+      summary: Get supplier by ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Supplier
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    patch:
+      tags: [suppliers]
+      summary: Update supplier
+      description: "Roles: owner, accountant"
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Supplier' }
+      responses:
+        '200':
+          description: Updated supplier
+    delete:
+      tags: [suppliers]
+      summary: Delete supplier
+      description: "Roles: owner. Fails if linked containers or lots exist."
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Deleted
+        '409':
+          description: Has linked records
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /containers:
+    get:
+      tags: [containers]
+      summary: List containers
+      description: "Roles: owner, accountant, sales_rep"
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20 }
+        - in: query
+          name: status
+          schema: { $ref: '#/components/schemas/ContainerStatus' }
+        - in: query
+          name: supplierId
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Paginated containers
+    post:
+      tags: [containers]
+      summary: Create container
+      description: "Roles: owner"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [number, supplierId]
+              properties:
+                number: { type: string }
+                supplierId: { type: string, format: uuid }
+                status: { $ref: '#/components/schemas/ContainerStatus' }
+                notes: { type: string }
+      responses:
+        '201':
+          description: Created container
+
+  /containers/{id}:
+    get:
+      tags: [containers]
+      summary: Get container with all details
+      description: "Returns product lines, expenses, discount, computed totals. cost_per_kg hidden from sales_rep."
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Full container
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Container' }
+    patch:
+      tags: [containers]
+      summary: Update container
+      description: "Roles: owner. Setting status to 'arrived' auto-creates stock lots."
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Updated container
+    delete:
+      tags: [containers]
+      summary: Delete container
+      description: "Roles: owner. Only if status != arrived."
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Deleted
+        '409':
+          description: Container has arrived — cannot delete
+
+  /containers/{id}/expenses:
+    get:
+      tags: [containers]
+      summary: List container expenses
+      description: "Roles: owner, accountant"
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Expense list
+    post:
+      tags: [containers]
+      summary: Add expense to container
+      description: "Roles: owner, accountant. Can be added after arrival — triggers cost_per_kg recalculation on linked lots."
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [description, amount]
+              properties:
+                description: { type: string, description: "Arabic supported" }
+                amount: { type: string, description: "USD decimal string" }
+      responses:
+        '201':
+          description: Created expense
+
+  /containers/{id}/discount:
+    get:
+      tags: [containers]
+      summary: Get container discount
+      description: "Roles: owner, accountant"
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Discount or null
+    put:
+      tags: [containers]
+      summary: Create or update container discount
+      description: "Roles: owner"
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount: { type: string }
+      responses:
+        '200':
+          description: Discount
+
+  /stock-lots:
+    get:
+      tags: [warehouse]
+      summary: List stock lots
+      description: "Roles: all. costPerKg hidden from sales_rep and worker."
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer }
+        - in: query
+          name: hasStock
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Paginated stock lots
+    post:
+      tags: [warehouse]
+      summary: Create direct stock lot (no container)
+      description: "Roles: owner"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [charcoalType, grade, supplierId, kgReceived, costPerKg, dateReceived]
+              properties:
+                charcoalType: { type: string }
+                grade: { type: string }
+                supplierId: { type: string, format: uuid }
+                kgReceived: { type: string }
+                costPerKg: { type: string }
+                dateReceived: { type: string, format: date }
+                notes: { type: string }
+      responses:
+        '201':
+          description: Created lot
+
+  /bag-types:
+    get:
+      tags: [warehouse]
+      summary: List bag types
+      responses:
+        '200':
+          description: Bag types array
+    post:
+      tags: [warehouse]
+      summary: Create bag type
+      description: "Roles: owner"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, nominalKg, costPerBag, workerRate]
+              properties:
+                name: { type: string }
+                nominalKg: { type: string }
+                costPerBag: { type: string }
+                workerRate: { type: string }
+                note: { type: string }
+      responses:
+        '201':
+          description: Created bag type
+
+  /packing-sessions:
+    get:
+      tags: [packing]
+      summary: List packing sessions
+      description: "Workers see only their own; owner/accountant see all."
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer }
+        - in: query
+          name: workerId
+          schema: { type: string, format: uuid }
+        - in: query
+          name: dateFrom
+          schema: { type: string, format: date }
+        - in: query
+          name: dateTo
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Paginated sessions
+    post:
+      tags: [packing]
+      summary: Create and complete a packing session
+      description: |
+        Roles: owner, worker.
+
+        Business rules enforced:
+        - kgConsumed <= lot.kgRemaining (CONSTRAINT 3)
+        - varianceKg < 0 requires varianceNote (CONSTRAINT 7)
+        - Immediately decrements lot.kgRemaining
+        - Creates packed stock records
+        - Updates worker.totalEarned and totalBagsPacked
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lotId, mode, kgConsumed, bagsOutput, date]
+              properties:
+                lotId: { type: string, format: uuid }
+                mode:
+                  type: string
+                  enum: [stock, order]
+                orderId: { type: string, format: uuid }
+                kgConsumed: { type: string }
+                bagsOutput:
+                  type: array
+                  items:
+                    type: object
+                    required: [bagTypeId, quantity]
+                    properties:
+                      bagTypeId: { type: string, format: uuid }
+                      quantity: { type: integer }
+                varianceNote: { type: string }
+                date: { type: string, format: date }
+                notes: { type: string }
+      responses:
+        '201':
+          description: Completed session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PackingSession' }
+        '400':
+          description: Constraint violation (kgConsumed > kgRemaining, or negative variance without note)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /clients:
+    get:
+      tags: [clients]
+      summary: List clients
+      description: "Roles: owner, sales_rep"
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer }
+        - in: query
+          name: type
+          schema: { $ref: '#/components/schemas/ClientType' }
+        - in: query
+          name: search
+          schema: { type: string }
+      responses:
+        '200':
+          description: Paginated clients
+    post:
+      tags: [clients]
+      summary: Create client
+      description: "Roles: owner, sales_rep"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, type, currency]
+              properties:
+                name: { type: string, description: "Arabic supported" }
+                type: { $ref: '#/components/schemas/ClientType' }
+                currency: { $ref: '#/components/schemas/Currency' }
+                phones:
+                  type: array
+                  items: { $ref: '#/components/schemas/ClientPhone' }
+                paymentTerms: { type: string }
+                notes: { type: string }
+      responses:
+        '201':
+          description: Created client
+
+  /clients/overdue:
+    get:
+      tags: [clients]
+      summary: CRM overdue clients alert
+      description: "Roles: owner, sales_rep. Clients past their avg order interval."
+      responses:
+        '200':
+          description: Overdue clients sorted by most overdue first
+
+  /clients/{id}:
+    get:
+      tags: [clients]
+      summary: Get client with balance
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Client with computed balance
+    patch:
+      tags: [clients]
+      summary: Update client
+      description: "Roles: owner, sales_rep"
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Updated client
+
+  /clients/{id}/phones:
+    post:
+      tags: [clients]
+      summary: Add phone number to client
+      description: "Phone numbers are NEVER deleted (CONSTRAINT 14). Only deactivated."
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [number, label]
+              properties:
+                number: { type: string }
+                label:
+                  type: string
+                  enum: [mobile, office, whatsapp]
+      responses:
+        '200':
+          description: Updated client with new phone
+
+  /orders:
+    get:
+      tags: [orders]
+      summary: List orders
+      description: "Roles: owner, sales_rep"
+      parameters:
+        - in: query
+          name: status
+          schema: { $ref: '#/components/schemas/OrderStatus' }
+        - in: query
+          name: clientId
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Paginated orders
+    post:
+      tags: [orders]
+      summary: Create order
+      description: "Roles: owner, sales_rep. Price entered at time of sale (CONSTRAINT 10)."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clientId, charcoalType, grade, totalKgRequested, pricePerBag]
+              properties:
+                clientId: { type: string, format: uuid }
+                charcoalType: { type: string }
+                grade: { type: string }
+                totalKgRequested: { type: string }
+                bagTypeId: { type: string, format: uuid }
+                pricePerBag: { type: string }
+                bagLines:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      bagTypeId: { type: string, format: uuid }
+                      quantity: { type: integer }
+      responses:
+        '201':
+          description: Created order
+
+  /shipments:
+    get:
+      tags: [delivery]
+      summary: List shipments
+      description: "Drivers see only shipments on their assigned trips."
+      responses:
+        '200':
+          description: Paginated shipments
+    post:
+      tags: [delivery]
+      summary: Create shipment within order
+      description: "Roles: owner, sales_rep. Validates bags <= packed stock (CONSTRAINT 4)."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId, address, bags]
+              properties:
+                orderId: { type: string, format: uuid }
+                address: { type: string, description: "Arabic supported" }
+                bags:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      bagTypeId: { type: string, format: uuid }
+                      quantity: { type: integer }
+      responses:
+        '201':
+          description: Created shipment
+        '400':
+          description: Insufficient packed stock
+
+  /shipments/{id}/confirm-delivery:
+    post:
+      tags: [delivery]
+      summary: Driver confirms delivery at stop
+      description: "Roles: driver, owner. Removes bags from packed stock. Optionally logs payment."
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deliveredAt]
+              properties:
+                deliveredAt: { type: string, format: date-time }
+                paymentMethod: { $ref: '#/components/schemas/PaymentMethod' }
+                paymentAmount: { type: string }
+      responses:
+        '200':
+          description: Confirmed shipment
+
+  /shipments/{id}/receipt:
+    get:
+      tags: [delivery]
+      summary: Get receipt data for thermal printer
+      description: "Roles: driver, owner, sales_rep"
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Receipt data
+
+  /invoices:
+    get:
+      tags: [invoices]
+      summary: List invoices
+      description: "Roles: owner, accountant, sales_rep"
+      responses:
+        '200':
+          description: Paginated invoices
+    post:
+      tags: [invoices]
+      summary: Create invoice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clientId, currency, lines]
+              properties:
+                clientId: { type: string, format: uuid }
+                orderId: { type: string, format: uuid }
+                currency: { $ref: '#/components/schemas/Currency' }
+                lines:
+                  type: array
+                  items:
+                    type: object
+                    required: [bagTypeId, bagTypeName, qty, pricePerBag]
+                    properties:
+                      bagTypeId: { type: string, format: uuid }
+                      bagTypeName: { type: string }
+                      qty: { type: integer }
+                      pricePerBag: { type: string }
+                dueDate: { type: string, format: date }
+      responses:
+        '201':
+          description: Draft invoice
+
+  /invoices/{id}/issue:
+    post:
+      tags: [invoices]
+      summary: Issue invoice (status → issued)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Issued invoice
+
+  /payments:
+    get:
+      tags: [payments]
+      summary: List payments
+      description: "Roles: owner, accountant, sales_rep"
+      responses:
+        '200':
+          description: Paginated payments
+    post:
+      tags: [payments]
+      summary: Log a payment from client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clientId, amount, currency, method, date]
+              properties:
+                clientId: { type: string, format: uuid }
+                invoiceId: { type: string, format: uuid }
+                amount: { type: string }
+                currency: { $ref: '#/components/schemas/Currency' }
+                method: { $ref: '#/components/schemas/PaymentMethod' }
+                date: { type: string, format: date }
+                notes: { type: string }
+      responses:
+        '201':
+          description: Created payment
+
+  /workers:
+    get:
+      tags: [workers]
+      summary: List workers
+      description: "Roles: owner only"
+      responses:
+        '200':
+          description: Workers with totalOwed computed
+    post:
+      tags: [workers]
+      summary: Create worker
+      description: "Roles: owner only"
+      responses:
+        '201':
+          description: Created worker
+
+  /workers/{id}/rates:
+    patch:
+      tags: [workers]
+      summary: Set worker bag rates
+      description: "Roles: owner only. Replaces entire rates array."
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ratesPerBagType]
+              properties:
+                ratesPerBagType:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      bagTypeId: { type: string, format: uuid }
+                      ratePerBag: { type: string }
+      responses:
+        '200':
+          description: Updated worker
+
+  /reports/profit-loss:
+    get:
+      tags: [reports]
+      summary: P&L report
+      description: "Roles: owner ONLY. Returns gross profit — never shown to other roles."
+      parameters:
+        - in: query
+          name: dateFrom
+          schema: { type: string, format: date }
+        - in: query
+          name: dateTo
+          schema: { type: string, format: date }
+        - in: query
+          name: clientId
+          schema: { type: string, format: uuid }
+        - in: query
+          name: clientType
+          schema: { $ref: '#/components/schemas/ClientType' }
+      responses:
+        '200':
+          description: P&L report
+        '403':
+          description: Forbidden — not owner role
+
+  /reports/stock-value:
+    get:
+      tags: [reports]
+      summary: Stock value report
+      description: "Roles: owner, accountant"
+      responses:
+        '200':
+          description: Stock value breakdown
+
+  /reports/variance:
+    get:
+      tags: [reports]
+      summary: Variance report
+      description: "Roles: owner, accountant"
+      responses:
+        '200':
+          description: Variance report
+
+  /reports/client-ledger/{clientId}:
+    get:
+      tags: [reports]
+      summary: Client ledger
+      description: "Roles: owner, accountant, sales_rep"
+      parameters:
+        - in: path
+          name: clientId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Client ledger with running balance
+
+  /reports/physical-count:
+    get:
+      tags: [reports]
+      summary: Get physical count items (current system quantities)
+      description: "Roles: owner only"
+      responses:
+        '200':
+          description: All lots and packed stock with system quantities
+    post:
+      tags: [reports]
+      summary: Submit physical count results
+      description: "Roles: owner only. Creates StockAdjustments for all discrepancies."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, id, countedQty]
+                    properties:
+                      type:
+                        type: string
+                        enum: [lot, packed_stock]
+                      id: { type: string, format: uuid }
+                      countedQty: { type: string }
+                      reason: { type: string }
+      responses:
+        '200':
+          description: Adjustments created summary

@@ -1,0 +1,1540 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ember — Cash Handover</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #F5F4F0;
+      --surface: #FFFFFF;
+      --surface2: #F0EEE9;
+      --border: #E4E1D9;
+      --border2: #D4D0C8;
+      --text: #1A1916;
+      --text2: #6B6860;
+      --text3: #9B9890;
+      --accent: #1D6B4A;
+      --accent-bg: #EAF5EF;
+      --accent2: #B45309;
+      --accent2-bg: #FEF3C7;
+      --red: #C0392B;
+      --red-bg: #FEF2F2;
+      --blue: #1D4ED8;
+      --blue-bg: #EFF6FF;
+      --sidebar-w: 220px;
+      --radius: 8px;
+      --radius-lg: 12px;
+    }
+
+    body {
+      font-family: 'IBM Plex Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+    }
+
+    /* SIDEBAR */
+    .sidebar {
+      width: var(--sidebar-w);
+      min-height: 100vh;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      z-index: 10;
+    }
+
+    .sidebar-logo {
+      padding: 20px 18px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-mark {
+      width: 30px;
+      height: 30px;
+      background: var(--text);
+      border-radius: 7px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .logo-mark i {
+      color: #fff;
+      font-size: 16px;
+    }
+
+    .logo-text {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+    }
+
+    .logo-sub {
+      font-size: 10px;
+      color: var(--text3);
+      font-family: 'IBM Plex Mono', monospace;
+      letter-spacing: 0.5px;
+    }
+
+    .sidebar-section {
+      padding: 16px 10px 4px;
+    }
+
+    .sidebar-section-label {
+      font-size: 10px;
+      font-family: 'IBM Plex Mono', monospace;
+      color: var(--text3);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      padding: 0 8px;
+      margin-bottom: 4px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      color: var(--text2);
+      font-size: 13.5px;
+      font-weight: 400;
+      transition: background 0.1s, color 0.1s;
+      text-decoration: none;
+    }
+
+    .nav-item:hover {
+      background: var(--surface2);
+      color: var(--text);
+    }
+
+    .nav-item.active {
+      background: var(--text);
+      color: #fff;
+    }
+
+    .nav-item.active i {
+      color: #fff;
+    }
+
+    .nav-item i {
+      font-size: 16px;
+      color: var(--text3);
+      transition: color 0.1s;
+    }
+
+    .nav-item:hover i {
+      color: var(--text);
+    }
+
+    .nav-badge {
+      margin-left: auto;
+      font-size: 10px;
+      font-family: 'IBM Plex Mono', monospace;
+      background: var(--red);
+      color: #fff;
+      border-radius: 100px;
+      padding: 1px 6px;
+      font-weight: 500;
+    }
+
+    .nav-badge.amber {
+      background: var(--accent2);
+    }
+
+    .sidebar-bottom {
+      margin-top: auto;
+      padding: 12px 10px;
+      border-top: 1px solid var(--border);
+    }
+
+    .user-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      cursor: pointer;
+    }
+
+    .user-row:hover {
+      background: var(--surface2);
+    }
+
+    .avatar-sm {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--text);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .user-name {
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .user-role {
+      font-size: 11px;
+      color: var(--text3);
+      font-family: 'IBM Plex Mono', monospace;
+    }
+
+    /* MAIN */
+    .main {
+      margin-left: var(--sidebar-w);
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    .topbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 28px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+
+    .page-title {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 13px;
+      font-family: 'IBM Plex Sans', sans-serif;
+      color: var(--text2);
+      transition: all 0.1s;
+    }
+
+    .btn:hover {
+      background: var(--surface2);
+      color: var(--text);
+    }
+
+    .btn.primary {
+      background: var(--text);
+      color: #fff;
+      border-color: var(--text);
+    }
+
+    .btn.primary:hover {
+      background: #2d2b28;
+    }
+
+    .btn.green {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    .btn.green:hover {
+      background: #155237;
+    }
+
+    .content {
+      padding: 24px 28px;
+      flex: 1;
+    }
+
+    @keyframes fadeUp {
+      from {
+        opacity: 0;
+        transform: translateY(8px)
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0)
+      }
+    }
+
+    /* BADGES */
+    .badge {
+      font-size: 11px;
+      font-family: 'IBM Plex Mono', monospace;
+      padding: 2px 8px;
+      border-radius: 100px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .badge-green {
+      background: var(--accent-bg);
+      color: var(--accent);
+    }
+
+    .badge-amber {
+      background: var(--accent2-bg);
+      color: var(--accent2);
+    }
+
+    .badge-red {
+      background: var(--red-bg);
+      color: var(--red);
+    }
+
+    .badge-blue {
+      background: var(--blue-bg);
+      color: var(--blue);
+    }
+
+    .badge-gray {
+      background: var(--surface2);
+      color: var(--text2);
+    }
+
+    /* SUMMARY ROW */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 22px;
+      animation: fadeUp 0.3s ease both;
+    }
+
+    .kpi {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 16px 18px;
+    }
+
+    .kpi-label {
+      font-size: 11px;
+      font-family: 'IBM Plex Mono', monospace;
+      color: var(--text3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    .kpi-value {
+      font-size: 24px;
+      font-weight: 600;
+      letter-spacing: -1px;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+
+    .kpi-sub {
+      font-size: 12px;
+      color: var(--text3);
+    }
+
+    /* DRIVER TABS */
+    .driver-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+
+    .driver-tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-radius: var(--radius-lg);
+      border: 1.5px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .driver-tab:hover {
+      border-color: var(--border2);
+    }
+
+    .driver-tab.active {
+      border-color: var(--text);
+      background: var(--text);
+      color: #fff;
+    }
+
+    .driver-tab.active .dt-name {
+      color: #fff;
+    }
+
+    .driver-tab.active .dt-meta {
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .driver-tab.active .dt-avatar {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fff;
+    }
+
+    .dt-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--surface2);
+      color: var(--text2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .dt-name {
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .dt-meta {
+      font-size: 11px;
+      color: var(--text3);
+      font-family: 'IBM Plex Mono', monospace;
+    }
+
+    .dt-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* TWO COLUMN LAYOUT */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 20px;
+      align-items: start;
+    }
+
+    /* CARD */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      margin-bottom: 14px;
+      animation: fadeUp 0.35s ease both;
+    }
+
+    .card-head {
+      padding: 13px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .card-title i {
+      font-size: 15px;
+      color: var(--text2);
+    }
+
+    /* TABLE */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .data-table th {
+      text-align: left;
+      padding: 8px 18px;
+      font-size: 11px;
+      font-family: 'IBM Plex Mono', monospace;
+      color: var(--text3);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 400;
+      background: var(--surface2);
+    }
+
+    .data-table td {
+      padding: 11px 18px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      vertical-align: middle;
+    }
+
+    .data-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* DELIVERY ROW */
+    .del-client {
+      font-weight: 500;
+    }
+
+    .del-address {
+      font-size: 11px;
+      color: var(--text3);
+      margin-top: 1px;
+    }
+
+    .del-inv {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      color: var(--text3);
+    }
+
+    /* PAID AMOUNT INPUT */
+    .paid-cell {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .paid-input {
+      width: 90px;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-family: 'IBM Plex Mono', monospace;
+      text-align: right;
+      outline: none;
+      background: var(--surface);
+      transition: border-color 0.15s;
+    }
+
+    .paid-input:focus {
+      border-color: var(--text);
+    }
+
+    .paid-input.has-val {
+      border-color: var(--accent);
+      background: var(--accent-bg);
+    }
+
+    .paid-curr {
+      font-size: 12px;
+      color: var(--text3);
+    }
+
+    /* EXPENSE DEDUCTION */
+    .exp-row-inline {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .exp-row-inline:last-child {
+      border-bottom: none;
+    }
+
+    .exp-desc-inline {
+      flex: 1;
+      font-size: 13px;
+      color: var(--text2);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .exp-input {
+      width: 90px;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-family: 'IBM Plex Mono', monospace;
+      text-align: right;
+      outline: none;
+      background: var(--surface);
+    }
+
+    .exp-input:focus {
+      border-color: var(--text);
+    }
+
+    /* RECONCILIATION PANEL */
+    .recon-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      position: sticky;
+      top: 76px;
+      animation: fadeUp 0.4s ease both;
+    }
+
+    .rp-head {
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface2);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .rp-title {
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .rp-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 9px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+
+    .rp-row:last-child {
+      border-bottom: none;
+    }
+
+    .rp-label {
+      color: var(--text2);
+    }
+
+    .rp-val {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    .rp-val.green {
+      color: var(--accent);
+    }
+
+    .rp-val.red {
+      color: var(--red);
+    }
+
+    .rp-val.amber {
+      color: var(--accent2);
+    }
+
+    .rp-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 0;
+    }
+
+    .rp-total-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 13px 16px;
+      background: var(--surface2);
+    }
+
+    .rp-total-label {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .rp-total-val {
+      font-size: 20px;
+      font-weight: 600;
+      font-family: 'IBM Plex Mono', monospace;
+      letter-spacing: -0.5px;
+    }
+
+    /* HANDOVER INPUT */
+    .handover-box {
+      padding: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .handover-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text2);
+      margin-bottom: 6px;
+      display: block;
+    }
+
+    .handover-input-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .handover-input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 20px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      text-align: right;
+      outline: none;
+      background: var(--surface);
+      transition: border-color 0.15s;
+    }
+
+    .handover-input:focus {
+      border-color: var(--text);
+    }
+
+    .handover-curr {
+      font-size: 14px;
+      color: var(--text2);
+      font-weight: 500;
+    }
+
+    .diff-bar {
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .diff-bar.ok {
+      background: var(--accent-bg);
+      border: 1px solid #a7f3d0;
+    }
+
+    .diff-bar.over {
+      background: var(--accent-bg);
+      border: 1px solid #a7f3d0;
+    }
+
+    .diff-bar.short {
+      background: var(--red-bg);
+      border: 1px solid #fca5a5;
+    }
+
+    .diff-bar.none {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+    }
+
+    .diff-label {
+      font-size: 12px;
+    }
+
+    .diff-val {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    /* CONFIRM BTN */
+    .confirm-btn {
+      width: 100%;
+      padding: 12px;
+      background: var(--text);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 14px;
+      font-weight: 600;
+      font-family: 'IBM Plex Sans', sans-serif;
+      cursor: pointer;
+      transition: background 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+    }
+
+    .confirm-btn:hover {
+      background: #2d2b28;
+    }
+
+    .confirm-btn:disabled {
+      background: var(--border);
+      color: var(--text3);
+      cursor: not-allowed;
+    }
+
+    .confirm-btn.green {
+      background: var(--accent);
+    }
+
+    .confirm-btn.green:hover {
+      background: #155237;
+    }
+
+    /* HISTORY */
+    .hist-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 18px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+
+    .hist-row:hover {
+      background: #FAFAF8;
+    }
+
+    .hist-row:last-child {
+      border-bottom: none;
+    }
+
+    .hist-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    .hist-info {
+      flex: 1;
+    }
+
+    .hist-info strong {
+      font-weight: 500;
+      display: block;
+      margin-bottom: 1px;
+    }
+
+    .hist-info span {
+      font-size: 11px;
+      color: var(--text3);
+      font-family: 'IBM Plex Mono', monospace;
+    }
+
+    .hist-amounts {
+      text-align: right;
+    }
+
+    .hist-handed {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    .hist-diff {
+      font-size: 11px;
+      font-family: 'IBM Plex Mono', monospace;
+      margin-top: 1px;
+    }
+
+    /* MODAL */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.3);
+      z-index: 40;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-overlay.open {
+      display: flex;
+    }
+
+    .modal {
+      background: var(--surface);
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border);
+      width: 420px;
+      box-shadow: 0 8px 40px rgba(0, 0, 0, 0.12);
+      animation: fadeUp 0.2s ease;
+    }
+
+    .modal-head {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .modal-sub {
+      font-size: 12px;
+      color: var(--text3);
+      margin-top: 2px;
+    }
+
+    .modal-body {
+      padding: 20px;
+    }
+
+    .modal-footer {
+      padding: 14px 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .sum-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 7px 0;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sum-row:last-child {
+      border-bottom: none;
+    }
+
+    .sum-row strong {
+      font-weight: 500;
+    }
+
+    .sum-mono {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+    }
+  </style>
+</head>
+
+<body>
+
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark"><i class="ti ti-flame"></i></div>
+      <div>
+        <div class="logo-text">Ember</div>
+        <div class="logo-sub">charcoal system</div>
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Overview</div>
+      <a class="nav-item"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
+      <a class="nav-item"><i class="ti ti-chart-bar"></i> Reports</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Stock</div>
+      <a class="nav-item"><i class="ti ti-ship"></i> Containers</a>
+      <a class="nav-item"><i class="ti ti-building-warehouse"></i> Warehouse</a>
+      <a class="nav-item"><i class="ti ti-tools"></i> Packing</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Sales</div>
+      <a class="nav-item"><i class="ti ti-users"></i> Clients <span class="nav-badge amber">3</span></a>
+      <a class="nav-item"><i class="ti ti-file-invoice"></i> Orders</a>
+      <a class="nav-item"><i class="ti ti-truck"></i> Delivery</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Finance</div>
+      <a class="nav-item"><i class="ti ti-receipt"></i> Invoices</a>
+      <a class="nav-item"><i class="ti ti-cash"></i> Payments</a>
+      <a class="nav-item active"><i class="ti ti-calculator"></i> Cash handover</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Setup</div>
+      <a class="nav-item"><i class="ti ti-building-store"></i> Suppliers</a>
+      <a class="nav-item"><i class="ti ti-settings"></i> Settings</a>
+    </div>
+    <div class="sidebar-bottom">
+      <div class="user-row">
+        <div class="avatar-sm">KA</div>
+        <div>
+          <div class="user-name">Khalil Abi Nader</div>
+          <div class="user-role">owner</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <span class="page-title">Cash handover</span>
+      <div class="topbar-right">
+        <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">Thursday 21 May
+          2026</span>
+        <button class="btn" onclick="showHistory()"><i class="ti ti-history" style="font-size:15px"></i>
+          History</button>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <!-- KPI SUMMARY -->
+      <div class="kpi-row">
+        <div class="kpi">
+          <div class="kpi-label">Collected today</div>
+          <div class="kpi-value" id="kpi-collected">$0</div>
+          <div class="kpi-sub" id="kpi-collected-sub">across all drivers</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Driver expenses</div>
+          <div class="kpi-value" id="kpi-expenses" style="color:var(--accent2)">$0</div>
+          <div class="kpi-sub">fuel + road costs</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Expected handover</div>
+          <div class="kpi-value" id="kpi-expected">$0</div>
+          <div class="kpi-sub">collected − expenses</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Handed over</div>
+          <div class="kpi-value" id="kpi-handed" style="color:var(--accent)">$0</div>
+          <div class="kpi-sub" id="kpi-handed-sub">pending</div>
+        </div>
+      </div>
+
+      <!-- DRIVER SELECTOR -->
+      <div
+        style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">
+        Select driver</div>
+      <div class="driver-tabs">
+        <div class="driver-tab active" onclick="selectDriver('mk',this)">
+          <div class="dt-avatar" id="av-mk">MK</div>
+          <div>
+            <div class="dt-name">Mohammed Khalil</div>
+            <div class="dt-meta">3 deliveries · $840 collected</div>
+          </div>
+          <div class="dt-dot" style="background:var(--accent2)"></div>
+        </div>
+        <div class="driver-tab" onclick="selectDriver('ah',this)">
+          <div class="dt-avatar" id="av-ah">AH</div>
+          <div>
+            <div class="dt-name">Ahmad Hassan</div>
+            <div class="dt-meta">2 deliveries · $480 collected</div>
+          </div>
+          <div class="dt-dot" style="background:var(--accent)"></div>
+        </div>
+        <div class="driver-tab" onclick="selectDriver('jn',this)">
+          <div class="dt-avatar" id="av-jn">JN</div>
+          <div>
+            <div class="dt-name">Joseph Nasr</div>
+            <div class="dt-meta">4 deliveries · $1,240 collected · ✓ done</div>
+          </div>
+          <div class="dt-dot" style="background:var(--accent)"></div>
+        </div>
+      </div>
+
+      <!-- MAIN CONTENT -->
+      <div class="two-col" id="mainContent">
+
+        <!-- LEFT: DELIVERIES + EXPENSES -->
+        <div>
+
+          <!-- DELIVERIES TODAY -->
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title"><i class="ti ti-truck"></i> Deliveries — Mohammed Khalil</div>
+              <span class="badge badge-amber">2 / 3 paid</span>
+            </div>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Client</th>
+                  <th>Invoice</th>
+                  <th>Invoice amt</th>
+                  <th>Collected</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="deliveryRows">
+                <tr>
+                  <td>
+                    <div class="del-client">Al Rawda Restaurant</div>
+                    <div class="del-address">Hamra, Beirut</div>
+                  </td>
+                  <td><span class="del-inv">INV-0338</span></td>
+                  <td style="font-family:'IBM Plex Mono',monospace">$840.00</td>
+                  <td>
+                    <div class="paid-cell">
+                      <input class="paid-input has-val" type="number" value="840" oninput="recalcAll()" id="paid-1">
+                      <span class="paid-curr">$</span>
+                    </div>
+                  </td>
+                  <td><span class="badge badge-green" id="status-1">Paid</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="del-client">Chez Michel</div>
+                    <div class="del-address">Achrafieh, Beirut</div>
+                  </td>
+                  <td><span class="del-inv">INV-0339</span></td>
+                  <td style="font-family:'IBM Plex Mono',monospace">$320.00</td>
+                  <td>
+                    <div class="paid-cell">
+                      <input class="paid-input has-val" type="number" value="320" oninput="recalcAll()" id="paid-2">
+                      <span class="paid-curr">$</span>
+                    </div>
+                  </td>
+                  <td><span class="badge badge-green" id="status-2">Paid</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="del-client">Cedar Grill House</div>
+                    <div class="del-address">Jdeideh</div>
+                  </td>
+                  <td><span class="del-inv">INV-0340</span></td>
+                  <td style="font-family:'IBM Plex Mono',monospace">$480.00</td>
+                  <td>
+                    <div class="paid-cell">
+                      <input class="paid-input" type="number" placeholder="0" oninput="recalcAll()" id="paid-3">
+                      <span class="paid-curr">$</span>
+                    </div>
+                  </td>
+                  <td><span class="badge badge-gray" id="status-3">On account</span></td>
+                </tr>
+              </tbody>
+            </table>
+            <div
+              style="padding:10px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:12px;color:var(--text3)">Total invoice value</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-weight:600">$1,640.00</span>
+            </div>
+          </div>
+
+          <!-- DRIVER EXPENSES -->
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title"><i class="ti ti-gas-station"></i> Driver expenses (kept from collection)</div>
+              <button class="btn" style="font-size:12px" onclick="addExpRow()"><i class="ti ti-plus"
+                  style="font-size:13px"></i> Add</button>
+            </div>
+            <div id="expRows">
+              <div class="exp-row-inline">
+                <div class="exp-desc-inline">
+                  <i class="ti ti-gas-station" style="font-size:14px;color:var(--text3)"></i>
+                  <input
+                    style="border:none;outline:none;font-size:13px;font-family:'IBM Plex Sans',sans-serif;color:var(--text);background:transparent;flex:1"
+                    value="Fuel" oninput="recalcAll()">
+                </div>
+                <input class="exp-input" type="number" value="45" oninput="recalcAll()">
+                <span style="font-size:12px;color:var(--text3)">$</span>
+                <button
+                  style="width:24px;height:24px;border-radius:5px;border:1px solid var(--border);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--text3)"
+                  onclick="this.closest('.exp-row-inline').remove();recalcAll()"><i class="ti ti-x"
+                    style="font-size:11px"></i></button>
+              </div>
+              <div class="exp-row-inline">
+                <div class="exp-desc-inline">
+                  <i class="ti ti-road" style="font-size:14px;color:var(--text3)"></i>
+                  <input
+                    style="border:none;outline:none;font-size:13px;font-family:'IBM Plex Sans',sans-serif;color:var(--text);background:transparent;flex:1"
+                    value="Toll fees" oninput="recalcAll()">
+                </div>
+                <input class="exp-input" type="number" value="12" oninput="recalcAll()">
+                <span style="font-size:12px;color:var(--text3)">$</span>
+                <button
+                  style="width:24px;height:24px;border-radius:5px;border:1px solid var(--border);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--text3)"
+                  onclick="this.closest('.exp-row-inline').remove();recalcAll()"><i class="ti ti-x"
+                    style="font-size:11px"></i></button>
+              </div>
+            </div>
+            <div
+              style="padding:10px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:space-between">
+              <span style="font-size:12px;color:var(--text3)">Total expenses deducted</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--accent2)"
+                id="expTotal">$57.00</span>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- RIGHT: RECONCILIATION -->
+        <div>
+          <div class="recon-panel">
+            <div class="rp-head">
+              <div class="rp-title"><i class="ti ti-calculator" style="font-size:14px;color:var(--text2)"></i>
+                Reconciliation</div>
+              <span style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">Mohammed
+                Khalil</span>
+            </div>
+
+            <div class="rp-row">
+              <span class="rp-label">Total collected on trips</span>
+              <span class="rp-val green" id="rp-collected">$1,160.00</span>
+            </div>
+            <div class="rp-row">
+              <span class="rp-label">− Expenses kept</span>
+              <span class="rp-val amber" id="rp-expenses">−$57.00</span>
+            </div>
+            <div class="rp-total-row">
+              <span class="rp-total-label">Expected handover</span>
+              <span class="rp-total-val" id="rp-expected">$1,103.00</span>
+            </div>
+
+            <div class="rp-divider"></div>
+
+            <!-- HANDOVER INPUT -->
+            <div class="handover-box">
+              <label class="handover-label">Cash handed over by driver</label>
+              <div class="handover-input-wrap">
+                <span class="handover-curr">$</span>
+                <input class="handover-input" type="number" id="handoverInput" placeholder="0.00" oninput="calcDiff()">
+              </div>
+
+              <div class="diff-bar none" id="diffBar">
+                <span class="diff-label" id="diffLabel">Enter amount above</span>
+                <span class="diff-val" id="diffVal">—</span>
+              </div>
+
+              <div style="margin-bottom:10px">
+                <label
+                  style="font-size:12px;font-weight:500;color:var(--text2);display:block;margin-bottom:5px">Received
+                  by</label>
+                <select
+                  style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;font-family:'IBM Plex Sans',sans-serif;outline:none;background:var(--surface)">
+                  <option>Khalil Abi Nader (owner)</option>
+                  <option>Accountant</option>
+                </select>
+              </div>
+
+              <div style="margin-bottom:10px">
+                <label style="font-size:12px;font-weight:500;color:var(--text2);display:block;margin-bottom:5px">Notes
+                  (optional)</label>
+                <input type="text" placeholder="e.g. driver said client will pay tomorrow"
+                  style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;font-family:'IBM Plex Sans',sans-serif;outline:none;background:var(--surface)">
+              </div>
+
+              <button class="confirm-btn" id="confirmBtn" disabled onclick="openConfirmModal()">
+                <i class="ti ti-check"></i> Confirm handover
+              </button>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+
+      <!-- HANDOVER HISTORY (hidden by default) -->
+      <div id="historySection" style="display:none;margin-top:4px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div style="font-size:15px;font-weight:600">Handover history</div>
+          <button class="btn" onclick="hideHistory()">✕ Close</button>
+        </div>
+        <div class="card" style="animation:none">
+          <div class="card-head">
+            <div class="card-title"><i class="ti ti-history"></i> All handovers — May 2026</div>
+          </div>
+          <div class="hist-row">
+            <div class="hist-icon" style="background:var(--accent-bg)"><i class="ti ti-cash"
+                style="color:var(--accent)"></i></div>
+            <div class="hist-info">
+              <strong>Mohammed Khalil</strong>
+              <span>20 May 2026 · 3 deliveries · collected $920</span>
+            </div>
+            <div class="hist-amounts">
+              <div class="hist-handed">$863.00</div>
+              <div class="hist-diff" style="color:var(--accent)">matched ✓</div>
+            </div>
+          </div>
+          <div class="hist-row">
+            <div class="hist-icon" style="background:var(--accent-bg)"><i class="ti ti-cash"
+                style="color:var(--accent)"></i></div>
+            <div class="hist-info">
+              <strong>Ahmad Hassan</strong>
+              <span>20 May 2026 · 2 deliveries · collected $640</span>
+            </div>
+            <div class="hist-amounts">
+              <div class="hist-handed">$592.00</div>
+              <div class="hist-diff" style="color:var(--accent)">matched ✓</div>
+            </div>
+          </div>
+          <div class="hist-row">
+            <div class="hist-icon" style="background:var(--red-bg)"><i class="ti ti-cash" style="color:var(--red)"></i>
+            </div>
+            <div class="hist-info">
+              <strong>Joseph Nasr</strong>
+              <span>19 May 2026 · 4 deliveries · collected $1,380</span>
+            </div>
+            <div class="hist-amounts">
+              <div class="hist-handed">$1,290.00</div>
+              <div class="hist-diff" style="color:var(--red)">−$30 short</div>
+            </div>
+          </div>
+          <div class="hist-row">
+            <div class="hist-icon" style="background:var(--accent-bg)"><i class="ti ti-cash"
+                style="color:var(--accent)"></i></div>
+            <div class="hist-info">
+              <strong>Mohammed Khalil</strong>
+              <span>19 May 2026 · 3 deliveries · collected $760</span>
+            </div>
+            <div class="hist-amounts">
+              <div class="hist-handed">$703.00</div>
+              <div class="hist-diff" style="color:var(--accent)">matched ✓</div>
+            </div>
+          </div>
+          <div class="hist-row">
+            <div class="hist-icon" style="background:var(--accent2-bg)"><i class="ti ti-cash"
+                style="color:var(--accent2)"></i></div>
+            <div class="hist-info">
+              <strong>Ahmad Hassan</strong>
+              <span>18 May 2026 · 3 deliveries · collected $880</span>
+            </div>
+            <div class="hist-amounts">
+              <div class="hist-handed">$845.00</div>
+              <div class="hist-diff" style="color:var(--accent2)">+$15 over</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- CONFIRM MODAL -->
+  <div class="modal-overlay" id="confirmModal">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="modal-title">Confirm handover — Mohammed Khalil</div>
+        <div class="modal-sub">This will be logged and cannot be changed without an adjustment.</div>
+      </div>
+      <div class="modal-body">
+        <div class="sum-row"><strong>Total collected on trips</strong><span class="sum-mono"
+            id="conf-collected">$1,160.00</span></div>
+        <div class="sum-row"><strong>Expenses kept by driver</strong><span class="sum-mono" style="color:var(--accent2)"
+            id="conf-exp">−$57.00</span></div>
+        <div class="sum-row"><strong>Expected handover</strong><span class="sum-mono"
+            id="conf-expected">$1,103.00</span></div>
+        <div class="sum-row" style="border-top:2px solid var(--border);padding-top:10px;margin-top:4px">
+          <strong>Cash handed over</strong>
+          <span class="sum-mono" style="font-size:18px" id="conf-handed">—</span>
+        </div>
+        <div style="margin-top:12px;padding:10px 12px;border-radius:var(--radius);font-size:13px" id="conf-diff-box">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeConfirmModal()">Cancel</button>
+        <button class="btn green" onclick="closeConfirmModal()"><i class="ti ti-check" style="font-size:14px"></i>
+          Confirm &amp; log handover</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const DRIVERS = {
+      mk: { name: 'Mohammed Khalil', deliveries: 3, invoiceTotal: 1640, payments: [840, 320, 0] },
+      ah: { name: 'Ahmad Hassan', deliveries: 2, invoiceTotal: 720, payments: [480, 0] },
+      jn: { name: 'Joseph Nasr', deliveries: 4, invoiceTotal: 1980, payments: [620, 380, 140, 100] }
+    };
+
+    let activeDriver = 'mk';
+
+    function selectDriver(id, el) {
+      activeDriver = id;
+      document.querySelectorAll('.driver-tab').forEach(t => t.classList.remove('active'));
+      el.classList.add('active');
+      recalcAll();
+    }
+
+    function recalcAll() {
+      // Sum collected from delivery inputs
+      let collected = 0;
+      document.querySelectorAll('[id^="paid-"]').forEach(inp => {
+        const val = parseFloat(inp.value) || 0;
+        collected += val;
+        const idx = inp.id.split('-')[1];
+        const statusEl = document.getElementById('status-' + idx);
+        if (val > 0) {
+          inp.classList.add('has-val');
+          statusEl.textContent = 'Paid';
+          statusEl.className = 'badge badge-green';
+        } else {
+          inp.classList.remove('has-val');
+          statusEl.textContent = 'On account';
+          statusEl.className = 'badge badge-gray';
+        }
+      });
+
+      // Sum expenses
+      let expenses = 0;
+      document.querySelectorAll('#expRows .exp-input').forEach(inp => {
+        expenses += parseFloat(inp.value) || 0;
+      });
+
+      const expected = collected - expenses;
+
+      // Update reconciliation panel
+      document.getElementById('rp-collected').textContent = '$' + collected.toFixed(2);
+      document.getElementById('rp-expenses').textContent = '−$' + expenses.toFixed(2);
+      document.getElementById('rp-expected').textContent = '$' + expected.toFixed(2);
+      document.getElementById('expTotal').textContent = '$' + expenses.toFixed(2);
+
+      // Update KPIs
+      document.getElementById('kpi-collected').textContent = '$' + collected.toFixed(0);
+      document.getElementById('kpi-expenses').textContent = '$' + expenses.toFixed(0);
+      document.getElementById('kpi-expected').textContent = '$' + expected.toFixed(0);
+
+      calcDiff();
+    }
+
+    function calcDiff() {
+      const handed = parseFloat(document.getElementById('handoverInput').value) || 0;
+      const expected = parseFloat(document.getElementById('rp-expected').textContent.replace('$', '')) || 0;
+      const diff = handed - expected;
+      const diffBar = document.getElementById('diffBar');
+      const diffLabel = document.getElementById('diffLabel');
+      const diffVal = document.getElementById('diffVal');
+      const btn = document.getElementById('confirmBtn');
+
+      if (handed === 0) {
+        diffBar.className = 'diff-bar none';
+        diffLabel.textContent = 'Enter amount above';
+        diffVal.textContent = '—';
+        btn.disabled = true;
+        return;
+      }
+
+      btn.disabled = false;
+      document.getElementById('kpi-handed').textContent = '$' + handed.toFixed(0);
+
+      if (Math.abs(diff) < 0.01) {
+        diffBar.className = 'diff-bar ok';
+        diffLabel.textContent = 'Exact match ✓';
+        diffVal.textContent = '$0.00';
+        diffVal.style.color = 'var(--accent)';
+        btn.className = 'confirm-btn green';
+      } else if (diff < 0) {
+        diffBar.className = 'diff-bar short';
+        diffLabel.textContent = 'Short — driver owes';
+        diffVal.textContent = '−$' + Math.abs(diff).toFixed(2);
+        diffVal.style.color = 'var(--red)';
+        btn.className = 'confirm-btn';
+      } else {
+        diffBar.className = 'diff-bar over';
+        diffLabel.textContent = 'Over — driver overpaid';
+        diffVal.textContent = '+$' + diff.toFixed(2);
+        diffVal.style.color = 'var(--accent)';
+        btn.className = 'confirm-btn green';
+      }
+    }
+
+    function addExpRow() {
+      const list = document.getElementById('expRows');
+      const row = document.createElement('div');
+      row.className = 'exp-row-inline';
+      row.innerHTML = `
+      <div class="exp-desc-inline">
+        <i class="ti ti-notes" style="font-size:14px;color:var(--text3)"></i>
+        <input style="border:none;outline:none;font-size:13px;font-family:'IBM Plex Sans',sans-serif;color:var(--text);background:transparent;flex:1" placeholder="Expense description" oninput="recalcAll()">
+      </div>
+      <input class="exp-input" type="number" placeholder="0" oninput="recalcAll()">
+      <span style="font-size:12px;color:var(--text3)">$</span>
+      <button style="width:24px;height:24px;border-radius:5px;border:1px solid var(--border);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--text3)" onclick="this.closest('.exp-row-inline').remove();recalcAll()"><i class="ti ti-x" style="font-size:11px"></i></button>
+    `;
+      list.appendChild(row);
+      row.querySelector('input').focus();
+    }
+
+    function openConfirmModal() {
+      const collected = document.getElementById('rp-collected').textContent;
+      const exp = document.getElementById('rp-expenses').textContent;
+      const expected = document.getElementById('rp-expected').textContent;
+      const handed = '$' + (parseFloat(document.getElementById('handoverInput').value) || 0).toFixed(2);
+      const diff = parseFloat(document.getElementById('handoverInput').value || 0) - parseFloat(document.getElementById('rp-expected').textContent.replace('$', ''));
+
+      document.getElementById('conf-collected').textContent = collected;
+      document.getElementById('conf-exp').textContent = exp;
+      document.getElementById('conf-expected').textContent = expected;
+      document.getElementById('conf-handed').textContent = handed;
+
+      const box = document.getElementById('conf-diff-box');
+      if (Math.abs(diff) < 0.01) {
+        box.style.background = 'var(--accent-bg)'; box.style.color = 'var(--accent)';
+        box.textContent = '✓ Amount matches expected handover exactly.';
+      } else if (diff < 0) {
+        box.style.background = 'var(--red-bg)'; box.style.color = 'var(--red)';
+        box.textContent = '⚠ Driver is short $' + Math.abs(diff).toFixed(2) + '. This will be noted on the record.';
+      } else {
+        box.style.background = 'var(--accent-bg)'; box.style.color = 'var(--accent)';
+        box.textContent = 'Driver overpaid by $' + diff.toFixed(2) + '. Noted on the record.';
+      }
+
+      document.getElementById('confirmModal').classList.add('open');
+    }
+
+    function closeConfirmModal() {
+      document.getElementById('confirmModal').classList.remove('open');
+    }
+
+    function showHistory() {
+      document.getElementById('historySection').style.display = 'block';
+      document.getElementById('historySection').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function hideHistory() {
+      document.getElementById('historySection').style.display = 'none';
+    }
+
+    document.getElementById('confirmModal').addEventListener('click', function (e) {
+      if (e.target === this) closeConfirmModal();
+    });
+
+    // Init
+    recalcAll();
+  </script>
+</body>
+
+</html>

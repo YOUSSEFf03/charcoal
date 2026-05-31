@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — New order</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<script src="sidebar.js" defer></script>
+<link rel="stylesheet" href="ember.css">
+<style>
+  .ar { font-family: 'Noto Sans Arabic', 'IBM Plex Sans', sans-serif; }
+
+  .form-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 20px; }
+  .form-card-head { font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px; margin-bottom: 14px; }
+
+  .grid-2c { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3c { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+  .line-row {
+    display: grid; grid-template-columns: 1.4fr 100px 100px 110px 120px 36px;
+    gap: 10px; align-items: end;
+    padding: 10px 0;
+    border-top: 1px dashed var(--border);
+  }
+  .line-row:first-of-type { border-top: none; }
+  .line-row select, .line-row input {
+    width: 100%; padding: 9px 10px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 13px; background: var(--surface); outline: none;
+    transition: border-color 0.1s;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .line-row select:focus, .line-row input:focus { border-color: var(--text); }
+  .line-row input.num { text-align: right; font-family: 'IBM Plex Mono', monospace; }
+  .line-row .lbl { font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; display: block; }
+  .line-row .line-total {
+    font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 600;
+    text-align: right; padding: 9px 0;
+  }
+  .line-del {
+    width: 36px; height: 38px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface);
+    cursor: pointer; color: var(--text3);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .line-del:hover { background: var(--red-bg); border-color: #fca5a5; color: var(--red); }
+
+  .add-line {
+    margin-top: 8px;
+    background: transparent; border: 1px dashed var(--border2);
+    color: var(--text2); font-family: 'IBM Plex Sans', sans-serif;
+    padding: 9px 14px; border-radius: var(--radius);
+    cursor: pointer; font-size: 13px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .add-line:hover { background: var(--surface2); color: var(--text); }
+
+  .summary {
+    position: sticky; top: 76px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden;
+  }
+  .sum-head {
+    background: var(--surface2); padding: 13px 18px;
+    font-size: 12px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text2); text-transform: uppercase; letter-spacing: 1px;
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between;
+  }
+  .sum-body { padding: 16px 18px; }
+  .sum-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 13px; }
+  .sum-row .lbl { color: var(--text2); }
+  .sum-row .val { font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
+  .sum-row.big { font-size: 18px; font-weight: 700; border-top: 1px dashed var(--border2); padding-top: 10px; margin-top: 8px; }
+  .sum-row.big .val { font-weight: 700; }
+
+  .client-card-mini { display: flex; align-items: center; gap: 12px; padding: 0 0 14px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+  .cm-av { width: 36px; height: 36px; border-radius: 9px; background: var(--blue-bg); color: var(--blue); border: 1px solid #c5d4f5; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+  .cm-info { flex: 1; }
+  .cm-name { font-size: 13.5px; font-weight: 600; }
+  .cm-meta { font-size: 11.5px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+  .cm-bal { font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 600; color: var(--accent2); }
+
+  .sum-actions { padding: 12px 18px; border-top: 1px solid var(--border); background: #FAFAF8; display: flex; flex-direction: column; gap: 8px; }
+  .sum-actions .btn { justify-content: center; }
+  .btn.green { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.green:hover { background: #155237; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar" data-active="orders"></aside>
+
+<div class="main">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="back-link" href="orders.html"><i class="ti ti-chevron-left"></i> Orders</a>
+      <span style="color:var(--text3)">·</span>
+      <span class="page-title">New order</span>
+      <span class="badge badge-gray" style="margin-left:4px">draft</span>
+    </div>
+    <div class="topbar-right">
+      <a class="btn" href="orders.html" style="text-decoration:none">Cancel</a>
+      <button class="btn">Save draft</button>
+      <button class="btn primary"><i class="ti ti-check" style="font-size:15px"></i> Confirm order</button>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <div style="display:grid;grid-template-columns:1.7fr 1fr;gap:14px;align-items:start">
+
+      <div class="stack">
+
+        <!-- CLIENT -->
+        <div class="form-card">
+          <div class="form-card-head">client</div>
+          <div class="grid-2c">
+            <div class="field">
+              <label class="field-label">Client</label>
+              <select class="input">
+                <option>Al Rawda Restaurant — Hamra · balance $840</option>
+                <option>Chez Michel — Achrafieh</option>
+                <option>Cedar Grill House — Jdeideh</option>
+                <option>Byblos BBQ Supply — wholesale</option>
+                <option>Gulf Charcoal Exports — export</option>
+                <option>+ New client …</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label">Currency (from client)</label>
+              <input class="input mono" value="USD" readonly>
+            </div>
+          </div>
+          <div class="grid-2c" style="margin-top:12px">
+            <div class="field">
+              <label class="field-label">Order date</label>
+              <input class="input" type="date" value="2026-05-22">
+            </div>
+            <div class="field">
+              <label class="field-label">Reference (optional)</label>
+              <input class="input" placeholder="WhatsApp / phone / walk-in">
+            </div>
+          </div>
+        </div>
+
+        <!-- ORDER LINES -->
+        <div class="form-card">
+          <div class="form-card-head" style="display:flex;justify-content:space-between;align-items:center">
+            <span>order lines · price set at time of sale</span>
+            <span style="font-size:11px;color:var(--text3)">all in client currency (USD)</span>
+          </div>
+
+          <div class="line-row">
+            <div>
+              <span class="lbl">Bag type</span>
+              <select>
+                <option>2 kg bag — BBQ Hardwood A</option>
+                <option>5 kg bag — BBQ Hardwood A</option>
+                <option>10 kg bag — BBQ Hardwood A</option>
+                <option>2 kg bag — Shisha B</option>
+                <option>5 kg bag — Restaurant A</option>
+              </select>
+            </div>
+            <div>
+              <span class="lbl">Quantity</span>
+              <input class="num" type="number" value="120">
+            </div>
+            <div>
+              <span class="lbl">Nom. kg</span>
+              <input class="num" value="240" readonly style="color:var(--text3);background:var(--surface2)">
+            </div>
+            <div>
+              <span class="lbl">Price / bag</span>
+              <input class="num" type="number" value="2.20" step="0.05">
+            </div>
+            <div>
+              <span class="lbl">Line total</span>
+              <div class="line-total">$264.00</div>
+            </div>
+            <button class="line-del"><i class="ti ti-x" style="font-size:13px"></i></button>
+          </div>
+
+          <div class="line-row">
+            <div>
+              <span class="lbl">Bag type</span>
+              <select>
+                <option>5 kg bag — BBQ Hardwood A</option>
+                <option>2 kg bag — BBQ Hardwood A</option>
+                <option>10 kg bag — BBQ Hardwood A</option>
+              </select>
+            </div>
+            <div>
+              <span class="lbl">Quantity</span>
+              <input class="num" type="number" value="30">
+            </div>
+            <div>
+              <span class="lbl">Nom. kg</span>
+              <input class="num" value="150" readonly style="color:var(--text3);background:var(--surface2)">
+            </div>
+            <div>
+              <span class="lbl">Price / bag</span>
+              <input class="num" type="number" value="5.20" step="0.05">
+            </div>
+            <div>
+              <span class="lbl">Line total</span>
+              <div class="line-total">$156.00</div>
+            </div>
+            <button class="line-del"><i class="ti ti-x" style="font-size:13px"></i></button>
+          </div>
+
+          <button class="add-line"><i class="ti ti-plus" style="font-size:14px"></i> Add bag type</button>
+        </div>
+
+        <!-- DELIVERY -->
+        <div class="form-card">
+          <div class="form-card-head">delivery</div>
+          <div class="grid-2c">
+            <div class="field">
+              <label class="field-label">Delivery address</label>
+              <input class="input" value="Al Rawda — Hamra branch · Rue Bliss">
+            </div>
+            <div class="field">
+              <label class="field-label">Split into shipments?</label>
+              <select class="input">
+                <option>No — single shipment</option>
+                <option>Yes — split by branch</option>
+                <option>Yes — manual split</option>
+              </select>
+            </div>
+          </div>
+          <div class="field" style="margin-top:12px">
+            <label class="field-label">Notes (Arabic supported)</label>
+            <textarea class="textarea" placeholder="e.g. deliver before 11am"></textarea>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- SUMMARY -->
+      <div class="summary">
+        <div class="sum-head">
+          <span>Order preview</span>
+          <span style="color:var(--text3)">ORD-0359</span>
+        </div>
+        <div class="sum-body">
+          <div class="client-card-mini">
+            <div class="cm-av">AR</div>
+            <div class="cm-info">
+              <div class="cm-name">Al Rawda Restaurant</div>
+              <div class="cm-meta">restaurant · Net 15</div>
+            </div>
+            <div class="cm-bal">$840 bal</div>
+          </div>
+          <div class="sum-row"><span class="lbl">Items</span><span class="val">2 lines · 150 bags</span></div>
+          <div class="sum-row"><span class="lbl">Nominal kg</span><span class="val">390 kg</span></div>
+          <div class="sum-row"><span class="lbl">Subtotal</span><span class="val">$420.00</span></div>
+          <div class="sum-row"><span class="lbl">Discount</span><span class="val">$0.00</span></div>
+          <div class="sum-row big"><span class="lbl">Total</span><span class="val">$420.00</span></div>
+        </div>
+        <div class="sum-actions">
+          <button class="btn green"><i class="ti ti-check" style="font-size:14px"></i> Confirm order</button>
+          <a class="btn" href="order-detail.html" style="text-decoration:none;justify-content:center">Confirm + go to detail</a>
+          <button class="btn">Save as draft</button>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

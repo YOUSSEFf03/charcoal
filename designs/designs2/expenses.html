@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember — Expenses & Employees</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="icons.js" defer></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:#F5F4F0; --surface:#FFFFFF; --surface2:#F0EEE9;
+    --border:#E4E1D9; --border2:#D4D0C8;
+    --text:#1A1916; --text2:#6B6860; --text3:#9B9890;
+    --accent:#1D6B4A; --accent-bg:#EAF5EF;
+    --accent2:#B45309; --accent2-bg:#FEF3C7;
+    --red:#C0392B; --red-bg:#FEF2F2;
+    --blue:#1D4ED8; --blue-bg:#EFF6FF;
+    --sidebar-w:220px; --radius:8px; --radius-lg:12px;
+  }
+  body { font-family:'IBM Plex Sans',sans-serif; background:var(--bg); color:var(--text); font-size:14px; line-height:1.5; min-height:100vh; display:flex; }
+
+  /* SIDEBAR */
+  .sidebar { width:var(--sidebar-w); min-height:100vh; background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; position:fixed; top:0; left:0; bottom:0; z-index:10; }
+  .sidebar-logo { padding:20px 18px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+  .logo-mark { width:30px; height:30px; background:var(--text); border-radius:7px; display:flex; align-items:center; justify-content:center; }
+  .logo-mark i { color:#fff; font-size:16px; }
+  .logo-text { font-size:15px; font-weight:600; letter-spacing:-0.3px; }
+  .logo-sub { font-size:10px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+  .sidebar-section { padding:16px 10px 4px; }
+  .sidebar-section-label { font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:1px; padding:0 8px; margin-bottom:4px; }
+  .nav-item { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; color:var(--text2); font-size:13.5px; font-weight:400; transition:background 0.1s,color 0.1s; text-decoration:none; }
+  .nav-item:hover { background:var(--surface2); color:var(--text); }
+  .nav-item.active { background:var(--text); color:#fff; }
+  .nav-item.active i { color:#fff; }
+  .nav-item i { font-size:16px; color:var(--text3); }
+  .nav-item:hover i { color:var(--text); }
+  .nav-badge { margin-left:auto; font-size:10px; font-family:'IBM Plex Mono',monospace; background:var(--red); color:#fff; border-radius:100px; padding:1px 6px; font-weight:500; }
+  .nav-badge.amber { background:var(--accent2); }
+  .sidebar-bottom { margin-top:auto; padding:12px 10px; border-top:1px solid var(--border); }
+  .user-row { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:var(--radius); cursor:pointer; }
+  .user-row:hover { background:var(--surface2); }
+  .avatar-sm { width:28px; height:28px; border-radius:50%; background:var(--text); color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; flex-shrink:0; }
+  .user-name { font-size:13px; font-weight:500; }
+  .user-role { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+
+  /* MAIN */
+  .main { margin-left:var(--sidebar-w); flex:1; display:flex; flex-direction:column; min-height:100vh; }
+  .topbar { background:var(--surface); border-bottom:1px solid var(--border); padding:0 28px; height:56px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; position:sticky; top:0; z-index:5; }
+  .page-title { font-size:15px; font-weight:600; letter-spacing:-0.2px; }
+  .topbar-right { display:flex; align-items:center; gap:8px; }
+  .btn { display:flex; align-items:center; gap:6px; padding:7px 12px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text2); transition:all 0.1s; }
+  .btn:hover { background:var(--surface2); color:var(--text); }
+  .btn.primary { background:var(--text); color:#fff; border-color:var(--text); }
+  .btn.primary:hover { background:#2d2b28; }
+  .btn.green { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .btn.green:hover { background:#155237; }
+
+  /* TABS */
+  .tabs { display:flex; gap:2px; padding:0 28px; background:var(--surface); border-bottom:1px solid var(--border); }
+  .tab { padding:12px 16px; font-size:13px; font-weight:500; color:var(--text3); cursor:pointer; border-bottom:2px solid transparent; transition:all 0.1s; display:flex; align-items:center; gap:7px; }
+  .tab:hover { color:var(--text2); }
+  .tab.active { color:var(--text); border-bottom-color:var(--text); }
+  .tab-count { font-size:11px; font-family:'IBM Plex Mono',monospace; background:var(--surface2); color:var(--text2); padding:1px 6px; border-radius:100px; }
+  .tab.active .tab-count { background:var(--text); color:#fff; }
+
+  .content { padding:24px 28px; flex:1; }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  .fade-up { animation:fadeUp 0.3s ease both; }
+
+  /* KPI */
+  .kpi-row { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px; }
+  .kpi { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px 18px; animation:fadeUp 0.3s ease both; }
+  .kpi-label { font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+  .kpi-value { font-size:24px; font-weight:600; letter-spacing:-1px; line-height:1; margin-bottom:4px; }
+  .kpi-sub { font-size:12px; color:var(--text3); }
+
+  /* BADGE */
+  .badge { font-size:11px; font-family:'IBM Plex Mono',monospace; padding:2px 8px; border-radius:100px; font-weight:500; white-space:nowrap; }
+  .badge-green  { background:var(--accent-bg); color:var(--accent); }
+  .badge-amber  { background:var(--accent2-bg); color:var(--accent2); }
+  .badge-red    { background:var(--red-bg); color:var(--red); }
+  .badge-blue   { background:var(--blue-bg); color:var(--blue); }
+  .badge-gray   { background:var(--surface2); color:var(--text2); }
+
+  /* CARD */
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:14px; }
+  .card-head { padding:13px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .card-title { font-size:13px; font-weight:600; display:flex; align-items:center; gap:7px; }
+  .card-title i { font-size:15px; color:var(--text2); }
+
+  /* EXPENSE ROW */
+  .exp-row { display:flex; align-items:center; gap:12px; padding:11px 18px; border-bottom:1px solid var(--border); }
+  .exp-row:last-child { border-bottom:none; }
+  .exp-icon { width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; flex-shrink:0; }
+  .exp-info { flex:1; }
+  .exp-name { font-size:13px; font-weight:500; }
+  .exp-meta { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; margin-top:1px; }
+  .exp-amount { text-align:right; }
+  .exp-amount-val { font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:14px; }
+  .exp-amount-lbl { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; margin-top:1px; }
+  .exp-del { width:28px; height:28px; border-radius:6px; border:1px solid var(--border); background:transparent; cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--text3); transition:all 0.1s; flex-shrink:0; }
+  .exp-del:hover { background:var(--red-bg); border-color:#fca5a5; color:var(--red); }
+
+  /* TWO COL */
+  .two-col { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px; }
+  .three-col { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-bottom:14px; }
+
+  /* EMPLOYEE CARD */
+  .emp-card { background:var(--surface); border:1.5px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; transition:border-color 0.15s,box-shadow 0.15s; }
+  .emp-card:hover { border-color:var(--border2); box-shadow:0 2px 8px rgba(0,0,0,0.06); }
+  .emp-head { padding:16px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; }
+  .emp-avatar { width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600; flex-shrink:0; }
+  .emp-name { font-size:14px; font-weight:600; }
+  .emp-role { font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); margin-top:2px; }
+  .emp-owed { margin-left:auto; text-align:right; }
+  .emp-owed-val { font-size:18px; font-weight:600; font-family:'IBM Plex Mono',monospace; letter-spacing:-0.5px; }
+  .emp-owed-lbl { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+
+  .emp-body { padding:14px 18px; }
+
+  /* DAYS WORKED GRID */
+  .days-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-bottom:12px; }
+  .day-cell { aspect-ratio:1; border-radius:5px; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:10px; font-family:'IBM Plex Mono',monospace; cursor:pointer; transition:all 0.1s; background:var(--surface2); color:var(--text3); }
+  .day-cell.worked { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  .day-cell.today { border:2px solid var(--text); }
+  .day-cell.future { opacity:0.3; cursor:not-allowed; }
+  .day-cell:hover:not(.future) { border-color:var(--text); }
+
+  /* EARNINGS BREAKDOWN */
+  .earn-row { display:flex; justify-content:space-between; align-items:baseline; padding:6px 0; font-size:13px; border-bottom:1px solid var(--border); }
+  .earn-row:last-child { border-bottom:none; }
+  .earn-label { color:var(--text2); }
+  .earn-val { font-family:'IBM Plex Mono',monospace; font-weight:600; }
+  .earn-val.green { color:var(--accent); }
+  .earn-val.amber { color:var(--accent2); }
+
+  .earn-total { display:flex; justify-content:space-between; align-items:center; padding:10px 0 4px; font-size:14px; font-weight:600; border-top:2px solid var(--border); margin-top:4px; }
+  .earn-total-mono { font-family:'IBM Plex Mono',monospace; font-size:16px; color:var(--accent2); }
+
+  /* PAY BUTTON */
+  .pay-btn { width:100%; padding:11px; background:var(--text); color:#fff; border:none; border-radius:var(--radius); font-size:13px; font-weight:600; font-family:'IBM Plex Sans',sans-serif; cursor:pointer; transition:background 0.15s; display:flex; align-items:center; justify-content:center; gap:7px; margin-top:14px; }
+  .pay-btn:hover { background:#2d2b28; }
+  .pay-btn.green { background:var(--accent); }
+  .pay-btn.green:hover { background:#155237; }
+
+  /* PAYMENT HISTORY */
+  .pay-hist { padding:0 18px; }
+  .pay-hist-row { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); font-size:13px; }
+  .pay-hist-row:last-child { border-bottom:none; }
+  .pay-hist-info { flex:1; }
+  .pay-hist-info strong { font-weight:500; display:block; }
+  .pay-hist-info span { font-size:11px; color:var(--text3); font-family:'IBM Plex Mono',monospace; }
+  .pay-hist-amount { font-family:'IBM Plex Mono',monospace; font-weight:600; color:var(--accent); }
+
+  /* TABLE */
+  .data-table { width:100%; border-collapse:collapse; }
+  .data-table th { text-align:left; padding:8px 18px; font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--text3); text-transform:uppercase; letter-spacing:0.6px; border-bottom:1px solid var(--border); font-weight:400; background:var(--surface2); }
+  .data-table td { padding:10px 18px; border-bottom:1px solid var(--border); font-size:13px; vertical-align:middle; }
+  .data-table tr:last-child td { border-bottom:none; }
+
+  /* MODAL */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:40; align-items:center; justify-content:center; }
+  .modal-overlay.open { display:flex; }
+  .modal { background:var(--surface); border-radius:var(--radius-lg); border:1px solid var(--border); width:440px; box-shadow:0 8px 40px rgba(0,0,0,0.12); animation:fadeUp 0.2s ease; }
+  .modal-head { padding:18px 20px; border-bottom:1px solid var(--border); display:flex; align-items:flex-start; justify-content:space-between; }
+  .modal-title { font-size:15px; font-weight:600; }
+  .modal-body { padding:20px; }
+  .modal-footer { padding:14px 20px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; }
+  .close-btn { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; color:var(--text2); }
+  .form-label { font-size:12px; font-weight:500; color:var(--text2); margin-bottom:5px; display:block; }
+  .form-input { width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; font-family:'IBM Plex Sans',sans-serif; color:var(--text); outline:none; background:var(--surface); transition:border-color 0.15s; margin-bottom:14px; }
+  .form-input:focus { border-color:var(--text); }
+  .form-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+
+  /* PAY INPUT */
+  .pay-input-wrap { display:flex; align-items:center; gap:8px; margin-bottom:14px; }
+  .pay-big-input { flex:1; padding:12px 14px; border:1.5px solid var(--border); border-radius:var(--radius); font-size:22px; font-family:'IBM Plex Mono',monospace; font-weight:600; text-align:right; outline:none; background:var(--surface); transition:border-color 0.15s; }
+  .pay-big-input:focus { border-color:var(--text); }
+  .pay-curr { font-size:16px; color:var(--text2); font-weight:500; }
+
+  /* DIFF BAR */
+  .diff-bar { border-radius:var(--radius); padding:9px 12px; display:flex; justify-content:space-between; font-size:13px; margin-bottom:14px; }
+  .diff-bar.ok    { background:var(--accent-bg); border:1px solid #a7f3d0; color:var(--accent); }
+  .diff-bar.short { background:var(--accent2-bg); border:1px solid #fcd34d; color:var(--accent2); }
+  .diff-bar.none  { background:var(--surface2); border:1px solid var(--border); color:var(--text3); }
+  .diff-mono { font-family:'IBM Plex Mono',monospace; font-weight:600; }
+
+  /* RECURRING TOGGLE */
+  .toggle-wrap { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .toggle { width:36px; height:20px; border-radius:100px; background:var(--border); cursor:pointer; position:relative; transition:background 0.15s; flex-shrink:0; }
+  .toggle.on { background:var(--accent); }
+  .toggle-knob { position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition:transform 0.15s; }
+  .toggle.on .toggle-knob { transform:translateX(16px); }
+  .toggle-label { font-size:13px; color:var(--text2); }
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark"><i class="ti ti-flame"></i></div>
+    <div><div class="logo-text">Ember</div><div class="logo-sub">charcoal system</div></div>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Overview</div>
+    <a class="nav-item" href="dashboard.html"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
+    <a class="nav-item" href="reports.html"><i class="ti ti-chart-bar"></i> Reports</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Stock</div>
+    <a class="nav-item" href="containers.html"><i class="ti ti-ship"></i> Containers</a>
+    <a class="nav-item" href="warehouse.html"><i class="ti ti-building-warehouse"></i> Warehouse</a>
+    <a class="nav-item" href="packing.html"><i class="ti ti-tools"></i> Packing</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Sales</div>
+    <a class="nav-item" href="clients.html"><i class="ti ti-users"></i> Clients <span class="nav-badge amber">3</span></a>
+    <a class="nav-item" href="orders.html"><i class="ti ti-file-invoice"></i> Orders</a>
+    <a class="nav-item" href="driver-mobile.html"><i class="ti ti-truck"></i> Delivery</a>
+    <a class="nav-item" href="warehouse-sales.html"><i class="ti ti-building-store"></i> Warehouse sales</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Finance</div>
+    <a class="nav-item" href="balances.html"><i class="ti ti-credit-card"></i> Balances <span class="nav-badge amber"><a class="nav-item" href="invoices.html"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-cash"></i> Payments</a>
+    <a class="nav-item" href="cash-handover.html"><i class="ti ti-calculator"></i> Cash handover</a>
+    <a class="nav-item active" href="expenses.html"><i class="ti ti-wallet"></i> Expenses</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item" href="suppliers.html"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item" href="settings.html"><i class="ti ti-settings"></i> Settings</a>
+    <a class="nav-item" href="fill-clients.html"><i class="ti ti-stack-2"></i> Fill clients</a>6k</span></a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-receipt"></i> Invoices</a>
+    <a class="nav-item" href="invoices.html"><i class="ti ti-cash"></i> Payments</a>
+    <a class="nav-item" href="cash-handover.html"><i class="ti ti-calculator"></i> Cash handover</a>
+    <a class="nav-item active" href="expenses.html"><i class="ti ti-wallet"></i> Expenses</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Setup</div>
+    <a class="nav-item" href="suppliers.html"><i class="ti ti-building-store"></i> Suppliers</a>
+    <a class="nav-item" href="settings.html"><i class="ti ti-settings"></i> Settings</a>
+    <a class="nav-item" href="fill-clients.html"><i class="ti ti-stack-2"></i> Fill clients</a>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="user-row">
+      <div class="avatar-sm">KA</div>
+      <div><div class="user-name">Khalil Abi Nader</div><div class="user-role">owner</div></div>
+    </div>
+  </div>
+</aside>
+
+<div class="main">
+  <header class="topbar">
+    <span class="page-title">Expenses & Employees</span>
+    <div class="topbar-right">
+      <span style="font-size:12px;color:var(--text3);font-family:'IBM Plex Mono',monospace">May 2026</span>
+      <button class="btn"><i class="ti ti-chevron-left" style="font-size:14px"></i></button>
+      <button class="btn"><i class="ti ti-chevron-right" style="font-size:14px"></i></button>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('expenses',this)">
+      <i class="ti ti-receipt-2" style="font-size:14px"></i> Expenses
+      <span class="tab-count">12</span>
+    </div>
+    <div class="tab" onclick="showTab('employees',this)">
+      <i class="ti ti-users" style="font-size:14px"></i> Employees
+      <span class="tab-count">3</span>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- KPI ROW -->
+    <div class="kpi-row">
+      <div class="kpi" style="animation-delay:0.05s">
+        <div class="kpi-label">Total expenses (May)</div>
+        <div class="kpi-value" style="color:var(--red)" id="kpi-total">$3,840</div>
+        <div class="kpi-sub">12 expense entries</div>
+      </div>
+      <div class="kpi" style="animation-delay:0.1s">
+        <div class="kpi-label">Recurring (monthly)</div>
+        <div class="kpi-value">$2,400</div>
+        <div class="kpi-sub">rent + fixed costs</div>
+      </div>
+      <div class="kpi" style="animation-delay:0.15s">
+        <div class="kpi-label">Employee wages owed</div>
+        <div class="kpi-value" style="color:var(--accent2)" id="kpi-wages">$1,284</div>
+        <div class="kpi-sub">worker + 3 drivers</div>
+      </div>
+      <div class="kpi" style="animation-delay:0.2s">
+        <div class="kpi-label">Total outgoing (May)</div>
+        <div class="kpi-value" style="color:var(--red)">$5,124</div>
+        <div class="kpi-sub">expenses + wages</div>
+      </div>
+    </div>
+
+    <!-- ── EXPENSES TAB ── -->
+    <div id="tab-expenses" class="fade-up">
+
+      <div style="display:grid;grid-template-columns:1fr 360px;gap:20px;align-items:start">
+
+        <!-- LEFT: EXPENSE LIST -->
+        <div>
+
+          <!-- RECURRING -->
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title"><i class="ti ti-repeat"></i> Recurring — monthly</div>
+              <button class="btn" style="font-size:12px" onclick="openAddExpense('recurring')">
+                <i class="ti ti-plus" style="font-size:13px"></i> Add
+              </button>
+            </div>
+
+            <div class="exp-row">
+              <div class="exp-icon" style="background:#EFF6FF"><i class="ti ti-building" style="color:var(--blue)"></i></div>
+              <div class="exp-info">
+                <div class="exp-name">Warehouse rent</div>
+                <div class="exp-meta">Monthly · auto-added on 1st · recurring</div>
+              </div>
+              <div class="exp-amount">
+                <div class="exp-amount-val">$1,500</div>
+                <div class="exp-amount-lbl">per month</div>
+              </div>
+              <button class="exp-del"><i class="ti ti-edit" style="font-size:12px"></i></button>
+            </div>
+
+            <div class="exp-row">
+              <div class="exp-icon" style="background:#FEF3C7"><i class="ti ti-bolt" style="color:var(--accent2)"></i></div>
+              <div class="exp-info">
+                <div class="exp-name">Electricity</div>
+                <div class="exp-meta">Monthly · recurring</div>
+              </div>
+              <div class="exp-amount">
+                <div class="exp-amount-val">$320</div>
+                <div class="exp-amount-lbl">per month</div>
+              </div>
+              <button class="exp-del"><i class="ti ti-edit" style="font-size:12px"></i></button>
+            </div>
+
+            <div class="exp-row">
+              <div class="exp-icon" style="background:#EAF5EF"><i class="ti ti-calculator" style="color:var(--accent)"></i></div>
+              <div class="exp-info">
+                <div class="exp-name">Accountant</div>
+                <div class="exp-meta">Monthly · recurring</div>
+              </div>
+              <div class="exp-amount">
+                <div class="exp-amount-val">$580</div>
+                <div class="exp-amount-lbl">per month</div>
+              </div>
+              <button class="exp-del"><i class="ti ti-edit" style="font-size:12px"></i></button>
+            </div>
+
+            <div style="padding:10px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:space-between;font-size:12px">
+              <span style="color:var(--text3)">Total recurring</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-weight:600">$2,400 / month</span>
+            </div>
+          </div>
+
+          <!-- ONE-TIME EXPENSES THIS MONTH -->
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title"><i class="ti ti-plus-circle"></i> One-time — May 2026</div>
+              <button class="btn" style="font-size:12px" onclick="openAddExpense('onetime')">
+                <i class="ti ti-plus" style="font-size:13px"></i> Add expense
+              </button>
+            </div>
+
+            <div class="exp-row" id="exp-list">
+              <div class="exp-icon" style="background:#EFF6FF"><i class="ti ti-gas-station" style="color:var(--blue)"></i></div>
+              <div class="exp-info">
+                <div class="exp-name">Warehouse generator fuel</div>
+                <div class="exp-meta">3 May 2026 · one-time</div>
+              </div>
+              <div class="exp-amount">
+                <div class="exp-amount-val">$180</div>
+              </div>
+              <button class="exp-del" onclick="this.closest('.exp-row').remove()"><i class="ti ti-x" style="font-size:12px"></i></button>
+            </div>
+
+            <div class="exp-row">
+              <div class="exp-icon" style="background:#FEF2F2"><i class="ti ti-tools" style="color:var(--red)"></i></div>
+              <div class="exp-info">
+                <div class="exp-name">Scale repair</div>
+                <div class="exp-meta">8 May 2026 · one-time</div>
+              </div>
+              <div class="exp-amount">
+                <div class="exp-amount-val">$240</div>
+              </div>
+              <button class="exp-del" onclick="this.closest('.exp-row').remove()"><i class="ti ti-x" style="font-size:12px"></i></button>
+            </div>
+
+            <div class="exp-row">
+              <div class="exp-icon" style="background:#EAF5EF"><i class="ti ti-package" style="color:var(--accent)"></i></div>
+              <div class="exp-info">
+                <div class="exp-name">Bag purchase — 2kg bags</div>
+                <div class="exp-meta">12 May 2026 · 5,000 bags × $0.04</div>
+              </div>
+              <div class="exp-amount">
+                <div class="exp-amount-val">$200</div>
+              </div>
+              <button class="exp-del" onclick="this.closest('.exp-row').remove()"><i class="ti ti-x" style="font-size:12px"></i></button>
+            </div>
+
+            <div class="exp-row">
+              <div class="exp-icon" style="background:#FEF3C7"><i class="ti ti-truck" style="color:var(--accent2)"></i></div>
+              <div class="exp-info">
+                <div class="exp-name">Vehicle maintenance</div>
+                <div class="exp-meta">15 May 2026 · one-time</div>
+              </div>
+              <div class="exp-amount">
+                <div class="exp-amount-val">$320</div>
+              </div>
+              <button class="exp-del" onclick="this.closest('.exp-row').remove()"><i class="ti ti-x" style="font-size:12px"></i></button>
+            </div>
+
+            <div style="padding:10px 18px;border-top:1px solid var(--border);background:var(--surface2);display:flex;justify-content:space-between;font-size:12px">
+              <span style="color:var(--text3)">Total one-time this month</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-weight:600">$940</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: MONTHLY SUMMARY -->
+        <div>
+          <div class="card" style="position:sticky;top:76px">
+            <div class="card-head">
+              <div class="card-title"><i class="ti ti-chart-bar"></i> May 2026 summary</div>
+            </div>
+
+            <div style="padding:16px 18px;border-bottom:1px solid var(--border)">
+              <div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border)">
+                <span style="color:var(--text2)">Rent</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--red)">$1,500</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border)">
+                <span style="color:var(--text2)">Electricity</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--red)">$320</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border)">
+                <span style="color:var(--text2)">Accountant</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--red)">$580</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border)">
+                <span style="color:var(--text2)">Generator fuel</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--red)">$180</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border)">
+                <span style="color:var(--text2)">Scale repair</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--red)">$240</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border)">
+                <span style="color:var(--text2)">Bag purchases</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--red)">$200</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0">
+                <span style="color:var(--text2)">Vehicle maintenance</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--red)">$320</span>
+              </div>
+            </div>
+
+            <div style="padding:14px 18px;background:var(--surface2)">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:14px;font-weight:600">Total expenses</span>
+                <span style="font-size:20px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:var(--red)">$3,340</span>
+              </div>
+              <div style="font-size:12px;color:var(--text3);margin-top:4px">Excluding employee wages</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── EMPLOYEES TAB ── -->
+    <div id="tab-employees" style="display:none" class="fade-up">
+
+      <!-- WORKER -->
+      <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Packing worker</div>
+      <div class="emp-card" style="margin-bottom:18px">
+        <div class="emp-head">
+          <div class="emp-avatar" style="background:#EAF5EF;color:var(--accent)">HM</div>
+          <div>
+            <div class="emp-name">Hasan Moussa</div>
+            <div class="emp-role">packing worker · daily rate + per bag</div>
+          </div>
+          <div class="emp-owed">
+            <div class="emp-owed-val" style="color:var(--accent2)">$284.20</div>
+            <div class="emp-owed-lbl">total owed</div>
+          </div>
+        </div>
+
+        <div class="emp-body">
+          <!-- Days worked calendar -->
+          <div style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:8px">Days worked — May 2026 <span style="font-family:'IBM Plex Mono',monospace;color:var(--accent);margin-left:8px">18 days</span></div>
+          <div class="days-grid" id="workerDays">
+            <!-- Days 1-31, filled by JS -->
+          </div>
+
+          <!-- Earnings breakdown -->
+          <div style="background:var(--surface2);border-radius:var(--radius);padding:12px 14px;margin-bottom:14px">
+            <div class="earn-row">
+              <span class="earn-label">Daily rate × 18 days worked</span>
+              <span class="earn-val">$15.00 × 18 = <strong style="color:var(--text)">$270.00</strong></span>
+            </div>
+            <div class="earn-row">
+              <span class="earn-label">Per-bag earnings (from sessions)</span>
+              <span class="earn-val green">+$140.96</span>
+            </div>
+            <div class="earn-row">
+              <span class="earn-label">Total earned this month</span>
+              <span class="earn-val" style="color:var(--text);font-size:14px">$410.96</span>
+            </div>
+            <div class="earn-row">
+              <span class="earn-label">Paid this month</span>
+              <span class="earn-val green">−$126.76</span>
+            </div>
+            <div class="earn-total">
+              <span>Owed now</span>
+              <span class="earn-total-mono">$284.20</span>
+            </div>
+          </div>
+
+          <!-- Per-bag breakdown -->
+          <div style="font-size:12px;color:var(--text3);margin-bottom:6px">Bags packed this month — per-bag earnings</div>
+          <table class="data-table" style="margin-bottom:14px">
+            <thead><tr><th>Bag type</th><th>Qty packed</th><th>Rate</th><th>Earned</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family:'IBM Plex Mono',monospace">2 kg</td><td style="font-family:'IBM Plex Mono',monospace">1,180</td><td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">$0.050</td><td style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">$59.00</td></tr>
+              <tr><td style="font-family:'IBM Plex Mono',monospace">5 kg</td><td style="font-family:'IBM Plex Mono',monospace">320</td><td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">$0.080</td><td style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">$25.60</td></tr>
+              <tr><td style="font-family:'IBM Plex Mono',monospace">10 kg</td><td style="font-family:'IBM Plex Mono',monospace">140</td><td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">$0.120</td><td style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">$16.80</td></tr>
+              <tr><td style="font-family:'IBM Plex Mono',monospace">20 kg</td><td style="font-family:'IBM Plex Mono',monospace">42</td><td style="font-family:'IBM Plex Mono',monospace;color:var(--text3)">$0.180</td><td style="font-family:'IBM Plex Mono',monospace;color:var(--accent)">$7.56</td></tr>
+            </tbody>
+          </table>
+
+          <button class="pay-btn green" onclick="openPayModal('Hasan Moussa', 284.20)">
+            <i class="ti ti-cash" style="font-size:14px"></i> Pay Hasan Moussa — $284.20 owed
+          </button>
+        </div>
+
+        <!-- Payment history -->
+        <div style="border-top:1px solid var(--border);padding:12px 18px 4px">
+          <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Payment history</div>
+          <div class="pay-hist">
+            <div class="pay-hist-row">
+              <div class="pay-hist-info"><strong>Cash payment</strong><span>10 May 2026 · by Khalil</span></div>
+              <div class="pay-hist-amount">$126.76</div>
+            </div>
+            <div class="pay-hist-row">
+              <div class="pay-hist-info"><strong>Cash payment</strong><span>1 May 2026 · by Khalil · April wages</span></div>
+              <div class="pay-hist-amount">$140.00</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DRIVERS -->
+      <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Drivers</div>
+      <div class="three-col">
+
+        <!-- Driver 1 -->
+        <div class="emp-card">
+          <div class="emp-head">
+            <div class="emp-avatar" style="background:var(--blue-bg);color:var(--blue)">MK</div>
+            <div>
+              <div class="emp-name">Mohammed Khalil</div>
+              <div class="emp-role">driver · $35/day</div>
+            </div>
+            <div class="emp-owed">
+              <div class="emp-owed-val" style="color:var(--accent2)">$560</div>
+              <div class="emp-owed-lbl">owed</div>
+            </div>
+          </div>
+          <div class="emp-body">
+            <div style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:6px">Days worked — May <span style="font-family:'IBM Plex Mono',monospace;color:var(--accent);margin-left:6px">16 days</span></div>
+            <div class="days-grid" id="driver1Days"></div>
+            <div style="background:var(--surface2);border-radius:var(--radius);padding:10px 12px;margin-bottom:12px;font-size:12px">
+              <div class="earn-row"><span class="earn-label">$35/day × 16 days</span><span class="earn-val">$560</span></div>
+              <div class="earn-row"><span class="earn-label">Paid this month</span><span class="earn-val green">$0</span></div>
+              <div class="earn-total"><span>Owed</span><span class="earn-total-mono">$560</span></div>
+            </div>
+            <button class="pay-btn" onclick="openPayModal('Mohammed Khalil', 560)">
+              <i class="ti ti-cash" style="font-size:13px"></i> Pay — $560 owed
+            </button>
+          </div>
+          <div style="border-top:1px solid var(--border);padding:10px 18px">
+            <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">No payments this month yet</div>
+          </div>
+        </div>
+
+        <!-- Driver 2 -->
+        <div class="emp-card">
+          <div class="emp-head">
+            <div class="emp-avatar" style="background:var(--accent2-bg);color:var(--accent2)">AH</div>
+            <div>
+              <div class="emp-name">Ahmad Hassan</div>
+              <div class="emp-role">driver · $35/day</div>
+            </div>
+            <div class="emp-owed">
+              <div class="emp-owed-val" style="color:var(--accent2)">$210</div>
+              <div class="emp-owed-lbl">owed</div>
+            </div>
+          </div>
+          <div class="emp-body">
+            <div style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:6px">Days worked — May <span style="font-family:'IBM Plex Mono',monospace;color:var(--accent);margin-left:6px">12 days</span></div>
+            <div class="days-grid" id="driver2Days"></div>
+            <div style="background:var(--surface2);border-radius:var(--radius);padding:10px 12px;margin-bottom:12px;font-size:12px">
+              <div class="earn-row"><span class="earn-label">$35/day × 12 days</span><span class="earn-val">$420</span></div>
+              <div class="earn-row"><span class="earn-label">Paid this month</span><span class="earn-val green">−$210</span></div>
+              <div class="earn-total"><span>Owed</span><span class="earn-total-mono">$210</span></div>
+            </div>
+            <button class="pay-btn" onclick="openPayModal('Ahmad Hassan', 210)">
+              <i class="ti ti-cash" style="font-size:13px"></i> Pay — $210 owed
+            </button>
+          </div>
+          <div style="border-top:1px solid var(--border);padding:10px 18px">
+            <div class="pay-hist">
+              <div class="pay-hist-row">
+                <div class="pay-hist-info"><strong>Cash payment</strong><span>8 May 2026</span></div>
+                <div class="pay-hist-amount">$210</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Driver 3 -->
+        <div class="emp-card">
+          <div class="emp-head">
+            <div class="emp-avatar" style="background:#F3F4F6;color:#374151">JN</div>
+            <div>
+              <div class="emp-name">Joseph Nasr</div>
+              <div class="emp-role">driver · $35/day</div>
+            </div>
+            <div class="emp-owed">
+              <div class="emp-owed-val" style="color:var(--accent2)">$245</div>
+              <div class="emp-owed-lbl">owed</div>
+            </div>
+          </div>
+          <div class="emp-body">
+            <div style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:6px">Days worked — May <span style="font-family:'IBM Plex Mono',monospace;color:var(--accent);margin-left:6px">7 days</span></div>
+            <div class="days-grid" id="driver3Days"></div>
+            <div style="background:var(--surface2);border-radius:var(--radius);padding:10px 12px;margin-bottom:12px;font-size:12px">
+              <div class="earn-row"><span class="earn-label">$35/day × 7 days</span><span class="earn-val">$245</span></div>
+              <div class="earn-row"><span class="earn-label">Paid this month</span><span class="earn-val green">$0</span></div>
+              <div class="earn-total"><span>Owed</span><span class="earn-total-mono">$245</span></div>
+            </div>
+            <button class="pay-btn" onclick="openPayModal('Joseph Nasr', 245)">
+              <i class="ti ti-cash" style="font-size:13px"></i> Pay — $245 owed
+            </button>
+          </div>
+          <div style="border-top:1px solid var(--border);padding:10px 18px">
+            <div style="font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace">No payments this month yet</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ADD EXPENSE MODAL -->
+<div class="modal-overlay" id="addExpenseModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title" id="expModalTitle">Add expense</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px">May 2026</div>
+      </div>
+      <button class="close-btn" onclick="closeAddExpense()">✕</button>
+    </div>
+    <div class="modal-body">
+      <label class="form-label">Description</label>
+      <input class="form-input" type="text" placeholder="e.g. Electricity bill, Equipment repair…">
+
+      <div class="form-row" style="margin-bottom:14px">
+        <div>
+          <label class="form-label">Amount ($)</label>
+          <input class="form-input" type="number" placeholder="0.00" style="margin:0">
+        </div>
+        <div>
+          <label class="form-label">Date</label>
+          <input class="form-input" type="date" value="2026-05-21" style="margin:0">
+        </div>
+      </div>
+
+      <div class="toggle-wrap" id="recurringToggleWrap">
+        <div class="toggle" id="recurringToggle" onclick="toggleRecurring(this)">
+          <div class="toggle-knob"></div>
+        </div>
+        <span class="toggle-label">Recurring — repeats every month automatically</span>
+      </div>
+
+      <label class="form-label">Notes (optional)</label>
+      <input class="form-input" type="text" placeholder="Any notes…" style="margin-bottom:0">
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeAddExpense()">Cancel</button>
+      <button class="btn primary"><i class="ti ti-check" style="font-size:14px"></i> Add expense</button>
+    </div>
+  </div>
+</div>
+
+<!-- PAY EMPLOYEE MODAL -->
+<div class="modal-overlay" id="payModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title" id="payModalTitle">Log payment</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px" id="payModalSub">Total owed: —</div>
+      </div>
+      <button class="close-btn" onclick="closePayModal()">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <div class="form-row" style="margin-bottom:14px">
+        <div>
+          <label class="form-label">Payment date</label>
+          <input class="form-input" type="date" value="2026-05-21" style="margin:0">
+        </div>
+        <div>
+          <label class="form-label">Paid by</label>
+          <select class="form-input" style="margin:0">
+            <option>Khalil (owner)</option>
+            <option>Accountant</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="form-label">Amount paid</label>
+      <div class="pay-input-wrap">
+        <span class="pay-curr">$</span>
+        <input class="pay-big-input" type="number" id="payAmount" placeholder="0.00" oninput="calcPayDiff()">
+      </div>
+
+      <div class="diff-bar none" id="payDiffBar">
+        <span id="payDiffLabel">Enter amount above</span>
+        <span class="diff-mono" id="payDiffVal">—</span>
+      </div>
+
+      <label class="form-label">Payment method</label>
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <div style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--radius);text-align:center;cursor:pointer;font-size:13px;font-weight:500;background:var(--text);color:#fff;border-color:var(--text)" onclick="selPayMethod(this)">Cash</div>
+        <div style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--radius);text-align:center;cursor:pointer;font-size:13px;font-weight:500" onclick="selPayMethod(this)">Whish</div>
+        <div style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--radius);text-align:center;cursor:pointer;font-size:13px;font-weight:500" onclick="selPayMethod(this)">OMT</div>
+      </div>
+
+      <label class="form-label">Notes (optional)</label>
+      <input class="form-input" type="text" placeholder="e.g. May wages partial" style="margin-bottom:0">
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closePayModal()">Cancel</button>
+      <button class="btn green"><i class="ti ti-check" style="font-size:14px"></i> Confirm payment</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentOwed = 0;
+
+  // Build day calendars
+  function buildCalendar(containerId, workedDays) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const daysInMay = 31;
+    const today = 21; // May 21
+    for (let d = 1; d <= daysInMay; d++) {
+      const cell = document.createElement('div');
+      cell.className = 'day-cell';
+      cell.textContent = d;
+      if (d > today) cell.classList.add('future');
+      else if (workedDays.includes(d)) cell.classList.add('worked');
+      if (d === today) cell.classList.add('today');
+      // Toggle on click
+      cell.addEventListener('click', function() {
+        if (this.classList.contains('future')) return;
+        this.classList.toggle('worked');
+      });
+      container.appendChild(cell);
+    }
+  }
+
+  // Worker: worked most weekdays
+  const workerWorked = [1,2,4,5,6,7,8,11,12,13,14,15,18,19,20,21];
+  buildCalendar('workerDays', workerWorked);
+
+  // Driver 1: worked 16 days
+  const d1Worked = [1,2,4,5,7,8,11,12,13,14,15,18,19,20,21];
+  buildCalendar('driver1Days', d1Worked);
+
+  // Driver 2: worked 12 days
+  const d2Worked = [1,4,5,7,8,11,12,14,15,18,19,21];
+  buildCalendar('driver2Days', d2Worked);
+
+  // Driver 3: worked 7 days
+  const d3Worked = [5,8,11,13,15,19,21];
+  buildCalendar('driver3Days', d3Worked);
+
+  function showTab(name, el) {
+    document.getElementById('tab-expenses').style.display = name==='expenses' ? 'block' : 'none';
+    document.getElementById('tab-employees').style.display = name==='employees' ? 'block' : 'none';
+    document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+    if (el) el.classList.add('active');
+  }
+
+  function openAddExpense(type) {
+    document.getElementById('expModalTitle').textContent = type==='recurring' ? 'Add recurring expense' : 'Add one-time expense';
+    const tw = document.getElementById('recurringToggleWrap');
+    const tog = document.getElementById('recurringToggle');
+    if (type === 'recurring') {
+      tog.classList.add('on');
+    } else {
+      tog.classList.remove('on');
+    }
+    document.getElementById('addExpenseModal').classList.add('open');
+  }
+
+  function closeAddExpense() {
+    document.getElementById('addExpenseModal').classList.remove('open');
+  }
+
+  function toggleRecurring(el) {
+    el.classList.toggle('on');
+  }
+
+  function openPayModal(name, owed) {
+    currentOwed = owed;
+    document.getElementById('payModalTitle').textContent = 'Pay ' + name;
+    document.getElementById('payModalSub').textContent = 'Total owed: $' + owed.toFixed(2);
+    document.getElementById('payAmount').value = '';
+    document.getElementById('payDiffBar').className = 'diff-bar none';
+    document.getElementById('payDiffLabel').textContent = 'Enter amount above';
+    document.getElementById('payDiffVal').textContent = '—';
+    document.getElementById('payModal').classList.add('open');
+  }
+
+  function closePayModal() {
+    document.getElementById('payModal').classList.remove('open');
+  }
+
+  function calcPayDiff() {
+    const paid = parseFloat(document.getElementById('payAmount').value) || 0;
+    const diff = paid - currentOwed;
+    const bar   = document.getElementById('payDiffBar');
+    const label = document.getElementById('payDiffLabel');
+    const val   = document.getElementById('payDiffVal');
+
+    if (paid === 0) {
+      bar.className = 'diff-bar none';
+      label.textContent = 'Enter amount above';
+      val.textContent = '—';
+      return;
+    }
+
+    if (Math.abs(diff) < 0.01) {
+      bar.className = 'diff-bar ok';
+      label.textContent = 'Pays full amount ✓';
+      val.textContent = '$0 remaining';
+    } else if (diff < 0) {
+      bar.className = 'diff-bar short';
+      label.textContent = 'Partial — $' + Math.abs(diff).toFixed(2) + ' still owed after';
+      val.textContent = '$' + Math.abs(diff).toFixed(2) + ' left';
+    } else {
+      bar.className = 'diff-bar ok';
+      label.textContent = 'Over by $' + diff.toFixed(2) + ' — noted';
+      val.textContent = '+$' + diff.toFixed(2);
+    }
+  }
+
+  function selPayMethod(el) {
+    el.parentElement.querySelectorAll('div').forEach(d => {
+      d.style.background = 'transparent';
+      d.style.color = 'var(--text2)';
+      d.style.borderColor = 'var(--border)';
+    });
+    el.style.background = 'var(--text)';
+    el.style.color = '#fff';
+    el.style.borderColor = 'var(--text)';
+  }
+
+  ['addExpenseModal','payModal'].forEach(id => {
+    document.getElementById(id).addEventListener('click', function(e) {
+      if (e.target === this) this.classList.remove('open');
+    });
+  });
+</script>
+</body>
+</html>

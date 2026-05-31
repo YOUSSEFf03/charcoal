@@ -1,0 +1,785 @@
+// Charcoal Business Accounting System — Prisma Schema
+// Stack: PostgreSQL on Railway + Prisma ORM
+// See SPEC.md for full business rules and entity definitions.
+// See SETUP.md for how to run migrations.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum Role {
+  owner
+  accountant
+  sales_rep
+  worker
+  driver
+}
+
+enum ContainerStatus {
+  port
+  transit
+  arrived
+}
+
+enum StockSource {
+  container
+  direct
+}
+
+enum PackingMode {
+  stock
+  order
+}
+
+enum ClientType {
+  restaurant
+  shop
+  wholesale
+  walk_in
+  corporate
+  export
+}
+
+enum Currency {
+  USD
+  LBP
+}
+
+enum OrderStatus {
+  draft
+  confirmed
+  partially_delivered
+  delivered
+  invoiced
+  paid
+}
+
+enum ShipmentStatus {
+  pending
+  loaded
+  delivered
+  returned
+}
+
+enum TripStatus {
+  planned
+  in_progress
+  completed
+}
+
+enum ExitType {
+  order
+  walk_in
+  sample
+  gift
+  internal
+  client_bags_fill
+}
+
+enum InvoiceStatus {
+  draft
+  issued
+  partially_paid
+  paid
+  cancelled
+}
+
+enum PaymentMethod {
+  cash
+  whish
+  omt
+}
+
+enum AdjustmentType {
+  lot
+  packed_stock
+}
+
+// ─────────────────────────────────────────────
+// USER
+// Synced from Clerk via webhook.
+// clerkId links to Clerk's user record.
+// role enforces permissions throughout the system.
+// ─────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(uuid())
+  clerkId   String   @unique
+  email     String   @unique
+  name      String   // Arabic supported
+  role      Role
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  containersCreated    Container[]        @relation("ContainerCreatedBy")
+  expensesAdded        ContainerExpense[] @relation("ExpenseAddedBy")
+  packingSessions      PackingSession[]   @relation("SessionWorker")
+  stockAdjustmentsMade StockAdjustment[]  @relation("AdjustmentCountedBy")
+  stockAdjustmentsApproved StockAdjustment[] @relation("AdjustmentApprovedBy")
+  ordersCreated        ClientOrder[]      @relation("OrderCreatedBy")
+  stockExitsLogged     StockExit[]        @relation("ExitLoggedBy")
+  paymentsLogged       Payment[]          @relation("PaymentLoggedBy")
+  bagPurchasesAdded    BagPurchase[]      @relation("BagPurchaseAddedBy")
+  driverTrips          DriverTrip[]       @relation("TripDriver")
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// SUPPLIER
+// Tracks who we buy charcoal from.
+// contact_persons, charcoal_types, bank_details stored as Json
+// because they are variable-length arrays of structured data.
+// ─────────────────────────────────────────────
+
+model Supplier {
+  id             String   @id @default(uuid())
+  name           String   // Arabic supported
+  country        String
+  contactPersons Json     @default("[]")
+  // Shape: [{ name: string, phone: string, role: string }]
+
+  charcoalTypes  Json     @default("[]")
+  // Shape: [{ type: string, grade: string }]
+  // These are the types this supplier can supply — used for procurement reference
+
+  bankDetails    Json?
+  // Shape: { bank_name: string, account_number: string, iban: string, swift: string }
+
+  paymentTerms   String?  // free text e.g. "30% upfront, 70% on BL"
+  leadTimeDays   Int?     // typical days from order to shipment
+  notes          String?  // Arabic supported
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  containers     Container[]
+  stockLots      StockLot[]
+  productLines   ContainerProductLine[]
+
+  @@map("suppliers")
+}
+
+// ─────────────────────────────────────────────
+// CONTAINER
+// Represents one incoming shipment from a supplier.
+// Can have multiple product lines (different charcoal types).
+// On arrival → auto-creates stock lots (handled in application logic).
+// ─────────────────────────────────────────────
+
+model Container {
+  id          String          @id @default(uuid())
+  number      String          // container reference number e.g. "CONT-2024-001"
+  supplierId  String
+  supplier    Supplier        @relation(fields: [supplierId], references: [id])
+  status      ContainerStatus @default(port)
+  arrivalDate DateTime?       // set when status changes to "arrived"
+  notes       String?         // Arabic supported
+  createdById String
+  createdBy   User            @relation("ContainerCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  // Relations
+  productLines ContainerProductLine[]
+  expenses     ContainerExpense[]
+  discount     ContainerDiscount?
+  stockLots    StockLot[]
+
+  @@map("containers")
+}
+
+// ─────────────────────────────────────────────
+// CONTAINER PRODUCT LINE
+// One charcoal type within a container.
+// All cost fields are COMPUTED in application logic — not stored.
+// kg_per_bag is reference only — never used in cost calculations.
+//
+// Computed (not stored, always calculated live):
+//   tonnage           = paidBags × kgPerBag / 1000
+//   expensePerTon     = container.totalExpenses × (this.tonnage / total.tonnage) / this.tonnage
+//   discountPerTon    = container.discount × (this.tonnage / total.tonnage) / this.tonnage
+//   allInCostPerTon   = pricePerTon + expensePerTon − discountPerTon
+//   allInCostPerKg    = allInCostPerTon / 1000
+// ─────────────────────────────────────────────
+
+model ContainerProductLine {
+  id           String    @id @default(uuid())
+  containerId  String
+  container    Container @relation(fields: [containerId], references: [id])
+  charcoalType String    // e.g. "BBQ hardwood", "shisha"
+  grade        String    // e.g. "A", "B", "C"
+  supplierId   String
+  supplier     Supplier  @relation(fields: [supplierId], references: [id])
+  paidBags     Int
+  giftBags     Int       @default(0)
+  kgPerBag     Decimal   @db.Decimal(10, 3)
+  // REFERENCE ONLY — used for tonnage estimate and lot kg_received calculation
+  // Never used in cost calculations directly
+  pricePerTon  Decimal   @db.Decimal(10, 2) // supplier price in USD per ton
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("container_product_lines")
+}
+
+// ─────────────────────────────────────────────
+// CONTAINER EXPENSE
+// Free-text expenses tied to a container.
+// Can be added at any time — even after container arrives.
+// When added, application must recalculate cost_per_kg on linked lots.
+// ─────────────────────────────────────────────
+
+model ContainerExpense {
+  id          String    @id @default(uuid())
+  containerId String
+  container   Container @relation(fields: [containerId], references: [id])
+  description String    // free text, Arabic supported e.g. "truck", "beirut port fees"
+  amount      Decimal   @db.Decimal(10, 2) // USD
+  addedById   String
+  addedBy     User      @relation("ExpenseAddedBy", fields: [addedById], references: [id])
+  addedAt     DateTime  @default(now())
+
+  @@map("container_expenses")
+}
+
+// ─────────────────────────────────────────────
+// CONTAINER DISCOUNT
+// One discount per container.
+// Split proportionally by tonnage across product lines in application logic.
+// ─────────────────────────────────────────────
+
+model ContainerDiscount {
+  id          String    @id @default(uuid())
+  containerId String    @unique // one discount per container
+  container   Container @relation(fields: [containerId], references: [id])
+  amount      Decimal   @db.Decimal(10, 2) // USD
+
+  @@map("container_discounts")
+}
+
+// ─────────────────────────────────────────────
+// STOCK LOT
+// A batch of raw charcoal sitting in the warehouse (Zone 1 — raw).
+// Created automatically when a container arrives, or added directly.
+// kg_remaining decreases as packing sessions consume from it.
+// cost_per_kg updates when container expenses change after arrival.
+//
+// CONSTRAINT 1: kg_remaining >= 0 at all times (enforced in application)
+// CONSTRAINT 8: Never merge lots from different suppliers — charcoalType + grade + supplierId = unique identity
+// ─────────────────────────────────────────────
+
+model StockLot {
+  id           String      @id @default(uuid())
+  charcoalType String      // e.g. "BBQ hardwood"
+  grade        String      // e.g. "A", "B", "C"
+  supplierId   String
+  supplier     Supplier    @relation(fields: [supplierId], references: [id])
+  kgReceived   Decimal     @db.Decimal(10, 3) // set on creation, never changes
+  kgRemaining  Decimal     @db.Decimal(10, 3) // updated by packing sessions and adjustments
+  costPerKg    Decimal     @db.Decimal(10, 4) // from container all_in_cost_per_kg; recalculates if expenses change
+  source       StockSource
+  containerId  String?     // null if source = "direct"
+  container    Container?  @relation(fields: [containerId], references: [id])
+  dateReceived DateTime    @db.Date
+  notes        String?     // Arabic supported
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  // Relations
+  packingSessions  PackingSession[]
+  packedStocks     PackedStock[]
+  stockAdjustments StockAdjustment[]
+
+  @@map("stock_lots")
+}
+
+// ─────────────────────────────────────────────
+// BAG TYPE
+// A packaging category — not an exact weight.
+// "2kg bag" and "1.9kg bag" use the same physical bag.
+// nominal_kg is used for stock calculations (system total kg).
+// cost_per_bag is the cost of purchasing one empty bag.
+// worker_rate is what the worker earns per bag of this type packed.
+// ─────────────────────────────────────────────
+
+model BagType {
+  id           String   @id @default(uuid())
+  name         String   // e.g. "2kg bag", "10kg bag", "1.9kg bag"
+  nominalKg    Decimal  @db.Decimal(10, 3) // declared weight used in all calculations
+  costPerBag   Decimal  @db.Decimal(10, 4) // what you pay for one empty bag (USD)
+  workerRate   Decimal  @db.Decimal(10, 4) // fixed amount worker earns per bag of this type
+  note         String?  // e.g. "same physical bag as 1.9kg"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  bagPurchases   BagPurchase[]
+  packedStocks   PackedStock[]
+  orderBagLines  OrderBagLine[]
+  shipmentBags   ShipmentBag[]
+  stockExits     StockExit[]
+  invoiceLines   InvoiceLineItem[]
+
+  @@map("bag_types")
+}
+
+// ─────────────────────────────────────────────
+// BAG PURCHASE
+// Records the purchase of empty bags.
+// Bag cost is tracked as a separate cost line in P&L.
+// ─────────────────────────────────────────────
+
+model BagPurchase {
+  id         String   @id @default(uuid())
+  bagTypeId  String
+  bagType    BagType  @relation(fields: [bagTypeId], references: [id])
+  quantity   Int
+  unitCost   Decimal  @db.Decimal(10, 4)
+  totalCost  Decimal  @db.Decimal(10, 2) // computed: quantity × unitCost — stored for audit
+  date       DateTime @db.Date
+  addedById  String
+  addedBy    User     @relation("BagPurchaseAddedBy", fields: [addedById], references: [id])
+  notes      String?
+
+  @@map("bag_purchases")
+}
+
+// ─────────────────────────────────────────────
+// PACKED STOCK
+// Bags ready for sale, sitting in Zone 2 (packed zone) of the warehouse.
+// Created by packing sessions. Decreased by stock exits.
+// Linked to source lot so we can always trace: which raw charcoal this came from.
+//
+// CONSTRAINT 2: quantity >= 0 at all times (enforced in application)
+// ─────────────────────────────────────────────
+
+model PackedStock {
+  id         String         @id @default(uuid())
+  lotId      String
+  lot        StockLot       @relation(fields: [lotId], references: [id])
+  bagTypeId  String
+  bagType    BagType        @relation(fields: [bagTypeId], references: [id])
+  quantity   Int            // current quantity — updated on every exit
+  sessionId  String
+  session    PackingSession @relation(fields: [sessionId], references: [id])
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  // Relations
+  stockExits StockExit[]
+  adjustments StockAdjustment[]
+
+  @@map("packed_stocks")
+}
+
+// ─────────────────────────────────────────────
+// PACKING SESSION
+// The core warehouse operation.
+// Worker consumes raw kg from a lot → produces counted bags.
+// Individual bags are NEVER weighed during packing.
+//
+// variance_kg = kgConsumed − kgOutputTotal
+//   Positive = loss (normal: dust, breakage)
+//   Negative = ERROR — requires explanation before session can close
+//
+// sessionEarnings = Σ (bagsOutput[type].qty × workerRate[type])
+//
+// CONSTRAINT 3: kgConsumed <= lot.kgRemaining (enforced in application before session starts)
+// CONSTRAINT 7: variance_kg < 0 requires explanation
+// ─────────────────────────────────────────────
+
+model PackingSession {
+  id             String      @id @default(uuid())
+  lotId          String
+  lot            StockLot    @relation(fields: [lotId], references: [id])
+  workerId       String
+  worker         User        @relation("SessionWorker", fields: [workerId], references: [id])
+  mode           PackingMode // stock = goes to general inventory | order = reserved for specific client
+  orderId        String?     // only set when mode = "order"
+  order          ClientOrder? @relation(fields: [orderId], references: [id])
+  kgConsumed     Decimal     @db.Decimal(10, 3) // weighed at start, reduces lot.kgRemaining immediately
+  bagsOutput     Json        @default("[]")
+  // Shape: [{ bagTypeId: string, quantity: number }]
+  // quantity × bagType.nominalKg = kg output for that bag type
+  kgOutputTotal  Decimal     @db.Decimal(10, 3) // computed: Σ (qty × bagType.nominalKg)
+  varianceKg     Decimal     @db.Decimal(10, 3) // computed: kgConsumed − kgOutputTotal
+  varianceNote   String?     // required if varianceKg < 0
+  sessionEarnings Decimal    @db.Decimal(10, 2) // computed: Σ (qty × workerRate per bag type)
+  date           DateTime    @db.Date
+  startedAt      DateTime    @default(now())
+  completedAt    DateTime?
+  notes          String?     // Arabic supported
+
+  // Relations
+  packedStocks PackedStock[]
+
+  @@map("packing_sessions")
+}
+
+// ─────────────────────────────────────────────
+// STOCK ADJUSTMENT
+// Created when a physical count reveals a discrepancy.
+// Owner-triggered only — never auto-corrected silently.
+// Can adjust a raw lot (kgRemaining) or packed stock (quantity).
+//
+// CONSTRAINT 6: Every adjustment needs reason + approved by owner
+// CONSTRAINT 13: No silent auto-correction
+// ─────────────────────────────────────────────
+
+model StockAdjustment {
+  id             String         @id @default(uuid())
+  adjustmentType AdjustmentType
+  lotId          String?        // set when adjustmentType = "lot"
+  lot            StockLot?      @relation(fields: [lotId], references: [id])
+  packedStockId  String?        // set when adjustmentType = "packed_stock"
+  packedStock    PackedStock?   @relation(fields: [packedStockId], references: [id])
+  qtyBefore      Decimal        @db.Decimal(10, 3)
+  qtyAfter       Decimal        @db.Decimal(10, 3)
+  difference     Decimal        @db.Decimal(10, 3) // qtyAfter − qtyBefore
+  reason         String         // required, Arabic supported
+  countedById    String
+  countedBy      User           @relation("AdjustmentCountedBy", fields: [countedById], references: [id])
+  approvedById   String         // must be owner role
+  approvedBy     User           @relation("AdjustmentApprovedBy", fields: [approvedById], references: [id])
+  date           DateTime       @db.Date
+  createdAt      DateTime       @default(now())
+
+  @@map("stock_adjustments")
+}
+
+// ─────────────────────────────────────────────
+// CLIENT
+// Every buyer in the system.
+// phones stored as Json — old numbers kept, never deleted (CONSTRAINT 14).
+// balance is computed in application: Σ invoices − Σ payments
+// avgOrderDays is computed from order history automatically.
+// preferredTypes records what types this client usually orders.
+// ─────────────────────────────────────────────
+
+model Client {
+  id             String     @id @default(uuid())
+  name           String     // Arabic supported
+  type           ClientType
+  currency       Currency   // all invoices for this client use this currency
+  phones         Json       @default("[]")
+  // Shape: [{ number: string, label: "mobile"|"office"|"whatsapp", isActive: boolean, dateAdded: string }]
+  // Old numbers are NEVER deleted — only marked isActive: false
+
+  preferredTypes Json       @default("[]")
+  // Shape: [{ charcoalType: string, grade: string }]
+  // Reference only — what this client usually orders
+
+  avgOrderDays   Decimal?   @db.Decimal(10, 2)
+  // Auto-calculated from order history
+  // null if client has fewer than 2 confirmed orders
+  // Formula: mean of gaps between consecutive order dates
+
+  lastOrderDate  DateTime?  @db.Date // auto-updated when a new order is confirmed
+  paymentTerms   String?    // free text e.g. "net 15", "cash on delivery"
+  notes          String?    // Arabic supported
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  // Relations
+  orders   ClientOrder[]
+  invoices Invoice[]
+  payments Payment[]
+
+  @@map("clients")
+}
+
+// ─────────────────────────────────────────────
+// CLIENT ORDER
+// A sales order from a client.
+// Price is entered at time of sale — not pre-set (CONSTRAINT 10).
+// Can be split into multiple shipments.
+// Can be fulfilled by multiple packing sessions.
+// ─────────────────────────────────────────────
+
+model ClientOrder {
+  id               String      @id @default(uuid())
+  clientId         String
+  client           Client      @relation(fields: [clientId], references: [id])
+  charcoalType     String      // what the client ordered
+  grade            String
+  totalKgRequested Decimal     @db.Decimal(10, 3)
+  bagTypeId        String?     // preferred bag type for this order (nullable — may vary by shipment)
+  bagType          BagType?    @relation(fields: [bagTypeId], references: [id])
+  pricePerBag      Decimal     @db.Decimal(10, 2) // entered at time of sale
+  currency         Currency    // inherits from client.currency
+  status           OrderStatus @default(draft)
+  createdById      String
+  createdBy        User        @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  notes            String?     // Arabic supported
+
+  // Relations
+  shipments       Shipment[]
+  packingSessions PackingSession[]
+  stockExits      StockExit[]
+  invoices        Invoice[]
+
+  @@map("client_orders")
+}
+
+// ─────────────────────────────────────────────
+// ORDER BAG LINE
+// The bag breakdown within a client order.
+// One order can request multiple bag types.
+// e.g. "100 × 2kg bags + 20 × 5kg bags"
+// ─────────────────────────────────────────────
+
+model OrderBagLine {
+  id        String      @id @default(uuid())
+  orderId   String
+  order     ClientOrder @relation(fields: [orderId], references: [id])
+  bagTypeId String
+  bagType   BagType     @relation(fields: [bagTypeId], references: [id])
+  quantity  Int
+
+  @@map("order_bag_lines")
+}
+
+// ─────────────────────────────────────────────
+// SHIPMENT
+// One delivery stop within an order.
+// Multiple shipments can be bundled into one driver trip.
+// actualKg is logged by the driver at loading — used for reconciliation only.
+// Billing is always based on bag count × price per bag, not actualKg.
+//
+// CONSTRAINT 4: total bags in shipment <= available packed_stock.quantity per bag type
+// ─────────────────────────────────────────────
+
+model Shipment {
+  id          String         @id @default(uuid())
+  orderId     String
+  order       ClientOrder    @relation(fields: [orderId], references: [id])
+  tripId      String?        // assigned when driver trip is created
+  trip        DriverTrip?    @relation(fields: [tripId], references: [id])
+  address     String         // delivery address, Arabic supported
+  nominalKg   Decimal        @db.Decimal(10, 3)
+  // computed: Σ (bags[i].quantity × bagType[i].nominalKg)
+  // stored here for quick reference
+  actualKg    Decimal?       @db.Decimal(10, 3) // entered by driver at loading — reconciliation only
+  status      ShipmentStatus @default(pending)
+  deliveredAt DateTime?
+  notes       String?        // Arabic supported
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  // Relations
+  bags ShipmentBag[]
+
+  @@map("shipments")
+}
+
+// ─────────────────────────────────────────────
+// SHIPMENT BAG
+// The bag breakdown within a shipment.
+// e.g. "50 × 2kg bags going to this address"
+// ─────────────────────────────────────────────
+
+model ShipmentBag {
+  id         String   @id @default(uuid())
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id])
+  bagTypeId  String
+  bagType    BagType  @relation(fields: [bagTypeId], references: [id])
+  quantity   Int
+
+  @@map("shipment_bags")
+}
+
+// ─────────────────────────────────────────────
+// DRIVER TRIP
+// One driver trip covers multiple shipments (multiple stops, potentially multiple clients).
+// Driver logs actual weight per shipment, confirms delivery at each stop.
+// Fuel and other expenses logged per trip.
+// ─────────────────────────────────────────────
+
+model DriverTrip {
+  id             String     @id @default(uuid())
+  driverId       String
+  driver         User       @relation("TripDriver", fields: [driverId], references: [id])
+  status         TripStatus @default(planned)
+  fuelCost       Decimal?   @db.Decimal(10, 2)
+  otherExpenses  Json       @default("[]")
+  // Shape: [{ description: string, amount: number }]
+  startedAt      DateTime?
+  completedAt    DateTime?
+  notes          String?    // Arabic supported
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  // Relations
+  shipments Shipment[]
+
+  @@map("driver_trips")
+}
+
+// ─────────────────────────────────────────────
+// STOCK EXIT
+// Every time a bag leaves the warehouse — for any reason.
+// This is the audit trail that makes reconciliation possible.
+// exitType covers all scenarios: order, walk-in, sample, gift, internal, client_bags_fill.
+//
+// CONSTRAINT 5: Every exit must have exitType, bagTypeId, quantity, loggedById, date
+// ─────────────────────────────────────────────
+
+model StockExit {
+  id            String      @id @default(uuid())
+  packedStockId String
+  packedStock   PackedStock @relation(fields: [packedStockId], references: [id])
+  bagTypeId     String
+  bagType       BagType     @relation(fields: [bagTypeId], references: [id])
+  quantity      Int
+  exitType      ExitType
+  reason        String?     // Arabic supported — required for sample/gift/internal
+  recipient     String?     // Arabic supported — optional, for gift or sample exits
+  orderId       String?     // linked when exitType = order or walk_in
+  order         ClientOrder? @relation(fields: [orderId], references: [id])
+  loggedById    String
+  loggedBy      User        @relation("ExitLoggedBy", fields: [loggedById], references: [id])
+  date          DateTime    @db.Date
+  createdAt     DateTime    @default(now())
+
+  @@map("stock_exits")
+}
+
+// ─────────────────────────────────────────────
+// INVOICE
+// Generated after delivery confirmation or walk-in sale.
+// Lines stored as Json for flexibility — bag types and prices can vary per order.
+// currency inherits from client.currency.
+// paidAmount tracked here; status computed from paidAmount vs total.
+//
+// invoice line formula: bagType × quantity × pricePerBag = lineTotal
+// ─────────────────────────────────────────────
+
+model Invoice {
+  id          String        @id @default(uuid())
+  orderId     String?       // null for walk-in sales
+  order       ClientOrder?  @relation(fields: [orderId], references: [id])
+  clientId    String
+  client      Client        @relation(fields: [clientId], references: [id])
+  lines       Json          @default("[]")
+  // Shape: [{ bagTypeId: string, bagTypeName: string, qty: number, pricePerBag: number, lineTotal: number }]
+  subtotal    Decimal       @db.Decimal(10, 2)
+  total       Decimal       @db.Decimal(10, 2)
+  currency    Currency
+  status      InvoiceStatus @default(draft)
+  paidAmount  Decimal       @db.Decimal(10, 2) @default(0)
+  issuedAt    DateTime?
+  dueDate     DateTime?     @db.Date
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // Relations
+  payments Payment[]
+
+  @@map("invoices")
+}
+
+// ─────────────────────────────────────────────
+// PAYMENT
+// A payment received from a client.
+// Partial payments allowed — invoiceId can be null for account-level payments.
+// Method: cash | whish | omt
+// currency must match client.currency.
+//
+// CONSTRAINT 15: client.balance is always computed from invoices and payments — never manually set
+// client.balance = Σ invoice.total − Σ payment.amount
+// ─────────────────────────────────────────────
+
+model Payment {
+  id          String        @id @default(uuid())
+  clientId    String
+  client      Client        @relation(fields: [clientId], references: [id])
+  invoiceId   String?       // optional — can be a general account payment
+  invoice     Invoice?      @relation(fields: [invoiceId], references: [id])
+  amount      Decimal       @db.Decimal(10, 2)
+  currency    Currency
+  method      PaymentMethod
+  date        DateTime      @db.Date
+  loggedById  String
+  loggedBy    User          @relation("PaymentLoggedBy", fields: [loggedById], references: [id])
+  notes       String?       // Arabic supported
+  createdAt   DateTime      @default(now())
+
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────
+// WORKER
+// The one employee who packs charcoal into bags.
+// Paid per bag type — different rate for 2kg vs 10kg bags.
+// Owner pays on demand — no fixed pay period.
+// total_owed is computed: totalEarned − totalPaid
+//
+// rates_per_bag_type — set by owner per bag type
+// total_bags_packed — running total updated after every packing session
+// totalEarned — running total from all session earnings
+// totalPaid — sum of all WorkerPayment records
+// ─────────────────────────────────────────────
+
+model Worker {
+  id              String   @id @default(uuid())
+  name            String   // Arabic supported
+  phone           String?
+  ratesPerBagType Json     @default("[]")
+  // Shape: [{ bagTypeId: string, ratePerBag: number }]
+  // Owner sets this. Used to calculate session earnings.
+
+  totalBagsPacked Json     @default("[]")
+  // Shape: [{ bagTypeId: string, count: number }]
+  // Running total — updated after every packing session completes.
+
+  totalEarned     Decimal  @db.Decimal(10, 2) @default(0)
+  // Running total of all session earnings
+
+  totalPaid       Decimal  @db.Decimal(10, 2) @default(0)
+  // Running total of all payments made to worker
+
+  // totalOwed = totalEarned − totalPaid (computed in application, not stored)
+
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  payments WorkerPayment[]
+
+  @@map("workers")
+}
+
+// ─────────────────────────────────────────────
+// WORKER PAYMENT
+// Records each time the owner pays the worker.
+// Reduces worker.totalOwed.
+// No fixed pay period — owner pays whenever they choose.
+// ─────────────────────────────────────────────
+
+model WorkerPayment {
+  id        String   @id @default(uuid())
+  workerId  String
+  worker    Worker   @relation(fields: [workerId], references: [id])
+  amount    Decimal  @db.Decimal(10, 2)
+  date      DateTime @db.Date
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@map("worker_payments")
+}
