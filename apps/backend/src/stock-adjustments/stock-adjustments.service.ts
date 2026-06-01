@@ -103,13 +103,13 @@ export class StockAdjustmentsService {
    * @throws BadRequestException   if qtyAfter would violate CONSTRAINT 1 or 2
    */
   async create(dto: CreateStockAdjustmentDto, userId: string) {
-    return this.prisma.$transaction(async (tx) => {
-      // CONSTRAINT 13 + 6: Resolve DB user — caller is both counter and approver
-      const user = await tx.user.findUnique({ where: { clerkId: userId } });
-      if (!user) {
-        throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
-      }
+    // CONSTRAINT 13 + 6: Resolve DB user — caller is both counter and approver
+    const user = await this.prisma.user.findUnique({ where: { clerkId: userId } });
+    if (!user) {
+      throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
+    }
 
+    return this.prisma.$transaction(async (tx) => {
       const difference = new Decimal(dto.qtyAfter).minus(new Decimal(dto.qtyBefore));
 
       if (dto.adjustmentType === 'lot') {

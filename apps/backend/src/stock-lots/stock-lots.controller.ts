@@ -1,16 +1,15 @@
 import {
   Body,
   Controller,
-  DefaultValuePipe,
   Get,
   Param,
   ParseBoolPipe,
-  ParseIntPipe,
   ParseUUIDPipe,
   Post,
   Query,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { StockLotsService } from './stock-lots.service';
 import { CreateStockLotDto } from './dto/create-stock-lot.dto';
 import { Roles } from '../auth/roles.decorator';
@@ -28,8 +27,8 @@ export class StockLotsController {
   @Get()
   @Roles('owner', 'accountant', 'sales_rep', 'worker')
   findAll(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('charcoalType') charcoalType?: string,
     @Query('grade') grade?: string,
     @Query('supplierId') supplierId?: string,

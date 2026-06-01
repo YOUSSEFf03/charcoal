@@ -1,17 +1,16 @@
 import {
   Body,
   Controller,
-  DefaultValuePipe,
   Delete,
   Get,
   Param,
-  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { Role } from '@prisma/client';
 import { UsersService } from './users.service';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
@@ -56,8 +55,8 @@ export class UsersController {
   @ApiResponse({ status: 200, description: 'Paginated user list' })
   @Get()
   findAll(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('role') role?: string,
   ) {
     const roleEnum = role && Object.values(Role).includes(role as Role) ? (role as Role) : undefined;

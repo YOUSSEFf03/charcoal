@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { parseCorsOrigins } from './common/utils/cors.utils';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -11,8 +12,11 @@ async function bootstrap() {
     rawBody: true,
   });
 
+  const configService = app.get(ConfigService);
+
+  const rawOrigins = configService.get<string>('CORS_ORIGINS') ?? 'http://localhost:5173';
   app.enableCors({
-    origin: /^http:\/\/localhost(:\d+)?$/,
+    origin: parseCorsOrigins(rawOrigins),
     credentials: true,
   });
 
@@ -41,8 +45,10 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT') ?? 3001;
   await app.listen(port);
 }
-bootstrap();
+bootstrap().catch((err: unknown) => {
+  console.error('Bootstrap failed:', err);
+  process.exit(1);
+});

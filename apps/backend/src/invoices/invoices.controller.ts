@@ -1,12 +1,10 @@
 import {
   Body,
   Controller,
-  DefaultValuePipe,
   Delete,
   Get,
   HttpCode,
   Param,
-  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -14,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { InvoiceStatus } from '@prisma/client';
+import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { InvoicesService } from './invoices.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
@@ -30,8 +29,8 @@ export class InvoicesController {
   @Get()
   @Roles('owner', 'accountant', 'sales_rep')
   findAll(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('clientId') clientId?: string,
     @Query('status') status?: string,
     @Query('dateFrom') dateFrom?: string,

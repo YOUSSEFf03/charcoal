@@ -105,14 +105,15 @@ enum AdjustmentType {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  clerkId   String   @unique
-  email     String   @unique
+  id        String    @id @default(uuid())
+  clerkId   String    @unique
+  email     String    @unique
   name      String
   role      Role
   phone     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   containersCreated         Container[]        @relation("ContainerCreatedBy")
   expensesAdded             ContainerExpense[] @relation("ExpenseAddedBy")
   packingSessions           PackingSession[]   @relation("SessionWorker")
@@ -169,7 +170,7 @@ model Supplier {
 
 model Container {
   id          String          @id @default(uuid())
-  number      String
+  number      String          @unique
   supplierId  String
   supplier    Supplier        @relation(fields: [supplierId], references: [id])
   status      ContainerStatus @default(port)
@@ -184,6 +185,7 @@ model Container {
   discount     ContainerDiscount?
   stockLots    StockLot[]
   @@index([status])
+  @@index([supplierId])
   @@map("containers")
 }
 
@@ -248,12 +250,13 @@ model StockLot {
   @@index([charcoalType, grade])
   @@index([supplierId])
   @@index([kgRemaining])
+  @@index([containerId])
   @@map("stock_lots")
 }
 
 model BagType {
   id           String   @id @default(uuid())
-  name         String
+  name         String   @unique
   nominalKg    Decimal  @db.Decimal(10, 3)
   costPerBag   Decimal  @db.Decimal(10, 4)
   workerRate   Decimal  @db.Decimal(10, 4)
@@ -280,6 +283,8 @@ model BagPurchase {
   addedById  String
   addedBy    User     @relation("BagPurchaseAddedBy", fields: [addedById], references: [id])
   notes      String?
+  @@index([date])
+  @@index([bagTypeId])
   @@map("bag_purchases")
 }
 
@@ -298,6 +303,7 @@ model PackedStock {
   adjustments StockAdjustment[]
   @@index([bagTypeId])
   @@index([lotId])
+  @@index([sessionId])
   @@map("packed_stocks")
 }
 
@@ -331,6 +337,8 @@ model PackingSession {
   packedStocks    PackedStock[]
   @@index([workerId])
   @@index([date])
+  @@index([workerEntityId])
+  @@index([orderId])
   @@map("packing_sessions")
 }
 
@@ -364,6 +372,9 @@ model StockAdjustment {
   approvedBy     User           @relation("AdjustmentApprovedBy", fields: [approvedById], references: [id])
   date           DateTime       @db.Date
   createdAt      DateTime       @default(now())
+  @@index([packedStockId])
+  @@index([lotId])
+  @@index([date])
   @@map("stock_adjustments")
 }
 
@@ -424,6 +435,7 @@ model OrderBagLine {
   bagTypeId String
   bagType   BagType     @relation(fields: [bagTypeId], references: [id])
   quantity  Int
+  @@index([orderId])
   @@map("order_bag_lines")
 }
 
@@ -444,6 +456,7 @@ model Shipment {
   bags ShipmentBag[]
   @@index([tripId])
   @@index([status])
+  @@index([orderId])
   @@map("shipments")
 }
 
@@ -454,6 +467,7 @@ model ShipmentBag {
   bagTypeId  String
   bagType    BagType  @relation(fields: [bagTypeId], references: [id])
   quantity   Int
+  @@index([shipmentId])
   @@map("shipment_bags")
 }
 
@@ -502,6 +516,10 @@ model StockExit {
   createdAt     DateTime    @default(now())
   @@index([date])
   @@index([exitType])
+  @@index([packedStockId])
+  @@index([orderId])
+  @@index([clientId])
+  @@index([lotId])
   @@map("stock_exits")
 }
 
@@ -525,6 +543,7 @@ model Invoice {
   @@index([clientId])
   @@index([status])
   @@index([issuedAt])
+  @@index([orderId])
   @@map("invoices")
 }
 
@@ -548,6 +567,7 @@ model Payment {
   @@index([clientId])
   @@index([date])
   @@index([receiverName])
+  @@index([invoiceId])
   @@map("payments")
 }
 
@@ -610,6 +630,8 @@ model WorkerPayment {
   date      DateTime @db.Date
   notes     String?
   createdAt DateTime @default(now())
+  @@index([workerId])
+  @@index([date])
   @@map("worker_payments")
 }
 

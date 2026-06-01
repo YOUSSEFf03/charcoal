@@ -148,6 +148,9 @@ describe('ShipmentsService', () => {
       const stockId2 = 'stock-id-2';
       const orderId = 'order-uuid-confirm';
 
+      // User lookup now happens outside the transaction
+      mockPrisma.user.findUnique.mockResolvedValue({ id: internalUserId, clerkId: userId });
+
       // Build the mock tx object
       const mockTx = {
         shipment: {
@@ -155,7 +158,6 @@ describe('ShipmentsService', () => {
           update: fn(),
           findMany: fn(),
         },
-        user: { findUnique: fn() },
         packedStock: { findMany: fn(), update: fn() },
         stockExit: { create: fn() },
         clientOrder: { update: fn() },
@@ -172,12 +174,6 @@ describe('ShipmentsService', () => {
         })
         // Final findUnique at end of transaction
         .mockResolvedValueOnce({ id: shipmentId, bags: [] });
-
-      // Step 2: resolve internal user
-      mockTx.user.findUnique.mockResolvedValue({
-        id: internalUserId,
-        clerkId: userId,
-      });
 
       // Step 3: FIFO packed stocks for this bag type
       mockTx.packedStock.findMany.mockResolvedValue([
@@ -231,9 +227,11 @@ describe('ShipmentsService', () => {
       const userId = 'clerk-user-confirm-2';
       const orderId = 'order-uuid-confirm-2';
 
+      // User lookup now happens outside the transaction
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-2', clerkId: userId });
+
       const mockTx = {
         shipment: { findUnique: fn(), update: fn(), findMany: fn() },
-        user: { findUnique: fn() },
         packedStock: { findMany: fn(), update: fn() },
         stockExit: { create: fn() },
         clientOrder: { update: fn() },
@@ -246,11 +244,6 @@ describe('ShipmentsService', () => {
         orderId,
         bags: [{ bagTypeId, quantity: 10 }],
         order: { clientId: 'client-uuid-2', currency: 'USD' },
-      });
-
-      mockTx.user.findUnique.mockResolvedValue({
-        id: 'db-user-2',
-        clerkId: userId,
       });
 
       mockTx.packedStock.findMany.mockResolvedValue([

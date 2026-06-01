@@ -41,6 +41,7 @@ function makeMockTx() {
     stockLot: {
       findMany: fn(),
       create: fn(),
+      createMany: fn(),
       update: fn(),
     },
   };
@@ -143,31 +144,32 @@ describe('ContainersService', () => {
       const mockLotAfterCreate = { id: 'lot-1', createdAt: new Date('2024-01-01') };
 
       const tx = makeMockTx();
-      // tx.container.findUnique is called 3 times inside $transaction:
+      // tx.container.findUnique is called 2 times inside $transaction:
       //   1st: arrival guard (re-fetch with productLines)
       //   2nd: inside recalculateContainerCosts
-      //   3rd: final return value
       tx.container.findUnique
         .mockResolvedValueOnce(containerInDb)
-        .mockResolvedValueOnce(containerForRecalc)
-        .mockResolvedValueOnce(finalContainer);
+        .mockResolvedValueOnce(containerForRecalc);
 
       tx.container.update.mockResolvedValue({});
-      tx.stockLot.create.mockResolvedValue(mockLotAfterCreate);
+      tx.stockLot.createMany.mockResolvedValue({ count: 1 });
       tx.stockLot.findMany.mockResolvedValue([mockLotAfterCreate]);
       tx.stockLot.update.mockResolvedValue({});
 
-      // Pre-transaction guard check
-      mockPrisma.container.findUnique.mockResolvedValue({ id: containerId, status: 'transit' });
+      // Pre-transaction guard check (1st call) and post-tx fetch (2nd call)
+      mockPrisma.container.findUnique
+        .mockResolvedValueOnce({ id: containerId, status: 'transit' })
+        .mockResolvedValueOnce(finalContainer);
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
       // Act
       await service.update(containerId, { status: 'arrived' }, 'user-clerk');
 
       // Assert
-      const createCall = tx.stockLot.create.mock.calls[0][0];
-      expect(createCall.data.kgReceived).toBe('8400.000');
-      expect(createCall.data.kgRemaining).toBe('8400.000');
+      const createCall = tx.stockLot.createMany.mock.calls[0][0];
+      const createData = createCall.data[0];
+      expect(createData.kgReceived).toBe('8400.000');
+      expect(createData.kgRemaining).toBe('8400.000');
     });
 
     // =======================================================================
@@ -217,24 +219,24 @@ describe('ContainersService', () => {
       const tx = makeMockTx();
       tx.container.findUnique
         .mockResolvedValueOnce(containerInDb)
-        .mockResolvedValueOnce(containerForRecalc)
-        .mockResolvedValueOnce(finalContainer);
+        .mockResolvedValueOnce(containerForRecalc);
 
       tx.container.update.mockResolvedValue({});
-      tx.stockLot.create
-        .mockResolvedValueOnce(lotA)
-        .mockResolvedValueOnce(lotB);
+      tx.stockLot.createMany.mockResolvedValue({ count: 2 });
       tx.stockLot.findMany.mockResolvedValue([lotA, lotB]);
       tx.stockLot.update.mockResolvedValue({});
 
-      mockPrisma.container.findUnique.mockResolvedValue({ id: containerId, status: 'transit' });
+      mockPrisma.container.findUnique
+        .mockResolvedValueOnce({ id: containerId, status: 'transit' })
+        .mockResolvedValueOnce(finalContainer);
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
       // Act
       await service.update(containerId, { status: 'arrived' }, 'user-clerk');
 
       // Assert — CONSTRAINT 8: one StockLot per product line, never merged
-      expect(tx.stockLot.create).toHaveBeenCalledTimes(2);
+      expect(tx.stockLot.createMany).toHaveBeenCalledTimes(1);
+      expect(tx.stockLot.createMany.mock.calls[0][0].data).toHaveLength(2);
     });
   });
 
@@ -541,24 +543,26 @@ describe('ContainersService', () => {
       const tx = makeMockTx();
       tx.container.findUnique
         .mockResolvedValueOnce(containerInDb)
-        .mockResolvedValueOnce(containerForRecalc)
-        .mockResolvedValueOnce(finalContainer);
+        .mockResolvedValueOnce(containerForRecalc);
       tx.container.update.mockResolvedValue({});
-      tx.stockLot.create.mockResolvedValue(lot);
+      tx.stockLot.createMany.mockResolvedValue({ count: 1 });
       tx.stockLot.findMany.mockResolvedValue([lot]);
       tx.stockLot.update.mockResolvedValue({});
 
-      mockPrisma.container.findUnique.mockResolvedValue({ id: containerId, status: 'transit' });
+      mockPrisma.container.findUnique
+        .mockResolvedValueOnce({ id: containerId, status: 'transit' })
+        .mockResolvedValueOnce(finalContainer);
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
       // Act
       await service.update(containerId, { status: 'arrived' }, 'user-clerk');
 
       // Assert — exact string representation, not floating-point garbage
-      const createCall = tx.stockLot.create.mock.calls[0][0];
-      expect(createCall.data.kgReceived).toBe('8400.000');
-      expect(createCall.data.kgRemaining).toBe('8400.000');
-      expect(typeof createCall.data.kgReceived).toBe('string');
+      const createCall = tx.stockLot.createMany.mock.calls[0][0];
+      const createData = createCall.data[0];
+      expect(createData.kgReceived).toBe('8400.000');
+      expect(createData.kgRemaining).toBe('8400.000');
+      expect(typeof createData.kgReceived).toBe('string');
     });
   });
 

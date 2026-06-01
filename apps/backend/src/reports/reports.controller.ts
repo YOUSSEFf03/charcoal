@@ -1,10 +1,8 @@
 import {
   Body,
   Controller,
-  DefaultValuePipe,
   Get,
   Param,
-  ParseIntPipe,
   ParseUUIDPipe,
   Post,
   Query,
@@ -15,6 +13,7 @@ import {
   ApiOperation,
   ApiResponse,
 } from '@nestjs/swagger';
+import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { ReportsService } from './reports.service';
 import { SubmitPhysicalCountDto } from './dto/physical-count.dto';
 import { Roles } from '../auth/roles.decorator';
@@ -54,8 +53,11 @@ export class ReportsController {
   @ApiResponse({ status: 403, description: 'Forbidden — sales_rep and worker' })
   @Roles('owner', 'accountant')
   @Get('stock-value')
-  getStockValue() {
-    return this.reportsService.getStockValue();
+  getStockValue(
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(50)) limit: number,
+  ) {
+    return this.reportsService.getStockValue(page, limit);
   }
 
   /**
@@ -67,11 +69,13 @@ export class ReportsController {
   @Roles('owner', 'accountant')
   @Get('variance')
   getVariance(
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(50)) limit: number,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('workerId') workerId?: string,
   ) {
-    return this.reportsService.getVariance({ dateFrom, dateTo, workerId });
+    return this.reportsService.getVariance({ dateFrom, dateTo, workerId, page, limit });
   }
 
   /**
@@ -83,11 +87,13 @@ export class ReportsController {
   @Roles('owner', 'accountant')
   @Get('container-costs')
   getContainerCosts(
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('supplierId') supplierId?: string,
   ) {
-    return this.reportsService.getContainerCosts({ dateFrom, dateTo, supplierId });
+    return this.reportsService.getContainerCosts({ dateFrom, dateTo, supplierId, page, limit });
   }
 
   /**
@@ -119,10 +125,12 @@ export class ReportsController {
   @Get('worker-earnings/:workerId')
   getWorkerEarnings(
     @Param('workerId', ParseUUIDPipe) workerId: string,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(50)) limit: number,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
   ) {
-    return this.reportsService.getWorkerEarnings(workerId, { dateFrom, dateTo });
+    return this.reportsService.getWorkerEarnings(workerId, { dateFrom, dateTo, page, limit });
   }
 
   /**
@@ -163,7 +171,7 @@ export class ReportsController {
   @Roles('owner', 'accountant', 'sales_rep')
   @Get('activity')
   getActivity(
-    @Query('limit', new DefaultValuePipe(30), ParseIntPipe) limit: number,
+    @Query('limit', new ParseLimitPipe(30)) limit: number,
   ) {
     return this.reportsService.getActivity(limit);
   }

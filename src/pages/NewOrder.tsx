@@ -34,7 +34,7 @@ export default function NewOrder() {
   const bagTypes = bagTypesQ.data ?? []
   const packedSummary = packedQ.data ?? []
   // Available packed bags per bag type, for the "available stock" hint.
-  const availableByBagType = new Map(packedSummary.map(p => [p.bagTypeId, p.totalQuantity]))
+  const availableByBagType = new Map(packedSummary.map(p => [p.bagTypeId, p.totalBags]))
 
   const [clientIdx, setClientIdx] = useState(0)
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10))

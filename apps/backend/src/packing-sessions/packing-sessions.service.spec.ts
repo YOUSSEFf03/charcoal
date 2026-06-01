@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PackingSessionsService } from './packing-sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -13,8 +13,8 @@ describe('PackingSessionsService', () => {
   const mockPrisma = {
     user: { findUnique: fn() },
     packingSession: { findMany: fn(), findUnique: fn(), create: fn(), count: fn() },
-    packingSessionLot: { create: fn() },
-    packedStock: { create: fn() },
+    packingSessionLot: { create: fn(), createMany: fn(), deleteMany: fn() },
+    packedStock: { create: fn(), createMany: fn(), deleteMany: fn() },
     stockLot: { findMany: fn(), update: fn() },
     bagType: { findMany: fn() },
     $transaction: fn(),
@@ -34,12 +34,14 @@ describe('PackingSessionsService', () => {
   // Helpers — makeTx mirrors what the service calls inside the transaction
   function makeTx(overrides: Record<string, any> = {}) {
     return {
-      user: { upsert: fn(), findUnique: fn(), ...overrides.user },
+      user: { findUnique: fn(), ...overrides.user },
       stockLot: { findMany: fn(), update: fn(), ...overrides.stockLot },
       bagType: { findMany: fn(), ...overrides.bagType },
-      packingSession: { create: fn(), findUnique: fn(), ...overrides.packingSession },
-      packingSessionLot: { create: fn(), ...overrides.packingSessionLot },
-      packedStock: { create: fn(), ...overrides.packedStock },
+      packingSession: { create: fn(), findUnique: fn(), update: fn(), ...overrides.packingSession },
+      packingSessionLot: { create: fn(), createMany: fn(), deleteMany: fn(), ...overrides.packingSessionLot },
+      packedStock: { create: fn(), createMany: fn(), deleteMany: fn(), ...overrides.packedStock },
+      stockExit: { count: fn(), ...overrides.stockExit },
+      stockAdjustment: { count: fn(), ...overrides.stockAdjustment },
     };
   }
 
@@ -48,13 +50,35 @@ describe('PackingSessionsService', () => {
   }
 
   describe('createPackingSession()', () => {
+    it('throws 403 NO_USER when Clerk userId has no matching DB user', async () => {
+      // User lookup now happens before the transaction
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      const tx = makeTx();
+      setupTransaction(tx);
+
+      const dto = { lotInputs: [{ lotId: 'any-lot', kg: '10.000' }], bagsOutput: [{ bagTypeId: 'any-bag', qty: 1 }] };
+
+      await expect(
+        service.createPackingSession(dto, 'unsynced-clerk-id'),
+      ).rejects.toThrow(ForbiddenException);
+
+      await expect(
+        service.createPackingSession(dto, 'unsynced-clerk-id'),
+      ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'NO_USER' }) });
+    });
+
     it('Test 1: throws CONSTRAINT_VIOLATION when kgUsed exceeds lot kgRemaining', async () => {
       const bagTypeId = '550e8400-e29b-41d4-a716-446655440001';
       const lotId     = '550e8400-e29b-41d4-a716-446655440000';
       const userId    = 'clerk-user-1';
 
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
+      mockPrisma.bagType.findMany.mockResolvedValue([{
+        id: bagTypeId,
+        nominalKg: { toString: () => '20.000' },
+        workerRate: { toString: () => '1.000' },
+      }]);
       const tx = makeTx();
-      tx.user.upsert.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
       tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
 
       setupTransaction(tx);
@@ -79,8 +103,13 @@ describe('PackingSessionsService', () => {
       const lotId     = '550e8400-e29b-41d4-a716-446655440000';
       const userId    = 'clerk-user-1';
 
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
+      mockPrisma.bagType.findMany.mockResolvedValue([{
+        id: bagTypeId,
+        nominalKg: { toString: () => '20.000' },
+        workerRate: { toString: () => '1.000' },
+      }]);
       const tx = makeTx();
-      tx.user.upsert.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
       tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
 
       setupTransaction(tx);
@@ -103,19 +132,20 @@ describe('PackingSessionsService', () => {
       const userId    = 'clerk-user-1';
       const sessionId = 'session-uuid-1';
 
-      const tx = makeTx();
-      tx.user.upsert.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
-      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
-      tx.bagType.findMany.mockResolvedValue([{
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
+      mockPrisma.bagType.findMany.mockResolvedValue([{
         id: bagTypeId,
         nominalKg: { toString: () => '20.000' },
         workerRate: { toString: () => '1.500' },
       }]);
+      mockPrisma.packingSession.findUnique.mockResolvedValue({ id: sessionId, sessionLots: [] });
+
+      const tx = makeTx();
+      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
       tx.stockLot.update.mockResolvedValue({});
       tx.packingSession.create.mockResolvedValue({ id: sessionId });
-      tx.packingSession.findUnique.mockResolvedValue({ id: sessionId, sessionLots: [] });
-      tx.packingSessionLot.create.mockResolvedValue({});
-      tx.packedStock.create.mockResolvedValue({});
+      tx.packingSessionLot.createMany.mockResolvedValue({ count: 1 });
+      tx.packedStock.createMany.mockResolvedValue({ count: 1 });
 
       setupTransaction(tx);
 
@@ -137,14 +167,15 @@ describe('PackingSessionsService', () => {
       const lotId     = '550e8400-e29b-41d4-a716-446655440000';
       const userId    = 'clerk-user-1';
 
-      const tx = makeTx();
-      tx.user.upsert.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
-      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
-      tx.bagType.findMany.mockResolvedValue([{
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
+      mockPrisma.bagType.findMany.mockResolvedValue([{
         id: bagTypeId,
         nominalKg: { toString: () => '0.200' },
         workerRate: { toString: () => '1.000' },
       }]);
+
+      const tx = makeTx();
+      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
 
       setupTransaction(tx);
 
@@ -166,19 +197,20 @@ describe('PackingSessionsService', () => {
       const lotId     = '550e8400-e29b-41d4-a716-446655440000';
       const userId    = 'clerk-user-1';
 
-      const tx = makeTx();
-      tx.user.upsert.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
-      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
-      tx.bagType.findMany.mockResolvedValue([{
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
+      mockPrisma.bagType.findMany.mockResolvedValue([{
         id: bagTypeId,
         nominalKg: { toString: () => '0.200' },
         workerRate: { toString: () => '1.000' },
       }]);
+      mockPrisma.packingSession.findUnique.mockResolvedValue({ id: 'session-uuid-4', sessionLots: [] });
+
+      const tx = makeTx();
+      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
       tx.stockLot.update.mockResolvedValue({});
       tx.packingSession.create.mockResolvedValue({ id: 'session-uuid-4' });
-      tx.packingSession.findUnique.mockResolvedValue({ id: 'session-uuid-4', sessionLots: [] });
-      tx.packingSessionLot.create.mockResolvedValue({});
-      tx.packedStock.create.mockResolvedValue({});
+      tx.packingSessionLot.createMany.mockResolvedValue({ count: 1 });
+      tx.packedStock.createMany.mockResolvedValue({ count: 1 });
 
       setupTransaction(tx);
 
@@ -190,25 +222,83 @@ describe('PackingSessionsService', () => {
       ).resolves.toBeDefined();
     });
 
+    it('splits PackedStock proportionally across lots by kg consumed (Option B)', async () => {
+      // Scenario: 60 kg from lot1 (costPerKg=2.00), 40 kg from lot2 (costPerKg=3.00)
+      // 10 bags × 5 kg nominal = 50 kg output.
+      // Expected split: lot1 → 6 bags, lot2 → 4 bags (proportional to 60:40).
+      // COGS if sold = (6×5×2.00) + (4×5×3.00) = 60 + 60 = 120.00  (not 100.00 with wrong single-lot)
+      const lotId1    = '550e8400-e29b-41d4-a716-aaaaaaaaaaaa';
+      const lotId2    = '550e8400-e29b-41d4-a716-bbbbbbbbbbbb';
+      const bagTypeId = '550e8400-e29b-41d4-a716-446655440001';
+      const userId    = 'clerk-user-1';
+      const sessionId = 'session-uuid-split';
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
+      mockPrisma.bagType.findMany.mockResolvedValue([{
+        id: bagTypeId,
+        nominalKg: { toString: () => '5.000' },
+        workerRate: { toString: () => '1.000' },
+      }]);
+      mockPrisma.packingSession.findUnique.mockResolvedValue({ id: sessionId, sessionLots: [] });
+
+      const tx = makeTx();
+      tx.stockLot.findMany.mockResolvedValue([
+        { id: lotId1, kgRemaining: { toString: () => '100.000' } },
+        { id: lotId2, kgRemaining: { toString: () => '100.000' } },
+      ]);
+      tx.stockLot.update.mockResolvedValue({});
+      tx.packingSession.create.mockResolvedValue({ id: sessionId });
+      tx.packingSessionLot.createMany.mockResolvedValue({ count: 1 });
+      tx.packedStock.createMany.mockResolvedValue({ count: 2 });
+
+      setupTransaction(tx);
+
+      await service.createPackingSession(
+        {
+          lotInputs: [
+            { lotId: lotId1, kg: '60.000' },
+            { lotId: lotId2, kg: '40.000' },
+          ],
+          bagsOutput: [{ bagTypeId, qty: 10 }],
+        },
+        userId,
+      );
+
+      // Must create exactly 1 createMany call with 2 PackedStock rows (one per lot)
+      expect(tx.packedStock.createMany).toHaveBeenCalledTimes(1);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: calls } = tx.packedStock.createMany.mock.calls[0][0] as any;
+      const ps1 = calls.find((d: any) => d.lotId === lotId1);
+      const ps2 = calls.find((d: any) => d.lotId === lotId2);
+
+      expect(ps1).toBeDefined();
+      expect(ps2).toBeDefined();
+      expect(ps1.quantity).toBe(6);   // 10 × 60/100 = 6
+      expect(ps2.quantity).toBe(4);   // 10 × 40/100 = 4
+      expect(ps1.quantity + ps2.quantity).toBe(10); // sum preserved exactly
+    });
+
     it('Test 6: kgOutputTotal is exactly "8400.000" for 800 bags × 10.500 kg (no float drift)', async () => {
       const bagTypeId = '550e8400-e29b-41d4-a716-446655440001';
       const lotId     = '550e8400-e29b-41d4-a716-446655440000';
       const userId    = 'clerk-user-1';
       const sessionId = 'session-uuid-6';
 
-      const tx = makeTx();
-      tx.user.upsert.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
-      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '99999.000' } }]);
-      tx.bagType.findMany.mockResolvedValue([{
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
+      mockPrisma.bagType.findMany.mockResolvedValue([{
         id: bagTypeId,
         nominalKg: { toString: () => '10.500' },
         workerRate: { toString: () => '2.000' },
       }]);
+      mockPrisma.packingSession.findUnique.mockResolvedValue({ id: sessionId, sessionLots: [] });
+
+      const tx = makeTx();
+      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '99999.000' } }]);
       tx.stockLot.update.mockResolvedValue({});
       tx.packingSession.create.mockResolvedValue({ id: sessionId });
-      tx.packingSession.findUnique.mockResolvedValue({ id: sessionId, sessionLots: [] });
-      tx.packingSessionLot.create.mockResolvedValue({});
-      tx.packedStock.create.mockResolvedValue({});
+      tx.packingSessionLot.createMany.mockResolvedValue({ count: 1 });
+      tx.packedStock.createMany.mockResolvedValue({ count: 1 });
 
       setupTransaction(tx);
 

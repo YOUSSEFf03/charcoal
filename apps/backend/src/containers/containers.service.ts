@@ -101,27 +101,23 @@ export class ContainersService {
     // Container not yet arrived — nothing to update
     if (lots.length === 0) return;
 
-    for (let i = 0; i < container.productLines.length; i++) {
-      const line = container.productLines[i];
-      const lot = lots[i];
-      if (!lot) continue;
-
-      const tonnage = tonnages[i];
-
-      const expenseShare = totalExpenses.mul(tonnage).div(totalTonnage);
-      const discountShare = totalDiscount.mul(tonnage).div(totalTonnage);
-
-      const allInCostPerTon = new Decimal(line.pricePerTon.toString())
-        .plus(expenseShare.div(tonnage))
-        .minus(discountShare.div(tonnage));
-
-      const allInCostPerKg = allInCostPerTon.div(1000);
-
-      await tx.stockLot.update({
-        where: { id: lot.id },
-        data: { costPerKg: allInCostPerKg.toFixed(4) },
-      });
-    }
+    await Promise.all(
+      container.productLines.map((line, i) => {
+        const lot = lots[i];
+        if (!lot) return Promise.resolve();
+        const tonnage = tonnages[i];
+        const expenseShare  = totalExpenses.mul(tonnage).div(totalTonnage);
+        const discountShare = totalDiscount.mul(tonnage).div(totalTonnage);
+        const allInCostPerTon = new Decimal(line.pricePerTon.toString())
+          .plus(expenseShare.div(tonnage))
+          .minus(discountShare.div(tonnage));
+        const allInCostPerKg = allInCostPerTon.div(1000);
+        return tx.stockLot.update({
+          where: { id: lot.id },
+          data: { costPerKg: allInCostPerKg.toFixed(4) },
+        });
+      }),
+    );
   }
 
   /**
@@ -327,7 +323,8 @@ export class ContainersService {
 
     const arrivingNow = dto.status === 'arrived';
 
-    return this.prisma.$transaction(async (tx) => {
+    try {
+    return await this.prisma.$transaction(async (tx) => {
       const container = await tx.container.create({
         data: {
           number: dto.number,
@@ -361,25 +358,24 @@ export class ContainersService {
           orderBy: { createdAt: 'asc' },
         });
 
-        for (const line of productLines) {
-          const kgReceived = new Decimal(line.paidBags)
-            .mul(new Decimal(line.kgPerBag.toString()))
-            .toFixed(3);
-
-          await tx.stockLot.create({
-            data: {
+        await tx.stockLot.createMany({
+          data: productLines.map(line => {
+            const kgReceived = new Decimal(line.paidBags)
+              .mul(new Decimal(line.kgPerBag.toString()))
+              .toFixed(3);
+            return {
               charcoalType: line.charcoalType,
-              grade: line.grade,
-              supplierId: line.supplierId,
+              grade:        line.grade,
+              supplierId:   line.supplierId,
               kgReceived,
-              kgRemaining: kgReceived,
-              costPerKg: '0',
-              source: 'container',
-              containerId: container.id,
+              kgRemaining:  kgReceived,
+              costPerKg:    '0',
+              source:       'container',
+              containerId:  container.id,
               dateReceived: new Date(),
-            },
-          });
-        }
+            };
+          }),
+        });
 
         await this.recalculateContainerCosts(container.id, tx);
       }
@@ -389,6 +385,12 @@ export class ContainersService {
         include: { supplier: true, productLines: true, expenses: true, discount: true },
       });
     });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException({ error: 'A container with this number already exists', code: 'CONFLICT' });
+      }
+      throw e;
+    }
   }
 
   async update(id: string, dto: UpdateContainerDto, userId: string) {
@@ -404,8 +406,9 @@ export class ContainersService {
     }
 
     // Arrival transition: transactional with StockLot creation
+    // Arrival: creates one StockLot per product line then recalculates all costPerKg; 10 s is generous for typical containers (3-10 lines).
     if (dto.status === 'arrived') {
-      return this.prisma.$transaction(async (tx) => {
+      await this.prisma.$transaction(async (tx) => {
         // Step 1: Re-read the container with product lines inside the transaction for a consistent snapshot.
         const container = await tx.container.findUnique({
           where: { id },
@@ -446,40 +449,39 @@ export class ContainersService {
 
         // Step 4: Create exactly one StockLot per product line (CONSTRAINT 8 — never merge).
         //         kgReceived = paidBags × kgPerBag (decimal.js). costPerKg seeded as "0" — overwritten in step 5.
-        for (const line of container.productLines) {
-          const kgReceived = new Decimal(line.paidBags)
-            .mul(new Decimal(line.kgPerBag.toString()))
-            .toFixed(3);
-
-          await tx.stockLot.create({
-            data: {
+        await tx.stockLot.createMany({
+          data: container.productLines.map(line => {
+            const kgReceived = new Decimal(line.paidBags)
+              .mul(new Decimal(line.kgPerBag.toString()))
+              .toFixed(3);
+            return {
               charcoalType: line.charcoalType,
               grade: line.grade,
               supplierId: line.supplierId,
-              kgReceived: kgReceived,
+              kgReceived,
               kgRemaining: kgReceived,
               costPerKg: '0', // placeholder — recalculated below
               source: 'container',
               containerId: id,
               dateReceived: new Date(),
-            },
-          });
-        }
+            };
+          }),
+        });
 
         // Step 5: Recalculate costPerKg on all lots just created (CONSTRAINT 9).
         await this.recalculateContainerCosts(id, tx);
+      }, { timeout: 10_000, maxWait: 5_000 });
 
-        // Step 6: Return the updated container with all relations for the HTTP response.
-        return tx.container.findUnique({
-          where: { id },
-          include: {
-            supplier: true,
-            productLines: { orderBy: { createdAt: 'asc' } },
-            expenses: true,
-            discount: true,
-            stockLots: { orderBy: { createdAt: 'asc' } },
-          },
-        });
+      // Step 6: Return the updated container with all relations for the HTTP response.
+      return this.prisma.container.findUnique({
+        where: { id },
+        include: {
+          supplier: true,
+          productLines: { orderBy: { createdAt: 'asc' } },
+          expenses: true,
+          discount: true,
+          stockLots: { orderBy: { createdAt: 'asc' } },
+        },
       });
     }
 
@@ -490,16 +492,23 @@ export class ContainersService {
     if (dto.status !== undefined) updateData.status = dto.status as any;
     if (dto.notes !== undefined) updateData.notes = dto.notes;
 
-    return this.prisma.container.update({
-      where: { id },
-      data: updateData,
-      include: {
-        supplier: true,
-        productLines: { orderBy: { createdAt: 'asc' } },
-        expenses: true,
-        discount: true,
-      },
-    });
+    try {
+      return await this.prisma.container.update({
+        where: { id },
+        data: updateData,
+        include: {
+          supplier: true,
+          productLines: { orderBy: { createdAt: 'asc' } },
+          expenses: true,
+          discount: true,
+        },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException({ error: 'A container with this number already exists', code: 'CONFLICT' });
+      }
+      throw e;
+    }
   }
 
   async remove(id: string): Promise<void> {

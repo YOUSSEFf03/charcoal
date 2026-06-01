@@ -10,16 +10,20 @@
  */
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { parseCorsOrigins } from '../src/common/utils/cors.utils';
+import { ParseLimitPipe, ParsePagePipe, MAX_PAGE_LIMIT } from '../src/common/pipes/pagination.pipes';
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
+import { Prisma } from '@prisma/client';
 
 import { PackingSessionsService } from '../src/packing-sessions/packing-sessions.service';
 import { StockExitsService } from '../src/stock-exits/stock-exits.service';
 import { ShipmentsService } from '../src/shipments/shipments.service';
 import { StockAdjustmentsService } from '../src/stock-adjustments/stock-adjustments.service';
 import { ContainersService } from '../src/containers/containers.service';
+import { BagTypesService } from '../src/bag-types/bag-types.service';
 import { InvoiceCalculatorService } from '../src/invoices/invoice-calculator.service';
 import { ReportsController } from '../src/reports/reports.controller';
 import { ReportsService } from '../src/reports/reports.service';
@@ -1226,5 +1230,263 @@ describe('CONSTRAINT 15: Client balance always computed from records — never s
 
     const balance = await service.computeBalance('client-3');
     expect(balance.toFixed(2)).toBe('0.00');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CONSTRAINT 16: CORS allowed origins are derived from CORS_ORIGINS env var
+// ---------------------------------------------------------------------------
+
+describe('CONSTRAINT 16: CORS allowed origins are derived from CORS_ORIGINS env var', () => {
+  it('default (CORS_ORIGINS unset) → only http://localhost:5173 is in the allow-list', () => {
+    const origins = parseCorsOrigins('http://localhost:5173');
+    expect(origins).toEqual(['http://localhost:5173']);
+    expect(origins).not.toContain('https://attacker.example.com');
+  });
+
+  it('CORS_ORIGINS="https://app.example.com" → only that origin is in the allow-list', () => {
+    const origins = parseCorsOrigins('https://app.example.com');
+    expect(origins).toContain('https://app.example.com');
+    expect(origins).not.toContain('http://localhost:5173');
+    expect(origins).not.toContain('https://attacker.example.com');
+  });
+
+  it('multiple origins (comma-separated) → all listed origins allowed, others not', () => {
+    const origins = parseCorsOrigins('https://app.example.com, http://localhost:5173');
+    expect(origins).toContain('https://app.example.com');
+    expect(origins).toContain('http://localhost:5173');
+    expect(origins).not.toContain('https://attacker.example.com');
+  });
+
+  it('extra whitespace around entries is stripped', () => {
+    const origins = parseCorsOrigins('  https://app.example.com  ,  https://staging.example.com  ');
+    expect(origins).toEqual(['https://app.example.com', 'https://staging.example.com']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CONSTRAINT 17: Pagination limit is clamped to MAX_PAGE_LIMIT on every list
+// endpoint — clients cannot force a full-table scan by sending limit=9999999
+// ---------------------------------------------------------------------------
+
+describe('CONSTRAINT 17: limit is clamped server-side regardless of client value', () => {
+  describe('ParseLimitPipe', () => {
+    it('limit=100000 → clamped to MAX_PAGE_LIMIT (never loads whole table)', () => {
+      const pipe = new ParseLimitPipe(20);
+      const result = pipe.transform('100000');
+      expect(result).toBe(MAX_PAGE_LIMIT);
+      expect(result).toBeLessThanOrEqual(MAX_PAGE_LIMIT);
+    });
+
+    it('limit=9999999 → clamped to MAX_PAGE_LIMIT', () => {
+      const pipe = new ParseLimitPipe(20);
+      expect(pipe.transform('9999999')).toBe(MAX_PAGE_LIMIT);
+    });
+
+    it('limit omitted (undefined) → returns configured default', () => {
+      expect(new ParseLimitPipe(20).transform(undefined)).toBe(20);
+      expect(new ParseLimitPipe(50).transform(undefined)).toBe(50);
+      expect(new ParseLimitPipe(30).transform(undefined)).toBe(30);
+    });
+
+    it('limit="" (empty string) → returns configured default', () => {
+      expect(new ParseLimitPipe(20).transform('')).toBe(20);
+    });
+
+    it('limit=0 → clamped to minimum of 1', () => {
+      expect(new ParseLimitPipe(20).transform('0')).toBe(1);
+    });
+
+    it('limit=-5 → clamped to minimum of 1', () => {
+      expect(new ParseLimitPipe(20).transform('-5')).toBe(1);
+    });
+
+    it('limit=NaN → returns configured default', () => {
+      expect(new ParseLimitPipe(20).transform('abc')).toBe(20);
+    });
+
+    it('limit=50 within bounds → passes through unchanged', () => {
+      expect(new ParseLimitPipe(20).transform('50')).toBe(50);
+    });
+  });
+
+  describe('ParsePagePipe', () => {
+    it('page omitted (undefined) → returns 1', () => {
+      expect(new ParsePagePipe().transform(undefined)).toBe(1);
+    });
+
+    it('page="" (empty string) → returns 1', () => {
+      expect(new ParsePagePipe().transform('')).toBe(1);
+    });
+
+    it('page=0 → clamped to 1', () => {
+      expect(new ParsePagePipe().transform('0')).toBe(1);
+    });
+
+    it('page=-1 → clamped to 1', () => {
+      expect(new ParsePagePipe().transform('-1')).toBe(1);
+    });
+
+    it('page=NaN → returns 1', () => {
+      expect(new ParsePagePipe().transform('abc')).toBe(1);
+    });
+
+    it('page=5 → passes through unchanged', () => {
+      expect(new ParsePagePipe().transform('5')).toBe(5);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CONSTRAINT 18: Container.number is globally unique — duplicate → 409 CONFLICT
+// ---------------------------------------------------------------------------
+
+describe('CONSTRAINT 18: Container.number is globally unique', () => {
+  let service: ContainersService;
+
+  // P2002 error that Prisma would raise on a unique-constraint violation
+  const p2002 = new Prisma.PrismaClientKnownRequestError(
+    'Unique constraint failed on the fields: (`number`)',
+    { code: 'P2002', clientVersion: '5.0.0' },
+  );
+
+  const mockPrisma = {
+    container: { create: fn(), update: fn(), findUnique: fn(), findMany: fn(), count: fn() },
+    containerProductLine: { createMany: fn(), findMany: fn() },
+    stockLot: { createMany: fn(), findMany: fn(), update: fn() },
+    containerExpense: { findMany: fn() },
+    containerDiscount: { findUnique: fn() },
+    user:     { findUnique: fn() },
+    supplier: { findUnique: fn() },
+    $transaction: fn(),
+    $queryRaw:    fn(),
+  };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockPrisma.$transaction.mockImplementation(async (cbOrArray: any) => {
+      if (Array.isArray(cbOrArray)) return Promise.all(cbOrArray);
+      return cbOrArray(mockPrisma);
+    });
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ContainersService,
+        { provide: PrismaService, useValue: mockPrisma },
+      ],
+    }).compile();
+
+    service = module.get<ContainersService>(ContainersService);
+  });
+
+  it('valid: first container with a new number is created successfully', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1' });
+    mockPrisma.supplier.findUnique.mockResolvedValue({ id: 's1', name: 'Acme' });
+    mockPrisma.container.create.mockResolvedValue({ id: 'c1' });
+    // findUniqueOrThrow used for the return value inside tx
+    (mockPrisma.container as any).findUniqueOrThrow = fn();
+    (mockPrisma.container as any).findUniqueOrThrow.mockResolvedValue({
+      id: 'c1', number: 'ABCD1234567', supplier: {}, productLines: [], expenses: [], discount: null,
+    });
+
+    await expect(
+      service.create({ number: 'ABCD1234567', supplierId: 's1' } as any, 'clerk-1'),
+    ).resolves.toBeDefined();
+  });
+
+  it('violation: duplicate Container.number → ConflictException with CONFLICT code', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1' });
+    mockPrisma.supplier.findUnique.mockResolvedValue({ id: 's1', name: 'Acme' });
+    // Simulate the DB rejecting with a P2002 unique-constraint error
+    mockPrisma.$transaction.mockRejectedValue(p2002);
+
+    await expect(
+      service.create({ number: 'ABCD1234567', supplierId: 's1' } as any, 'clerk-1'),
+    ).rejects.toThrow(ConflictException);
+
+    await expect(
+      service.create({ number: 'ABCD1234567', supplierId: 's1' } as any, 'clerk-1'),
+    ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'CONFLICT' }) });
+  });
+
+  it('violation: renaming a container to an existing number → ConflictException', async () => {
+    mockPrisma.container.findUnique.mockResolvedValue({ id: 'c2', status: 'port' });
+    // Simulate P2002 from the UPDATE
+    mockPrisma.container.update.mockRejectedValue(p2002);
+
+    await expect(
+      service.update('c2', { number: 'ABCD1234567' } as any, 'clerk-1'),
+    ).rejects.toThrow(ConflictException);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CONSTRAINT 19: BagType.name is unique — duplicate → 409 CONFLICT
+// ---------------------------------------------------------------------------
+
+describe('CONSTRAINT 19: BagType.name is unique', () => {
+  let service: BagTypesService;
+
+  const p2002 = new Prisma.PrismaClientKnownRequestError(
+    'Unique constraint failed on the fields: (`name`)',
+    { code: 'P2002', clientVersion: '5.0.0' },
+  );
+
+  const mockPrisma = {
+    bagType: { create: fn(), update: fn(), findUnique: fn(), findMany: fn(), count: fn() },
+    $transaction: fn(),
+  };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockPrisma.$transaction.mockImplementation(async (arr: any) =>
+      Array.isArray(arr) ? Promise.all(arr) : arr(mockPrisma),
+    );
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        BagTypesService,
+        { provide: PrismaService, useValue: mockPrisma },
+      ],
+    }).compile();
+
+    service = module.get<BagTypesService>(BagTypesService);
+  });
+
+  it('valid: first bag type with a new name is created successfully', async () => {
+    mockPrisma.bagType.create.mockResolvedValue({
+      id: 'bt1', name: '2kg bag', nominalKg: '2.000', costPerBag: '0.05', workerRate: '0.05',
+    });
+
+    await expect(
+      service.create({ name: '2kg bag', nominalKg: '2.000', costPerBag: '0.0500', workerRate: '0.0500' } as any),
+    ).resolves.toBeDefined();
+  });
+
+  it('violation: duplicate BagType.name → ConflictException with CONFLICT code', async () => {
+    mockPrisma.bagType.create.mockRejectedValue(p2002);
+
+    await expect(
+      service.create({ name: '2kg bag', nominalKg: '2.000', costPerBag: '0.0500', workerRate: '0.0500' } as any),
+    ).rejects.toThrow(ConflictException);
+
+    await expect(
+      service.create({ name: '2kg bag', nominalKg: '2.000', costPerBag: '0.0500', workerRate: '0.0500' } as any),
+    ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'CONFLICT' }) });
+  });
+
+  it('violation: renaming a bag type to an existing name → ConflictException', async () => {
+    // findOne (called by update) succeeds — the bag type exists
+    mockPrisma.bagType.findUnique.mockResolvedValue({ id: 'bt2', name: '5kg bag' });
+    // update fails with P2002 because target name already taken
+    mockPrisma.bagType.update.mockRejectedValue(p2002);
+
+    await expect(
+      service.update('bt2', { name: '2kg bag' }),
+    ).rejects.toThrow(ConflictException);
+
+    await expect(
+      service.update('bt2', { name: '2kg bag' }),
+    ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'CONFLICT' }) });
   });
 });

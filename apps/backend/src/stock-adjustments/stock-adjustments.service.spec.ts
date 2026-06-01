@@ -117,8 +117,8 @@ describe('StockAdjustmentsService', () => {
       const dbUserId = 'db-user-uuid-1';
       const lotId = '550e8400-e29b-41d4-a716-446655440000';
 
+      mockPrisma.user.findUnique.mockResolvedValue({ id: dbUserId, clerkId });
       const tx = setupTransaction();
-      tx.user.findUnique.mockResolvedValue({ id: dbUserId, clerkId });
       tx.stockLot.findUnique.mockResolvedValue({
         id: lotId,
         kgRemaining: { toString: () => '100.000' },
@@ -151,8 +151,8 @@ describe('StockAdjustmentsService', () => {
       const clerkId = 'clerk-owner-1';
       const lotId = '550e8400-e29b-41d4-a716-446655440000';
 
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId });
       const tx = setupTransaction();
-      tx.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId });
       tx.stockLot.findUnique.mockResolvedValue({
         id: lotId,
         kgRemaining: { toString: () => '100.000' },
@@ -183,8 +183,8 @@ describe('StockAdjustmentsService', () => {
       const clerkId = 'clerk-owner-1';
       const lotId = '550e8400-e29b-41d4-a716-446655440000';
 
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId });
       const tx = setupTransaction();
-      tx.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId });
       tx.stockLot.findUnique.mockResolvedValue({
         id: lotId,
         kgRemaining: { toString: () => '100.000' },
@@ -214,8 +214,8 @@ describe('StockAdjustmentsService', () => {
       const clerkId = 'clerk-owner-1';
       const lotId = '550e8400-e29b-41d4-a716-446655440000';
 
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId });
       const tx = setupTransaction();
-      tx.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId });
       tx.stockLot.findUnique.mockResolvedValue({
         id: lotId,
         kgRemaining: { toString: () => '100.000' },

@@ -1,10 +1,8 @@
 import {
   Body,
   Controller,
-  DefaultValuePipe,
   Get,
   Param,
-  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -12,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { ExitType } from '@prisma/client';
+import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { StockExitsService } from './stock-exits.service';
 import { CreateStockExitDto } from './dto/create-stock-exit.dto';
 import { Roles } from '../auth/roles.decorator';
@@ -30,8 +29,8 @@ export class StockExitsController {
   @Get()
   @Roles('owner', 'accountant', 'sales_rep')
   findAll(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('exitType') exitType?: ExitType,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,

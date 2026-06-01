@@ -17,17 +17,18 @@
 7. [Module 3 — Packing Sessions](#7-module-3--packing-sessions)
 8. [Module 4 — Client CRM](#8-module-4--client-crm)
 9. [Module 5 — Orders & Invoicing](#9-module-5--orders--invoicing)
-10. [Module 6 — Delivery](#10-module-6--delivery)
-11. [Module 7 — Suppliers](#11-module-7--suppliers)
-12. [Module 8 — Reports & Reconciliation](#12-module-8--reports--reconciliation)
-13. [Sales Scenarios](#13-sales-scenarios)
-14. [Stock Reconciliation Rules](#14-stock-reconciliation-rules)
-15. [Entity Reference — All 18 Entities](#15-entity-reference--all-18-entities)
-16. [Business Logic & Formulas](#16-business-logic--formulas)
-17. [Print Templates](#17-print-templates)
-18. [Currency & Payments](#18-currency--payments)
-19. [Arabic Language Support](#19-arabic-language-support)
-20. [Critical Constraints — Never Violate](#20-critical-constraints--never-violate)
+10. [Module 6 — Fill Jobs (Client-Provided Bags)](#10-module-6--fill-jobs-client-provided-bags)
+11. [Module 7 — Delivery](#11-module-7--delivery)
+12. [Module 8 — Suppliers](#12-module-8--suppliers)
+13. [Module 9 — Reports & Reconciliation](#13-module-9--reports--reconciliation)
+14. [Sales Scenarios](#14-sales-scenarios)
+15. [Stock Reconciliation Rules](#15-stock-reconciliation-rules)
+16. [Entity Reference — All 30 Entities](#16-entity-reference--all-30-entities)
+17. [Business Logic & Formulas](#17-business-logic--formulas)
+18. [Print Templates](#18-print-templates)
+19. [Currency & Payments](#19-currency--payments)
+20. [Arabic Language Support](#20-arabic-language-support)
+21. [Critical Constraints — Never Violate](#21-critical-constraints--never-violate)
 
 ---
 
@@ -421,7 +422,93 @@ currency = client.currency (USD or LBP)
 
 ---
 
-## 10. Module 6 — Delivery
+## 10. Module 6 — Fill Jobs (Client-Provided Bags)
+
+### Purpose
+Handle the "fill client" workflow: a client supplies empty bags, the warehouse fills them with charcoal, and tracks the charcoal cost.
+
+### Client Type
+Clients with `type = "fill_client"` can create fill jobs. These are typically walk-in buyers or regular clients who prefer to supply their own bags rather than buy ours.
+
+### Fill Job Workflow
+
+**Step 1 — Create fill job**
+Client brings bags to warehouse. Sales rep or owner creates a fill job:
+- Client selected
+- Date
+- Worker assigned (optional — for piece-rate tracking)
+- Bags to fill (list of bag types and quantities)
+
+**Step 2 — Log charcoal source**
+Worker takes charcoal from one or more stock lots and fills the bags. After filling, the fill job records:
+- Which lot(s) were used and how many kg from each
+- Total charcoal kg used (Σ of all lots)
+- Total bags filled
+
+**Step 3 — Calculate cost**
+Per lot used:
+```
+cost_per_kg = lot's current cost_per_kg
+kg_used = weighed by worker
+cost = kg_used × cost_per_kg
+```
+
+Totals:
+```
+totalCharcoalKg = Σ kg_used across all lots
+totalBags = Σ bags by type
+totalCost = Σ cost per lot = Σ (kg_used × costPerKg)
+```
+
+### FillJob Fields
+```
+id              uuid PK
+clientId        uuid FK → Client
+date            date
+workerEntityId  uuid FK → Worker (optional)
+bagOutputs      jsonb         — [{bagTypeId, quantity}]
+totalCharcoalKg decimal       — sum of all lot kg used
+totalBags       integer       — sum of all bags filled
+totalCost       decimal       — sum of (kg_used × cost_per_kg) per lot
+notes           text          — Arabic supported
+```
+
+### FillJobLot
+One record per lot used in the fill job.
+```
+id         uuid PK
+fillJobId  uuid FK → FillJob
+lotId      uuid FK → Stock lot
+kgUsed     decimal               — weight taken from lot
+costPerKg  decimal (snapshot)    — lot's cost_per_kg at time of fill
+cost       decimal               — computed: kgUsed × costPerKg
+```
+
+### Stock Deduction
+After a fill job completes:
+- Each lot's `kg_remaining` decreases by `kgUsed`
+- Packed stock is **not** created (client brings their own bags, we don't track them)
+- A stock exit is created with `exitType = "client_bags_fill"`
+
+### Difference from Packing Sessions
+
+| Aspect | Packing Session | Fill Job |
+|--------|---|---|
+| **Output** | Packed stock (our bags) | None (client's bags) |
+| **Bag cost** | Applied (we buy bags) | Not applied (client's bags) |
+| **Worker earnings** | Optional rate per bag type | Not tracked (different workflow) |
+| **Stock exit** | Created for sales only | Created for every fill job |
+| **Variance** | Tracked (loss during packing) | Not tracked (client owns bags) |
+
+### Fill Job vs Walk-in Sale
+- **Walk-in**: Customer buys bags at warehouse, weighed, paid immediately, stock exits
+- **Fill client**: Customer supplies bags, we fill and charge per bag or per kg, stock exits same way
+
+Both are non-packing flows. Fill jobs are specifically for clients who bring bags repeatedly.
+
+---
+
+## 11. Module 7 — Delivery
 
 ### Purpose
 Manage driver trips from warehouse to delivery locations. One trip covers multiple stops.
@@ -481,7 +568,7 @@ A driver trip contains one or more shipments (potentially from multiple orders/c
 
 ---
 
-## 11. Module 7 — Suppliers
+## 12. Module 8 — Suppliers
 
 ### Purpose
 Maintain supplier profiles for procurement reference.
@@ -499,7 +586,7 @@ Maintain supplier profiles for procurement reference.
 
 ---
 
-## 12. Module 8 — Reports & Reconciliation
+## 13. Module 9 — Reports & Reconciliation
 
 ### Who sees what
 - **Owner**: all reports including total profit, cost per kg, container costs, worker earnings
@@ -560,7 +647,7 @@ Per client:
 
 ---
 
-## 13. Sales Scenarios
+## 14. Sales Scenarios
 
 ### S1 — Walk-in warehouse buyer
 - Customer arrives at warehouse unannounced
@@ -604,7 +691,7 @@ Per client:
 
 ---
 
-## 14. Stock Reconciliation Rules
+## 15. Stock Reconciliation Rules
 
 This is the core accounting guarantee of the system.
 
@@ -648,7 +735,7 @@ session.variance_kg = kg_consumed − Σ (bags_output_qty × bag_type.nominal_kg
 
 ---
 
-## 15. Entity Reference — All 18 Entities
+## 16. Entity Reference — All 30 Entities
 
 ### Container
 ```
@@ -908,7 +995,7 @@ notes             text          — Arabic supported
 
 ---
 
-## 16. Business Logic & Formulas
+## 17. Business Logic & Formulas
 
 ### Container cost allocation
 ```
@@ -966,7 +1053,7 @@ gross_profit = revenue − cogs − bag_cost − variance_cost − delivery_cost
 
 ---
 
-## 17. Print Templates
+## 18. Print Templates
 
 Two templates required. Both must print cleanly on a mobile thermal printer (58mm or 80mm roll).
 
@@ -996,7 +1083,7 @@ Full invoice with: company header, client details, order lines, totals, payment 
 
 ---
 
-## 18. Currency & Payments
+## 19. Currency & Payments
 
 - Each client is assigned one currency: USD or LBP
 - All invoices for that client use their assigned currency
@@ -1007,7 +1094,7 @@ Full invoice with: company header, client details, order lines, totals, payment 
 
 ---
 
-## 19. Arabic Language Support
+## 20. Arabic Language Support
 
 - All free-text fields accept Arabic input
 - Arabic text must render correctly (right-to-left where appropriate within a field)
@@ -1017,7 +1104,7 @@ Full invoice with: company header, client details, order lines, totals, payment 
 
 ---
 
-## 20. Critical Constraints — Never Violate
+## 21. Critical Constraints — Never Violate
 
 These are hard rules. The system must enforce them at the data layer, not just the UI.
 

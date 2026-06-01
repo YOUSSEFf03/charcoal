@@ -1,10 +1,8 @@
 import {
   Body,
   Controller,
-  DefaultValuePipe,
   Get,
   Param,
-  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -12,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { TripStatus } from '@prisma/client';
+import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { DriverTripsService } from './driver-trips.service';
 import { CreateDriverTripDto } from './dto/create-driver-trip.dto';
 import { UpdateDriverTripDto } from './dto/update-driver-trip.dto';
@@ -36,8 +35,8 @@ export class DriverTripsController {
   @Get()
   findAll(
     @CurrentUser() currentUser: ClerkUser,
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('driverId') driverId?: string,
     @Query('status') status?: TripStatus,
     @Query('dateFrom') dateFrom?: string,

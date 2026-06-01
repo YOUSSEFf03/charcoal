@@ -95,18 +95,8 @@ export class StockExitsService {
   }
 
   /**
-   * Create a stock exit and decrement the corresponding packed stock.
-   *
-   * Step 1: Resolve internal User from clerkId (loggedById source — CONSTRAINT 5)
-   * Step 2: Validate PackedStock exists
-   * Step 3: CONSTRAINT 2 — reject if quantity - dto.quantity < 0
-   * Step 4: Decrement packed stock quantity
-   * Step 5: Create StockExit with loggedById = user.id (never from DTO)
-   *
-   * @param dto - Exit creation data (no loggedById)
-   * @param userId - Clerk user ID from @CurrentUser
-   * @constraint 2 reject if quantity - dto.quantity < 0
-   * @constraint 5 loggedById comes from userId, never from the DTO
+   * Update mutable fields on an existing exit (amount, recipient).
+   * Identity and audit fields (loggedById, exitType, date) are immutable after creation.
    */
   async updateExit(id: string, dto: { amount?: number; recipient?: string }) {
     const exit = await this.prisma.stockExit.findUnique({ where: { id } });
@@ -121,20 +111,36 @@ export class StockExitsService {
     });
   }
 
+  /**
+   * Create a stock exit and decrement the corresponding packed stock.
+   *
+   * Step 1: Resolve internal User from clerkId (loggedById source — CONSTRAINT 5)
+   * Step 2: Validate PackedStock exists
+   * Step 3: CONSTRAINT 2 — reject if packedStock.quantity - dto.quantity < 0
+   * Step 4: Decrement packed stock quantity
+   * Step 5: Create StockExit with loggedById = user.id (never from DTO)
+   *
+   * @param dto    - Exit creation data; must not include loggedById
+   * @param userId - Clerk user ID from @CurrentUser — sole source of loggedById
+   * @constraint 2 packedStock.quantity - dto.quantity < 0 → 400 CONSTRAINT_VIOLATION; transaction rolled back
+   * @constraint 5 loggedById is always user.id resolved from the JWT, never from the request body
+   */
   async create(dto: CreateStockExitDto, userId: string) {
+    // Resolve caller before opening a transaction — this read is safe outside
+    // the tx because the user record is not mutated during the operation.
+    const user = await this.prisma.user.findUnique({ where: { clerkId: userId } });
+    if (!user) throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
+
+    // Resolve collector name outside tx (display-only, not a constraint)
+    let collectorFields: { collectedById?: string; collectedBy?: string } = {};
+    if (dto.collectedById) {
+      const collector = await this.prisma.user.findUnique({ where: { id: dto.collectedById }, select: { name: true } });
+      collectorFields = { collectedById: dto.collectedById, collectedBy: collector?.name };
+    } else if (dto.collectedBy) {
+      collectorFields = { collectedBy: dto.collectedBy };
+    }
+
     return this.prisma.$transaction(async (tx) => {
-      const user = await tx.user.findUnique({ where: { clerkId: userId } });
-      if (!user) throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
-
-      // Resolve collector: if collectedById provided, derive the name for the string field too
-      let collectorFields: { collectedById?: string; collectedBy?: string } = {};
-      if (dto.collectedById) {
-        const collector = await tx.user.findUnique({ where: { id: dto.collectedById }, select: { name: true } });
-        collectorFields = { collectedById: dto.collectedById, collectedBy: collector?.name };
-      } else if (dto.collectedBy) {
-        collectorFields = { collectedBy: dto.collectedBy };
-      }
-
       const commonData = {
         exitType: dto.exitType,
         date: new Date(dto.date),

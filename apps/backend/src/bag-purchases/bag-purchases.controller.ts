@@ -1,16 +1,15 @@
 import {
   Body,
   Controller,
-  DefaultValuePipe,
   Get,
   Param,
-  ParseIntPipe,
   ParseUUIDPipe,
   Post,
   Query,
   Request,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { BagPurchasesService } from './bag-purchases.service';
 import { CreateBagPurchaseDto } from './dto/create-bag-purchase.dto';
 import { Roles } from '../auth/roles.decorator';
@@ -26,8 +25,8 @@ export class BagPurchasesController {
   @Get()
   @Roles('owner', 'accountant')
   findAll(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('bagTypeId') bagTypeId?: string,
   ) {
     return this.bagPurchasesService.findAll(page, limit, bagTypeId);

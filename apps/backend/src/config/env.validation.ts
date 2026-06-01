@@ -44,4 +44,12 @@ export const envValidationSchema = Joi.object({
   // HTTP port. Optional with a default for local dev; platforms typically
   // inject this in production.
   PORT: Joi.number().port().default(3001),
+
+  // Comma-separated list of allowed CORS origins. Optional — defaults to the
+  // Vite dev server so local development works without any configuration.
+  // In production set this to the real frontend URL, e.g.
+  // CORS_ORIGINS="https://app.example.com"
+  // Multiple origins: CORS_ORIGINS="https://app.example.com,https://staging.example.com"
+  // Do NOT use "*" together with credentials:true — browsers reject that.
+  CORS_ORIGINS: Joi.string().default('http://localhost:5173'),
 });

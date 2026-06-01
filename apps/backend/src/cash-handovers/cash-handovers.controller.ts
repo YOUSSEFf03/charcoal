@@ -1,5 +1,6 @@
-import { Body, Controller, DefaultValuePipe, Get, ParseIntPipe, ParseUUIDPipe, Post, Query, Param } from '@nestjs/common';
+import { Body, Controller, Get, ParseUUIDPipe, Post, Query, Param } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { CashHandoversService } from './cash-handovers.service';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -15,8 +16,8 @@ export class CashHandoversController {
   @ApiOperation({ summary: 'List cash handovers' })
   @Get()
   findAll(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
   ) {

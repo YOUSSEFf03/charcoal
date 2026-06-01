@@ -2,7 +2,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, Worker } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWorkerDto } from './dto/create-worker.dto';
@@ -10,55 +10,94 @@ import { UpdateWorkerDto } from './dto/update-worker.dto';
 import { SetRatesDto } from './dto/set-rates.dto';
 import { CreateWorkerPaymentDto } from './dto/create-worker-payment.dto';
 
+// Worker.totalEarned / totalBagsPacked / totalPaid are DEPRECATED CACHE columns.
+// They are never written by packing-session create/update and never read as source of truth.
+// Source of truth: PackingSession.sessionEarnings (where workerEntityId = worker.id)
+//                  and WorkerPayment.amount (where workerId = worker.id).
+
 @Injectable()
 export class WorkersService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Compute totalOwed = totalEarned − totalPaid via decimal.js.
-   * Never stored — always computed on read.
+   * Compute live earned/paid/owed totals for a single worker from source records.
+   * Uses Decimal arithmetic throughout — no native number math on money.
    */
-  private computeTotalOwed(worker: Worker): string {
-    return new Decimal(worker.totalEarned.toString())
-      .minus(new Decimal(worker.totalPaid.toString()))
-      .toFixed(2);
+  private async computeTotals(workerId: string) {
+    const [earnedResult, paidResult] = await Promise.all([
+      this.prisma.packingSession.aggregate({
+        where: { workerEntityId: workerId },
+        _sum: { sessionEarnings: true },
+      }),
+      this.prisma.workerPayment.aggregate({
+        where: { workerId },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const totalEarned = new Decimal(earnedResult._sum.sessionEarnings?.toString() ?? '0');
+    const totalPaid   = new Decimal(paidResult._sum.amount?.toString() ?? '0');
+    return {
+      totalEarned: totalEarned.toFixed(2),
+      totalPaid:   totalPaid.toFixed(2),
+      totalOwed:   totalEarned.minus(totalPaid).toFixed(2),
+    };
   }
 
   /**
-   * Return a paginated list of workers with computed totalOwed.
-   *
-   * @param page - 1-indexed page number
-   * @param limit - Items per page
+   * Return a paginated list of workers with computed totals.
+   * Uses two grouped aggregation queries (not N queries) after the main list fetch.
    */
   async findAll(page: number, limit: number) {
     const skip = (page - 1) * limit;
 
     const [workers, total] = await this.prisma.$transaction([
-      this.prisma.worker.findMany({
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-      }),
+      this.prisma.worker.findMany({ skip, take: limit, orderBy: { createdAt: 'desc' } }),
       this.prisma.worker.count(),
     ]);
 
-    const data = workers.map((w) => ({ ...w, totalOwed: this.computeTotalOwed(w) }));
+    if (workers.length === 0) return { data: [], total, page, limit };
+
+    const workerIds = workers.map(w => w.id);
+
+    const [earnedAgg, paidAgg] = await Promise.all([
+      this.prisma.packingSession.groupBy({
+        by: ['workerEntityId'],
+        where: { workerEntityId: { in: workerIds } },
+        _sum: { sessionEarnings: true },
+      }),
+      this.prisma.workerPayment.groupBy({
+        by: ['workerId'],
+        where: { workerId: { in: workerIds } },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const earnedMap = new Map(earnedAgg.map(r => [r.workerEntityId, r._sum.sessionEarnings]));
+    const paidMap   = new Map(paidAgg.map(r => [r.workerId, r._sum.amount]));
+
+    const data = workers.map(w => {
+      const earned = new Decimal(earnedMap.get(w.id)?.toString() ?? '0');
+      const paid   = new Decimal(paidMap.get(w.id)?.toString() ?? '0');
+      return {
+        ...w,
+        totalEarned: earned.toFixed(2),
+        totalPaid:   paid.toFixed(2),
+        totalOwed:   earned.minus(paid).toFixed(2),
+      };
+    });
 
     return { data, total, page, limit };
   }
 
   /**
-   * Return a single worker with computed totalOwed.
-   *
-   * @param id - Worker UUID
-   * @throws NotFoundException if not found
+   * Return a single worker with live-computed totalEarned / totalPaid / totalOwed.
    */
   async findOne(id: string) {
     const worker = await this.prisma.worker.findUnique({ where: { id } });
-    if (!worker) {
-      throw new NotFoundException({ error: 'Worker not found', code: 'NOT_FOUND' });
-    }
-    return { ...worker, totalOwed: this.computeTotalOwed(worker) };
+    if (!worker) throw new NotFoundException({ error: 'Worker not found', code: 'NOT_FOUND' });
+    const totals = await this.computeTotals(id);
+    return { ...worker, ...totals };
   }
 
   /**
@@ -140,37 +179,21 @@ export class WorkersService {
   }
 
   /**
-   * Pay a worker and atomically increment totalPaid.
-   * Step 1: Fetch worker (404 if not found)
-   * Step 2: Create WorkerPayment record
-   * Step 3: Increment worker.totalPaid using decimal.js (never native arithmetic)
+   * Pay a worker — creates a WorkerPayment record.
+   * totalPaid is computed on read from WorkerPayment rows; no stored counter to update.
+   * No transaction needed: guard read + single write have no atomicity requirement.
    */
   async addPayment(id: string, dto: CreateWorkerPaymentDto) {
-    return this.prisma.$transaction(async (tx) => {
-      const worker = await tx.worker.findUnique({ where: { id } });
-      if (!worker) {
-        throw new NotFoundException({ error: 'Worker not found', code: 'NOT_FOUND' });
-      }
+    const worker = await this.prisma.worker.findUnique({ where: { id } });
+    if (!worker) throw new NotFoundException({ error: 'Worker not found', code: 'NOT_FOUND' });
 
-      const payment = await tx.workerPayment.create({
-        data: {
-          workerId: id,
-          amount: dto.amount,
-          date: dto.date ? new Date(dto.date) : new Date(),
-          ...(dto.notes ? { notes: dto.notes } : {}),
-        },
-      });
-
-      const newTotalPaid = new Decimal(worker.totalPaid.toString())
-        .plus(dto.amount)
-        .toFixed(2);
-
-      await tx.worker.update({
-        where: { id },
-        data: { totalPaid: newTotalPaid },
-      });
-
-      return payment;
+    return this.prisma.workerPayment.create({
+      data: {
+        workerId: id,
+        amount: dto.amount,
+        date: dto.date ? new Date(dto.date) : new Date(),
+        ...(dto.notes ? { notes: dto.notes } : {}),
+      },
     });
   }
 

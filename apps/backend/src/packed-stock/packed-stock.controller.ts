@@ -1,11 +1,10 @@
 import {
   Controller,
-  DefaultValuePipe,
   Get,
-  ParseIntPipe,
   Query,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { PackedStockService } from './packed-stock.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ClerkUser } from '../auth/clerk.strategy';
@@ -27,8 +26,8 @@ export class PackedStockController {
   @ApiResponse({ status: 200, description: 'Success' })
   @Get()
   findAll(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('lotId') lotId?: string,
     @Query('bagTypeId') bagTypeId?: string,
     @CurrentUser() user?: ClerkUser,

@@ -140,6 +140,7 @@ describe('ClientBalanceService — computeBalance()', () => {
   const mockPrisma = {
     invoice: { findMany: fn() },
     payment: { findMany: fn() },
+    stockExit: { findMany: fn() }, // walk-in sale amounts also contribute to balance
     $transaction: fn(),
   };
 
@@ -171,6 +172,7 @@ describe('ClientBalanceService — computeBalance()', () => {
     mockPrisma.payment.findMany.mockResolvedValue([
       { amount: { toString: () => '50' } },
     ]);
+    mockPrisma.stockExit.findMany.mockResolvedValue([]); // no walk-in sale amounts
 
     const result = await balanceService.computeBalance(clientId);
 
@@ -196,6 +198,7 @@ describe('ClientBalanceService — computeBalance()', () => {
   it('returns 0.00 when there are no invoices and no payments', async () => {
     mockPrisma.invoice.findMany.mockResolvedValue([]);
     mockPrisma.payment.findMany.mockResolvedValue([]);
+    mockPrisma.stockExit.findMany.mockResolvedValue([]);
 
     const result = await balanceService.computeBalance('client-uuid-zero');
 

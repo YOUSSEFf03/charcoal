@@ -110,48 +110,42 @@ describe('StockExitsService', () => {
     // Test 3: CONSTRAINT 5 — loggedById equals user.id resolved from clerkId, NOT from DTO
     // =========================================================================
 
-    it('CONSTRAINT 5: creates StockExit with loggedById = user.id from clerkId (never from DTO body)', async () => {
+    it('CONSTRAINT 5: loggedById = authenticated user even if DTO carries a fake loggedById', async () => {
       const clerkId = 'clerk-user-stockexit';
       const internalUserId = 'db-user-stockexit-id';
       const packedStockId = 'packed-stock-uuid-1';
       const bagTypeId = 'bag-type-uuid-se-1';
 
+      // User lookup now happens outside the transaction
+      mockPrisma.user.findUnique.mockResolvedValue({ id: internalUserId, clerkId });
+
       const mockTx = {
-        user: { findUnique: fn() },
         packedStock: { findUnique: fn(), update: fn() },
         stockExit: { create: fn() },
       };
 
-      mockTx.user.findUnique.mockResolvedValue({
-        id: internalUserId,
-        clerkId,
-      });
-
-      mockTx.packedStock.findUnique.mockResolvedValue({
-        id: packedStockId,
-        quantity: 20,
-        bagTypeId,
-      });
-
+      mockTx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 20, bagTypeId });
       mockTx.packedStock.update.mockResolvedValue({});
       mockTx.stockExit.create.mockResolvedValue({ id: 'exit-uuid-1' });
-
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockTx));
 
-      const dto: CreateStockExitDto = {
+      // Simulate a malicious caller injecting loggedById into the DTO body.
+      // CreateStockExitDto has no loggedById field, but test this explicitly.
+      const dto = {
         packedStockId,
         bagTypeId,
         quantity: 5,
         exitType: 'sample' as any,
         date: '2024-06-01',
-      };
+        loggedById: 'ATTACKER-ID',   // ← should be ignored
+      } as CreateStockExitDto;
 
       await service.create(dto, clerkId);
 
       const createCall = mockTx.stockExit.create.mock.calls[0][0];
-      // loggedById must be the internal DB user ID, not the clerkId or any DTO value
+      // loggedById must be the JWT-resolved DB user id, never the DTO value
       expect(createCall.data.loggedById).toBe(internalUserId);
-      // Confirm clerkId itself was NOT used as loggedById
+      expect(createCall.data.loggedById).not.toBe('ATTACKER-ID');
       expect(createCall.data.loggedById).not.toBe(clerkId);
     });
 
@@ -159,29 +153,21 @@ describe('StockExitsService', () => {
     // Test 4: CONSTRAINT 2 — packedStock.quantity - dto.quantity < 0 → throws BadRequestException
     // =========================================================================
 
-    it('throws BadRequestException CONSTRAINT_VIOLATION when requested quantity exceeds available packed stock', async () => {
+    it('CONSTRAINT 2: quantity > available → 400 CONSTRAINT_VIOLATION; packedStock.update NOT called (rollback)', async () => {
       const clerkId = 'clerk-user-stockexit-2';
       const packedStockId = 'packed-stock-uuid-2';
       const bagTypeId = 'bag-type-uuid-se-2';
 
+      // User lookup now happens outside the transaction
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-2', clerkId });
+
       const mockTx = {
-        user: { findUnique: fn() },
         packedStock: { findUnique: fn(), update: fn() },
         stockExit: { create: fn() },
       };
 
-      mockTx.user.findUnique.mockResolvedValue({
-        id: 'db-user-2',
-        clerkId,
-      });
-
-      // Only 3 available, requesting 10
-      mockTx.packedStock.findUnique.mockResolvedValue({
-        id: packedStockId,
-        quantity: 3,
-        bagTypeId,
-      });
-
+      // Only 3 bags available — requesting 10
+      mockTx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 3, bagTypeId });
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockTx));
 
       const dto: CreateStockExitDto = {
@@ -193,12 +179,14 @@ describe('StockExitsService', () => {
       };
 
       await expect(service.create(dto, clerkId)).rejects.toThrow(BadRequestException);
-
       await expect(service.create(dto, clerkId)).rejects.toMatchObject({
         response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
       });
 
-      // stockExit.create must not be called when validation fails
+      // Neither the decrement nor the exit record must be written when validation fails.
+      // In production the transaction rolls back; in the unit test the mocks confirm
+      // neither call was made before the throw.
+      expect(mockTx.packedStock.update).not.toHaveBeenCalled();
       expect(mockTx.stockExit.create).not.toHaveBeenCalled();
     });
   });

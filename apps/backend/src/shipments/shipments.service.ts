@@ -151,6 +151,14 @@ export class ShipmentsService {
    * @constraint 5 loggedById from user.id, never from DTO
    */
   async confirmDelivery(id: string, dto: ConfirmDeliveryDto, userId: string) {
+    // Resolve caller's internal user record before opening a transaction —
+    // the user row is not mutated during delivery confirmation.
+    const user = await this.prisma.user.findUnique({ where: { clerkId: userId } });
+    if (!user) {
+      throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
+    }
+
+    // Delivery FIFO drain: scales with (bag types × stock entries); 15 s covers large shipments without hanging the pool indefinitely.
     return this.prisma.$transaction(async (tx) => {
       // Step 1: Fetch shipment with bags and order
       const shipment = await tx.shipment.findUnique({
@@ -159,12 +167,6 @@ export class ShipmentsService {
       });
       if (!shipment) {
         throw new NotFoundException({ error: 'Shipment not found', code: 'NOT_FOUND' });
-      }
-
-      // Step 2: Resolve caller's internal user record
-      const user = await tx.user.findUnique({ where: { clerkId: userId } });
-      if (!user) {
-        throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
       }
 
       // Step 3: For each ShipmentBag, drain packed stock FIFO
@@ -268,7 +270,7 @@ export class ShipmentsService {
         where: { id },
         include: { bags: { include: { bagType: true } } },
       });
-    });
+    }, { timeout: 15_000, maxWait: 5_000 });
   }
 
   /**

@@ -164,22 +164,22 @@ export class CashHandoversService {
     handedAmt: string;
     notes?: string | null;
   }, userId: string) {
+    const [logger, receiver] = await Promise.all([
+      this.prisma.user.findUnique({ where: { clerkId: userId } }),
+      this.prisma.user.findUnique({ where: { id: dto.receiverId } }),
+    ]);
+    if (!logger)   throw new NotFoundException({ error: 'User not found',     code: 'NOT_FOUND' });
+    if (!receiver) throw new NotFoundException({ error: 'Receiver not found', code: 'NOT_FOUND' });
+
+    const expected  = parseFloat(dto.expectedAmt);
+    const handed    = parseFloat(dto.handedAmt);
+    const diff      = handed - expected;
+    const handedDec = new Decimal(dto.handedAmt);
+
     return this.prisma.$transaction(async (tx) => {
-      const [logger, receiver] = await Promise.all([
-        tx.user.findUnique({ where: { clerkId: userId } }),
-        tx.user.findUnique({ where: { id: dto.receiverId } }),
-      ]);
-      if (!logger)   throw new NotFoundException({ error: 'User not found',     code: 'NOT_FOUND' });
-      if (!receiver) throw new NotFoundException({ error: 'Receiver not found', code: 'NOT_FOUND' });
-
-      const expected  = parseFloat(dto.expectedAmt);
-      const handed    = parseFloat(dto.handedAmt);
-      const diff      = handed - expected;
-      const handedDec = new Decimal(dto.handedAmt);
-
       const handover = await tx.cashHandover.create({
         data: {
-          date:        new Date(dto.date),
+          date:         new Date(dto.date),
           receiverName: receiver.name,
           receiverId:   receiver.id,
           expectedAmt:  expected.toFixed(2),

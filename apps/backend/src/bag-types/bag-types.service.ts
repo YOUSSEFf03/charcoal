@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBagTypeDto } from './dto/create-bag-type.dto';
 import { UpdateBagTypeDto } from './dto/update-bag-type.dto';
@@ -53,15 +54,22 @@ export class BagTypesService {
    * @returns Newly created BagType object
    */
   async create(dto: CreateBagTypeDto) {
-    return this.prisma.bagType.create({
-      data: {
-        name: dto.name,
-        nominalKg: dto.nominalKg,
-        costPerBag: dto.costPerBag,
-        workerRate: dto.workerRate,
-        note: dto.note,
-      },
-    });
+    try {
+      return await this.prisma.bagType.create({
+        data: {
+          name: dto.name,
+          nominalKg: dto.nominalKg,
+          costPerBag: dto.costPerBag,
+          workerRate: dto.workerRate,
+          note: dto.note,
+        },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException({ error: 'A bag type with this name already exists', code: 'CONFLICT' });
+      }
+      throw e;
+    }
   }
 
   /**
@@ -74,16 +82,23 @@ export class BagTypesService {
    */
   async update(id: string, dto: UpdateBagTypeDto) {
     await this.findOne(id);
-    return this.prisma.bagType.update({
-      where: { id },
-      data: {
-        ...(dto.name !== undefined && { name: dto.name }),
-        ...(dto.nominalKg !== undefined && { nominalKg: dto.nominalKg }),
-        ...(dto.costPerBag !== undefined && { costPerBag: dto.costPerBag }),
-        ...(dto.workerRate !== undefined && { workerRate: dto.workerRate }),
-        ...(dto.note !== undefined && { note: dto.note }),
-      },
-    });
+    try {
+      return await this.prisma.bagType.update({
+        where: { id },
+        data: {
+          ...(dto.name !== undefined && { name: dto.name }),
+          ...(dto.nominalKg !== undefined && { nominalKg: dto.nominalKg }),
+          ...(dto.costPerBag !== undefined && { costPerBag: dto.costPerBag }),
+          ...(dto.workerRate !== undefined && { workerRate: dto.workerRate }),
+          ...(dto.note !== undefined && { note: dto.note }),
+        },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException({ error: 'A bag type with this name already exists', code: 'CONFLICT' });
+      }
+      throw e;
+    }
   }
 
   /**

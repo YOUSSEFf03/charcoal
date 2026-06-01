@@ -1,10 +1,8 @@
 import {
   Body,
   Controller,
-  DefaultValuePipe,
   Get,
   Param,
-  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -12,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { ClientType } from '@prisma/client';
+import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { ClientsService } from './clients.service';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
@@ -31,8 +30,8 @@ export class ClientsController {
   @Get()
   @Roles('owner', 'sales_rep')
   findAll(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('search') search?: string,
     @Query('type') type?: ClientType,
     @Query('isActive') isActiveRaw?: string,
@@ -130,8 +129,8 @@ export class ClientsController {
   @Roles('owner', 'sales_rep')
   getOrders(
     @Param('id', ParseUUIDPipe) id: string,
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
   ) {
     return this.clientsService.getOrders(id, page, limit);
   }
@@ -143,8 +142,8 @@ export class ClientsController {
   @Roles('owner', 'accountant', 'sales_rep')
   getInvoices(
     @Param('id', ParseUUIDPipe) id: string,
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
   ) {
     return this.clientsService.getInvoices(id, page, limit);
   }
@@ -156,8 +155,8 @@ export class ClientsController {
   @Roles('owner', 'accountant', 'sales_rep')
   getPayments(
     @Param('id', ParseUUIDPipe) id: string,
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
   ) {
     return this.clientsService.getPayments(id, page, limit);
   }

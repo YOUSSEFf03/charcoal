@@ -84,7 +84,7 @@ export class FillJobsService {
    *   8. Return job with fill lots included
    */
   async create(dto: CreateFillJobDto) {
-    return this.prisma.$transaction(async (tx) => {
+    const fillJobId = await this.prisma.$transaction(async (tx) => {
       // Step 1: Fetch all referenced lots
       const lotIds = dto.charcoalInputs.map((i) => i.lotId);
       const lots = await tx.stockLot.findMany({ where: { id: { in: lotIds } } });
@@ -138,14 +138,14 @@ export class FillJobsService {
       });
 
       // Step 5: Deduct kgUsed from each lot's kgRemaining
-      for (const inp of lotCosts) {
+      await Promise.all(lotCosts.map(inp => {
         const lot = lotMap.get(inp.lotId)!;
         const newRemaining = new Decimal(lot.kgRemaining.toString()).minus(inp.kg).toFixed(3);
-        await tx.stockLot.update({
+        return tx.stockLot.update({
           where: { id: inp.lotId },
           data: { kgRemaining: newRemaining },
         });
-      }
+      }));
 
       // Step 6: Create FillJob record
       const fillJob = await tx.fillJob.create({
@@ -162,23 +162,24 @@ export class FillJobsService {
       });
 
       // Step 7: Create FillJobLot junction rows (one per charcoal input)
-      for (const inp of lotCosts) {
-        await tx.fillJobLot.create({
-          data: {
-            fillJobId: fillJob.id,
-            lotId: inp.lotId,
-            kgUsed: inp.kg.toFixed(3),
-            costPerKg: inp.costPerKg.toFixed(4),
-            cost: inp.cost.toFixed(2),
-          },
-        });
-      }
-
-      // Step 8: Return with fill lots and worker entity included
-      return tx.fillJob.findUnique({
-        where: { id: fillJob.id },
-        include: FILL_JOB_INCLUDE,
+      await tx.fillJobLot.createMany({
+        data: lotCosts.map(inp => ({
+          fillJobId: fillJob.id,
+          lotId: inp.lotId,
+          kgUsed: inp.kg.toFixed(3),
+          costPerKg: inp.costPerKg.toFixed(4),
+          cost: inp.cost.toFixed(2),
+        })),
       });
+
+      // Step 8: Return fill job id (final fetch happens outside tx)
+      return fillJob.id;
+    });
+
+    // Fetch with relations outside the transaction — read-only, no contention
+    return this.prisma.fillJob.findUnique({
+      where: { id: fillJobId },
+      include: FILL_JOB_INCLUDE,
     });
   }
 }

@@ -333,6 +333,8 @@ export interface CreateContainerDto {
 export interface UpdateContainerDto {
   number?: string;
   supplierId?: string;
+  status?: ContainerStatus;
+  arrivalDate?: string;
   notes?: string | null;
 }
 
@@ -659,7 +661,8 @@ export interface CreateOrderDto {
   totalKgRequested: string;
   bagTypeId?: string | null;
   pricePerBag: string;
-  currency: Currency;
+  currency?: Currency;
+  bagLines?: CreateOrderBagLineDto[];
   notes?: string | null;
 }
 
