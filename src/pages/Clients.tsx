@@ -50,7 +50,7 @@ export default function Clients() {
   const [lbpAmt, setLbpAmt] = useState('')
   const rateCtx = useRate()
   const [newRate, setNewRate] = useState(rateCtx.rate.replace(/,/g, ''))
-  const RATE = parseInt(rateCtx.rate.replace(/,/g, '')) || 89550
+  const rawRate = rateCtx.rawRate
   const [toast, setToast] = useState('')
   const [newPhone, setNewPhone] = useState('')
   const [newPhoneType, setNewPhoneType] = useState('Mobile')
@@ -99,7 +99,7 @@ export default function Clients() {
 
   const usd = parseFloat(usdAmt) || 0
   const lbp = parseFloat(lbpAmt) || 0
-  const lbpAsUsd = lbp / RATE
+  const lbpAsUsd = rawRate > 0 ? lbp / rawRate : 0
   const totalPay = usd + lbpAsUsd
   const outstanding = activeClient ? parseFloat(activeClient.balance) : 0
   const remaining = outstanding - totalPay
@@ -154,7 +154,7 @@ export default function Clients() {
     createPayment.mutate(
       {
         clientId: activeClient.id,
-        amount: usd.toFixed(2),
+        amount: totalPay.toFixed(2),
         currency: 'USD',
         method,
         date: payDate,
@@ -186,7 +186,7 @@ export default function Clients() {
       <div className="rate-bar">
         <i className="ti ti-currency-dollar" style={{ fontSize: 14, color: 'var(--accent)' }} />
         <span>Exchange rate (owner-controlled):</span>
-        <span className="rate-val">$1 = {RATE.toLocaleString()} LBP</span>
+        <span className="rate-val">$1 = {rawRate.toLocaleString()} LBP</span>
         <span className="rate-edit" onClick={() => setRateOpen(true)} style={{ cursor: 'pointer' }}>Update rate</span>
       </div>
 
@@ -364,7 +364,7 @@ export default function Clients() {
                 const cards = [
                   { label: 'TOTAL OWED', val: fmtUsd(String(totalOwed)), vColor: 'var(--accent2)', sub: `${balanceClients.length} clients` },
                   { label: 'OVERDUE', val: fmtUsd(String(overdueOwed)), vColor: 'var(--red)', sub: `${overdueClients.length} clients` },
-                  { label: 'IN LBP EQUIV.', val: Math.round(totalOwed * RATE).toLocaleString(), vSize: 18, sub: `at ${RATE.toLocaleString()} rate` },
+                  { label: 'IN LBP EQUIV.', val: Math.round(totalOwed * rawRate).toLocaleString(), vSize: 18, sub: `at ${rawRate.toLocaleString()} rate` },
                   { label: 'RATE', val: parseInt(newRate).toLocaleString(), vSize: 22, sub: 'Click to update →', subColor: 'var(--accent)', click: true },
                 ] as { label: string; val: string; vColor?: string; vSize?: number; sub: string; subColor?: string; click?: boolean }[]
                 return cards.map((s, i) => (
@@ -392,7 +392,7 @@ export default function Clients() {
                       <td style={{ fontSize: 12, color: 'var(--text3)' }}>{c.type}</td>
                       <td><span className="badge badge-gray">{c.currency}</span></td>
                       <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: c.isOverdue ? 'var(--red)' : 'var(--text)' }}>{fmtUsd(c.balance)}</td>
-                      <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text2)' }}>{Math.round(parseFloat(c.balance) * RATE).toLocaleString()} LL</td>
+                      <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text2)' }}>{Math.round(parseFloat(c.balance) * rawRate).toLocaleString()} LL</td>
                       <td><span className={`badge ${c.isOverdue ? 'badge-red' : 'badge-gray'}`}>{c.isOverdue ? 'Overdue' : 'On account'}</span></td>
                     </tr>
                   ))}

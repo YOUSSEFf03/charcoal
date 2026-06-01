@@ -4,8 +4,7 @@ import { useInvoices, useIssueInvoice, useCancelInvoice } from '../hooks/useInvo
 import { usePayments, useCreatePayment } from '../hooks/usePayments'
 import { useClients } from '../hooks/useClients'
 import type { Invoice, InvoiceStatus, PaymentMethod } from '../types/api'
-
-const RATE = 89550
+import { useRate } from '../context/RateContext'
 
 function statusBadge(status: string) {
   if (status === 'paid') return <span className="badge badge-green">Paid</span>
@@ -58,6 +57,7 @@ export default function Invoices() {
   const createPayment = useCreatePayment()
   const issueInvoice = useIssueInvoice()
   const cancelInvoice = useCancelInvoice()
+  const { rawRate, rate: fmtRate } = useRate()
 
   const invoiceRows = invoicesQ.data?.data ?? []
   const paymentRows = paymentsQ.data?.data ?? []
@@ -94,12 +94,14 @@ export default function Invoices() {
   function submitPayment() {
     if (!activeInvoice) return
     const usd = parseFloat(usdAmt) || 0
-    if (usd <= 0) return
+    const lbp = parseFloat(lbpAmt) || 0
+    const total = usd + (rawRate > 0 ? lbp / rawRate : 0)
+    if (total <= 0) return
     createPayment.mutate(
       {
         clientId: activeInvoice.clientId,
         invoiceId: activeInvoice.id,
-        amount: usd.toFixed(2),
+        amount: total.toFixed(2),
         currency: 'USD',
         method: payMethod.toLowerCase() as PaymentMethod,
         date: new Date().toISOString().slice(0, 10),
@@ -117,7 +119,7 @@ export default function Invoices() {
 
   const usdNum = parseFloat(usdAmt) || 0
   const lbpNum = parseFloat(lbpAmt) || 0
-  const totalPay = usdNum + lbpNum / RATE
+  const totalPay = usdNum + (rawRate > 0 ? lbpNum / rawRate : 0)
   const remaining = invoiceRemaining - totalPay
   const pct = invoiceRemaining > 0 ? Math.min(100, (totalPay / invoiceRemaining) * 100) : 0
 
@@ -130,7 +132,7 @@ export default function Invoices() {
   return (
     <>
       <Topbar title="Invoices & Payments">
-        <span className="rate-display">89,550 LL/$</span>
+        <span className="rate-display">{fmtRate} LL/$</span>
         <button className="btn btn-ghost" onClick={() => setExportOpen(true)}><i className="ti ti-download" /> Export</button>
       </Topbar>
 
@@ -310,7 +312,7 @@ export default function Invoices() {
                       <td><span className="mono">{p.invoiceId ?? '—'}</span></td>
                       <td><span className="mono">{p.currency === 'USD' ? `$${fmtMoney(p.amount)}` : '—'}</span></td>
                       <td><span className="mono" style={{ color: 'var(--text2)' }}>{p.currency === 'LBP' ? `LL ${amt.toLocaleString()}` : '—'}</span></td>
-                      <td><strong>${p.currency === 'USD' ? fmtMoney(p.amount) : (amt / RATE).toFixed(2)}</strong></td>
+                      <td><strong>${p.currency === 'USD' ? fmtMoney(p.amount) : (rawRate > 0 ? amt / rawRate : 0).toFixed(2)}</strong></td>
                       <td>{methodBadge(p.method)}</td>
                       <td style={{ color: 'var(--text2)', fontSize: '0.83rem' }}>{p.loggedById}</td>
                     </tr>

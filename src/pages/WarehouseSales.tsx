@@ -40,7 +40,7 @@ export default function WarehouseSales() {
   const workersQ = useWorkers()
   const { receivers: customReceivers } = useReceivers()
   const rateCtx = useRate()
-  const RATE = parseInt(rateCtx.rate.replace(/,/g, '')) || 89550
+  const rawRate = rateCtx.rawRate
 
   const packedRecordsQ = usePackedStockRecords({ limit: 200 })
   const exitsQ = useStockExits({ exitType: 'walk_in', limit: 100 })
@@ -163,7 +163,7 @@ export default function WarehouseSales() {
   // Totals
   function lineTotalUSD(ln: PackedLine) {
     const sub = (parseFloat(ln.qty) || 0) * (parseFloat(ln.price) || 0)
-    return ln.curr === 'LBP' ? sub / RATE : sub
+    return ln.curr === 'LBP' ? (rawRate > 0 ? sub / rawRate : 0) : sub
   }
 
   let totalUSD = 0
@@ -183,7 +183,7 @@ export default function WarehouseSales() {
     const w = parseFloat(kgWeight) || 0
     const p = parseFloat(kgPrice) || 0
     const sub = w * p
-    totalUSD = kgCurr === 'LBP' ? sub / RATE : sub
+    totalUSD = kgCurr === 'LBP' ? (rawRate > 0 ? sub / rawRate : 0) : sub
     const lot = activeLots.find(l => l.id === kgLotId)
     breakdown = w > 0 && p > 0
       ? `${w} kg × ${kgCurr === 'USD' ? '$' : ''}${p}${kgCurr === 'LBP' ? ' LL' : ''}/kg · ${lot?.charcoalType || ''} Grade ${lot?.grade || ''}`
@@ -192,7 +192,7 @@ export default function WarehouseSales() {
 
   const usdNum = parseFloat(rcvUsd) || 0
   const lbpNum = parseFloat(rcvLbp) || 0
-  const lbpEq = lbpNum / RATE
+  const lbpEq = rawRate > 0 ? lbpNum / rawRate : 0
   const totalRecv = usdNum + lbpEq
 
   let recvBarCls = 'recv-bar none'
@@ -257,7 +257,7 @@ export default function WarehouseSales() {
           const take = Math.min(rec.quantity, remaining)
           try {
             const bt = bagTypes.find(b => b.id === ln.bagTypeId)
-            const lineAmt = bt ? take * (parseFloat(ln.price) || 0) * (ln.curr === 'LBP' ? 1 / RATE : 1) : 0
+            const lineAmt = bt ? take * (parseFloat(ln.price) || 0) * (ln.curr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1) : 0
             await createExit.mutateAsync({
               packedStockId: rec.id,
               bagTypeId: ln.bagTypeId,
@@ -291,7 +291,7 @@ export default function WarehouseSales() {
         return
       }
       try {
-        const kgAmt = kgNum * (parseFloat(kgPrice) || 0) * (kgCurr === 'LBP' ? 1 / RATE : 1)
+        const kgAmt = kgNum * (parseFloat(kgPrice) || 0) * (kgCurr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1)
         await createExit.mutateAsync({
           lotId: lot.id,
           kgQuantity: kgNum,

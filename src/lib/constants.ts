@@ -1,1 +1,1 @@
-export const RATE = 89550
+// RATE constant removed — use rateCtx.rawRate from useRate() everywhere.
