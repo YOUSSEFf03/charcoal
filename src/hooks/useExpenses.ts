@@ -1,10 +1,12 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type {
   Container,
   ContainerExpense,
   DriverTrip,
   PaginatedResponse,
+  GeneralExpense,
+  CreateGeneralExpenseDto,
 } from '../types/api'
 
 /** Date-range params for the aggregated expense views. */
@@ -73,6 +75,40 @@ export function useDriverExpenses(params?: ExpensesQuery) {
         params,
       })
       return res.data
+    },
+  })
+}
+
+/**
+ * List all general (non-container, non-driver) expenses.
+ * @returns React Query result of PaginatedResponse<GeneralExpense>
+ * GET /general-expenses
+ */
+export function useGeneralExpenses() {
+  return useQuery({
+    queryKey: ['general-expenses'],
+    queryFn: async () => {
+      const res = await api.get<PaginatedResponse<GeneralExpense>>('/general-expenses', {
+        params: { limit: 100 },
+      })
+      return res.data.data
+    },
+  })
+}
+
+/**
+ * Create a general expense, then invalidate the list query.
+ * POST /general-expenses
+ */
+export function useCreateGeneralExpense() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: CreateGeneralExpenseDto) => {
+      const res = await api.post<GeneralExpense>('/general-expenses', body)
+      return res.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['general-expenses'] })
     },
   })
 }

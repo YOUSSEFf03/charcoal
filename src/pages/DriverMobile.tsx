@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useDriverTrips, useStartTrip, useCompleteTrip } from '../hooks/useDriverTrips'
 import { useShipments, useConfirmDelivery, useLogActualWeight } from '../hooks/useShipments'
+import { useRate } from '../context/RateContext'
 import type { ShipmentStatus } from '../types/api'
 
 type Screen = 'login' | 'trip' | 'confirm' | 'success' | 'expenses'
-const RATE = 89550
 
 const mono = "'IBM Plex Mono', monospace"
 const sans = "'IBM Plex Sans', sans-serif"
@@ -21,6 +21,7 @@ interface Expense { id: number; desc: string; amount: string }
 export default function DriverMobile() {
   const [screen, setScreen] = useState<Screen>('login')
   const [driver, setDriver] = useState<{ initials: string; name: string; id: string } | null>(null)
+  const rateCtx = useRate()
 
   // Live trips + shipments + mutations.
   const tripsQ = useDriverTrips({ limit: 100 })
@@ -64,17 +65,19 @@ export default function DriverMobile() {
   const [onAccount, setOnAccount] = useState(false)
   const [method, setMethod] = useState('Cash')
   const [actualKg, setActualKg] = useState('')
-  const [expenses, setExpenses] = useState<Expense[]>([{ id: 1, desc: 'Fuel', amount: '45' }, { id: 2, desc: 'Toll fees', amount: '12' }])
+  const [expenses, setExpenses] = useState<Expense[]>([{ id: 1, desc: 'Fuel', amount: '' }, { id: 2, desc: '', amount: '' }])
   const [nextExpId, setNextExpId] = useState(3)
 
-  const INVOICE_TOTAL = 280
+  // TODO: derive from shipment's order invoice total (backend sub-task)
+  const INVOICE_TOTAL = 0
   const usd = parseFloat(payUsd) || 0
   const lbp = parseFloat(payLbp) || 0
-  const lbpAsUsd = lbp / RATE
+  const lbpAsUsd = lbp / (parseInt(rateCtx.rate.replace(/,/g, ''), 10) || 89550)
   const totalPay = usd + lbpAsUsd
   const payDiff = totalPay - INVOICE_TOTAL
   const expTotal = expenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0)
-  const collected = 840
+  // TODO: sum payment_amounts from completed shipments in this trip (backend sub-task)
+  const collected = 0
 
   function go(s: Screen) { setScreen(s); window.scrollTo(0, 0) }
 
@@ -98,7 +101,7 @@ export default function DriverMobile() {
         id: activeStop.id,
         body: {
           actualKg: actualKg || undefined,
-          paymentAmount: onAccount ? undefined : (usd + lbp / RATE).toFixed(2),
+          paymentAmount: onAccount ? undefined : (usd + lbp / (parseInt(rateCtx.rate.replace(/,/g, ''), 10) || 89550)).toFixed(2),
         },
       },
       { onSuccess: () => go('success') },

@@ -34,6 +34,7 @@ import { WorkersModule } from './workers/workers.module';
 import { ReportsModule } from './reports/reports.module';
 import { FillJobsModule } from './fill-jobs/fill-jobs.module';
 import { SettingsModule } from './settings/settings.module';
+import { GeneralExpensesModule } from './general-expenses/general-expenses.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { SettingsModule } from './settings/settings.module';
     ReportsModule,
     FillJobsModule,
     SettingsModule,
+    GeneralExpensesModule,
   ],
   controllers: [HealthController],
   providers: [

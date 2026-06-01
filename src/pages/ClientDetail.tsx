@@ -21,9 +21,7 @@ interface ClientVM {
   outstandingBal: number; openInvoices: number; daysSinceOrder: number; avgDays: number
 }
 
-const BAG_TYPES = ['1.9 kg', '2 kg', '5 kg', '10 kg', '20 kg']
 const CHARCOAL_TYPES = ['BBQ Hardwood · A', 'BBQ Hardwood · B', 'Shisha · A', 'Shisha · B', 'Restaurant Grade · A']
-const DEFAULT_PRICES: Record<string, number> = { '1.9 kg': 2.5, '2 kg': 2.6, '5 kg': 6.4, '10 kg': 12.5, '20 kg': 24.0 }
 
 const MONTH_IDX: Record<string, number> = { Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11 }
 function parseDate(s: string) {
@@ -60,6 +58,10 @@ export default function ClientDetail() {
   const createPaymentM = useCreatePayment()
   const bagTypesQ = useBagTypes()
   const bagTypesList = bagTypesQ.data ?? []
+  const bagTypeNames = bagTypesList.map(b => b.name)
+  const defaultPriceByName: Record<string, number> = Object.fromEntries(
+    bagTypesList.map(b => [b.name, b.costPerBag ? parseFloat(b.costPerBag) : 0])
+  )
   const warehousePurchases = warehouseExitsQ.data?.data ?? []
   const { receivers: customReceivers } = useReceivers()
   const workersQ = useWorkers()
@@ -124,7 +126,7 @@ export default function ClientDetail() {
   const [payModalOpen, setPayModalOpen] = useState(false)
 
   const [editForm, setEditForm] = useState({ ...client })
-  const [orderLines, setOrderLines] = useState([{ id: _olid++, bag: '2 kg', char: 'BBQ Hardwood · A', qty: 0, price: 2.6 }])
+  const [orderLines, setOrderLines] = useState([{ id: _olid++, bag: '', char: 'BBQ Hardwood · A', qty: 0, price: 0 }])
   const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10))
   const [payMethod, setPayMethod] = useState('cash')
   const [payAmt, setPayAmt] = useState('')
@@ -248,7 +250,7 @@ export default function ClientDetail() {
   }
 
   function addOrderLine() {
-    setOrderLines(prev => [...prev, { id: _olid++, bag: '2 kg', char: 'BBQ Hardwood · A', qty: 0, price: 2.6 }])
+    setOrderLines(prev => [...prev, { id: _olid++, bag: '', char: 'BBQ Hardwood · A', qty: 0, price: 0 }])
   }
   function removeOrderLine(id: number) {
     if (orderLines.length === 1) return
@@ -258,7 +260,7 @@ export default function ClientDetail() {
     setOrderLines(prev => prev.map(l => {
       if (l.id !== id) return l
       const updated = { ...l, [field]: val }
-      if (field === 'bag' && DEFAULT_PRICES[val as string]) updated.price = DEFAULT_PRICES[val as string]
+      if (field === 'bag' && defaultPriceByName[val as string]) updated.price = defaultPriceByName[val as string]
       return updated
     }))
   }
@@ -289,7 +291,7 @@ export default function ClientDetail() {
         onSuccess: () => {
           setOrderOpen(false)
           showToast(`Order ${kind === 'draft' ? 'saved as draft' : 'created'} — ${fmt(orderSub)}`)
-          setOrderLines([{ id: _olid++, bag: '2 kg', char: 'BBQ Hardwood · A', qty: 0, price: 2.6 }])
+          setOrderLines([{ id: _olid++, bag: '', char: 'BBQ Hardwood · A', qty: 0, price: 0 }])
         },
         onError: () => showToast('Failed to create order'),
       },
@@ -884,9 +886,8 @@ export default function ClientDetail() {
                       <td style={{ padding: 8, borderTop: '1px solid var(--border)' }}>
                         <select style={{ width: '100%', padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, fontFamily: "'IBM Plex Sans',sans-serif", background: 'var(--surface)', color: 'var(--text)' }}
                           value={l.bag} onChange={e => updateOrderLine(l.id, 'bag', e.target.value)}>
-                          {bagTypesList.length > 0
-                            ? bagTypesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)
-                            : BAG_TYPES.map(b => <option key={b}>{b}</option>)}
+                          <option value="">Select bag type…</option>
+                          {bagTypeNames.map(b => <option key={b} value={b}>{b}</option>)}
                         </select>
                       </td>
                       <td style={{ padding: 8, borderTop: '1px solid var(--border)' }}>

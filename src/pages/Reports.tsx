@@ -1,10 +1,4 @@
 import { useState } from 'react'
-import {
-  Chart as ChartJS,
-  CategoryScale, LinearScale, BarElement,
-  ArcElement, Tooltip, Legend,
-} from 'chart.js'
-import { Bar, Doughnut } from 'react-chartjs-2'
 import Topbar from '../components/layout/Topbar'
 import { useProfitLoss, useVarianceReport } from '../hooks/useReports'
 import { useWorkers, useLogWorkerPayment } from '../hooks/useWorkers'
@@ -12,8 +6,6 @@ import { useBagTypes } from '../hooks/useBagTypes'
 import { useClients } from '../hooks/useClients'
 import { useInvoices } from '../hooks/useInvoices'
 import { useRate } from '../context/RateContext'
-
-ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend)
 
 function usd(value?: string | null) {
   const n = value != null ? parseFloat(value) : NaN
@@ -23,28 +15,6 @@ function usd(value?: string | null) {
 type Tab = 'pnl' | 'variance' | 'worker' | 'ledger'
 
 const mono = "'IBM Plex Mono', monospace"
-
-const REVENUE_DATA = [840,0,1200,640,0,2100,480,720,0,1640,840,0,2800,1200,960,0,3400,2100,1840,1200,1640]
-const REVENUE_LABELS = REVENUE_DATA.map((_, i) => String(i + 1))
-
-const barData = {
-  labels: REVENUE_LABELS,
-  datasets: [{ data: REVENUE_DATA, backgroundColor: '#1D6B4A', borderRadius: 3, borderSkipped: false as const }],
-}
-const barOptions = {
-  responsive: true,
-  plugins: { legend: { display: false } },
-  scales: {
-    x: { grid: { display: false }, ticks: { font: { family: 'IBM Plex Mono', size: 10 }, color: '#9B9890' } },
-    y: { grid: { color: '#E4E1D9' }, ticks: { font: { family: 'IBM Plex Mono', size: 10 }, color: '#9B9890', callback: (v: number | string) => `$${Number(v).toLocaleString()}` } },
-  },
-}
-
-const donutData = {
-  labels: ['BBQ Hardwood', 'Shisha', 'Restaurant'],
-  datasets: [{ data: [22100, 11200, 5150], backgroundColor: ['#1D6B4A', '#B45309', '#1D4ED8'], borderWidth: 0, hoverOffset: 4 }],
-}
-const donutOptions = { responsive: true, cutout: '68%', plugins: { legend: { display: false } } }
 
 function Card({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 14, ...style }}>{children}</div>
@@ -215,10 +185,10 @@ export default function Reports() {
                   const gross = pnl ? parseFloat(pnl.grossProfit) : 0
                   const margin = revenue > 0 ? ((gross / revenue) * 100).toFixed(1) : '0.0'
                   return [
-                    { label: 'Revenue',    value: pnlQ.isLoading ? '…' : usd(pnl?.revenue), sub: pnl ? `${pnl.from} → ${pnl.to}` : 'selected period', color: undefined },
+                    { label: 'Revenue',    value: pnlQ.isLoading ? '…' : usd(pnl?.revenue), sub: pnl?.from && pnl?.to ? `${pnl.from} → ${pnl.to}` : 'selected period', color: undefined },
                     { label: 'Total costs', value: pnlQ.isLoading ? '…' : `$${totalCosts.toLocaleString('en-US', { maximumFractionDigits: 0 })}`, sub: 'COGS + bags + variance + delivery', color: 'var(--red)' },
                     { label: <>Gross profit <OwnerTag /></>, value: pnlQ.isLoading ? '…' : usd(pnl?.grossProfit), sub: `${margin}% margin`, color: 'var(--accent)' },
-                    { label: 'Currency', value: pnl?.currency ?? 'USD', sub: 'reporting currency', color: 'var(--accent)', smallVal: true },
+                    { label: 'Currency', value: 'USD', sub: 'reporting currency', color: 'var(--accent)', smallVal: true },
                   ]
                 })().map((item, i) => (
                   <div key={i} style={i % 2 === 1 ? { background: 'var(--border)' } : { padding: i === 0 ? '0 28px 0 0' : i === 6 ? '0 0 0 28px' : '0 28px' }}>
@@ -237,21 +207,14 @@ export default function Reports() {
             <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 14, marginBottom: 14 }}>
               <Card style={{ marginBottom: 0 }}>
                 <CardHead icon="ti-chart-bar">Daily revenue — May 2026</CardHead>
-                <div style={{ padding: 16 }}><Bar data={barData} options={barOptions} style={{ maxHeight: 200 }} /></div>
+                <div style={{ padding: '24px 18px', textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>
+                  Daily revenue chart · <em>coming soon — requires per-day revenue endpoint</em>
+                </div>
               </Card>
               <Card style={{ marginBottom: 0 }}>
                 <CardHead icon="ti-chart-pie">Revenue by type</CardHead>
-                <div style={{ padding: 16, display: 'flex', alignItems: 'center', gap: 16 }}>
-                  <Doughnut data={donutData} options={donutOptions} style={{ maxHeight: 160, maxWidth: 160 }} />
-                  <div style={{ flex: 1 }}>
-                    {[{ color: '#1D6B4A', label: 'BBQ Hardwood', val: '$22,100' }, { color: '#B45309', label: 'Shisha', val: '$11,200' }, { color: '#1D4ED8', label: 'Restaurant Grade', val: '$5,150' }].map(r => (
-                      <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 12 }}>
-                        <div style={{ width: 10, height: 10, borderRadius: 2, background: r.color, flexShrink: 0 }} />
-                        <span style={{ flex: 1 }}>{r.label}</span>
-                        <span style={{ fontFamily: mono, fontWeight: 600 }}>{r.val}</span>
-                      </div>
-                    ))}
-                  </div>
+                <div style={{ padding: '24px 18px', textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>
+                  Revenue by charcoal type · <em>coming soon — requires type-indexed invoices endpoint</em>
                 </div>
               </Card>
             </div>
@@ -287,12 +250,9 @@ export default function Reports() {
               </div>
               <DataTable
                 headers={['Type / grade', 'Revenue', 'COGS', 'Bag cost', 'Variance cost', 'Gross profit', 'Margin']}
-                rows={[
-                  ['BBQ Hardwood · A', <Mono color="var(--accent)">$22,100</Mono>, <Mono color="var(--red)">$13,600</Mono>, <Mono color="var(--red)">$1,640</Mono>, <Mono color="var(--accent2)">$740</Mono>, <Mono color="var(--accent)" bold>$6,120</Mono>, <span className="badge badge-green">27.7%</span>],
-                  ['Shisha · B',        <Mono color="var(--accent)">$11,200</Mono>, <Mono color="var(--red)">$7,940</Mono>,  <Mono color="var(--red)">$840</Mono>,   <Mono color="var(--accent2)">$380</Mono>, <Mono color="var(--accent)" bold>$2,040</Mono>, <span className="badge badge-amber">18.2%</span>],
-                  ['Restaurant Grade · A', <Mono color="var(--accent)">$5,150</Mono>, <Mono color="var(--red)">$2,640</Mono>, <Mono color="var(--red)">$360</Mono>, <Mono color="var(--accent2)">$170</Mono>, <Mono color="var(--accent)" bold>$1,980</Mono>, <span className="badge badge-green">38.4%</span>],
-                ]}
+                rows={[]}
               />
+              <div style={{ padding: '14px 18px', fontSize: 12, color: 'var(--text3)' }}>Breakdown by charcoal type requires type-indexed invoice lines (backend sub-task).</div>
             </Card>
           </div>
         )}
@@ -305,16 +265,16 @@ export default function Reports() {
               <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '14px 16px' }}>
                 <div style={{ fontSize: 11, fontFamily: mono, color: 'var(--text3)', marginBottom: 4 }}>Total variance</div>
                 <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: -0.5, color: 'var(--accent2)' }}>{variance ? `${parseFloat(variance.totalVarianceKg).toFixed(0)} kg` : '—'}</div>
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>across {variance?.rows.length ?? 0} sessions</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>across {variance?.total ?? 0} sessions</div>
               </div>
               <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '14px 16px' }}>
                 <div style={{ fontSize: 11, fontFamily: mono, color: 'var(--text3)', marginBottom: 4 }}>Variance cost <OwnerTag /></div>
-                <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: -0.5, color: 'var(--red)' }}>{usd(variance?.totalVarianceCostUsd)}</div>
+                <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: -0.5, color: 'var(--red)' }}>{usd(variance?.totalVarianceCost)}</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>at weighted avg cost/kg</div>
               </div>
               <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '14px 16px' }}>
                 <div style={{ fontSize: 11, fontFamily: mono, color: 'var(--text3)', marginBottom: 4 }}>Avg variance per session</div>
-                <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: -0.5 }}>{variance && variance.rows.length > 0 ? `${(parseFloat(variance.totalVarianceKg) / variance.rows.length).toFixed(1)} kg` : '—'}</div>
+                <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: -0.5 }}>{variance && variance.total > 0 ? `${(parseFloat(variance.totalVarianceKg) / variance.total).toFixed(1)} kg` : '—'}</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>per packing session</div>
               </div>
             </div>
@@ -323,12 +283,9 @@ export default function Reports() {
                 <CardHead icon="ti-flame">Variance by charcoal type</CardHead>
                 <DataTable
                   headers={['Type', 'Sessions', 'Total var. kg', 'Var. cost', 'Avg %']}
-                  rows={[
-                    ['BBQ Hardwood · A',   <Mono>18</Mono>, <Mono color="var(--accent2)">−640 kg</Mono>,  <Mono color="var(--red)">$474</Mono>, <span className="badge badge-amber">2.6%</span>],
-                    ['Shisha · B',          <Mono>14</Mono>, <Mono color="var(--accent2)">−510 kg</Mono>,  <Mono color="var(--red)">$454</Mono>, <span className="badge badge-amber">3.1%</span>],
-                    ['Restaurant Grade · A', <Mono>10</Mono>, <Mono color="var(--accent2)">−270 kg</Mono>, <Mono color="var(--red)">$246</Mono>, <span className="badge badge-green">2.2%</span>],
-                  ]}
+                  rows={[]}
                 />
+                <div style={{ padding: '14px 18px', fontSize: 12, color: 'var(--text3)' }}>Breakdown by charcoal type requires type-indexed invoice lines (backend sub-task).</div>
               </Card>
               <Card style={{ marginBottom: 0 }}>
                 <CardHead icon="ti-tools">Variance by worker</CardHead>
@@ -343,17 +300,17 @@ export default function Reports() {
               <CardHead icon="ti-list">Session variance log</CardHead>
               <DataTable
                 headers={['Session', 'Date', 'Lot', 'kg consumed', 'kg output', 'Variance', 'Var. cost']}
-                rows={(variance?.rows ?? []).map(r => [
+                rows={(variance?.data ?? []).map(r => [
                   <Mono>{r.sessionId.slice(0, 8)}</Mono>,
                   <span style={{ color: 'var(--text2)' }}>{new Date(r.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>,
-                  <span>{r.lotId.slice(0, 8)}</span>,
+                  <span>{r.lots.map(l => l.lotId.slice(0, 8)).join(', ') || '—'}</span>,
                   <Mono>{parseFloat(r.kgConsumed).toFixed(0)} kg</Mono>,
                   <Mono>{parseFloat(r.kgOutputTotal).toFixed(0)} kg</Mono>,
                   <Mono color="var(--accent2)">{parseFloat(r.varianceKg).toFixed(1)} kg</Mono>,
-                  <Mono color="var(--red)">{usd(r.varianceCostUsd)}</Mono>,
+                  <Mono color="var(--red)">{usd(r.varianceCost)}</Mono>,
                 ])}
               />
-              {(!variance || variance.rows.length === 0) && <div className="empty">No variance records for this period.</div>}
+              {(!variance || variance.data.length === 0) && <div className="empty">No variance records for this period.</div>}
             </Card>
           </div>
         )}
@@ -400,12 +357,12 @@ export default function Reports() {
                     </button>
                   )}
                 </div>
-                {worker.totalBagsPacked.length > 0 ? (
+                {(worker.totalBagsPacked ?? []).length > 0 ? (
                   <DataTable
                     headers={['Bag type', 'Bags packed', 'Rate / bag', 'Earned']}
-                    rows={worker.totalBagsPacked.map(entry => {
+                    rows={(worker.totalBagsPacked ?? []).map(entry => {
                       const rateEntry = worker.ratesPerBagType.find(r => r.bagTypeId === entry.bagTypeId)
-                      const rate = rateEntry?.ratePerBag ?? 0
+                      const rate = parseFloat(rateEntry?.ratePerBag ?? '0')
                       const earned = entry.count * rate
                       return [
                         <Mono bold>{bagTypeNameById.get(entry.bagTypeId) ?? entry.bagTypeId.slice(0, 8)}</Mono>,

@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useOrders, useCreateOrder } from '../hooks/useOrders'
 import { useClients } from '../hooks/useClients'
-import { useCreateShipment, useConfirmDelivery, useLogReturn, useLogActualWeight } from '../hooks/useShipments'
+import { useCreateShipment, useConfirmDelivery, useLogReturn, useLogActualWeight, useShipments } from '../hooks/useShipments'
+import { useDriverTrips } from '../hooks/useDriverTrips'
 import type { OrderStatus, ClientOrder } from '../types/api'
 
 // Map an order status enum to a badge colour + display label.
@@ -36,10 +37,6 @@ function fmtUsd(value?: string | null) {
 }
 
 interface Shipment { id: number; addr: string; b2: number; b5: number; b10: number }
-interface PanelShipment {
-  id: number; num: string; badge: string; status: string; addr: string
-  bags: string[]; nom: string; act: string; paid: string; actColor: string; paidColor: string
-}
 
 export default function Orders() {
   const navigate = useNavigate()
@@ -52,20 +49,15 @@ export default function Orders() {
   const [newTripOpen, setNewTripOpen] = useState(false)
   const [invoiceOpen, setInvoiceOpen] = useState(false)
   const [assignOpen, setAssignOpen] = useState(false)
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [addShipPanelOpen, setAddShipPanelOpen] = useState(false)
   const [payMethod, setPayMethod] = useState('Cash')
   const [bagCounts, setBagCounts] = useState<Record<number, Record<string, number>>>({})
   const [shipments, setShipments] = useState<Shipment[]>([{ id: 1, addr: '', b2: 0, b5: 0, b10: 0 }])
-  const [panelShipments, setPanelShipments] = useState<PanelShipment[]>([
-    { id: 1, num: 'Shipment 1', badge: 'badge-green', status: 'Delivered',  addr: 'Hamra, Beirut',      bags: ['80 × 2kg bag', '20 × 5kg bag'], nom: '260 kg', act: '262 kg', paid: '$840 cash', actColor: 'var(--accent)', paidColor: 'var(--accent)' },
-    { id: 2, num: 'Shipment 2', badge: 'badge-blue',  status: 'In transit', addr: 'Achrafieh, Beirut',  bags: ['50 × 2kg bag', '10 × 5kg bag'], nom: '150 kg', act: '148 kg', paid: 'pending',   actColor: 'var(--accent)', paidColor: 'var(--text3)' },
-    { id: 3, num: 'Shipment 3', badge: 'badge-gray',  status: 'Pending',    addr: 'Jdeideh',            bags: ['120 × 2kg bag'],                nom: '240 kg', act: '—',      paid: '',          actColor: 'var(--text3)',  paidColor: 'var(--text3)' },
-  ])
   const [newShipAddr, setNewShipAddr] = useState('')
   const [newShipBag2, setNewShipBag2] = useState(0)
   const [newShipBag5, setNewShipBag5] = useState(0)
   const [newShipBag10, setNewShipBag10] = useState(0)
-  const [tripStarted, setTripStarted] = useState(false)
   const [toast, setToast] = useState('')
   const [errClient, setErrClient] = useState(false)
   const [errBags, setErrBags] = useState(false)
@@ -84,6 +76,8 @@ export default function Orders() {
   const confirmDelivery = useConfirmDelivery()
   const logReturn = useLogReturn()
   const logActualWeight = useLogActualWeight()
+  const driverTripsQ = useDriverTrips({ limit: 50 })
+  const panelShipmentsQ = useShipments({ orderId: selectedOrderId ?? undefined })
 
   const orders = ordersQ.data?.data ?? []
   const orderTotal = ordersQ.data?.total ?? orders.length
@@ -125,33 +119,6 @@ export default function Orders() {
   function showToast(msg: string) {
     setToast(msg)
     setTimeout(() => setToast(''), 2800)
-  }
-
-  function startTrip() {
-    setTripStarted(true)
-    showToast('Trip #TRP-0092 started — Ahmad Hassan dispatched')
-  }
-
-  function confirmAddShipment() {
-    const bags: string[] = []
-    if (newShipBag2 > 0) bags.push(`${newShipBag2} × 2kg bag`)
-    if (newShipBag5 > 0) bags.push(`${newShipBag5} × 5kg bag`)
-    if (newShipBag10 > 0) bags.push(`${newShipBag10} × 10kg bag`)
-    const nextNum = panelShipments.length + 1
-    setPanelShipments(prev => [...prev, {
-      id: Date.now(),
-      num: `Shipment ${nextNum}`,
-      badge: 'badge-gray',
-      status: 'Pending',
-      addr: newShipAddr.trim() || '—',
-      bags: bags.length > 0 ? bags : ['—'],
-      nom: '—', act: '—', paid: '',
-      actColor: 'var(--text3)', paidColor: 'var(--text3)',
-    }])
-    setAddShipPanelOpen(false)
-    setNewShipAddr('')
-    setNewShipBag2(0); setNewShipBag5(0); setNewShipBag10(0)
-    showToast(`Shipment ${nextNum} added to ORD-0284`)
   }
 
   // Status is filtered server-side; free-text search (client name / order id)
@@ -217,7 +184,7 @@ export default function Orders() {
         </div>
         <div className={`tab ${tab === 'trips' ? 'active' : ''}`} onClick={() => setTab('trips')}>
           <i className="ti ti-truck" style={{ fontSize: 14 }} /> Driver trips
-          <span className="tab-count blue">3</span>
+          <span className="tab-count blue">{driverTripsQ.data?.total ?? 0}</span>
         </div>
       </div>
 
@@ -263,7 +230,7 @@ export default function Orders() {
             {!ordersQ.isLoading && !ordersQ.isError && filteredOrders.map((o: ClientOrder) => {
               const meta = orderStatusMeta(o.status)
               return (
-                <div className="order-card" key={o.id} onClick={() => navigate('/orders/' + o.id)}>
+                <div className="order-card" key={o.id} onClick={() => { setSelectedOrderId(o.id); setPanelOpen(true) }}>
                   <div className="order-card-inner">
                     <div className="order-stripe" style={{ background: meta.stripe }} />
                     <div className="order-body">
@@ -308,115 +275,45 @@ export default function Orders() {
               <button className="btn primary" onClick={() => setNewTripOpen(true)}><i className="ti ti-plus" style={{ fontSize: 14 }} /> New trip</button>
             </div>
 
-            {/* Trip 1 — In progress */}
-            <div className="trip-card">
-              <div className="trip-head">
-                <div className="driver-badge" style={{ background: 'var(--blue-bg)', color: 'var(--blue)' }}>MK</div>
-                <div className="trip-info">
-                  <div className="trip-driver">Mohammed Khalil</div>
-                  <div className="trip-meta">Trip #TRP-0091 · 3 stops · started 08:00</div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span className="badge badge-blue">In progress</span>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text2)' }}>890 kg</span>
+            {driverTripsQ.isLoading && [0, 1].map(i => (
+              <div key={i} className="trip-card">
+                <div className="trip-head">
+                  <div className="driver-badge" style={{ background: 'var(--surface2)' }}><div className="skeleton" style={{ width: 24, height: 24, borderRadius: 6 }} /></div>
+                  <div className="trip-info">
+                    <div className="skeleton" style={{ width: 120, height: 13, marginBottom: 5 }} />
+                    <div className="skeleton" style={{ width: 80, height: 11 }} />
+                  </div>
                 </div>
               </div>
-              <div className="trip-stops">
-                <div className="stop-row">
-                  <div className="stop-line" />
-                  <div className="stop-dot done"><i className="ti ti-check" style={{ fontSize: 10 }} /></div>
-                  <div className="stop-info">
-                    <div className="stop-client">Al Rawda Restaurant</div>
-                    <div className="stop-addr">Hamra, Beirut · INV-0338</div>
-                    <div className="stop-bags"><span>80 × 2kg bag</span><span>20 × 5kg bag</span></div>
+            ))}
+            {driverTripsQ.isError && <div className="empty">Failed to load trips.<div><button className="btn" style={{ marginTop: 10 }} onClick={() => driverTripsQ.refetch()}>Retry</button></div></div>}
+            {!driverTripsQ.isLoading && !driverTripsQ.isError && (driverTripsQ.data?.data ?? []).length === 0 && (
+              <div className="empty">No trips found for this period.</div>
+            )}
+            {!driverTripsQ.isLoading && !driverTripsQ.isError && (driverTripsQ.data?.data ?? []).map(trip => {
+              const statusBadge = trip.status === 'completed' ? 'badge-green' : trip.status === 'in_progress' ? 'badge-blue' : 'badge-gray'
+              const statusLabel = trip.status === 'completed' ? 'Completed' : trip.status === 'in_progress' ? 'In progress' : 'Planned'
+              const driverLabel = trip.driverId.slice(0, 2).toUpperCase()
+              return (
+                <div key={trip.id} className="trip-card">
+                  <div className="trip-head">
+                    <div className="driver-badge" style={{ background: 'var(--blue-bg)', color: 'var(--blue)' }}>{driverLabel}</div>
+                    <div className="trip-info">
+                      <div className="trip-driver">Driver {driverLabel}</div>
+                      <div className="trip-meta">Trip {trip.id.slice(0, 8)} · {trip.startedAt ? new Date(trip.startedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'not started'}</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className={`badge ${statusBadge}`}>{statusLabel}</span>
+                    </div>
                   </div>
-                  <div className="stop-right">
-                    <span className="badge badge-green">Delivered</span>
-                    <span className="stop-kg">260 kg · paid $840</span>
-                  </div>
-                </div>
-                <div className="stop-row">
-                  <div className="stop-line" />
-                  <div className="stop-dot active">2</div>
-                  <div className="stop-info">
-                    <div className="stop-client">Chez Michel</div>
-                    <div className="stop-addr">Achrafieh, Beirut · INV-0339</div>
-                    <div className="stop-bags"><span>50 × 2kg bag</span><span>10 × 5kg bag</span></div>
-                  </div>
-                  <div className="stop-right">
-                    <span className="badge badge-blue">In transit</span>
-                    <span className="stop-kg">150 kg</span>
-                    <div className="stop-actions">
-                      <button className="stop-btn confirm-stop" onClick={() => setReceiptOpen(true)}>Confirm delivery</button>
+                  <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                      {trip.fuelCost ? `Fuel: $${parseFloat(trip.fuelCost).toFixed(2)}` : 'No expenses logged'}
                     </div>
                   </div>
                 </div>
-                <div className="stop-row">
-                  <div className="stop-dot">3</div>
-                  <div className="stop-info">
-                    <div className="stop-client">Cedar Grill House</div>
-                    <div className="stop-addr">Jdeideh · INV-0340</div>
-                    <div className="stop-bags"><span>120 × 2kg bag</span></div>
-                  </div>
-                  <div className="stop-right">
-                    <span className="badge badge-gray">Pending</span>
-                    <span className="stop-kg">240 kg</span>
-                  </div>
-                </div>
-              </div>
-              <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontSize: 12, color: 'var(--text3)' }}>Actual weights logged: 262kg / 148kg / pending</div>
-                <button className="btn" style={{ fontSize: 12 }} onClick={() => setExpensesOpen(true)}><i className="ti ti-gas-station" style={{ fontSize: 13 }} /> Log expenses</button>
-              </div>
-            </div>
-
-            {/* Trip 2 — Planned */}
-            <div className="trip-card">
-              <div className="trip-head">
-                <div className="driver-badge" style={{ background: 'var(--accent2-bg)', color: 'var(--accent2)' }}>AH</div>
-                <div className="trip-info">
-                  <div className="trip-driver">Ahmad Hassan</div>
-                  <div className="trip-meta">Trip #TRP-0092 · 2 stops · planned 13:00</div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span className={`badge ${tripStarted ? 'badge-blue' : 'badge-gray'}`}>{tripStarted ? 'In progress' : 'Planned'}</span>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text2)' }}>620 kg</span>
-                </div>
-              </div>
-              <div className="trip-stops">
-                <div className="stop-row">
-                  <div className="stop-line" />
-                  <div className="stop-dot">1</div>
-                  <div className="stop-info">
-                    <div className="stop-client">Byblos BBQ Supply</div>
-                    <div className="stop-addr">Byblos warehouse</div>
-                    <div className="stop-bags"><span>100 × 5kg bag</span><span>50 × 10kg bag</span></div>
-                  </div>
-                  <div className="stop-right">
-                    <span className="badge badge-gray">Pending</span>
-                    <span className="stop-kg">1,000 kg nom.</span>
-                  </div>
-                </div>
-                <div className="stop-row">
-                  <div className="stop-dot">2</div>
-                  <div className="stop-info">
-                    <div className="stop-client">Hamra Supermarket</div>
-                    <div className="stop-addr">Hamra, Beirut</div>
-                    <div className="stop-bags"><span>80 × 2kg bag</span></div>
-                  </div>
-                  <div className="stop-right">
-                    <span className="badge badge-gray">Pending</span>
-                    <span className="stop-kg">160 kg nom.</span>
-                  </div>
-                </div>
-              </div>
-              <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontSize: 12, color: 'var(--text3)' }}>{tripStarted ? 'Dispatched 13:00' : 'Not yet dispatched'}</div>
-                {!tripStarted && (
-                  <button className="btn green" style={{ fontSize: 12 }} onClick={startTrip}><i className="ti ti-player-play" style={{ fontSize: 13 }} /> Start trip</button>
-                )}
-              </div>
-            </div>
+              )
+            })}
           </div>
         )}
       </div>
@@ -450,25 +347,28 @@ export default function Orders() {
         <div className="panel-body">
           <div className="panel-section">
             <div className="panel-section-label">Shipments</div>
-            {panelShipments.map(s => (
+            {panelShipmentsQ.isLoading && <div style={{ fontSize: 13, color: 'var(--text3)', padding: 8 }}>Loading shipments…</div>}
+            {!panelShipmentsQ.isLoading && (panelShipmentsQ.data?.data ?? []).map(s => (
               <div className="shipment-card" key={s.id}>
                 <div className="ship-head">
-                  <span className="ship-num">{s.num}</span>
-                  <span className={`badge ${s.badge}`}>{s.status}</span>
+                  <span className="ship-num">{s.id.slice(0, 8)}</span>
+                  <span className={`badge ${s.status === 'delivered' ? 'badge-green' : s.status === 'loaded' ? 'badge-blue' : 'badge-gray'}`}>{s.status}</span>
                 </div>
                 <div className="ship-body">
-                  <div className="ship-addr">{s.addr}</div>
+                  <div className="ship-addr">{s.address}</div>
                   <div className="ship-bags">
-                    {s.bags.map((b, j) => <span className="ship-bag-pill" key={j}>{b}</span>)}
+                    {s.bags.map(b => <span className="ship-bag-pill" key={b.id}>{b.quantity} × {b.bagTypeId.slice(0, 8)}</span>)}
                   </div>
                   <div className="ship-weights">
-                    <div className="ship-weight-item"><div className="ship-weight-label">Nominal</div><div className="ship-weight-val">{s.nom}</div></div>
-                    <div className="ship-weight-item"><div className="ship-weight-label">Actual (driver)</div><div className={`ship-weight-val ${s.actColor === 'var(--accent)' ? 'ship-weight-actual' : ''}`} style={{ color: s.actColor }}>{s.act}</div></div>
-                    {s.paid && <div className="ship-weight-item"><div className="ship-weight-label">Paid</div><div className="ship-weight-val" style={{ color: s.paidColor }}>{s.paid}</div></div>}
+                    <div className="ship-weight-item"><div className="ship-weight-label">Nominal</div><div className="ship-weight-val">{parseFloat(s.nominalKg).toFixed(0)} kg</div></div>
+                    {s.actualKg && <div className="ship-weight-item"><div className="ship-weight-label">Actual</div><div className="ship-weight-val ship-weight-actual">{parseFloat(s.actualKg).toFixed(0)} kg</div></div>}
                   </div>
                 </div>
               </div>
             ))}
+            {!panelShipmentsQ.isLoading && (panelShipmentsQ.data?.data ?? []).length === 0 && (
+              <div style={{ fontSize: 13, color: 'var(--text3)', padding: 8 }}>No shipments yet.</div>
+            )}
             <button className="btn" style={{ width: '100%', justifyContent: 'center', marginTop: 8 }} onClick={() => setAddShipPanelOpen(true)}>
               <i className="ti ti-plus" style={{ fontSize: 14 }} /> Add shipment
             </button>
@@ -893,7 +793,7 @@ export default function Orders() {
             </div>
             <div className="modal-footer">
               <button className="btn" onClick={() => setAddShipPanelOpen(false)}>Cancel</button>
-              <button className="btn primary" onClick={confirmAddShipment}><i className="ti ti-plus" style={{ fontSize: 14 }} /> Add shipment</button>
+              <button className="btn primary" onClick={() => { setAddShipPanelOpen(false); setNewShipAddr(''); setNewShipBag2(0); setNewShipBag5(0); setNewShipBag10(0) }}><i className="ti ti-plus" style={{ fontSize: 14 }} /> Add shipment</button>
             </div>
           </div>
         </div>

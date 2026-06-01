@@ -158,7 +158,7 @@ export interface InvoiceLineItem {
 
 export interface WorkerRate {
   bagTypeId: string;
-  ratePerBag: number;
+  ratePerBag: string; // Decimal — stored as string via @IsNumberString DTO
 }
 
 export interface WorkerBagCount {
@@ -452,7 +452,6 @@ export interface PackedStockSummary {
   bagTypeName: string;
   totalBags: number;
   totalNominalKg: string;
-  lots?: { lotId: string; charcoalType: string; grade: string; quantity: number }[];
 }
 
 // ----------------------------------------------------------------------------
@@ -746,6 +745,9 @@ export interface DriverTrip {
   notes: string | null; // AR
   createdAt: string;
   updatedAt: string;
+  // Included by every list/create/findOne response
+  driver?: { id: string; name: string };
+  shipments?: { id: string; address: string; status: ShipmentStatus }[];
 }
 
 export interface DriverTripDetail extends DriverTrip {
@@ -775,27 +777,42 @@ export interface UpdateDriverTripStatusDto {
 
 export interface StockExit {
   id: string;
-  packedStockId: string;
-  bagTypeId: string;
-  quantity: number;
+  // Mode 1 — packed bags:
+  packedStockId: string | null;
+  bagTypeId: string | null;
+  quantity: number | null;
+  // Mode 2 — raw kg from lot:
+  lotId: string | null;
+  kgQuantity: string | null; // Decimal
   exitType: ExitType;
   reason: string | null; // AR — required for sample/gift/internal
   recipient: string | null; // AR
   orderId: string | null;
+  clientId: string | null;
+  amount: string | null; // Decimal — sale amount for walk_in exits
+  collectedBy: string | null;
+  collectedById: string | null;
   loggedById: string;
   date: string; // ISO date
   createdAt: string;
 }
 
-/** POST /stock-exits — CONSTRAINT 5: all fields required; qty <= stock. */
+/** POST /stock-exits — CONSTRAINT 5: exactly one mode must be supplied. */
 export interface CreateStockExitDto {
-  packedStockId: string;
-  bagTypeId: string;
-  quantity: number;
+  // Mode 1 — packed bags:
+  packedStockId?: string;
+  bagTypeId?: string;
+  quantity?: number;
+  // Mode 2 — raw kg from lot:
+  lotId?: string;
+  kgQuantity?: string;
   exitType: ExitType;
   reason?: string | null; // required when exitType in (sample, gift, internal)
   recipient?: string | null;
-  orderId?: string | null; // required when exitType in (order, walk_in)
+  orderId?: string | null;
+  clientId?: string | null;
+  amount?: string; // walk_in sale price
+  collectedById?: string;
   date: string;
 }
 
@@ -889,10 +906,15 @@ export interface Worker {
   name: string; // AR
   phone: string | null;
   ratesPerBagType: WorkerRate[];
+  /** @deprecated Cache column — never written post-migration; always [] in API responses. Use packing-session data for a live breakdown. */
   totalBagsPacked: WorkerBagCount[];
   totalEarned: string; // Decimal
   totalPaid: string; // Decimal
   totalOwed: string; // Decimal (computed: totalEarned - totalPaid)
+  dailyRate: string;      // Decimal — daily wage rate
+  attendanceDays: number; // computed from WorkerAttendance count
+  pieceEarned: string;    // Decimal — Σ sessionEarnings (bag-rate earnings)
+  dailyEarned: string;    // Decimal — attendanceDays × dailyRate
   notes: string | null;
   createdAt: string;
   updatedAt: string;
@@ -903,6 +925,7 @@ export interface CreateWorkerDto {
   phone?: string | null;
   ratesPerBagType?: WorkerRate[];
   notes?: string | null;
+  dailyRate?: string;
 }
 
 export interface UpdateWorkerDto {
@@ -928,6 +951,19 @@ export interface CreateWorkerPaymentDto {
 }
 
 // ----------------------------------------------------------------------------
+// WORKER ATTENDANCE
+// ----------------------------------------------------------------------------
+
+export interface WorkerAttendanceRecord {
+  id: string;
+  date: string; // YYYY-MM-DD
+}
+
+export interface CreateWorkerAttendanceDto {
+  date: string; // YYYY-MM-DD
+}
+
+// ----------------------------------------------------------------------------
 // REPORTS (all owner/accountant scoped unless noted)
 // ----------------------------------------------------------------------------
 
@@ -938,9 +974,8 @@ export interface ReportDateRange {
 }
 
 export interface ProfitLossReport {
-  from: string;
-  to: string;
-  currency: Currency;
+  from: string | null;
+  to: string | null;
   revenue: string;
   cogs: string;
   bagCost: string;
@@ -950,60 +985,95 @@ export interface ProfitLossReport {
 }
 
 export interface StockValueReport {
-  rawLots: { lotId: string; charcoalType: string; grade: string; kgRemaining: string; valueUsd: string }[];
-  packedStock: { bagTypeId: string; bagTypeName: string; quantity: number; valueUsd: string }[];
-  totalRawValueUsd: string;
-  totalPackedValueUsd: string;
-  totalValueUsd: string;
+  data: {
+    lotId: string;
+    charcoalType: string;
+    grade: string;
+    kgRemaining: string;
+    costPerKg: string;
+    lotValue: string;
+  }[];
+  total: number;
+  page: number;
+  limit: number;
+  totalValue: string;
 }
 
 export interface VarianceReportRow {
   sessionId: string;
   date: string;
   workerId: string;
-  lotId: string;
+  workerName: string;
+  lots: { lotId: string; charcoalType: string; grade: string; kgUsed: string }[];
   kgConsumed: string;
   kgOutputTotal: string;
   varianceKg: string;
   varianceNote: string | null;
-  varianceCostUsd: string;
+  varianceCost: string; // was varianceCostUsd
 }
 
 export interface VarianceReport {
-  from: string;
-  to: string;
-  rows: VarianceReportRow[];
+  from: string | null;
+  to: string | null;
+  data: VarianceReportRow[]; // paginated; was "rows"
+  total: number;
+  page: number;
+  limit: number;
   totalVarianceKg: string;
-  totalVarianceCostUsd: string;
+  totalVarianceCost: string; // was totalVarianceCostUsd
 }
 
-export interface ContainerCostReport {
+export interface ContainerCostReportRow {
   containerId: string;
   number: string;
   supplierName: string;
-  productLines: (ContainerProductLine & { computed: ContainerLineCost })[];
-  totalExpensesUsd: string;
-  totalDiscountUsd: string;
-  grandTotalCostUsd: string;
+  arrivalDate: string | null;
+  productLines: {
+    id: string;
+    charcoalType: string;
+    grade: string;
+    paidBags: number;
+    giftBags: number;
+    kgPerBag: string;
+    pricePerTon: string;
+    computed: ContainerLineCost;
+  }[];
+  totalExpenses: string;
+  totalDiscount: string;
+  totalTonnage: string;
+}
+
+export interface ContainerCostReport {
+  data: ContainerCostReportRow[];
+  total: number;
+  page: number;
+  limit: number;
 }
 
 export interface WorkerEarningsReport {
-  from: string;
-  to: string;
-  rows: {
-    workerId: string;
-    name: string;
-    bagsPacked: WorkerBagCount[];
-    earned: string;
-    paid: string;
-    owed: string;
-  }[];
+  workerId: string;
+  workerName: string;
+  from: string | null;
+  to: string | null;
+  sessions: {
+    data: { sessionId: string; date: string; sessionEarnings: string }[];
+    total: number;
+    page: number;
+    limit: number;
+  };
+  payments: { paymentId: string; date: string; amount: string; notes: string | null }[];
+  totalEarned: string;
+  totalPaid: string;
+  totalOwed: string;
 }
 
 export interface PhysicalCountReport {
   generatedAt: string;
-  rawLots: { lotId: string; charcoalType: string; grade: string; systemKg: string }[];
-  packedStock: { packedStockId: string; bagTypeName: string; systemQty: number }[];
+  packedStock: {
+    bagTypeId: string;
+    bagTypeName: string;
+    items: { packedStockId: string; lotId: string; quantity: number }[];
+  }[];
 }
 
 export interface DashboardSummary {
@@ -1018,4 +1088,30 @@ export interface DashboardSummary {
   monthRevenue?: string; // owner/accountant
   monthGrossProfit?: string; // owner only
   workerOwed?: string; // owner
+}
+
+// ----------------------------------------------------------------------------
+// GENERAL EXPENSES
+// ----------------------------------------------------------------------------
+
+export interface GeneralExpense {
+  id: string;
+  description: string;
+  amount: string;        // Decimal string
+  isRecurring: boolean;
+  category: string | null;
+  date: string;          // YYYY-MM-DD
+  notes: string | null;
+  addedById: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateGeneralExpenseDto {
+  description: string;
+  amount: string;
+  isRecurring?: boolean;
+  category?: string | null;
+  date?: string;
+  notes?: string | null;
 }

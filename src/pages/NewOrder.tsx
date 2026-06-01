@@ -5,6 +5,7 @@ import { useClients } from '../hooks/useClients'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { usePackedStockSummary } from '../hooks/useWarehouse'
 import { useCreateOrder } from '../hooks/useOrders'
+import { useUsers } from '../hooks/useUsers'
 import type { CreateOrderBagLineDto } from '../types/api'
 
 interface OrderLine {
@@ -17,7 +18,6 @@ interface OrderLine {
 }
 
 const CHARCOAL_OPTIONS = ['BBQ Hardwood · A', 'BBQ Hardwood · B', 'Shisha · A', 'Shisha · B', 'Restaurant Grade · A']
-const DRIVERS = ['— Assign later —', 'Joseph Nasr', 'Mohammed Khalil', 'Hasan Moussa']
 
 let _nid = 1
 
@@ -29,17 +29,19 @@ export default function NewOrder() {
   const bagTypesQ = useBagTypes()
   const packedQ = usePackedStockSummary()
   const createOrder = useCreateOrder()
+  const driversQ = useUsers({ role: 'driver' })
 
   const clients = clientsQ.data?.data ?? []
   const bagTypes = bagTypesQ.data ?? []
   const packedSummary = packedQ.data ?? []
+  const driverOptions = ['— Assign later —', ...(driversQ.data?.data ?? []).map(u => u.name)]
   // Available packed bags per bag type, for the "available stock" hint.
   const availableByBagType = new Map(packedSummary.map(p => [p.bagTypeId, p.totalBags]))
 
   const [clientIdx, setClientIdx] = useState(0)
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10))
   const [ref, setRef] = useState('')
-  const [driver, setDriver] = useState(DRIVERS[0])
+  const [driver, setDriver] = useState('— Assign later —')
   const [addr, setAddr] = useState('')
   const [splitMode, setSplitMode] = useState('No — single shipment')
   const [notes, setNotes] = useState('')
@@ -205,7 +207,7 @@ export default function NewOrder() {
               <div className="field" style={{ marginTop: 12 }}>
                 <label className="field-label">Driver</label>
                 <select className="select" value={driver} onChange={e => setDriver(e.target.value)}>
-                  {DRIVERS.map(d => <option key={d}>{d}</option>)}
+                  {driverOptions.map(d => <option key={d}>{d}</option>)}
                 </select>
               </div>
               <div className="field" style={{ marginTop: 12 }}>

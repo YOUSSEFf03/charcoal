@@ -6,6 +6,7 @@ import type {
   UpdateWorkerRatesDto,
   CreateWorkerPaymentDto,
   WorkerPayment,
+  WorkerAttendanceRecord,
 } from '../types/api'
 
 /**
@@ -82,7 +83,7 @@ export function useDeleteWorker() {
 export function useUpdateWorker() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, body }: { id: string; body: { name?: string; phone?: string | null; notes?: string | null } }) => {
+    mutationFn: async ({ id, body }: { id: string; body: { name?: string; phone?: string | null; notes?: string | null; dailyRate?: string } }) => {
       const res = await api.patch<Worker>(`/workers/${id}`, body)
       return res.data
     },
@@ -138,6 +139,84 @@ export function useLogWorkerPayment() {
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['workers'] })
       qc.invalidateQueries({ queryKey: ['workers', id] })
+    },
+  })
+}
+
+/**
+ * List payments for a worker (paginated).
+ * @param workerId - worker UUID (skip query if undefined)
+ * @returns React Query result of WorkerPayment[]
+ * GET /workers/:id/payments
+ */
+export function useWorkerPayments(workerId: string | undefined) {
+  return useQuery({
+    queryKey: ['workers', workerId, 'payments'],
+    queryFn: async () => {
+      const res = await api.get<{ data: WorkerPayment[] }>(`/workers/${workerId}/payments`, {
+        params: { limit: 20 },
+      })
+      return res.data.data
+    },
+    enabled: Boolean(workerId),
+  })
+}
+
+/**
+ * List attendance records for a worker, filtered to a calendar month.
+ * @param workerId - worker UUID (skip if undefined)
+ * @param month    - "YYYY-MM" string
+ * @returns React Query result of WorkerAttendanceRecord[]
+ * GET /workers/:id/attendance?month=YYYY-MM
+ */
+export function useWorkerAttendance(workerId: string | undefined, month: string) {
+  return useQuery({
+    queryKey: ['workers', workerId, 'attendance', month],
+    queryFn: async () => {
+      const res = await api.get<{ id: string; date: string }[]>(
+        `/workers/${workerId}/attendance`,
+        { params: { month } },
+      )
+      return res.data
+    },
+    enabled: Boolean(workerId),
+  })
+}
+
+/**
+ * Mark a day attended (POST /workers/:id/attendance). Idempotent.
+ * Invalidates the worker's attendance query AND the worker totals query.
+ */
+export function useMarkAttendance() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ workerId, date }: { workerId: string; date: string }) => {
+      const res = await api.post<{ id: string; date: string }>(
+        `/workers/${workerId}/attendance`,
+        { date },
+      )
+      return res.data
+    },
+    onSuccess: (_data, { workerId }) => {
+      qc.invalidateQueries({ queryKey: ['workers', workerId, 'attendance'] })
+      qc.invalidateQueries({ queryKey: ['workers'] })
+    },
+  })
+}
+
+/**
+ * Unmark a day (DELETE /workers/:id/attendance/:date).
+ * Invalidates the worker's attendance query AND the worker totals query.
+ */
+export function useUnmarkAttendance() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ workerId, date }: { workerId: string; date: string }) => {
+      await api.delete(`/workers/${workerId}/attendance/${date}`)
+    },
+    onSuccess: (_data, { workerId }) => {
+      qc.invalidateQueries({ queryKey: ['workers', workerId, 'attendance'] })
+      qc.invalidateQueries({ queryKey: ['workers'] })
     },
   })
 }

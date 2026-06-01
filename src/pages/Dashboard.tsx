@@ -10,8 +10,6 @@ import type { ActivityItem } from '../hooks/useReports'
 import { useWorkers } from '../hooks/useWorkers'
 import { useDriverTrips } from '../hooks/useDriverTrips'
 
-const miniBarHeights = [40,55,70,45,80,65,90,75,85,60,95,70,88,72,92,78,84,91,96,100,88]
-
 function fmtKg(value?: string | null) {
   const n = value != null ? parseFloat(value) : NaN
   return Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'
@@ -127,7 +125,7 @@ export default function Dashboard() {
     <>
       <Topbar title="Dashboard">
         <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
-          Thursday, 21 May 2026
+          {new Date().toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
         </span>
         <button className="btn" onClick={() => setNotifOpen(true)}><i className="ti ti-bell" style={{ fontSize: 15 }} /></button>
         <button className="btn" onClick={() => navigate('/orders')}><i className="ti ti-plus" style={{ fontSize: 15 }} /> New order</button>
@@ -267,14 +265,14 @@ export default function Dashboard() {
               const statusLabel =
                 trip.status === 'completed' ? 'Completed' :
                 trip.status === 'in_progress' ? 'In progress' : 'Planned'
-              const driverName = (trip as any).driver?.name ?? trip.driverId.slice(0, 8)
+              const driverName = trip.driver?.name ?? trip.driverId.slice(0, 8)
               const initials = driverName.trim().split(/\s+/).map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()
               return (
                 <div className="delivery-row" key={trip.id}>
                   <div className="driver-avatar">{initials}</div>
                   <div className="del-info">
                     <div className="del-driver">{driverName}</div>
-                    <div className="del-stops">{(trip as any)._count?.shipments ?? 0} shipments · {trip.fuelCost ? `$${trip.fuelCost} fuel` : 'no expenses logged'}</div>
+                    <div className="del-stops">{trip.shipments?.length ?? 0} shipments · {trip.fuelCost ? `$${trip.fuelCost} fuel` : 'no expenses logged'}</div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                     <span className={`badge ${statusBadge}`}>{statusLabel}</span>
@@ -304,7 +302,7 @@ export default function Dashboard() {
                 <div className="bag-cell" key={b.bagTypeId}>
                   <div className="bag-size">{b.bagTypeName}</div>
                   <div className="bag-count">{b.totalBags.toLocaleString('en-US')}</div>
-                  <div className="bag-kg">{(b.lots?.length ?? 0)} lot{(b.lots?.length ?? 0) === 1 ? '' : 's'}</div>
+                  <div className="bag-kg">{fmtKg(b.totalNominalKg)} kg</div>
                 </div>
               ))}
               {!loading && (
@@ -392,10 +390,8 @@ export default function Dashboard() {
               </div>
               <div>
                 <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace", paddingBottom: 6 }}>daily revenue — {now.toLocaleString('en-US', { month: 'long' }).toLowerCase()}</div>
-                <div className="mini-chart">
-                  {miniBarHeights.map((h, i) => (
-                    <div key={i} className="bar-col" style={{ height: `${h}%`, background: i >= 16 ? '#1D6B4A' : '#CBD5E1' }} />
-                  ))}
+                <div style={{ height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: 'var(--text3)', fontStyle: 'italic' }}>
+                  Daily chart · coming soon
                 </div>
               </div>
             </div>
@@ -458,29 +454,22 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </div>
-                <table className="data-table">
-                  <thead>
-                    <tr><th>Bag type</th><th>Bags packed</th><th>Rate</th><th>Earned</th></tr>
-                  </thead>
-                  <tbody>
-                    {firstWorker.totalBagsPacked.map((entry, i) => {
-                      const rateEntry = firstWorker.ratesPerBagType.find(r => r.bagTypeId === entry.bagTypeId)
-                      const rate = rateEntry?.ratePerBag ?? 0
-                      const earned = entry.count * rate
-                      return (
-                        <tr key={i}>
-                          <td><span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{entry.bagTypeId.slice(-8)}</span></td>
-                          <td style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{entry.count.toLocaleString('en-US')}</td>
-                          <td style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)' }}>${rate.toFixed(2)}</td>
-                          <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>${earned.toFixed(2)}</td>
-                        </tr>
-                      )
-                    })}
-                    {firstWorker.totalBagsPacked.length === 0 && (
-                      <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text3)', padding: '12px 0' }}>No packing sessions yet</td></tr>
-                    )}
-                  </tbody>
-                </table>
+                <div style={{ padding: '4px 0 2px' }}>
+                  {([
+                    { label: 'Bag earnings', value: firstWorker.pieceEarned },
+                    { label: 'Daily wages',  value: firstWorker.dailyEarned },
+                    { label: 'Paid out',     value: firstWorker.totalPaid },
+                  ] as { label: string; value: string }[]).map(({ label, value }) => (
+                    <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 18px', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+                      <span style={{ color: 'var(--text2)' }}>{label}</span>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>{fmtUsd(value)}</span>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 18px', fontSize: 13 }}>
+                    <span style={{ color: 'var(--text3)' }}>Attendance this month</span>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)' }}>{firstWorker.attendanceDays} day{firstWorker.attendanceDays === 1 ? '' : 's'}</span>
+                  </div>
+                </div>
                 <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>Total earned all-time</span>
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>{fmtUsd(firstWorker.totalEarned)}</span>

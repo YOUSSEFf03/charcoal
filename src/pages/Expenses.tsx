@@ -1,55 +1,22 @@
 import { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useAllExpenses, useDriverExpenses } from '../hooks/useExpenses'
+import { useAllExpenses, useDriverExpenses, useGeneralExpenses, useCreateGeneralExpense } from '../hooks/useExpenses'
+import { useWorkers, useWorkerPayments, useWorkerAttendance } from '../hooks/useWorkers'
 import type { DriverTrip } from '../types/api'
 
 type ETab = 'expenses' | 'employees'
 
-interface ExpItem {
-  id: number
-  desc: string
-  icon: string
-  iconBg: string
-  iconColor: string
-  amount: number
-  category: string
-  date?: string
-  meta?: string
-}
+const _expNow = new Date()
+const MAY_DAYS = new Date(_expNow.getFullYear(), _expNow.getMonth() + 1, 0).getDate()
+const TODAY_DAY = _expNow.getDate()
+const ATTENDANCE_MONTH = `${_expNow.getFullYear()}-${String(_expNow.getMonth() + 1).padStart(2, '0')}`
 
-// ── Seed data ─────────────────────────────────────────────
-const SEED_RECURRING: ExpItem[] = [
-  { id: 1, desc: 'Warehouse rent',  icon: 'ti-building',    iconBg: '#EFF6FF', iconColor: 'var(--blue)',    amount: 1500, category: 'Rent' },
-  { id: 2, desc: 'Electricity',     icon: 'ti-bolt',        iconBg: '#FEF3C7', iconColor: 'var(--accent2)', amount: 320,  category: 'Utilities' },
-  { id: 3, desc: 'Accountant',      icon: 'ti-calculator',  iconBg: '#EAF5EF', iconColor: 'var(--accent)',  amount: 580,  category: 'Services' },
-]
-
-const SEED_ONETIME: ExpItem[] = [
-  { id: 4, desc: 'Warehouse generator fuel', icon: 'ti-gas-station', iconBg: '#EFF6FF', iconColor: 'var(--blue)',    amount: 180, category: 'Utilities', date: '3 May 2026' },
-  { id: 5, desc: 'Scale repair',             icon: 'ti-tools',       iconBg: '#FEF2F2', iconColor: 'var(--red)',     amount: 240, category: 'Equipment', date: '8 May 2026' },
-  { id: 6, desc: 'Bag purchase — 2kg bags',  icon: 'ti-package',     iconBg: '#EAF5EF', iconColor: 'var(--accent)',  amount: 200, category: 'Supplies',  date: '12 May 2026', meta: '5,000 bags × $0.04' },
-  { id: 7, desc: 'Vehicle maintenance',      icon: 'ti-truck',       iconBg: '#FEF3C7', iconColor: 'var(--accent2)', amount: 320, category: 'Transport', date: '15 May 2026' },
-]
-
-const WORKER_WORKED_DAYS = new Set([1,2,4,5,6,7,8,11,12,13,14,15,18,19,20,21,22,23])
-const MAY_DAYS = 31
-const TODAY_DAY = 21
-
-const BAG_BREAKDOWN = [
-  { size: '2 kg',  bags: 1180, rate: 0.050, earn: 59.00 },
-  { size: '5 kg',  bags:  320, rate: 0.080, earn: 25.60 },
-  { size: '10 kg', bags:  140, rate: 0.120, earn: 16.80 },
-  { size: '20 kg', bags:   42, rate: 0.180, earn:  7.56 },
-]
-
-// Short driver label/avatar derived from a driverId (no driver name on the API).
 const DRIVER_AVATAR_PALETTE = [
   { avatarBg: 'var(--blue-bg,#EFF6FF)', avatarColor: 'var(--blue)' },
   { avatarBg: 'var(--accent2-bg)', avatarColor: 'var(--accent2)' },
   { avatarBg: '#F3F4F6', avatarColor: '#374151' },
 ]
 
-/** Sum a driver trip's expenses (fuel + other) as a number of USD. */
 function tripExpenseTotal(t: DriverTrip): number {
   const fuel = t.fuelCost != null ? parseFloat(t.fuelCost) : 0
   const other = (t.otherExpenses ?? []).reduce((s, e) => s + (Number(e.amount) || 0), 0)
@@ -64,7 +31,6 @@ interface DriverGroup {
   expensesTotal: number
 }
 
-/** Group driver trips by driverId into per-driver cards. */
 function groupDriverTrips(trips: DriverTrip[]): DriverGroup[] {
   const byDriver = new Map<string, DriverTrip[]>()
   for (const t of trips) {
@@ -86,18 +52,37 @@ function groupDriverTrips(trips: DriverTrip[]): DriverGroup[] {
   })
 }
 
+const CATEGORY_COLORS: Record<string, string> = {
+  Rent:       'var(--blue)',
+  Utilities:  'var(--accent2)',
+  Services:   'var(--accent)',
+  Equipment:  'var(--red)',
+  Supplies:   '#6d28d9',
+  Transport:  '#0891b2',
+}
+
 export default function Expenses() {
   const [tab, setTab] = useState<ETab>('expenses')
-  const [recurring, setRecurring] = useState<ExpItem[]>(SEED_RECURRING)
-  const [onetime, setOnetime] = useState<ExpItem[]>(SEED_ONETIME)
 
-  // Live data: container expense rows + driver-trip expense rows.
+  // Live general expenses (recurring + one-time)
+  const {
+    data: generalExpenses,
+    isLoading: genLoading,
+    isError: genError,
+    refetch: refetchGeneral,
+  } = useGeneralExpenses()
+
+  const createExpense = useCreateGeneralExpense()
+
+  // Live container expenses
   const {
     data: containerExpenses,
     isLoading: contLoading,
     isError: contError,
     refetch: refetchContainers,
   } = useAllExpenses()
+
+  // Live driver trips
   const {
     data: driverTripsResp,
     isLoading: drvLoading,
@@ -105,7 +90,26 @@ export default function Expenses() {
     refetch: refetchDrivers,
   } = useDriverExpenses()
 
+  // Worker data
+  const { data: workersData, isLoading: workersLoading } = useWorkers()
+  const primaryWorker = workersData?.[0]
+  const { data: workerPayments } = useWorkerPayments(primaryWorker?.id)
+  const { data: workerAttendance } = useWorkerAttendance(primaryWorker?.id, ATTENDANCE_MONTH)
+
+  const workerWorkedDays = new Set<number>(
+    (workerAttendance ?? [])
+      .filter(r => {
+        const d = new Date(r.date)
+        return d.getMonth() === _expNow.getMonth() && d.getFullYear() === _expNow.getFullYear()
+      })
+      .map(r => new Date(r.date).getDate())
+  )
+
   const driverGroups = groupDriverTrips(driverTripsResp?.data ?? [])
+
+  // Derived splits
+  const recurring = (generalExpenses ?? []).filter(e => e.isRecurring)
+  const onetime   = (generalExpenses ?? []).filter(e => !e.isRecurring)
 
   // Add expense modal
   const [addModalType, setAddModalType] = useState<'recurring' | 'onetime' | null>(null)
@@ -113,6 +117,7 @@ export default function Expenses() {
   const [newAmt, setNewAmt] = useState('')
   const [newDate, setNewDate] = useState(new Date().toISOString().slice(0, 10))
   const [newIsRecurring, setNewIsRecurring] = useState(false)
+  const [newCategory, setNewCategory] = useState('')
   const [newNotes, setNewNotes] = useState('')
 
   // Pay modal
@@ -121,62 +126,48 @@ export default function Expenses() {
   const [payAmt, setPayAmt] = useState('')
   const [payMethod, setPayMethod] = useState<'Cash' | 'Whish' | 'OMT'>('Cash')
 
-  // ── Derived totals ─────────────────────────────────────
-  const totalRecurring = recurring.reduce((s, e) => s + e.amount, 0)
-  const totalOnetime   = onetime.reduce((s, e) => s + e.amount, 0)
+  // Derived totals
+  const totalRecurring = recurring.reduce((s, e) => s + parseFloat(e.amount), 0)
+  const totalOnetime   = onetime.reduce((s, e) => s + parseFloat(e.amount), 0)
   const totalExpenses  = totalRecurring + totalOnetime
 
-  const workerBagEarn  = BAG_BREAKDOWN.reduce((s, r) => s + r.earn, 0)   // 108.96
-  const workerDailyEarn = 15 * 18  // $15/day × 18 days = $270
-  const workerTotalEarned = workerDailyEarn + workerBagEarn                // $410.96
-  const workerPaid     = 126.76
-  const workerOwed     = workerTotalEarned - workerPaid                    // $284.20
+  const workerOwed    = parseFloat(primaryWorker?.totalOwed    ?? '0')
+  const workerEarned  = parseFloat(primaryWorker?.totalEarned  ?? '0')
+  const workerPaidAmt = parseFloat(primaryWorker?.totalPaid    ?? '0')
 
-  // Driver trip expenses (fuel + other) replace the old hardcoded wage figures.
   const totalDriverExpenses = driverGroups.reduce((s, g) => s + g.expensesTotal, 0)
   const totalWagesOwed = workerOwed + totalDriverExpenses
   const totalOutgoing  = totalExpenses + totalWagesOwed
 
-  // ── Expenses by category (my addition) ────────────────
-  const allExp = [...recurring, ...onetime]
+  // By-category summary (recurring + one-time general expenses only)
+  const allGenExp = [...recurring, ...onetime]
   const categoryTotals: Record<string, number> = {}
-  allExp.forEach(e => { categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount })
-  const CATEGORY_COLORS: Record<string, string> = {
-    Rent:       'var(--blue)',
-    Utilities:  'var(--accent2)',
-    Services:   'var(--accent)',
-    Equipment:  'var(--red)',
-    Supplies:   '#6d28d9',
-    Transport:  '#0891b2',
-  }
-  const categoryRows = Object.entries(categoryTotals)
-    .sort((a, b) => b[1] - a[1])
+  allGenExp.forEach(e => {
+    const cat = e.category || 'Other'
+    categoryTotals[cat] = (categoryTotals[cat] || 0) + parseFloat(e.amount)
+  })
+  const categoryRows = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1])
 
-  // ── Add expense ───────────────────────────────────────
   function openAdd(type: 'recurring' | 'onetime') {
     setAddModalType(type)
     setNewIsRecurring(type === 'recurring')
-    setNewDesc(''); setNewAmt(''); setNewNotes('')
+    setNewDesc(''); setNewAmt(''); setNewNotes(''); setNewCategory('')
     setNewDate(new Date().toISOString().slice(0, 10))
   }
-  function saveExpense() {
+
+  async function saveExpense() {
     if (!newDesc.trim() || !newAmt) return
-    const item: ExpItem = {
-      id: Date.now(),
-      desc: newDesc.trim(),
-      icon: 'ti-receipt-2',
-      iconBg: 'var(--surface2)',
-      iconColor: 'var(--text2)',
-      amount: parseFloat(newAmt),
-      category: 'Other',
+    await createExpense.mutateAsync({
+      description: newDesc.trim(),
+      amount: parseFloat(newAmt).toFixed(2),
+      isRecurring: newIsRecurring,
+      category: newCategory.trim() || undefined,
       date: newDate,
-    }
-    if (newIsRecurring) setRecurring(prev => [...prev, item])
-    else setOnetime(prev => [...prev, item])
+      notes: newNotes.trim() || undefined,
+    })
     setAddModalType(null)
   }
 
-  // ── Pay modal ─────────────────────────────────────────
   function openPay(name: string, owed: number) {
     setPayTarget({ name, owed })
     setPayAmt('')
@@ -200,7 +191,6 @@ export default function Expenses() {
     }
   }
 
-  // ── Calendar renderer ─────────────────────────────────
   function DaysGrid({ worked }: { worked: Set<number> }) {
     const cells = []
     for (let d = 1; d <= MAY_DAYS; d++) {
@@ -213,7 +203,6 @@ export default function Expenses() {
     return <div className="days-grid">{cells}</div>
   }
 
-  // ── Render ────────────────────────────────────────────
   return (
     <>
       <Topbar title="Expenses & Employees">
@@ -228,11 +217,11 @@ export default function Expenses() {
       <div className="tabs">
         <div className={`tab${tab === 'expenses' ? ' active' : ''}`} onClick={() => setTab('expenses')}>
           <i className="ti ti-receipt-2" style={{ fontSize: 14 }} /> Expenses
-          <span className="tab-count">12</span>
+          <span className="tab-count">{(generalExpenses?.length ?? 0) + (containerExpenses?.length ?? 0)}</span>
         </div>
         <div className={`tab${tab === 'employees' ? ' active' : ''}`} onClick={() => setTab('employees')}>
           <i className="ti ti-users" style={{ fontSize: 14 }} /> Employees
-          <span className="tab-count">4</span>
+          <span className="tab-count">{1 + driverGroups.length}</span>
         </div>
       </div>
 
@@ -253,7 +242,7 @@ export default function Expenses() {
           <div className="kpi">
             <div className="kpi-label">Employee wages owed</div>
             <div className="kpi-value" style={{ color: 'var(--accent2)' }}>${totalWagesOwed.toFixed(0)}</div>
-            <div className="kpi-sub">worker + 3 drivers</div>
+            <div className="kpi-sub">worker + {driverGroups.length} drivers</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Total outgoing (May)</div>
@@ -266,7 +255,6 @@ export default function Expenses() {
         {tab === 'expenses' && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 20, alignItems: 'start' }}>
 
-            {/* Left: expense lists */}
             <div>
 
               {/* Recurring */}
@@ -277,22 +265,41 @@ export default function Expenses() {
                     <i className="ti ti-plus" style={{ fontSize: 13 }} /> Add
                   </button>
                 </div>
-                {recurring.map(e => (
+                {genLoading && [0, 1, 2].map(i => (
+                  <div key={`rec-sk-${i}`} className="exp-item">
+                    <div className="exp-icon" style={{ background: 'var(--surface2)' }}><div className="skeleton" style={{ width: 18, height: 18, borderRadius: 4 }} /></div>
+                    <div className="exp-info">
+                      <div className="skeleton" style={{ width: '60%', height: 13, marginBottom: 4 }} />
+                      <div className="skeleton" style={{ width: '40%', height: 11 }} />
+                    </div>
+                    <div className="exp-amount"><div className="skeleton" style={{ width: 60, height: 13 }} /></div>
+                  </div>
+                ))}
+                {genError && (
+                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
+                    Failed to load expenses.
+                    <div><button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={() => refetchGeneral()}>Retry</button></div>
+                  </div>
+                )}
+                {!genLoading && !genError && recurring.map(e => (
                   <div key={e.id} className="exp-item">
-                    <div className="exp-icon" style={{ background: e.iconBg }}>
-                      <i className={`ti ${e.icon}`} style={{ color: e.iconColor }} />
+                    <div className="exp-icon" style={{ background: '#EFF6FF' }}>
+                      <i className="ti ti-repeat" style={{ color: 'var(--blue)' }} />
                     </div>
                     <div className="exp-info">
-                      <div className="exp-name">{e.desc}</div>
-                      <div className="exp-meta">Monthly · recurring</div>
+                      <div className="exp-name">{e.description}</div>
+                      <div className="exp-meta">{e.category ? `${e.category} · ` : ''}Monthly · recurring</div>
                     </div>
                     <div className="exp-amount">
-                      <div className="exp-amount-val">${e.amount.toLocaleString()}</div>
+                      <div className="exp-amount-val">${parseFloat(e.amount).toLocaleString()}</div>
                       <div className="exp-amount-lbl">per month</div>
                     </div>
                     <button className="exp-del"><i className="ti ti-edit" style={{ fontSize: 12 }} /></button>
                   </div>
                 ))}
+                {!genLoading && !genError && recurring.length === 0 && (
+                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>No recurring expenses.</div>
+                )}
                 <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                   <span style={{ color: 'var(--text3)' }}>Total recurring</span>
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${totalRecurring.toLocaleString()} / month</span>
@@ -307,23 +314,24 @@ export default function Expenses() {
                     <i className="ti ti-plus" style={{ fontSize: 13 }} /> Add expense
                   </button>
                 </div>
-                {onetime.map(e => (
+                {!genLoading && !genError && onetime.map(e => (
                   <div key={e.id} className="exp-item">
-                    <div className="exp-icon" style={{ background: e.iconBg }}>
-                      <i className={`ti ${e.icon}`} style={{ color: e.iconColor }} />
+                    <div className="exp-icon" style={{ background: 'var(--surface2)' }}>
+                      <i className="ti ti-receipt-2" style={{ color: 'var(--text2)' }} />
                     </div>
                     <div className="exp-info">
-                      <div className="exp-name">{e.desc}</div>
-                      <div className="exp-meta">{e.meta ? `${e.date} · ${e.meta}` : `${e.date} · one-time`}</div>
+                      <div className="exp-name">{e.description}</div>
+                      <div className="exp-meta">{e.date?.slice(0, 10)} · {e.notes || 'one-time'}</div>
                     </div>
                     <div className="exp-amount">
-                      <div className="exp-amount-val">${e.amount.toLocaleString()}</div>
+                      <div className="exp-amount-val">${parseFloat(e.amount).toLocaleString()}</div>
                     </div>
-                    <button className="exp-del" onClick={() => setOnetime(prev => prev.filter(x => x.id !== e.id))}>
-                      <i className="ti ti-x" style={{ fontSize: 12 }} />
-                    </button>
+                    <button className="exp-del"><i className="ti ti-x" style={{ fontSize: 12 }} /></button>
                   </div>
                 ))}
+                {!genLoading && !genError && onetime.length === 0 && (
+                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>No one-time expenses this month.</div>
+                )}
                 <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                   <span style={{ color: 'var(--text3)' }}>Total one-time this month</span>
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${totalOnetime.toLocaleString()}</span>
@@ -379,19 +387,18 @@ export default function Expenses() {
               </div>
             </div>
 
-            {/* Right: summary + by type */}
+            {/* Right: summary + by category */}
             <div style={{ position: 'sticky', top: 76 }}>
 
-              {/* Monthly summary */}
               <div className="card" style={{ marginBottom: 14 }}>
                 <div className="card-head">
                   <div className="card-title"><i className="ti ti-chart-bar" /> May 2026 summary</div>
                 </div>
                 <div style={{ padding: '4px 0 0' }}>
-                  {[...recurring, ...onetime].map(e => (
+                  {allGenExp.map(e => (
                     <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '5px 18px', borderBottom: '1px solid var(--border)' }}>
-                      <span style={{ color: 'var(--text2)' }}>{e.desc}</span>
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: 'var(--red)' }}>${e.amount.toLocaleString()}</span>
+                      <span style={{ color: 'var(--text2)' }}>{e.description}</span>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: 'var(--red)' }}>${parseFloat(e.amount).toLocaleString()}</span>
                     </div>
                   ))}
                 </div>
@@ -404,14 +411,16 @@ export default function Expenses() {
                 </div>
               </div>
 
-              {/* Expenses by category (added) */}
               <div className="card">
                 <div className="card-head">
                   <div className="card-title"><i className="ti ti-category" /> Spending by category</div>
                 </div>
                 <div style={{ padding: '6px 18px 12px' }}>
+                  {categoryRows.length === 0 && (
+                    <div style={{ fontSize: 13, color: 'var(--text3)', padding: '8px 0' }}>No expenses yet.</div>
+                  )}
                   {categoryRows.map(([cat, amt]) => {
-                    const pct = Math.round((amt / totalExpenses) * 100)
+                    const pct = totalExpenses > 0 ? Math.round((amt / totalExpenses) * 100) : 0
                     const color = CATEGORY_COLORS[cat] || 'var(--text3)'
                     return (
                       <div key={cat} className="cat-row">
@@ -436,104 +445,91 @@ export default function Expenses() {
         {tab === 'employees' && (
           <div>
 
-            {/* Packing worker */}
             <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
               Packing worker
             </div>
-            <div className="emp-card">
-              <div className="emp-head">
-                <div className="emp-avatar" style={{ background: '#EAF5EF', color: 'var(--accent)' }}>HM</div>
-                <div>
-                  <div className="emp-name">Hasan Moussa</div>
-                  <div className="emp-role-lbl">packing worker · daily rate + per bag</div>
-                </div>
-                <div className="emp-owed">
-                  <div className="emp-owed-val" style={{ color: 'var(--accent2)' }}>${workerOwed.toFixed(2)}</div>
-                  <div className="emp-owed-lbl">total owed</div>
-                </div>
+
+            {workersLoading && (
+              <div className="emp-card" style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
+                Loading worker data…
               </div>
+            )}
 
-              <div className="emp-body">
-                <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text2)', marginBottom: 8 }}>
-                  Days worked — May 2026
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--accent)', marginLeft: 8 }}>
-                    {WORKER_WORKED_DAYS.size} days
-                  </span>
-                </div>
-                <DaysGrid worked={WORKER_WORKED_DAYS} />
-
-                {/* Earnings breakdown */}
-                <div style={{ background: 'var(--surface2)', borderRadius: 'var(--radius)', padding: '12px 14px', marginBottom: 14 }}>
-                  <div className="earn-row">
-                    <span className="earn-label">Daily rate × 18 days worked</span>
-                    <span className="earn-val">$15.00 × 18 = <strong style={{ color: 'var(--text)' }}>${workerDailyEarn.toFixed(2)}</strong></span>
+            {!workersLoading && primaryWorker && (
+              <div className="emp-card">
+                <div className="emp-head">
+                  <div className="emp-avatar" style={{ background: '#EAF5EF', color: 'var(--accent)' }}>
+                    {primaryWorker.name.slice(0, 2).toUpperCase()}
                   </div>
-                  <div className="earn-row">
-                    <span className="earn-label">Per-bag earnings (from sessions)</span>
-                    <span className="earn-val green">+${workerBagEarn.toFixed(2)}</span>
+                  <div>
+                    <div className="emp-name">{primaryWorker.name}</div>
+                    <div className="emp-role-lbl">packing worker · daily rate + per bag</div>
                   </div>
-                  <div className="earn-row">
-                    <span className="earn-label">Total earned this month</span>
-                    <span className="earn-val" style={{ color: 'var(--text)', fontSize: 14 }}>${workerTotalEarned.toFixed(2)}</span>
-                  </div>
-                  <div className="earn-row">
-                    <span className="earn-label">Paid this month</span>
-                    <span className="earn-val green">−${workerPaid.toFixed(2)}</span>
-                  </div>
-                  <div className="earn-total">
-                    <span>Owed now</span>
-                    <span className="earn-total-mono">${workerOwed.toFixed(2)}</span>
+                  <div className="emp-owed">
+                    <div className="emp-owed-val" style={{ color: 'var(--accent2)' }}>${parseFloat(primaryWorker.totalOwed).toFixed(2)}</div>
+                    <div className="emp-owed-lbl">total owed</div>
                   </div>
                 </div>
 
-                {/* Per-bag breakdown */}
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>Bags packed this month — per-bag earnings</div>
-                <table className="data-table" style={{ marginBottom: 14 }}>
-                  <thead>
-                    <tr><th>Bag type</th><th>Qty packed</th><th>Rate</th><th>Earned</th></tr>
-                  </thead>
-                  <tbody>
-                    {BAG_BREAKDOWN.map(r => (
-                      <tr key={r.size}>
-                        <td style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{r.size}</td>
-                        <td style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{r.bags.toLocaleString()}</td>
-                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)' }}>${r.rate.toFixed(3)}</td>
-                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--accent)' }}>${r.earn.toFixed(2)}</td>
-                      </tr>
+                <div className="emp-body">
+                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text2)', marginBottom: 8 }}>
+                    Days worked — May 2026
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--accent)', marginLeft: 8 }}>
+                      {workerWorkedDays.size} days
+                    </span>
+                  </div>
+                  <DaysGrid worked={workerWorkedDays} />
+
+                  <div style={{ background: 'var(--surface2)', borderRadius: 'var(--radius)', padding: '12px 14px', marginBottom: 14 }}>
+                    <div className="earn-row">
+                      <span className="earn-label">Total earned this month</span>
+                      <span className="earn-val" style={{ color: 'var(--text)', fontSize: 14 }}>${parseFloat(primaryWorker.totalEarned).toFixed(2)}</span>
+                    </div>
+                    <div className="earn-row">
+                      <span className="earn-label">Paid this month</span>
+                      <span className="earn-val green">−${parseFloat(primaryWorker.totalPaid).toFixed(2)}</span>
+                    </div>
+                    <div className="earn-total">
+                      <span>Owed now</span>
+                      <span className="earn-total-mono">${parseFloat(primaryWorker.totalOwed).toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  <button className="pay-btn green" onClick={() => openPay(primaryWorker.name, workerOwed)}>
+                    <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay {primaryWorker.name} — ${workerOwed.toFixed(2)} owed
+                  </button>
+                </div>
+
+                <div style={{ borderTop: '1px solid var(--border)', padding: '12px 18px 4px' }}>
+                  <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                    Payment history
+                  </div>
+                  <div className="pay-hist">
+                    {(workerPayments ?? []).length === 0 && (
+                      <div style={{ fontSize: 12, color: 'var(--text3)', padding: '4px 0' }}>No payments recorded.</div>
+                    )}
+                    {(workerPayments ?? []).map(p => (
+                      <div key={p.id} className="pay-hist-row">
+                        <div className="pay-hist-info">
+                          <strong style={{ fontWeight: 500, display: 'block' }}>{p.notes || 'Payment'}</strong>
+                          <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>{p.date?.slice(0, 10)}</span>
+                        </div>
+                        <div className="pay-hist-amount">${parseFloat(p.amount).toFixed(2)}</div>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
-
-                <button className="pay-btn green" onClick={() => openPay('Hasan Moussa', workerOwed)}>
-                  <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay Hasan Moussa — ${workerOwed.toFixed(2)} owed
-                </button>
-              </div>
-
-              <div style={{ borderTop: '1px solid var(--border)', padding: '12px 18px 4px' }}>
-                <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                  Payment history
-                </div>
-                <div className="pay-hist">
-                  <div className="pay-hist-row">
-                    <div className="pay-hist-info">
-                      <strong style={{ fontWeight: 500, display: 'block' }}>Cash payment</strong>
-                      <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>10 May 2026 · by Khalil</span>
-                    </div>
-                    <div className="pay-hist-amount">${workerPaid.toFixed(2)}</div>
-                  </div>
-                  <div className="pay-hist-row">
-                    <div className="pay-hist-info">
-                      <strong style={{ fontWeight: 500, display: 'block' }}>Cash payment</strong>
-                      <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>1 May 2026 · by Khalil · April wages</span>
-                    </div>
-                    <div className="pay-hist-amount">$140.00</div>
                   </div>
                 </div>
               </div>
-            </div>
+            )}
+
+            {!workersLoading && !primaryWorker && (
+              <div className="emp-card" style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
+                No workers found.
+              </div>
+            )}
 
             {/* Drivers */}
-            <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, margin: '20px 0 10px' }}>
               Drivers
             </div>
             <div className="three-col">
@@ -650,6 +646,15 @@ export default function Expenses() {
                 </div>
               </div>
 
+              <label className="form-label">Category (optional)</label>
+              <input
+                className="form-input"
+                type="text"
+                placeholder="e.g. Rent, Utilities, Equipment…"
+                value={newCategory}
+                onChange={e => setNewCategory(e.target.value)}
+              />
+
               <div className="toggle-wrap">
                 <div className={`toggle-switch${newIsRecurring ? ' on' : ''}`} onClick={() => setNewIsRecurring(r => !r)}>
                   <div className="toggle-knob" />
@@ -669,8 +674,9 @@ export default function Expenses() {
             </div>
             <div className="modal-footer">
               <button className="btn" onClick={() => setAddModalType(null)}>Cancel</button>
-              <button className="btn primary" onClick={saveExpense}>
-                <i className="ti ti-check" style={{ fontSize: 14 }} /> Add expense
+              <button className="btn primary" onClick={saveExpense} disabled={createExpense.isPending}>
+                <i className="ti ti-check" style={{ fontSize: 14 }} />
+                {createExpense.isPending ? 'Saving…' : 'Add expense'}
               </button>
             </div>
           </div>

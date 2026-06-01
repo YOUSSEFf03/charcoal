@@ -17,6 +17,7 @@ import { CreateWorkerDto } from './dto/create-worker.dto';
 import { UpdateWorkerDto } from './dto/update-worker.dto';
 import { SetRatesDto } from './dto/set-rates.dto';
 import { CreateWorkerPaymentDto } from './dto/create-worker-payment.dto';
+import { CreateWorkerAttendanceDto } from './dto/create-worker-attendance.dto';
 import { Roles } from '../auth/roles.decorator';
 
 @ApiTags('workers')
@@ -52,7 +53,7 @@ export class WorkersController {
     return this.workersService.create(dto);
   }
 
-  @ApiOperation({ summary: 'Update a worker (name, phone, notes)' })
+  @ApiOperation({ summary: 'Update a worker (name, phone, notes, dailyRate)' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
   @Patch(':id')
@@ -112,5 +113,36 @@ export class WorkersController {
     @Param('paymentId', ParseUUIDPipe) paymentId: string,
   ) {
     return this.workersService.getPayment(id, paymentId);
+  }
+
+  @ApiOperation({ summary: 'List attendance for a worker (optionally filter by month=YYYY-MM)' })
+  @ApiResponse({ status: 200, description: 'Array of { id, date } objects' })
+  @Get(':id/attendance')
+  listAttendance(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('month') month?: string,
+  ) {
+    return this.workersService.listAttendance(id, month);
+  }
+
+  @ApiOperation({ summary: 'Mark a day attended (idempotent)' })
+  @ApiResponse({ status: 201 })
+  @Post(':id/attendance')
+  markAttendance(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateWorkerAttendanceDto,
+  ) {
+    return this.workersService.markAttendance(id, dto);
+  }
+
+  @ApiOperation({ summary: 'Unmark a day (delete attendance record)' })
+  @ApiResponse({ status: 204 })
+  @Delete(':id/attendance/:date')
+  @HttpCode(204)
+  unmarkAttendance(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('date') date: string,
+  ) {
+    return this.workersService.unmarkAttendance(id, date);
   }
 }

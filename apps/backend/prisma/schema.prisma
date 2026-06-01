@@ -128,6 +128,7 @@ model User {
   paymentsReceived          Payment[]          @relation("PaymentReceivedBy")
   exitsCollected            StockExit[]        @relation("ExitCollectedBy")
   handoversReceived         CashHandover[]     @relation("HandoverReceiver")
+  generalExpensesAdded      GeneralExpense[]   @relation("GeneralExpenseAddedBy")
   account                   UserAccount?
   @@map("users")
 }
@@ -580,11 +581,13 @@ model Worker {
   totalEarned     Decimal  @db.Decimal(10, 2) @default(0)
   totalPaid       Decimal  @db.Decimal(10, 2) @default(0)
   notes           String?
+  dailyRate       Decimal  @db.Decimal(10,2) @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   payments        WorkerPayment[]
   packingSessions PackingSession[]
   fillJobs        FillJob[]
+  attendance      WorkerAttendance[]
   @@map("workers")
 }
 
@@ -635,6 +638,18 @@ model WorkerPayment {
   @@map("worker_payments")
 }
 
+model WorkerAttendance {
+  id        String   @id @default(uuid())
+  workerId  String
+  worker    Worker   @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  date      DateTime @db.Date
+  createdAt DateTime @default(now())
+  @@unique([workerId, date])
+  @@index([workerId])
+  @@index([date])
+  @@map("worker_attendance")
+}
+
 // One account per user — denormalized running balance for fast reads.
 model UserAccount {
   id        String         @id @default(uuid())
@@ -645,6 +660,23 @@ model UserAccount {
   updatedAt DateTime       @updatedAt
   entries   AccountEntry[]
   @@map("user_accounts")
+}
+
+model GeneralExpense {
+  id          String   @id @default(uuid())
+  description String
+  amount      Decimal  @db.Decimal(10, 2)
+  isRecurring Boolean  @default(false)
+  category    String?
+  date        DateTime @db.Date
+  notes       String?
+  addedById   String
+  addedBy     User     @relation("GeneralExpenseAddedBy", fields: [addedById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@index([date])
+  @@index([isRecurring])
+  @@map("general_expenses")
 }
 
 // Ledger: every credit and debit that affects a user's cash balance.

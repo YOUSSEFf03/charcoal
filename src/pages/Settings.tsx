@@ -1,42 +1,22 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import Topbar from '../components/layout/Topbar'
 import { useUsers, useUpdateUserRole } from '../hooks/useUsers'
 import { useBagTypes, useCreateBagType, useUpdateBagType, useDeleteBagType } from '../hooks/useBagTypes'
 import { useReceivers } from '../hooks/useReceivers'
 import { useRate } from '../context/RateContext'
+import { useWorkers } from '../hooks/useWorkers'
 import type { User, Role } from '../types/api'
 
 type Section = 'company' | 'currency' | 'bagtypes' | 'workerrates' | 'driverrates' | 'receivers' | 'users' | 'preferences' | 'danger'
 
-interface BagType { id: number; name: string; kg: number; cost: number; workerRate: number; note: string }
-interface WorkerBagRate { id: number; bag: string; rate: number; monthly: string }
 interface PrefToggle { label: string; desc: string; on: boolean }
 
-const INIT_BAGS: BagType[] = [
-  { id: 1, name: '1.9 kg bag', kg: 1.9, cost: 0.04, workerRate: 0.05, note: 'same bag as 2kg' },
-  { id: 2, name: '2 kg bag', kg: 2.0, cost: 0.04, workerRate: 0.05, note: 'same bag as 1.9kg' },
-  { id: 3, name: '5 kg bag', kg: 5.0, cost: 0.07, workerRate: 0.08, note: '' },
-  { id: 4, name: '10 kg bag', kg: 10.0, cost: 0.10, workerRate: 0.12, note: '' },
-  { id: 5, name: '20 kg bag', kg: 20.0, cost: 0.15, workerRate: 0.18, note: '' },
-]
-const INIT_WORKER_BAG_RATES: WorkerBagRate[] = [
-  { id: 1, bag: '1.9 kg bag', rate: 0.050, monthly: '~$25 / month' },
-  { id: 2, bag: '2 kg bag', rate: 0.050, monthly: '~$59 / month' },
-  { id: 3, bag: '5 kg bag', rate: 0.080, monthly: '~$26 / month' },
-  { id: 4, bag: '10 kg bag', rate: 0.120, monthly: '~$17 / month' },
-  { id: 5, bag: '20 kg bag', rate: 0.180, monthly: '~$7 / month' },
-]
 const INIT_PREFS: PrefToggle[] = [
   { label: 'CRM alerts — overdue client notifications', desc: "Show alert when a client hasn't ordered past their average order interval", on: true },
   { label: 'Low stock warnings', desc: 'Alert on dashboard when a raw lot falls below 20% remaining', on: true },
   { label: 'Auto-generate invoice on delivery', desc: 'Invoice is created automatically when driver confirms delivery', on: true },
   { label: 'Require variance explanation below zero', desc: 'Worker must enter a note if packing output exceeds input kg', on: true },
   { label: 'Show LBP equivalent on all USD amounts', desc: 'Display LBP equivalent below every USD amount using current rate', on: true },
-]
-const RATE_HISTORY = [
-  { rate: '89,550', date: '21 May 2026', by: 'Khalil', current: true },
-  { rate: '89,200', date: '1 May 2026', by: 'Khalil', current: false },
-  { rate: '88,750', date: '15 Apr 2026', by: 'Khalil', current: false },
 ]
 // Role → display label + badge styling (API returns the raw `Role` enum).
 const ROLE_META: Record<Role, { label: string; badgeClass: string; badgeStyle: React.CSSProperties; avBg: string; avColor: string }> = {
@@ -78,15 +58,12 @@ export default function Settings() {
   const createBagType = useCreateBagType()
   const updateBagType = useUpdateBagType()
   const deleteBagType = useDeleteBagType()
+  const workersQ = useWorkers()
+  const driversQ = useUsers({ role: 'driver' })
 
   const [section, setSection] = useState<Section>('company')
   const [toast, setToast] = useState(false)
   const [toastMsg, setToastMsg] = useState('Changes saved')
-  const [bags, setBags] = useState<BagType[]>(INIT_BAGS)
-  const [nextBagId, setNextBagId] = useState(6)
-  const [workerBagRates, setWorkerBagRates] = useState<WorkerBagRate[]>(INIT_WORKER_BAG_RATES)
-  const [nextRateId, setNextRateId] = useState(6)
-  const [currentRate, setCurrentRate] = useState('89,550')
   const [newRate, setNewRate] = useState('')
   const [prefs, setPrefs] = useState<PrefToggle[]>(INIT_PREFS)
   const { receivers, add: addReceiver, remove: removeReceiver, update: updateReceiver } = useReceivers()
@@ -102,8 +79,13 @@ export default function Settings() {
   const [editingUser, setEditingUser] = useState<User | null>(null)
   const [editingRole, setEditingRole] = useState<Role>('accountant')
   const [workerDailyRate, setWorkerDailyRate] = useState('15.00')
-  const [driverRates, setDriverRates] = useState<Record<string, string>>({ MK: '35', AH: '35', JN: '35' })
+  const [driverRates, setDriverRates] = useState<Record<string, string>>({})
   const [company, setCompany] = useState({ name: 'Farah Charcoal', phone: '+961 1 234 567', address: 'Beirut, Lebanon', addressAr: 'بيروت، لبنان', taxNo: '', email: 'contact@farahcharcoal.lb', footer: '' })
+
+  useEffect(() => {
+    const r = workersQ.data?.[0]?.dailyRate
+    if (r) setWorkerDailyRate(parseFloat(r).toFixed(2))
+  }, [workersQ.data])
 
   function showToast(msg?: string) {
     setToastMsg(msg || 'Changes saved')
@@ -113,20 +95,9 @@ export default function Settings() {
   function updateRate() {
     const val = parseInt(newRate.replace(/,/g, ''), 10)
     if (!val || isNaN(val)) return
-    setCurrentRate(val.toLocaleString())
     rateCtx.setRate(val.toLocaleString()) // saves to backend via RateContext
     setNewRate('')
     showToast('Exchange rate updated — saved to backend')
-  }
-  function addBag() { setBags(p => [...p, { id: nextBagId, name: '', kg: 0, cost: 0, workerRate: 0, note: '' }]); setNextBagId(n => n + 1) }
-  function removeBag(id: number) { setBags(p => p.filter(b => b.id !== id)) }
-  function updateBag(id: number, field: keyof BagType, val: string) {
-    setBags(p => p.map(b => b.id === id ? { ...b, [field]: ['kg', 'cost', 'workerRate'].includes(field as string) ? parseFloat(val) || 0 : val } : b))
-  }
-  function addWorkerBagRate() { setWorkerBagRates(p => [...p, { id: nextRateId, bag: '', rate: 0, monthly: '' }]); setNextRateId(n => n + 1) }
-  function removeWorkerBagRate(id: number) { setWorkerBagRates(p => p.filter(r => r.id !== id)) }
-  function updateWorkerBagRate(id: number, field: keyof WorkerBagRate, val: string) {
-    setWorkerBagRates(p => p.map(r => r.id === id ? { ...r, [field]: field === 'rate' ? parseFloat(val) || 0 : val } : r))
   }
   function togglePref(i: number) { setPrefs(p => p.map((t, idx) => idx === i ? { ...t, on: !t.on } : t)) }
 
@@ -193,7 +164,7 @@ export default function Settings() {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', marginBottom: 14 }}>
                   <div>
                     <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 2 }}>Current rate</div>
-                    <div style={{ fontSize: 24, fontWeight: 600, letterSpacing: -1, fontFamily: "'IBM Plex Mono',monospace" }}>{currentRate}</div>
+                    <div style={{ fontSize: 24, fontWeight: 600, letterSpacing: -1, fontFamily: "'IBM Plex Mono',monospace" }}>{rateCtx.rate}</div>
                     <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", marginTop: 2 }}>LBP per $1 USD · updated 21 May 2026 by Khalil</div>
                   </div>
                   <span className="badge badge-green">Active</span>
@@ -207,7 +178,7 @@ export default function Settings() {
                   </div>
                 </div>
                 <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '10px 14px', fontSize: 12, color: 'var(--text2)' }}>
-                  <strong>Example:</strong> At rate {currentRate} — an invoice of $100 USD = {(parseInt(currentRate.replace(/,/g, '')) * 100).toLocaleString()} LBP
+                  <strong>Example:</strong> At rate {rateCtx.rate} — an invoice of $100 USD = {(parseInt(rateCtx.rate.replace(/,/g, '')) * 100).toLocaleString()} LBP
                 </div>
               </div>
             </div>
@@ -215,7 +186,7 @@ export default function Settings() {
               <div style={cardHd}><div style={cardTl}><i className="ti ti-history" style={{ fontSize: 15, color: 'var(--text2)' }} /> Rate history</div></div>
               <table style={{ width: '100%', borderCollapse: 'collapse' as const, fontSize: 13 }}>
                 <thead><tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>{['Rate (LBP/$)', 'Date set', 'Set by'].map(h => <th key={h} style={{ textAlign: 'left', padding: '8px 18px', fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', fontWeight: 400, textTransform: 'uppercase' as const, letterSpacing: 0.6 }}>{h}</th>)}</tr></thead>
-                <tbody>{RATE_HISTORY.map((r, i) => <tr key={i} style={{ borderBottom: i < RATE_HISTORY.length - 1 ? '1px solid var(--border)' : 'none' }}><td style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: r.current ? 600 : 400, color: r.current ? 'var(--text)' : 'var(--text3)' }}>{r.rate}</td><td style={{ padding: '10px 18px', color: 'var(--text2)' }}>{r.date}</td><td style={{ padding: '10px 18px', fontSize: 12, color: 'var(--text2)' }}>{r.by}</td></tr>)}</tbody>
+                <tbody><tr><td colSpan={3} style={{ padding: '12px 18px', fontSize: 12, color: 'var(--text3)', textAlign: 'center' }}>Rate change history coming soon</td></tr></tbody>
               </table>
             </div>
           </>}
@@ -332,16 +303,24 @@ export default function Settings() {
             <div style={card}>
               <div style={cardHd}><div style={cardTl}><i className="ti ti-truck" style={{ fontSize: 15, color: 'var(--text2)' }} /> Driver daily rates</div></div>
               <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
-                {([['MK', 'Mohammed Khalil', 'var(--blue-bg)', 'var(--blue)'], ['AH', 'Ahmad Hassan', 'var(--accent2-bg)', 'var(--accent2)'], ['JN', 'Joseph Nasr', 'var(--surface2)', 'var(--text2)']] as const).map(([init, name, bg, color]) => (
-                  <div key={init} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: 14, background: 'var(--surface2)', borderRadius: 'var(--radius)' }}>
-                    <div style={{ width: 38, height: 38, borderRadius: '50%', background: bg, color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 600, flexShrink: 0 }}>{init}</div>
-                    <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 500 }}>{name}</div><div style={{ fontSize: 11, color: 'var(--text3)' }}>driver</div></div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <input type="number" step={1} value={driverRates[init]} onChange={e => setDriverRates(p => ({ ...p, [init]: e.target.value }))} style={{ width: 80, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 16, fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', outline: 'none', background: 'var(--surface)' }} />
-                      <span style={{ fontSize: 12, color: 'var(--text2)' }}>$ / day</span>
+                {driversQ.isLoading && <div style={{ padding: 18, fontSize: 13, color: 'var(--text3)' }}>Loading drivers…</div>}
+                {(driversQ.data?.data ?? []).map(u => {
+                  const init = u.name.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase()
+                  return (
+                    <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: 14, background: 'var(--surface2)', borderRadius: 'var(--radius)' }}>
+                      <div style={{ width: 38, height: 38, borderRadius: '50%', background: 'var(--blue-bg)', color: 'var(--blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 600, flexShrink: 0 }}>{init}</div>
+                      <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 500 }}>{u.name}</div><div style={{ fontSize: 11, color: 'var(--text3)' }}>driver</div></div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {/* TODO backend sub-task: persist driver daily rate */}
+                        <input type="number" step={1} value={driverRates[u.id] ?? '35'} onChange={e => setDriverRates(p => ({ ...p, [u.id]: e.target.value }))} style={{ width: 80, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 16, fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', outline: 'none', background: 'var(--surface)' }} />
+                        <span style={{ fontSize: 12, color: 'var(--text2)' }}>$ / day</span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
+                {!driversQ.isLoading && (driversQ.data?.data ?? []).length === 0 && (
+                  <div style={{ padding: 18, fontSize: 13, color: 'var(--text3)', textAlign: 'center' }}>No driver users found. Add users with the driver role in Users &amp; Roles.</div>
+                )}
               </div>
               <div style={ftr}><button style={saveBtn} onClick={() => showToast()}><i className="ti ti-check" style={{ fontSize: 14 }} /> Save rates</button></div>
             </div>

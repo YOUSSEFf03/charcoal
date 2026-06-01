@@ -36,6 +36,7 @@ export interface WarehouseSummary {
   totalSystemKg: string // Decimal
   lotCount: number
   packedSummary: PackedStockSummary[]
+  estimatedTotalValue?: string // Decimal — omitted for sales_rep/worker roles
 }
 
 /**
@@ -111,8 +112,5 @@ export interface CompleteDriverTripDto {
  * TODO: verify against Swagger.
  */
 export interface SubmitPhysicalCountDto {
-  rawLots?: { lotId: string; countedKg: string }[]
-  packedStock?: { packedStockId: string; countedQty: number }[]
-  date: string
-  reason?: string | null
+  items: { packedStockId: string; actualQuantity: number }[]
 }

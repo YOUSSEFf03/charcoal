@@ -121,7 +121,7 @@ export default function Warehouse() {
     size: p.bagTypeName,
     bags: p.totalBags,
     totalKg: parseFloat(p.totalNominalKg),
-    lots: p.lots?.length ?? 0,
+    lots: 0,
   }))
   const totalPackedKg = packedCards.reduce((s, c) => s + c.totalKg, 0) || 1
 
