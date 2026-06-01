@@ -162,6 +162,20 @@ export class ReportsController {
   }
 
   /**
+   * AR summary — full-table SQL aggregates for the Invoices KPI cards.
+   * Returns totalInvoiced, totalCollected, totalOutstanding, totalOverdue,
+   * openInvoiceCount, overdueCount, oldestOverdueDays.
+   * No rows are fetched into memory; safe at any invoice volume.
+   */
+  @ApiOperation({ summary: 'Accounts-receivable summary (full-table aggregates)' })
+  @ApiResponse({ status: 200, description: 'AR totals computed over the full table in SQL' })
+  @Roles('owner', 'accountant', 'sales_rep')
+  @Get('ar-summary')
+  getArSummary() {
+    return this.reportsService.getArSummary();
+  }
+
+  /**
    * Unified activity feed — recent events from all major domains, sorted newest-first.
    * Sources: packing sessions, deliveries, payments, invoices, orders, fill jobs,
    *          containers, stock exits.

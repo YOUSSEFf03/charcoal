@@ -3,6 +3,7 @@ import Topbar from '../components/layout/Topbar'
 import { useInvoices, useIssueInvoice, useCancelInvoice } from '../hooks/useInvoices'
 import { usePayments, useCreatePayment } from '../hooks/usePayments'
 import { useClients } from '../hooks/useClients'
+import { useArSummary } from '../hooks/useReports'
 import type { Invoice, InvoiceStatus, PaymentMethod } from '../types/api'
 import { useRate } from '../context/RateContext'
 
@@ -52,8 +53,10 @@ export default function Invoices() {
   const apiStatus = ({ 'Paid': 'paid', 'Partial': 'partially_paid', 'Unpaid': 'issued', 'Overdue': 'overdue' } as Record<string, string>)[statusFilter]
   const invoicesQ = useInvoices({ status: apiStatus, limit: 100 })
   const paymentsQ = usePayments({ limit: 100 })
+  // outstandingQ feeds the Outstanding tab TABLE only — not used for KPI numbers.
   const outstandingQ = useInvoices({ status: 'overdue', limit: 100 })
   const clientsQ = useClients({ limit: 100 })
+  const arQ = useArSummary()
   const createPayment = useCreatePayment()
   const issueInvoice = useIssueInvoice()
   const cancelInvoice = useCancelInvoice()
@@ -65,16 +68,13 @@ export default function Invoices() {
   const clientList = clientsQ.data?.data ?? []
   const clientNameById = new Map(clientList.map(c => [c.id, c.name]))
 
-  // KPI computations from real data
-  const totalInvoiced = invoiceRows.reduce((s, inv) => s + parseFloat(inv.total), 0)
-  const totalCollected = paymentRows.reduce((s, p) => s + parseFloat(p.amount), 0)
-  const totalOutstanding = invoiceRows
-    .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled')
-    .reduce((s, inv) => s + (parseFloat(inv.total) - parseFloat(inv.paidAmount)), 0)
-  const totalOverdue = outstandingRows.reduce((s, inv) => s + (parseFloat(inv.total) - parseFloat(inv.paidAmount)), 0)
-  const oldestOverdueDays = outstandingRows.length > 0
-    ? Math.max(...outstandingRows.map(inv => inv.dueDate ? Math.max(0, Math.round((Date.now() - new Date(inv.dueDate).getTime()) / 86400000)) : 0))
-    : 0
+  // KPI values — full-table SQL aggregates from the backend (never a reduce over a page).
+  const ar = arQ.data
+  const totalInvoiced    = parseFloat(ar?.totalInvoiced    ?? '0')
+  const totalCollected   = parseFloat(ar?.totalCollected   ?? '0')
+  const totalOutstanding = parseFloat(ar?.totalOutstanding ?? '0')
+  const totalOverdue     = parseFloat(ar?.totalOverdue     ?? '0')
+  const oldestOverdueDays = ar?.oldestOverdueDays ?? 0
 
   function showToast(msg: string) {
     setToast(msg)
@@ -146,8 +146,8 @@ export default function Invoices() {
                 <i className="ti ti-file-invoice" />
               </span>
             </div>
-            <div className="kpi-value">${fmtMoney(String(totalInvoiced))}</div>
-            <div className="kpi-sub">{invoiceRows.length} invoices loaded</div>
+            <div className="kpi-value">{arQ.isLoading ? '…' : `$${fmtMoney(String(totalInvoiced))}`}</div>
+            <div className="kpi-sub">{ar?.openInvoiceCount ?? '—'} open invoices</div>
           </div>
           <div className="kpi-card">
             <div className="kpi-header">
@@ -156,7 +156,7 @@ export default function Invoices() {
                 <i className="ti ti-circle-check" />
               </span>
             </div>
-            <div className="kpi-value">${fmtMoney(String(totalCollected))}</div>
+            <div className="kpi-value">{arQ.isLoading ? '…' : `$${fmtMoney(String(totalCollected))}`}</div>
             <div className="kpi-sub kpi-delta delta-up">
               {totalInvoiced > 0 ? <><i className="ti ti-trending-up" /> {Math.round((totalCollected / totalInvoiced) * 100)}% collection rate</> : 'No invoices'}
             </div>
@@ -168,8 +168,8 @@ export default function Invoices() {
                 <i className="ti ti-clock" />
               </span>
             </div>
-            <div className="kpi-value">${fmtMoney(String(totalOutstanding))}</div>
-            <div className="kpi-sub">{invoiceRows.filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled').length} open invoices</div>
+            <div className="kpi-value">{arQ.isLoading ? '…' : `$${fmtMoney(String(totalOutstanding))}`}</div>
+            <div className="kpi-sub">{ar?.openInvoiceCount ?? '—'} not yet paid</div>
           </div>
           <div className="kpi-card">
             <div className="kpi-header">
@@ -178,8 +178,8 @@ export default function Invoices() {
                 <i className="ti ti-alert-triangle" />
               </span>
             </div>
-            <div className="kpi-value" style={{ color: 'var(--red)' }}>${fmtMoney(String(totalOverdue))}</div>
-            <div className="kpi-sub kpi-delta delta-warn"><i className="ti ti-alert-circle" /> {outstandingRows.length} invoices overdue</div>
+            <div className="kpi-value" style={{ color: 'var(--red)' }}>{arQ.isLoading ? '…' : `$${fmtMoney(String(totalOverdue))}`}</div>
+            <div className="kpi-sub kpi-delta delta-warn"><i className="ti ti-alert-circle" /> {ar?.overdueCount ?? '—'} invoices overdue</div>
           </div>
         </div>
 
@@ -332,15 +332,15 @@ export default function Invoices() {
             <div className="grid-3" style={{ marginBottom: 16 }}>
               <div className="card" style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: '0.78rem', color: 'var(--text2)', marginBottom: 4 }}>Total Outstanding</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--accent2)' }}>${fmtMoney(String(totalOutstanding))}</div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--accent2)' }}>{arQ.isLoading ? '…' : `$${fmtMoney(String(totalOutstanding))}`}</div>
               </div>
               <div className="card" style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: '0.78rem', color: 'var(--text2)', marginBottom: 4 }}>Overdue Amount</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--red)' }}>${fmtMoney(String(totalOverdue))}</div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--red)' }}>{arQ.isLoading ? '…' : `$${fmtMoney(String(totalOverdue))}`}</div>
               </div>
               <div className="card" style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: '0.78rem', color: 'var(--text2)', marginBottom: 4 }}>Oldest Invoice</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{oldestOverdueDays > 0 ? `${oldestOverdueDays} days` : '—'}</div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{arQ.isLoading ? '…' : oldestOverdueDays > 0 ? `${oldestOverdueDays} days` : '—'}</div>
               </div>
             </div>
             <div className="card">

@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type {
+  ArSummary,
   ProfitLossReport,
   StockValueReport,
   VarianceReport,
@@ -38,6 +39,22 @@ export interface ContainerCostsQuery {
 export interface ClientLedgerQuery {
   dateFrom?: string
   dateTo?: string
+}
+
+/**
+ * AR summary — full-table SQL aggregates for invoice KPI cards.
+ * Safe at any invoice/payment volume; no reduce() over a page slice.
+ * GET /reports/ar-summary
+ */
+export function useArSummary() {
+  return useQuery({
+    queryKey: ['reports', 'ar-summary'],
+    queryFn: async () => {
+      const res = await api.get<ArSummary>('/reports/ar-summary')
+      return res.data
+    },
+    staleTime: 30_000,
+  })
 }
 
 /**

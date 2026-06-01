@@ -823,4 +823,58 @@ export class ReportsService {
     items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     return items.slice(0, limit);
   }
+
+  /**
+   * AR (accounts-receivable) summary — all four aggregates computed in SQL
+   * over the full table so the numbers are correct regardless of row count.
+   *
+   * Four parallel queries; no rows fetched into memory.
+   *
+   * Accessible to owner, accountant, and sales_rep (matches invoice list visibility).
+   */
+  async getArSummary() {
+    const [invoicedAgg, collectedAgg, outstandingResult, overdueResult] = await Promise.all([
+      // totalInvoiced: sum of all issued/partially_paid/paid invoice totals
+      this.prisma.invoice.aggregate({
+        where: { status: { notIn: ['draft', 'cancelled'] } },
+        _sum: { total: true },
+      }),
+
+      // totalCollected: sum of every payment recorded
+      this.prisma.payment.aggregate({
+        _sum: { amount: true },
+      }),
+
+      // totalOutstanding + open count: invoices not yet fully paid or cancelled
+      this.prisma.$queryRaw<[{ total_outstanding: string; open_count: string }]>(Prisma.sql`
+        SELECT
+          COALESCE(SUM("total" - "paidAmount"), 0)::text AS total_outstanding,
+          COUNT(*)::text                                  AS open_count
+        FROM "invoices"
+        WHERE "status" NOT IN ('paid', 'cancelled', 'draft')
+      `),
+
+      // totalOverdue + overdue count + oldest overdue age
+      this.prisma.$queryRaw<[{ total_overdue: string; overdue_count: string; oldest_days: string }]>(Prisma.sql`
+        SELECT
+          COALESCE(SUM("total" - "paidAmount"), 0)::text                                                  AS total_overdue,
+          COUNT(*)::text                                                                                   AS overdue_count,
+          COALESCE(MAX(GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - "dueDate")) / 86400))), 0)::text     AS oldest_days
+        FROM "invoices"
+        WHERE "status" IN ('issued', 'partially_paid')
+          AND "dueDate" IS NOT NULL
+          AND "dueDate" < NOW()
+      `),
+    ]);
+
+    return {
+      totalInvoiced:    new Decimal(invoicedAgg._sum.total?.toString()   ?? '0').toFixed(2),
+      totalCollected:   new Decimal(collectedAgg._sum.amount?.toString() ?? '0').toFixed(2),
+      totalOutstanding: new Decimal(outstandingResult[0]?.total_outstanding ?? '0').toFixed(2),
+      totalOverdue:     new Decimal(overdueResult[0]?.total_overdue          ?? '0').toFixed(2),
+      openInvoiceCount: Number(outstandingResult[0]?.open_count  ?? 0),
+      overdueCount:     Number(overdueResult[0]?.overdue_count   ?? 0),
+      oldestOverdueDays: Number(overdueResult[0]?.oldest_days    ?? 0),
+    };
+  }
 }

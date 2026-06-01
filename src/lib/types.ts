@@ -1115,3 +1115,18 @@ export interface CreateGeneralExpenseDto {
   date?: string;
   notes?: string | null;
 }
+
+// ----------------------------------------------------------------------------
+// AR SUMMARY (GET /reports/ar-summary)
+// ----------------------------------------------------------------------------
+
+/** Full-table AR aggregate — KPI cards on the Invoices page. */
+export interface ArSummary {
+  totalInvoiced: string;    // Decimal — SUM(total) for all non-draft/non-cancelled invoices
+  totalCollected: string;   // Decimal — SUM(amount) across all payments
+  totalOutstanding: string; // Decimal — SUM(total - paidAmount) for open invoices
+  totalOverdue: string;     // Decimal — SUM(total - paidAmount) for overdue invoices
+  openInvoiceCount: number;
+  overdueCount: number;
+  oldestOverdueDays: number;
+}

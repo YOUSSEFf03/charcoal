@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useProfitLoss, useVarianceReport } from '../hooks/useReports'
+import { useProfitLoss, useVarianceReport, useArSummary } from '../hooks/useReports'
 import { useWorkers, useLogWorkerPayment } from '../hooks/useWorkers'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { useClients } from '../hooks/useClients'
@@ -119,6 +119,7 @@ export default function Reports() {
   // Client ledger tab data
   const clientsQ = useClients({ limit: 50 })
   const invoicesQ = useInvoices({ limit: 100 })
+  const arQ = useArSummary()
 
   const pnl = pnlQ.data
   const variance = varianceQ.data
@@ -384,19 +385,19 @@ export default function Reports() {
         {tab === 'ledger' && (
           <div>
             {(() => {
-              const allInvoices = invoicesQ.data?.data ?? []
               const allClients = clientsQ.data?.data ?? []
-              const totalInvoiced = allInvoices.reduce((s, inv) => s + parseFloat(inv.total), 0)
-              const totalCollected = allInvoices.reduce((s, inv) => s + parseFloat(inv.paidAmount), 0)
-              const outstanding = totalInvoiced - totalCollected
+              const ar = arQ.data
+              const totalInvoiced  = parseFloat(ar?.totalInvoiced    ?? '0')
+              const totalCollected = parseFloat(ar?.totalCollected   ?? '0')
+              const outstanding    = parseFloat(ar?.totalOutstanding ?? '0')
               const clientCount = allClients.length
               const clientsWithBalance = allClients.filter(c => parseFloat(c.balance) > 0).length
               return (
                 <>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 14 }}>
-                    <SvCard label="Total invoiced" value={invoicesQ.isLoading ? '…' : usd(String(totalInvoiced))} sub={`${clientCount} clients`} />
-                    <SvCard label="Total collected" value={invoicesQ.isLoading ? '…' : usd(String(totalCollected))} sub={totalInvoiced > 0 ? `${((totalCollected / totalInvoiced) * 100).toFixed(1)}% collection rate` : '—'} color="var(--accent)" />
-                    <SvCard label="Outstanding" value={invoicesQ.isLoading ? '…' : usd(String(outstanding))} sub={`${clientsWithBalance} clients with balance`} color="var(--accent2)" />
+                    <SvCard label="Total invoiced" value={arQ.isLoading ? '…' : usd(String(totalInvoiced))} sub={`${clientCount} clients`} />
+                    <SvCard label="Total collected" value={arQ.isLoading ? '…' : usd(String(totalCollected))} sub={totalInvoiced > 0 ? `${((totalCollected / totalInvoiced) * 100).toFixed(1)}% collection rate` : '—'} color="var(--accent)" />
+                    <SvCard label="Outstanding" value={arQ.isLoading ? '…' : usd(String(outstanding))} sub={`${clientsWithBalance} clients with balance`} color="var(--accent2)" />
                   </div>
                   <Card>
                     <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
