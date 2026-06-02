@@ -30,6 +30,31 @@ describe('ShipmentsService', () => {
     $transaction: fn(),
   };
 
+  // createShipment now runs inside a transaction and reserves FIFO. Build a tx whose
+  // packedStock rows carry quantity + reservedQuantity.
+  function makeCreateTx(rows: Array<{ id: string; bagTypeId: string; quantity: number; reservedQuantity: number; createdAt: Date }>) {
+    const store = rows.map((r) => ({ ...r }));
+    return {
+      _store: store,
+      packedStock: {
+        findMany: fn().mockImplementation(async (args: any) => {
+          let res = store.filter((r) => r.bagTypeId === args.where.bagTypeId);
+          if (args?.where?.reservedQuantity?.gt !== undefined) res = res.filter((r) => r.reservedQuantity > args.where.reservedQuantity.gt);
+          if (args?.where?.quantity?.gt !== undefined) res = res.filter((r) => r.quantity > args.where.quantity.gt);
+          return res.slice().sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+        }),
+        update: fn().mockImplementation(async (args: any) => {
+          const row = store.find((r) => r.id === args.where.id)!;
+          if (args.data.reservedQuantity?.increment) row.reservedQuantity += args.data.reservedQuantity.increment;
+          if (args.data.reservedQuantity?.decrement) row.reservedQuantity -= args.data.reservedQuantity.decrement;
+          if (args.data.quantity?.decrement) row.quantity -= args.data.quantity.decrement;
+          return row;
+        }),
+      },
+      shipment: { create: fn() },
+    };
+  }
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -53,13 +78,12 @@ describe('ShipmentsService', () => {
     // Test 1: CONSTRAINT 4 — insufficient stock throws before any DB write
     // =========================================================================
 
-    it('CONSTRAINT 4: throws BadRequestException with CONSTRAINT_VIOLATION before shipment.create when stock < required quantity', async () => {
+    it('CONSTRAINT 4: throws CONSTRAINT_VIOLATION and does not create the shipment when free stock < required quantity', async () => {
       const bagTypeId = 'bag-type-uuid-1';
 
-      // aggregate returns sum of 5, but we request 10
-      mockPrisma.packedStock.aggregate.mockResolvedValue({
-        _sum: { quantity: 5 },
-      });
+      // 5 in stock, none reserved; we request 10 → cannot fully reserve.
+      const tx = makeCreateTx([{ id: 'ps-1', bagTypeId, quantity: 5, reservedQuantity: 0, createdAt: new Date('2024-01-01') }]);
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
       const dto = {
         orderId: 'order-uuid-1',
@@ -70,59 +94,127 @@ describe('ShipmentsService', () => {
 
       await expect(
         service.createShipment(dto as any, 'clerk-user-1'),
-      ).rejects.toThrow(BadRequestException);
-
-      await expect(
-        service.createShipment(dto as any, 'clerk-user-1'),
       ).rejects.toMatchObject({
         response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
       });
 
       // shipment.create must NOT have been called
-      expect(mockPrisma.shipment.create).not.toHaveBeenCalled();
+      expect(tx.shipment.create).not.toHaveBeenCalled();
     });
 
     // =========================================================================
     // Test 2: sufficient stock → calls shipment.create with correct shape
     // =========================================================================
 
-    it('calls shipment.create with orderId, address, nominalKg and bags when stock is sufficient', async () => {
+    it('reserves stock and calls shipment.create with the right shape when stock is sufficient', async () => {
       const bagTypeId = 'bag-type-uuid-2';
       const orderId = 'order-uuid-2';
 
-      mockPrisma.packedStock.aggregate.mockResolvedValue({
-        _sum: { quantity: 20 },
-      });
-
+      const tx = makeCreateTx([{ id: 'ps-2', bagTypeId, quantity: 20, reservedQuantity: 0, createdAt: new Date('2024-01-01') }]);
       const createdShipment = {
-        id: 'shipment-uuid-1',
-        orderId,
-        address: '456 Delivery Ave',
-        nominalKg: '30.000',
-        bags: [],
+        id: 'shipment-uuid-1', orderId, address: '456 Delivery Ave', nominalKg: '30.000', bags: [],
       };
-      mockPrisma.shipment.create.mockResolvedValue(createdShipment);
+      tx.shipment.create.mockResolvedValue(createdShipment);
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
       const dto = {
-        orderId,
-        address: '456 Delivery Ave',
-        nominalKg: '30.000',
-        bags: [{ bagTypeId, quantity: 5 }],
+        orderId, address: '456 Delivery Ave', nominalKg: '30.000', bags: [{ bagTypeId, quantity: 5 }],
       };
 
       const result = await service.createShipment(dto as any, 'clerk-user-1');
 
-      expect(mockPrisma.shipment.create).toHaveBeenCalledTimes(1);
-      const createArg = mockPrisma.shipment.create.mock.calls[0][0];
+      expect(tx.shipment.create).toHaveBeenCalledTimes(1);
+      const createArg = tx.shipment.create.mock.calls[0][0];
       expect(createArg.data.orderId).toBe(orderId);
       expect(createArg.data.address).toBe('456 Delivery Ave');
       expect(createArg.data.nominalKg).toBe('30.000');
       expect(createArg.data.bags.create).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ bagTypeId, quantity: 5 }),
-        ]),
+        expect.arrayContaining([expect.objectContaining({ bagTypeId, quantity: 5 })]),
       );
+      // BUG-2: the 5 bags are now reserved, physical quantity unchanged.
+      expect(tx._store[0].reservedQuantity).toBe(5);
+      expect(tx._store[0].quantity).toBe(20);
       expect(result).toBe(createdShipment);
+    });
+
+    // =========================================================================
+    // BUG-2 (P2): joint over-allocation across two shipments is impossible
+    // =========================================================================
+
+    it('BUG-2: two shipments for the same bag type cannot jointly exceed packed stock', async () => {
+      const bagTypeId = 'bag-type-joint';
+      // Shared stateful store: reservation from shipment 1 is visible to shipment 2.
+      const tx = makeCreateTx([{ id: 'ps-j', bagTypeId, quantity: 100, reservedQuantity: 0, createdAt: new Date('2024-01-01') }]);
+      tx.shipment.create.mockResolvedValue({ id: 's', bags: [] });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      // First reserves 70 — OK.
+      await service.createShipment(
+        { orderId: 'o1', address: 'a', nominalKg: '1', bags: [{ bagTypeId, quantity: 70 }] } as any,
+        'clerk-1',
+      );
+      expect(tx._store[0].reservedQuantity).toBe(70);
+
+      // Second wants 50, only 30 free → rejected.
+      await expect(
+        service.createShipment(
+          { orderId: 'o2', address: 'a', nominalKg: '1', bags: [{ bagTypeId, quantity: 50 }] } as any,
+          'clerk-1',
+        ),
+      ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }) });
+
+      // INVARIANT: reserved never exceeds physical quantity.
+      expect(tx._store[0].reservedQuantity).toBeLessThanOrEqual(tx._store[0].quantity);
+    });
+  });
+
+  // =========================================================================
+  // cancelShipment() — BUG-2 reservation release
+  // =========================================================================
+
+  describe('cancelShipment()', () => {
+    function makeCancelTx(rows: Array<{ id: string; bagTypeId: string; quantity: number; reservedQuantity: number; createdAt: Date }>, shipment: any) {
+      const store = rows.map((r) => ({ ...r }));
+      return {
+        _store: store,
+        packedStock: {
+          findMany: fn().mockImplementation(async (args: any) => {
+            let res = store.filter((r) => r.bagTypeId === args.where.bagTypeId);
+            if (args?.where?.reservedQuantity?.gt !== undefined) res = res.filter((r) => r.reservedQuantity > args.where.reservedQuantity.gt);
+            return res.slice().sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+          }),
+          update: fn().mockImplementation(async (args: any) => {
+            const row = store.find((r) => r.id === args.where.id)!;
+            if (args.data.reservedQuantity?.decrement) row.reservedQuantity -= args.data.reservedQuantity.decrement;
+            return row;
+          }),
+        },
+        shipment: {
+          findUnique: fn().mockResolvedValue(shipment),
+          update: fn().mockResolvedValue({ id: shipment?.id }),
+        },
+      };
+    }
+
+    it('BUG-2: cancel releases the reservation only (quantity untouched) and marks cancelled', async () => {
+      const bagTypeId = 'bag-cancel';
+      const tx = makeCancelTx(
+        [{ id: 'ps-c', bagTypeId, quantity: 100, reservedQuantity: 40, createdAt: new Date('2024-01-01') }],
+        { id: 'ship-c', status: 'pending', bags: [{ bagTypeId, quantity: 40 }] },
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.cancelShipment('ship-c');
+
+      expect(tx._store[0].reservedQuantity).toBe(0);
+      expect(tx._store[0].quantity).toBe(100);
+      expect(tx.shipment.update.mock.calls[0][0].data.status).toBe('cancelled');
+    });
+
+    it('BUG-2: cancel is rejected for a delivered shipment', async () => {
+      const tx = makeCancelTx([], { id: 'ship-d', status: 'delivered', bags: [] });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      await expect(service.cancelShipment('ship-d')).rejects.toThrow(BadRequestException);
     });
   });
 
@@ -175,10 +267,10 @@ describe('ShipmentsService', () => {
         // Final findUnique at end of transaction
         .mockResolvedValueOnce({ id: shipmentId, bags: [] });
 
-      // Step 3: FIFO packed stocks for this bag type
+      // Step 3: FIFO packed stocks for this bag type (with reservations from creation).
       mockTx.packedStock.findMany.mockResolvedValue([
-        { id: stockId1, bagTypeId, quantity: 5, createdAt: new Date('2024-01-01') },
-        { id: stockId2, bagTypeId, quantity: 10, createdAt: new Date('2024-01-02') },
+        { id: stockId1, bagTypeId, quantity: 5, reservedQuantity: 5, createdAt: new Date('2024-01-01') },
+        { id: stockId2, bagTypeId, quantity: 10, reservedQuantity: 2, createdAt: new Date('2024-01-02') },
       ]);
 
       mockTx.packedStock.update.mockResolvedValue({});
@@ -200,10 +292,14 @@ describe('ShipmentsService', () => {
       const firstUpdate = updateCalls[0][0];
       expect(firstUpdate.where.id).toBe(stockId1);
       expect(firstUpdate.data.quantity.decrement).toBe(5);
+      // BUG-2: delivery releases the reservation it held (5 reserved → release 5).
+      expect(firstUpdate.data.reservedQuantity.decrement).toBe(5);
 
       const secondUpdate = updateCalls[1][0];
       expect(secondUpdate.where.id).toBe(stockId2);
       expect(secondUpdate.data.quantity.decrement).toBe(2);
+      // Second row held 2 reserved → release 2.
+      expect(secondUpdate.data.reservedQuantity.decrement).toBe(2);
 
       // CONSTRAINT 5: both StockExit records must use user.id, not anything from DTO
       const exitCalls = mockTx.stockExit.create.mock.calls;
@@ -247,7 +343,7 @@ describe('ShipmentsService', () => {
       });
 
       mockTx.packedStock.findMany.mockResolvedValue([
-        { id: 'stock-id-3', bagTypeId, quantity: 3, createdAt: new Date('2024-01-01') },
+        { id: 'stock-id-3', bagTypeId, quantity: 3, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
       ]);
 
       mockTx.packedStock.update.mockResolvedValue({});

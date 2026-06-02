@@ -35,6 +35,7 @@ import { ReportsModule } from './reports/reports.module';
 import { FillJobsModule } from './fill-jobs/fill-jobs.module';
 import { SettingsModule } from './settings/settings.module';
 import { GeneralExpensesModule } from './general-expenses/general-expenses.module';
+import { WalkInSalesModule } from './walk-in-sales/walk-in-sales.module';
 
 @Module({
   imports: [
@@ -70,6 +71,7 @@ import { GeneralExpensesModule } from './general-expenses/general-expenses.modul
     FillJobsModule,
     SettingsModule,
     GeneralExpensesModule,
+    WalkInSalesModule,
   ],
   controllers: [HealthController],
   providers: [

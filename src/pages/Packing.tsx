@@ -223,7 +223,8 @@ export default function Packing() {
 
   function saveEdit() {
     if (!editCanSave || !detailId) return
-    const validRows = editCharRows.filter(r => r.lotIdx >= 0 && Number(r.kg) > 0)
+    // Resolve to REAL lotId; drop any row whose index no longer maps to a live lot.
+    const validRows = editCharRows.filter(r => r.lotIdx >= 0 && Number(r.kg) > 0 && LOTS[r.lotIdx])
     if (validRows.length === 0) return
     const primaryLot = LOTS[validRows[0].lotIdx]
     const selectedBagType = TYPES[editBagTypeIdx]
@@ -260,13 +261,17 @@ export default function Packing() {
 
   function addEntry() {
     if (!canAdd) return
-    const validCharRows = charRows.filter(r => r.lotIdx >= 0 && Number(r.kg) > 0)
-    if (validCharRows.length === 0) return
+    // Resolve each row to its REAL lotId (LOTS[idx].id), not the transient array index.
+    // Guard against a stale index (LOTS may have refetched/reordered since selection).
+    const lotInputs = charRows
+      .filter(r => r.lotIdx >= 0 && Number(r.kg) > 0 && LOTS[r.lotIdx])
+      .map(r => ({ lotId: LOTS[r.lotIdx].id, kg: Number(r.kg).toFixed(3) }))
+    if (lotInputs.length === 0) return
     const selectedBagType = TYPES[bagTypeIdx]
     if (!selectedBagType || Number(bagQty) <= 0) return
     createSession.mutate(
       {
-        lotInputs: validCharRows.map(r => ({ lotId: LOTS[r.lotIdx].id, kg: Number(r.kg).toFixed(3) })),
+        lotInputs,
         bagsOutput: [{ bagTypeId: selectedBagType.id, qty: Number(bagQty) }],
         date: new Date().toISOString().slice(0, 10),
         ...(selectedWorkerId ? { workerEntityId: selectedWorkerId } : {}),

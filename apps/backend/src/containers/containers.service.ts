@@ -40,12 +40,15 @@ export class ContainersService {
    * allInCostPerKg   = allInCostPerTon / 1000
    * ```
    *
-   * ### StockLot matching
-   * Lots are matched to product lines by creation order (both sorted by `createdAt ASC`).
-   * This is safe because:
-   *   - Lots are created in product-line order inside the arrival transaction.
-   *   - Deleting product lines from arrived containers is blocked (@constraint 8).
-   *   - The index-based mapping is therefore stable for the lifetime of an arrived container.
+   * ### StockLot matching (BUG-1 / P1)
+   * Lots are matched to product lines by the persisted `StockLot.productLineId` FK — the
+   * real key — never by `createdAt` array index. This guarantees a lot's cost always
+   * derives from its OWN product line, even when:
+   *   - lines or lots are created out of `createdAt` order,
+   *   - a line is added to an arrived container after the fact,
+   *   - two lines share the same charcoalType/grade/supplier.
+   * Lots with a null `productLineId` (legacy rows the backfill could not bind) are skipped
+   * defensively rather than mis-assigned by index.
    *
    * @constraint 8  One StockLot per ContainerProductLine — never merged across lines.
    * @constraint 9  Called after every expense, discount, and product-line write.
@@ -92,32 +95,46 @@ export class ContainersService {
     // Guard against division by zero
     if (totalTonnage.isZero()) return;
 
-    // Fetch this container's stock lots in creation order (matches productLine order)
+    // Fetch this container's stock lots.
     const lots = await tx.stockLot.findMany({
       where: { containerId, source: 'container' },
-      orderBy: { createdAt: 'asc' },
     });
 
     // Container not yet arrived — nothing to update
     if (lots.length === 0) return;
 
-    await Promise.all(
-      container.productLines.map((line, i) => {
-        const lot = lots[i];
-        if (!lot) return Promise.resolve();
-        const tonnage = tonnages[i];
-        const expenseShare  = totalExpenses.mul(tonnage).div(totalTonnage);
-        const discountShare = totalDiscount.mul(tonnage).div(totalTonnage);
-        const allInCostPerTon = new Decimal(line.pricePerTon.toString())
-          .plus(expenseShare.div(tonnage))
-          .minus(discountShare.div(tonnage));
-        const allInCostPerKg = allInCostPerTon.div(1000);
-        return tx.stockLot.update({
-          where: { id: lot.id },
-          data: { costPerKg: allInCostPerKg.toFixed(4) },
-        });
-      }),
-    );
+    // BUG-1 (P1): index lots by their real productLineId FK so each line updates
+    // its OWN lot(s), independent of createdAt ordering.
+    const lotsByLineId = new Map<string, typeof lots>();
+    for (const lot of lots) {
+      if (!lot.productLineId) continue; // legacy null FK — skip rather than mis-map by index
+      const bucket = lotsByLineId.get(lot.productLineId);
+      if (bucket) bucket.push(lot);
+      else lotsByLineId.set(lot.productLineId, [lot]);
+    }
+
+    const updates: Promise<unknown>[] = [];
+    container.productLines.forEach((line, i) => {
+      const lineLots = lotsByLineId.get(line.id);
+      if (!lineLots || lineLots.length === 0) return;
+      const tonnage = tonnages[i];
+      const expenseShare  = totalExpenses.mul(tonnage).div(totalTonnage);
+      const discountShare = totalDiscount.mul(tonnage).div(totalTonnage);
+      const allInCostPerTon = new Decimal(line.pricePerTon.toString())
+        .plus(expenseShare.div(tonnage))
+        .minus(discountShare.div(tonnage));
+      const allInCostPerKg = allInCostPerTon.div(1000);
+      for (const lot of lineLots) {
+        updates.push(
+          tx.stockLot.update({
+            where: { id: lot.id },
+            data: { costPerKg: allInCostPerKg.toFixed(4) },
+          }),
+        );
+      }
+    });
+
+    await Promise.all(updates);
   }
 
   /**
@@ -358,12 +375,14 @@ export class ContainersService {
           orderBy: { createdAt: 'asc' },
         });
 
-        await tx.stockLot.createMany({
-          data: productLines.map(line => {
-            const kgReceived = new Decimal(line.paidBags)
-              .mul(new Decimal(line.kgPerBag.toString()))
-              .toFixed(3);
-            return {
+        // BUG-1 (P1): bind each lot to its product line via productLineId FK.
+        // One create per line (not createMany) so the FK is set per row.
+        for (const line of productLines) {
+          const kgReceived = new Decimal(line.paidBags)
+            .mul(new Decimal(line.kgPerBag.toString()))
+            .toFixed(3);
+          await tx.stockLot.create({
+            data: {
               charcoalType: line.charcoalType,
               grade:        line.grade,
               supplierId:   line.supplierId,
@@ -372,10 +391,11 @@ export class ContainersService {
               costPerKg:    '0',
               source:       'container',
               containerId:  container.id,
+              productLineId: line.id,
               dateReceived: new Date(),
-            };
-          }),
-        });
+            },
+          });
+        }
 
         await this.recalculateContainerCosts(container.id, tx);
       }
@@ -449,12 +469,15 @@ export class ContainersService {
 
         // Step 4: Create exactly one StockLot per product line (CONSTRAINT 8 — never merge).
         //         kgReceived = paidBags × kgPerBag (decimal.js). costPerKg seeded as "0" — overwritten in step 5.
-        await tx.stockLot.createMany({
-          data: container.productLines.map(line => {
-            const kgReceived = new Decimal(line.paidBags)
-              .mul(new Decimal(line.kgPerBag.toString()))
-              .toFixed(3);
-            return {
+        //         BUG-1 (P1): each lot persists productLineId — its real FK to the originating
+        //         line — so cost recalculation joins by key, never by createdAt array index.
+        //         Created one-by-one (not createMany) because the FK must be bound per row.
+        for (const line of container.productLines) {
+          const kgReceived = new Decimal(line.paidBags)
+            .mul(new Decimal(line.kgPerBag.toString()))
+            .toFixed(3);
+          await tx.stockLot.create({
+            data: {
               charcoalType: line.charcoalType,
               grade: line.grade,
               supplierId: line.supplierId,
@@ -463,10 +486,11 @@ export class ContainersService {
               costPerKg: '0', // placeholder — recalculated below
               source: 'container',
               containerId: id,
+              productLineId: line.id,
               dateReceived: new Date(),
-            };
-          }),
-        });
+            },
+          });
+        }
 
         // Step 5: Recalculate costPerKg on all lots just created (CONSTRAINT 9).
         await this.recalculateContainerCosts(id, tx);

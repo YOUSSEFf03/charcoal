@@ -141,7 +141,7 @@ describe('ContainersService', () => {
       };
 
       const finalContainer = { id: containerId, status: 'arrived' };
-      const mockLotAfterCreate = { id: 'lot-1', createdAt: new Date('2024-01-01') };
+      const mockLotAfterCreate = { id: 'lot-1', productLineId: 'line-1', createdAt: new Date('2024-01-01') };
 
       const tx = makeMockTx();
       // tx.container.findUnique is called 2 times inside $transaction:
@@ -152,7 +152,8 @@ describe('ContainersService', () => {
         .mockResolvedValueOnce(containerForRecalc);
 
       tx.container.update.mockResolvedValue({});
-      tx.stockLot.createMany.mockResolvedValue({ count: 1 });
+      // BUG-1: lots are now created one-by-one with productLineId, not via createMany.
+      tx.stockLot.create.mockResolvedValue({ id: 'lot-1' });
       tx.stockLot.findMany.mockResolvedValue([mockLotAfterCreate]);
       tx.stockLot.update.mockResolvedValue({});
 
@@ -166,10 +167,11 @@ describe('ContainersService', () => {
       await service.update(containerId, { status: 'arrived' }, 'user-clerk');
 
       // Assert
-      const createCall = tx.stockLot.createMany.mock.calls[0][0];
-      const createData = createCall.data[0];
+      const createCall = tx.stockLot.create.mock.calls[0][0];
+      const createData = createCall.data;
       expect(createData.kgReceived).toBe('8400.000');
       expect(createData.kgRemaining).toBe('8400.000');
+      expect(createData.productLineId).toBe('line-1');
     });
 
     // =======================================================================
@@ -213,8 +215,8 @@ describe('ContainersService', () => {
       };
       const finalContainer = { id: containerId, status: 'arrived' };
 
-      const lotA = { id: 'lot-a', createdAt: new Date('2024-01-01') };
-      const lotB = { id: 'lot-b', createdAt: new Date('2024-01-02') };
+      const lotA = { id: 'lot-a', productLineId: 'line-a', createdAt: new Date('2024-01-01') };
+      const lotB = { id: 'lot-b', productLineId: 'line-b', createdAt: new Date('2024-01-02') };
 
       const tx = makeMockTx();
       tx.container.findUnique
@@ -222,7 +224,7 @@ describe('ContainersService', () => {
         .mockResolvedValueOnce(containerForRecalc);
 
       tx.container.update.mockResolvedValue({});
-      tx.stockLot.createMany.mockResolvedValue({ count: 2 });
+      tx.stockLot.create.mockResolvedValue({ id: 'lot-x' });
       tx.stockLot.findMany.mockResolvedValue([lotA, lotB]);
       tx.stockLot.update.mockResolvedValue({});
 
@@ -234,9 +236,11 @@ describe('ContainersService', () => {
       // Act
       await service.update(containerId, { status: 'arrived' }, 'user-clerk');
 
-      // Assert — CONSTRAINT 8: one StockLot per product line, never merged
-      expect(tx.stockLot.createMany).toHaveBeenCalledTimes(1);
-      expect(tx.stockLot.createMany.mock.calls[0][0].data).toHaveLength(2);
+      // Assert — CONSTRAINT 8: one StockLot per product line, never merged.
+      // BUG-1: created one-by-one, each bound to its own productLineId.
+      expect(tx.stockLot.create).toHaveBeenCalledTimes(2);
+      const createdLineIds = tx.stockLot.create.mock.calls.map((c: any) => c[0].data.productLineId);
+      expect(createdLineIds).toEqual(['line-a', 'line-b']);
     });
   });
 
@@ -266,7 +270,7 @@ describe('ContainersService', () => {
         discount: null,
       };
 
-      const lot = { id: 'lot-1', createdAt: new Date('2024-01-01') };
+      const lot = { id: 'lot-1', productLineId: 'line-1', createdAt: new Date('2024-01-01') };
 
       const tx = makeMockTx();
       tx.container.findUnique.mockResolvedValue(containerData);
@@ -320,8 +324,8 @@ describe('ContainersService', () => {
         discount: null,
       };
 
-      const lotA = { id: 'lot-a', createdAt: new Date('2024-01-01') };
-      const lotB = { id: 'lot-b', createdAt: new Date('2024-01-02') };
+      const lotA = { id: 'lot-a', productLineId: 'line-a', createdAt: new Date('2024-01-01') };
+      const lotB = { id: 'lot-b', productLineId: 'line-b', createdAt: new Date('2024-01-02') };
 
       const tx = makeMockTx();
       tx.container.findUnique.mockResolvedValue(containerData);
@@ -331,18 +335,74 @@ describe('ContainersService', () => {
       // Act
       await service.recalculateContainerCosts(containerId, tx as any);
 
-      // Assert
+      // Assert — lookup is by productLineId FK, so assert per-lot by id (not call order).
       // Line A: tonnage=20, expenseShare=300×(20/30)=200, allInCostPerTon=800+(200/20)=810, /1000=0.8100
       // Line B: tonnage=10, expenseShare=300×(10/30)=100, allInCostPerTon=900+(100/10)=910, /1000=0.9100
       expect(tx.stockLot.update).toHaveBeenCalledTimes(2);
 
-      const callA = tx.stockLot.update.mock.calls[0][0];
-      expect(callA.where.id).toBe('lot-a');
-      expect(callA.data.costPerKg).toBe('0.8100');
+      const costById = (id: string) =>
+        tx.stockLot.update.mock.calls.find((c: any) => c[0].where.id === id)[0].data.costPerKg;
+      expect(costById('lot-a')).toBe('0.8100');
+      expect(costById('lot-b')).toBe('0.9100');
+    });
 
-      const callB = tx.stockLot.update.mock.calls[1][0];
-      expect(callB.where.id).toBe('lot-b');
-      expect(callB.data.costPerKg).toBe('0.9100');
+    // =======================================================================
+    // BUG-1 (P1): FK join, not array index
+    // =======================================================================
+
+    it('BUG-1: lots returned in REVERSE order still map cost to their OWN line (FK join, not index)', async () => {
+      // Two lines, same type/grade/supplier, different price. findMany returns the
+      // lots in the OPPOSITE order to productLines — the old index path would swap
+      // the costs. The FK join must keep each lot tied to its own line.
+      const containerId = 'container-bug1';
+      const lineCheap = { id: 'line-cheap', paidBags: 100, kgPerBag: { toString: () => '50' }, pricePerTon: { toString: () => '1000' } };
+      const lineExp = { id: 'line-exp', paidBags: 100, kgPerBag: { toString: () => '50' }, pricePerTon: { toString: () => '3000' } };
+
+      const tx = makeMockTx();
+      tx.container.findUnique.mockResolvedValue({
+        id: containerId,
+        productLines: [lineCheap, lineExp],
+        expenses: [],
+        discount: null,
+      });
+      // Reverse order: exp lot first, cheap lot second.
+      tx.stockLot.findMany.mockResolvedValue([
+        { id: 'lot-exp', productLineId: 'line-exp' },
+        { id: 'lot-cheap', productLineId: 'line-cheap' },
+      ]);
+      tx.stockLot.update.mockResolvedValue({});
+
+      await service.recalculateContainerCosts(containerId, tx as any);
+
+      const costById = (id: string) =>
+        tx.stockLot.update.mock.calls.find((c: any) => c[0].where.id === id)[0].data.costPerKg;
+      // cheap line 1000/ton → 1.0000/kg; exp line 3000/ton → 3.0000/kg
+      expect(costById('lot-cheap')).toBe('1.0000');
+      expect(costById('lot-exp')).toBe('3.0000');
+    });
+
+    it('BUG-1: skips lots with a null productLineId instead of mis-assigning by index', async () => {
+      const containerId = 'container-bug1-null';
+      const line = { id: 'line-1', paidBags: 100, kgPerBag: { toString: () => '50' }, pricePerTon: { toString: () => '1000' } };
+
+      const tx = makeMockTx();
+      tx.container.findUnique.mockResolvedValue({
+        id: containerId,
+        productLines: [line],
+        expenses: [],
+        discount: null,
+      });
+      tx.stockLot.findMany.mockResolvedValue([
+        { id: 'lot-1', productLineId: 'line-1' },
+        { id: 'orphan-lot', productLineId: null },
+      ]);
+      tx.stockLot.update.mockResolvedValue({});
+
+      await service.recalculateContainerCosts(containerId, tx as any);
+
+      const updatedIds = tx.stockLot.update.mock.calls.map((c: any) => c[0].where.id);
+      expect(updatedIds).toContain('lot-1');
+      expect(updatedIds).not.toContain('orphan-lot');
     });
   });
 
@@ -377,7 +437,7 @@ describe('ContainersService', () => {
         discount: null,
       };
 
-      const lot = { id: 'lot-1', createdAt: new Date('2024-01-01') };
+      const lot = { id: 'lot-1', productLineId: 'line-1', createdAt: new Date('2024-01-01') };
 
       mockPrisma.container.findUnique.mockResolvedValue(container);
       mockPrisma.user.findUnique.mockResolvedValue(user);
@@ -538,14 +598,14 @@ describe('ContainersService', () => {
       };
       const finalContainer = { id: containerId, status: 'arrived' };
 
-      const lot = { id: 'lot-1', createdAt: new Date('2024-01-01') };
+      const lot = { id: 'lot-1', productLineId: 'line-1', createdAt: new Date('2024-01-01') };
 
       const tx = makeMockTx();
       tx.container.findUnique
         .mockResolvedValueOnce(containerInDb)
         .mockResolvedValueOnce(containerForRecalc);
       tx.container.update.mockResolvedValue({});
-      tx.stockLot.createMany.mockResolvedValue({ count: 1 });
+      tx.stockLot.create.mockResolvedValue({ id: 'lot-1' });
       tx.stockLot.findMany.mockResolvedValue([lot]);
       tx.stockLot.update.mockResolvedValue({});
 
@@ -558,8 +618,8 @@ describe('ContainersService', () => {
       await service.update(containerId, { status: 'arrived' }, 'user-clerk');
 
       // Assert — exact string representation, not floating-point garbage
-      const createCall = tx.stockLot.createMany.mock.calls[0][0];
-      const createData = createCall.data[0];
+      const createCall = tx.stockLot.create.mock.calls[0][0];
+      const createData = createCall.data;
       expect(createData.kgReceived).toBe('8400.000');
       expect(createData.kgRemaining).toBe('8400.000');
       expect(typeof createData.kgReceived).toBe('string');

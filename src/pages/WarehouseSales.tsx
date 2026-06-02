@@ -5,7 +5,7 @@ import { useStockLots, usePackedStockSummary, usePackedStockRecords, useStockExi
 import { useClients } from '../hooks/useClients'
 import { useWorkers } from '../hooks/useWorkers'
 import { useReceivers } from '../hooks/useReceivers'
-import { useCreatePayment } from '../hooks/usePayments'
+import { useCreateWalkInSale } from '../hooks/useWalkInSales'
 import { useRate } from '../context/RateContext'
 import { roundDp } from '../lib/money'
 
@@ -70,7 +70,7 @@ export default function WarehouseSales() {
   // Paginated exits list — kept for the today's log table and cash-box totals only.
   const todayExitsQ = useStockExits({ exitType: 'walk_in', dateFrom: today, dateTo: today, limit: 100 })
   const createExit = useCreateStockExit()
-  const createPayment = useCreatePayment()
+  const createWalkInSale = useCreateWalkInSale()
 
   const bagTypes = bagTypesQ.data ?? []
   const activeLots = lotsQ.data?.data ?? []
@@ -236,8 +236,78 @@ export default function WarehouseSales() {
     setPackedLines(prev => prev.map(l => l.id === id ? { ...l, [field]: val } : l))
   }
 
+  // Maps the UI payment label to the backend PaymentMethod enum.
+  const PAY_METHOD_MAP: Record<string, 'cash' | 'whish' | 'omt' | 'bank_transfer'> = {
+    'Cash': 'cash', 'Whish': 'whish', 'OMT': 'omt', 'Bank transfer': 'bank_transfer',
+  }
+
   async function submitSale() {
     const buyerName = selectedBuyer ? selectedBuyer.name : (buyerInput.trim() || 'Walk-in')
+    const isRegisteredClient = !!selectedBuyerId && selectedBuyerId !== 'walk-in'
+
+    // BUG-3/BUG-4: a sale to a REGISTERED client (packed bags) goes through one atomic
+    // backend endpoint that writes stock exit + issued invoice + payment together, in the
+    // client's currency. This replaces the old flow that created a payment with no invoice
+    // (balance went negative) and hardcoded USD.
+    if (isRegisteredClient && mode === 'packed') {
+      const activeLines = packedLines.filter(ln => (parseInt(ln.qty) || 0) > 0 && (parseFloat(ln.price) || 0) > 0)
+      if (activeLines.length === 0) { showToast('Add at least one bag with qty + price'); return }
+
+      for (const ln of activeLines) {
+        const avail = bagStockMap.get(ln.bagTypeId) ?? 0
+        if (avail > 0 && (parseInt(ln.qty) || 0) > avail) {
+          const bt = bagTypes.find(b => b.id === ln.bagTypeId)
+          showToast(`Not enough stock for ${bt?.name ?? 'bag'} — only ${avail} available`)
+          return
+        }
+      }
+
+      // Each line is drawn from the oldest packed-stock record for its bag type.
+      const bagsPayload: { packedStockId: string; bagTypeId: string; bagTypeName: string; quantity: number; pricePerBag: string; currency: 'USD' | 'LBP' }[] = []
+      for (const ln of activeLines) {
+        const rec = packedRecords
+          .filter(r => r.bagTypeId === ln.bagTypeId && r.quantity > 0)
+          .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())[0]
+        if (!rec) { showToast('No packed stock record found for a selected bag type'); return }
+        const bt = bagTypes.find(b => b.id === ln.bagTypeId)
+        bagsPayload.push({
+          packedStockId: rec.id,
+          bagTypeId: ln.bagTypeId,
+          bagTypeName: bt?.name ?? 'Bag',
+          quantity: parseInt(ln.qty),
+          pricePerBag: (parseFloat(ln.price) || 0).toFixed(2),
+          currency: ln.curr,
+        })
+      }
+
+      const mappedMethod = PAY_METHOD_MAP[payMethod]
+      const receiverId = allReceivers.find(r => r.name === receiver && r.role === 'worker')?.id
+
+      try {
+        await createWalkInSale.mutateAsync({
+          clientId: selectedBuyerId!,
+          date: saleDate,
+          bags: bagsPayload,
+          ...(usdNum > 0 ? { receivedUsd: usdNum.toFixed(2) } : {}),
+          ...(lbpNum > 0 ? { receivedLbp: lbpNum.toFixed(2) } : {}),
+          method: mappedMethod ?? 'cash',
+          ...(receiverId ? { receiverId } : {}),
+          recipient: buyerName,
+          notes: notes || undefined,
+        })
+      } catch (err: any) {
+        showToast(err?.error ?? err?.response?.data?.error ?? 'Failed to record sale')
+        return
+      }
+
+      showToast(`Sale recorded · invoiced ${buyerName}`)
+      setBuyerInput(''); setSelectedBuyerId(null)
+      setRcvUsd(''); setRcvLbp('')
+      setKgWeight(''); setKgPrice('')
+      setNotes('')
+      setPackedLines([{ id: Date.now(), bagTypeId: bagTypes[0]?.id ?? '', qty: '', price: '', curr: 'USD' }])
+      return
+    }
 
     if (mode === 'packed') {
       const activeLines = packedLines.filter(ln => (parseInt(ln.qty) || 0) > 0 && (parseFloat(ln.price) || 0) > 0)
@@ -318,27 +388,11 @@ export default function WarehouseSales() {
       }
     }
 
-    // If a registered client paid (partially or fully), record the payment so it
-    // reduces their balance. Walk-in / "On account" → skip (balance stays as owed).
-    const PAY_METHOD_MAP: Record<string, string> = {
-      'Cash': 'cash', 'Whish': 'whish', 'OMT': 'omt', 'Bank transfer': 'cash',
-    }
-    const mappedMethod = PAY_METHOD_MAP[payMethod]
-    if (selectedBuyerId && selectedBuyerId !== 'walk-in' && totalRecv > 0 && mappedMethod) {
-      try {
-        await createPayment.mutateAsync({
-          clientId: selectedBuyerId,
-          amount: totalRecv.toFixed(2),
-          currency: 'USD',
-          method: mappedMethod as any,
-          date: saleDate,
-          notes: notes ? `[ws] ${notes}` : '[ws]',
-        })
-      } catch (err: any) {
-        showToast(err?.error ?? 'Sale recorded but payment entry failed')
-        return
-      }
-    }
+    // NOTE: registered-client PACKED sales are handled atomically above via
+    // POST /walk-in-sales (stock exit + issued invoice + payment, in client currency).
+    // The old block here created a Payment with NO invoice and hardcoded USD — the
+    // BUG-3/BUG-4 root cause — and has been removed. By-kg and anonymous sales record
+    // the amount on the stock exit itself; no standalone payment is created.
 
     showToast(`Sale recorded · $${totalUSD.toFixed(2)} from ${buyerName}`)
     setBuyerInput(''); setSelectedBuyerId(null)

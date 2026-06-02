@@ -71,50 +71,75 @@ export class ShipmentsService {
   }
 
   /**
-   * Create a shipment.
+   * Create a shipment and RESERVE packed stock for it (BUG-2 / P2).
    *
-   * CONSTRAINT 4: pre-flight stock availability check runs before any DB write.
-   * Throws 400 CONSTRAINT_VIOLATION if any bagType is under-stocked.
+   * The old version only validated `Σ quantity` and never reserved, so two concurrent
+   * shipments for the same bag type could each pass validation and jointly exceed the
+   * available stock — an over-allocation. We now reserve before acting:
+   *
+   *   For each bag line, walk packed-stock rows FIFO (createdAt asc) and atomically
+   *   `increment reservedQuantity`, validating each row against its FREE quantity
+   *   (`quantity − reservedQuantity`). If the full line cannot be reserved the whole
+   *   transaction rolls back. Reservation does NOT decrement `quantity` — the physical
+   *   bags only leave at delivery; cancel/return releases the reservation.
+   *
+   * The reservation walk uses the same FIFO order as {@link confirmDelivery} and
+   * {@link cancelShipment} so reserve, drain, and release stay consistent.
    *
    * @param dto - Shipment creation data
    * @param userId - Clerk user ID (unused in creation but kept for symmetry)
-   * @constraint 4 pre-flight stock availability check runs before any DB write
+   * @constraint 4 Σ reserved per bag type never exceeds packed stock (enforced atomically per row)
    */
   async createShipment(dto: CreateShipmentDto, _userId: string) {
-    // CONSTRAINT 4: pre-flight stock availability check
-    for (const bag of dto.bags) {
-      const available = await this.prisma.packedStock.aggregate({
-        where: { bagTypeId: bag.bagTypeId, quantity: { gt: 0 } },
-        _sum: { quantity: true },
-      });
-      const availableQty = available._sum.quantity ?? 0;
-      if (availableQty < bag.quantity) {
-        throw new BadRequestException({
-          message: `Insufficient packed stock for bagTypeId ${bag.bagTypeId}`,
-          error: `Insufficient packed stock for bagTypeId ${bag.bagTypeId}`,
-          code: 'CONSTRAINT_VIOLATION',
-        });
-      }
-    }
+    return this.prisma.$transaction(async (tx) => {
+      // Reserve each bag line FIFO before creating the shipment.
+      for (const bag of dto.bags) {
+        let remaining = bag.quantity;
 
-    // All checks passed — create shipment and bag records
-    return this.prisma.shipment.create({
-      data: {
-        orderId: dto.orderId,
-        address: dto.address,
-        nominalKg: dto.nominalKg,
-        ...(dto.tripId ? { tripId: dto.tripId } : {}),
-        ...(dto.notes ? { notes: dto.notes } : {}),
-        bags: {
-          create: dto.bags.map((b) => ({
-            bagTypeId: b.bagTypeId,
-            quantity: b.quantity,
-          })),
+        const stocks = await tx.packedStock.findMany({
+          where: { bagTypeId: bag.bagTypeId },
+          orderBy: { createdAt: 'asc' },
+        });
+
+        for (const stock of stocks) {
+          if (remaining <= 0) break;
+          const free = stock.quantity - stock.reservedQuantity;
+          if (free <= 0) continue;
+          const take = Math.min(free, remaining);
+          await tx.packedStock.update({
+            where: { id: stock.id },
+            data: { reservedQuantity: { increment: take } },
+          });
+          remaining -= take;
+        }
+
+        if (remaining > 0) {
+          throw new BadRequestException({
+            message: `Insufficient packed stock for bagTypeId ${bag.bagTypeId}`,
+            error: `Insufficient packed stock for bagTypeId ${bag.bagTypeId}`,
+            code: 'CONSTRAINT_VIOLATION',
+          });
+        }
+      }
+
+      return tx.shipment.create({
+        data: {
+          orderId: dto.orderId,
+          address: dto.address,
+          nominalKg: dto.nominalKg,
+          ...(dto.tripId ? { tripId: dto.tripId } : {}),
+          ...(dto.notes ? { notes: dto.notes } : {}),
+          bags: {
+            create: dto.bags.map((b) => ({
+              bagTypeId: b.bagTypeId,
+              quantity: b.quantity,
+            })),
+          },
         },
-      },
-      include: {
-        bags: { include: { bagType: true } },
-      },
+        include: {
+          bags: { include: { bagType: true } },
+        },
+      });
     });
   }
 
@@ -191,9 +216,16 @@ export class ShipmentsService {
             });
           }
 
+          // BUG-2: delivery consumes the physical bags AND releases the reservation
+          // that createShipment placed. Decrement reservedQuantity by the portion this
+          // row actually held (never below 0) so quantity and reservedQuantity stay aligned.
+          const releaseReserved = Math.min(take, stock.reservedQuantity);
           await tx.packedStock.update({
             where: { id: stock.id },
-            data: { quantity: { decrement: take } },
+            data: {
+              quantity: { decrement: take },
+              ...(releaseReserved > 0 ? { reservedQuantity: { decrement: releaseReserved } } : {}),
+            },
           });
 
           // CONSTRAINT 5: loggedById comes from user.id, NEVER from DTO
@@ -344,6 +376,66 @@ export class ShipmentsService {
           data: { status: newOrderStatus },
         });
       }
+
+      return tx.shipment.findUnique({
+        where: { id },
+        include: { bags: { include: { bagType: true } } },
+      });
+    });
+  }
+
+  /**
+   * Cancel a pending shipment and RELEASE its packed-stock reservation (BUG-2 / P2).
+   *
+   * Only a shipment that has not yet been delivered or returned can be cancelled —
+   * those terminal states have already adjusted physical `quantity`, so re-releasing
+   * a reservation would double-count. Cancel decrements `reservedQuantity` ONLY
+   * (never `quantity`), walking the same FIFO order used to reserve, and never below 0.
+   *
+   * @param id - Shipment UUID
+   * @throws NotFoundException if the shipment does not exist
+   * @throws BadRequestException if the shipment is already delivered or returned
+   */
+  async cancelShipment(id: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const shipment = await tx.shipment.findUnique({
+        where: { id },
+        include: { bags: true },
+      });
+      if (!shipment) {
+        throw new NotFoundException({ error: 'Shipment not found', code: 'NOT_FOUND' });
+      }
+
+      if (shipment.status === 'delivered' || shipment.status === 'returned') {
+        throw new BadRequestException({
+          message: `Cannot cancel a ${shipment.status} shipment`,
+          error: `Cannot cancel a ${shipment.status} shipment`,
+          code: 'INVALID_TRANSITION',
+        });
+      }
+
+      // Release the reservation for each bag line, FIFO, never below zero.
+      for (const bag of shipment.bags) {
+        let remaining = bag.quantity;
+        const stocks = await tx.packedStock.findMany({
+          where: { bagTypeId: bag.bagTypeId, reservedQuantity: { gt: 0 } },
+          orderBy: { createdAt: 'asc' },
+        });
+        for (const stock of stocks) {
+          if (remaining <= 0) break;
+          const release = Math.min(stock.reservedQuantity, remaining);
+          await tx.packedStock.update({
+            where: { id: stock.id },
+            data: { reservedQuantity: { decrement: release } },
+          });
+          remaining -= release;
+        }
+      }
+
+      await tx.shipment.update({
+        where: { id },
+        data: { status: 'cancelled' },
+      });
 
       return tx.shipment.findUnique({
         where: { id },

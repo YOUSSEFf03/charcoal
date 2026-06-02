@@ -11,6 +11,8 @@ import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes'
 import { FillJobsService } from './fill-jobs.service';
 import { CreateFillJobDto } from './dto/create-fill-job.dto';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { ClerkUser } from '../auth/clerk.strategy';
 
 @ApiTags('fill-jobs')
 @ApiBearerAuth()
@@ -44,7 +46,7 @@ export class FillJobsController {
   @ApiResponse({ status: 404, description: 'Stock lot not found' })
   @Post()
   @Roles('owner', 'worker')
-  create(@Body() dto: CreateFillJobDto) {
-    return this.fillJobsService.create(dto);
+  create(@Body() dto: CreateFillJobDto, @CurrentUser() user: ClerkUser) {
+    return this.fillJobsService.create(dto, user.userId);
   }
 }

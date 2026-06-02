@@ -68,6 +68,7 @@ enum ShipmentStatus {
   loaded
   delivered
   returned
+  cancelled
 }
 
 enum TripStatus {
@@ -230,6 +231,7 @@ model ContainerProductLine {
   pricePerTon  Decimal   @db.Decimal(10, 2)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+  stockLots    StockLot[]
   @@map("container_product_lines")
 }
 
@@ -265,6 +267,8 @@ model StockLot {
   source       StockSource
   containerId  String?
   container    Container?  @relation(fields: [containerId], references: [id])
+  productLineId String?
+  productLine   ContainerProductLine? @relation(fields: [productLineId], references: [id])
   dateReceived DateTime    @db.Date
   notes        String?
   createdAt    DateTime    @default(now())
@@ -278,6 +282,7 @@ model StockLot {
   @@index([supplierId])
   @@index([kgRemaining])
   @@index([containerId])
+  @@index([productLineId])
   @@map("stock_lots")
 }
 
@@ -322,6 +327,7 @@ model PackedStock {
   bagTypeId  String
   bagType    BagType        @relation(fields: [bagTypeId], references: [id])
   quantity   Int
+  reservedQuantity Int      @default(0)
   sessionId  String
   session    PackingSession @relation(fields: [sessionId], references: [id])
   createdAt  DateTime       @default(now())

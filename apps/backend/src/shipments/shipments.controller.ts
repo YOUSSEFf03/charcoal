@@ -116,6 +116,16 @@ export class ShipmentsController {
     return this.shipmentsService.logReturn(id, dto, user.userId);
   }
 
+  @ApiOperation({ summary: 'Cancel a pending shipment — releases its packed-stock reservation (atomic)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 400, description: 'Bad request / invalid transition' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Post(':id/cancel')
+  @Roles('owner', 'sales_rep')
+  cancel(@Param('id', ParseUUIDPipe) id: string) {
+    return this.shipmentsService.cancelShipment(id);
+  }
+
   @ApiOperation({ summary: 'Get a delivery receipt for a shipment' })
   @ApiResponse({ status: 200, description: 'OK' })
   @ApiResponse({ status: 404, description: 'Not found' })

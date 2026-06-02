@@ -10,6 +10,7 @@ import { CreatePackingSessionDto } from './dto/create-packing-session.dto';
 import { UpdatePackingSessionDto } from './dto/update-packing-session.dto';
 import { ClerkUser } from '../auth/clerk.strategy';
 import { Prisma } from '@prisma/client';
+import { consumeLots } from '../common/inventory/consume-lots';
 
 const SESSION_INCLUDE = {
   sessionLots: { include: { lot: true } },
@@ -199,35 +200,24 @@ export class PackingSessionsService {
     }
 
     const sessionId = await this.prisma.$transaction(async (tx) => {
-      // Step 2: Fetch all referenced StockLots
-      const lotIds = [...new Set(dto.lotInputs.map(i => i.lotId))];
-      const lots = await tx.stockLot.findMany({ where: { id: { in: lotIds } } });
-      const lotMap = new Map(lots.map(l => [l.id, l]));
-      for (const inp of dto.lotInputs) {
-        if (!lotMap.has(inp.lotId)) {
-          throw new NotFoundException({ error: `Stock lot not found: ${inp.lotId}`, code: 'NOT_FOUND' });
-        }
-      }
+      // Steps 2, 3, 10: aggregate by lotId, validate kgUsed ≤ kgRemaining, and deduct
+      // via atomic { decrement } — all through the shared consume-lots primitive.
+      // Duplicate lotIds in dto.lotInputs are summed and deducted once (no lost update).
+      const consumed = await consumeLots(tx, dto.lotInputs);
 
-      // Step 3: Validate kgUsed ≤ kgRemaining for each lot
-      for (const inp of dto.lotInputs) {
-        const l = lotMap.get(inp.lotId)!;
-        if (new Decimal(inp.kg).gt(l.kgRemaining.toString())) {
-          throw new BadRequestException({
-            message: `kgUsed (${inp.kg}) exceeds lot kgRemaining (${l.kgRemaining}) for lot ${inp.lotId}`,
-            error: 'kgUsed exceeds lot kgRemaining',
-            code: 'CONSTRAINT_VIOLATION',
-          });
-        }
-      }
+      // Aggregated per-lot inputs — the single source of truth for junction + split rows.
+      const aggregatedLotInputs = consumed.map(c => ({ lotId: c.lotId, kg: c.kg.toFixed(3) }));
 
-      // Step 10: Decrement kgRemaining for every lot (safe — validated in step 3)
-      await Promise.all(dto.lotInputs.map(inp =>
-        tx.stockLot.update({
-          where: { id: inp.lotId },
-          data: { kgRemaining: new Decimal(lotMap.get(inp.lotId)!.kgRemaining.toString()).minus(inp.kg).toFixed(3) },
-        }),
-      ));
+      // Conservation invariant: Σinput = Σoutput + variance (waste/loss). Asserted inside
+      // the transaction so any drift rolls the whole session back before commit.
+      const consumedTotal = consumed.reduce((s, c) => s.plus(c.kg), new Decimal(0));
+      if (!consumedTotal.minus(kgOutputTotal).minus(varianceKg).abs().lte('0.001')) {
+        throw new BadRequestException({
+          message: `Conservation check failed: Σinput (${consumedTotal.toFixed(3)}) ≠ Σoutput (${kgOutputTotal.toFixed(3)}) + variance (${varianceKg.toFixed(3)})`,
+          error: 'Conservation invariant violated',
+          code: 'CONSTRAINT_VIOLATION',
+        });
+      }
 
       // Step 11: Create PackingSession
       const created = await tx.packingSession.create({
@@ -247,14 +237,14 @@ export class PackingSessionsService {
         },
       });
 
-      // Step 12: Create PackingSessionLot junction rows (one per lot input)
+      // Step 12: Create PackingSessionLot junction rows (one per DISTINCT lot — aggregated)
       await tx.packingSessionLot.createMany({
-        data: dto.lotInputs.map(inp => ({ sessionId: created.id, lotId: inp.lotId, kgUsed: inp.kg })),
+        data: aggregatedLotInputs.map(inp => ({ sessionId: created.id, lotId: inp.lotId, kgUsed: inp.kg })),
       });
 
       // Step 13: Create PackedStock — one row per (lot × bagType), split proportionally so
       // each row carries a single defensible costPerKg for COGS tracing.
-      const splitRows = splitBagsAcrossLots(dto.lotInputs, dto.bagsOutput, totalKgConsumed);
+      const splitRows = splitBagsAcrossLots(aggregatedLotInputs, dto.bagsOutput, totalKgConsumed);
       await tx.packedStock.createMany({
         data: splitRows.map(row => ({ lotId: row.lotId, bagTypeId: row.bagTypeId, quantity: row.qty, sessionId: created.id })),
       });
@@ -301,40 +291,20 @@ export class PackingSessionsService {
         }
       }
 
-      // Restore old lot kgRemaining from junction table
-      const oldLotIds = [...new Set(existing.sessionLots.map(sl => sl.lotId))];
-      const oldLots = await tx.stockLot.findMany({ where: { id: { in: oldLotIds } } });
-      const oldLotMap = new Map(oldLots.map(l => [l.id, l]));
-      await Promise.all(existing.sessionLots.map(sl => {
-        const l = oldLotMap.get(sl.lotId);
-        if (!l) return Promise.resolve();
-        return tx.stockLot.update({
+      // Restore old lot kgRemaining from junction table via atomic { increment }.
+      // Junction rows are already one-per-distinct-lot, so each increment is independent.
+      await Promise.all(existing.sessionLots.map(sl =>
+        tx.stockLot.update({
           where: { id: sl.lotId },
-          data: { kgRemaining: new Decimal(l.kgRemaining.toString()).plus(sl.kgUsed.toString()).toFixed(3) },
-        });
-      }));
+          data: { kgRemaining: { increment: new Decimal(sl.kgUsed.toString()).toFixed(3) } },
+        }),
+      ));
 
       // Resolve new lot inputs (fall back to old if not provided)
       const newLotInputs: Array<{ lotId: string; kg: string }> =
         dto.lotInputs && dto.lotInputs.length > 0
           ? dto.lotInputs
           : existing.sessionLots.map(sl => ({ lotId: sl.lotId, kg: sl.kgUsed.toString() }));
-
-      // Fetch and validate new lots (reads post-restore kgRemaining within transaction)
-      const newLotIds = [...new Set(newLotInputs.map(i => i.lotId))];
-      const newLots = await tx.stockLot.findMany({ where: { id: { in: newLotIds } } });
-      const newLotMap = new Map(newLots.map(l => [l.id, l]));
-      for (const inp of newLotInputs) {
-        if (!newLotMap.has(inp.lotId)) throw new NotFoundException({ error: `Stock lot not found: ${inp.lotId}`, code: 'NOT_FOUND' });
-        const l = newLotMap.get(inp.lotId)!;
-        if (new Decimal(inp.kg).gt(l.kgRemaining.toString())) {
-          throw new BadRequestException({
-            message: `kgUsed (${inp.kg}) exceeds lot kgRemaining (${l.kgRemaining}) for lot ${inp.lotId}`,
-            error: 'kgUsed exceeds lot kgRemaining',
-            code: 'CONSTRAINT_VIOLATION',
-          });
-        }
-      }
 
       // Resolve new bags output
       const newBagsOutput: Array<{ bagTypeId: string; qty: number }> =
@@ -369,14 +339,20 @@ export class PackingSessionsService {
         sessionEarnings = sessionEarnings.plus(new Decimal(bt.workerRate.toString()).mul(line.qty));
       }
 
-      // Apply new lot deductions
-      await Promise.all(newLotInputs.map(inp => {
-        const l = newLotMap.get(inp.lotId)!;
-        return tx.stockLot.update({
-          where: { id: inp.lotId },
-          data: { kgRemaining: new Decimal(l.kgRemaining.toString()).minus(inp.kg).toFixed(3) },
+      // Aggregate by lotId, validate (reads post-restore kgRemaining within the tx), and
+      // deduct via atomic { decrement } through the shared consume-lots primitive.
+      const consumed = await consumeLots(tx, newLotInputs);
+      const aggregatedLotInputs = consumed.map(c => ({ lotId: c.lotId, kg: c.kg.toFixed(3) }));
+
+      // Conservation invariant: Σinput = Σoutput + variance, asserted before commit.
+      const consumedTotal = consumed.reduce((s, c) => s.plus(c.kg), new Decimal(0));
+      if (!consumedTotal.minus(kgOutputTotal).minus(varianceKg).abs().lte('0.001')) {
+        throw new BadRequestException({
+          message: `Conservation check failed: Σinput (${consumedTotal.toFixed(3)}) ≠ Σoutput (${kgOutputTotal.toFixed(3)}) + variance (${varianceKg.toFixed(3)})`,
+          error: 'Conservation invariant violated',
+          code: 'CONSTRAINT_VIOLATION',
         });
-      }));
+      }
 
       const newWorkerEntityId =
         dto.workerEntityId !== undefined ? (dto.workerEntityId || null) : existing.workerEntityId;
@@ -396,15 +372,15 @@ export class PackingSessionsService {
         },
       });
 
-      // Replace junction rows
+      // Replace junction rows (one per DISTINCT lot — aggregated)
       await tx.packingSessionLot.deleteMany({ where: { sessionId: id } });
       await tx.packingSessionLot.createMany({
-        data: newLotInputs.map(inp => ({ sessionId: id, lotId: inp.lotId, kgUsed: inp.kg })),
+        data: aggregatedLotInputs.map(inp => ({ sessionId: id, lotId: inp.lotId, kgUsed: inp.kg })),
       });
 
       // Replace PackedStock records — same proportional split as create
       await tx.packedStock.deleteMany({ where: { sessionId: id } });
-      const updateSplitRows = splitBagsAcrossLots(newLotInputs, newBagsOutput, totalKgConsumed);
+      const updateSplitRows = splitBagsAcrossLots(aggregatedLotInputs, newBagsOutput, totalKgConsumed);
       await tx.packedStock.createMany({
         data: updateSplitRows.map(row => ({ lotId: row.lotId, bagTypeId: row.bagTypeId, quantity: row.qty, sessionId: id })),
       });

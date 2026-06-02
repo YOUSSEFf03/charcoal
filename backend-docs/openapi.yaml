@@ -852,36 +852,46 @@ paths:
         Roles: owner, worker.
 
         Business rules enforced:
-        - kgConsumed <= lot.kgRemaining (CONSTRAINT 3)
+        - Per-lot kgUsed <= lot.kgRemaining, validated per DISTINCT lot after aggregation (CONSTRAINT 3)
         - varianceKg < 0 requires varianceNote (CONSTRAINT 7)
-        - Immediately decrements lot.kgRemaining
-        - Creates packed stock records
-        - Updates worker.totalEarned and totalBagsPacked
+        - Conservation invariant asserted in-transaction: Σ(lotInputs.kg) = kgOutputTotal + varianceKg
+        - Each lot's kgRemaining is decremented ONLY by that lot's input kg, via an atomic decrement
+        - Inputs are aggregated by lotId first, so a lot listed twice deducts the sum once (no lost update)
+        - Creates packed stock records (split proportionally across lots)
+
+        NOTE: The legacy single-lot contract (top-level lotId + mode + kgConsumed) has been
+        REMOVED. Charcoal consumption is now expressed exclusively as the lotInputs[] array.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [lotId, mode, kgConsumed, bagsOutput, date]
+              required: [lotInputs, bagsOutput]
               properties:
-                lotId: { type: string, format: uuid }
-                mode:
-                  type: string
-                  enum: [stock, order]
-                orderId: { type: string, format: uuid }
-                kgConsumed: { type: string }
-                bagsOutput:
+                lotInputs:
                   type: array
+                  description: One entry per charcoal lot with the actual kg used from that lot. Duplicate lotIds are summed.
+                  minItems: 1
                   items:
                     type: object
-                    required: [bagTypeId, quantity]
+                    required: [lotId, kg]
+                    properties:
+                      lotId: { type: string, format: uuid }
+                      kg: { type: string, description: Decimal string, e.g. "180.000" }
+                bagsOutput:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [bagTypeId, qty]
                     properties:
                       bagTypeId: { type: string, format: uuid }
-                      quantity: { type: integer }
+                      qty: { type: integer }
                 varianceNote: { type: string }
                 date: { type: string, format: date }
                 notes: { type: string }
+                workerEntityId: { type: string, format: uuid }
       responses:
         '201':
           description: Completed session
@@ -889,7 +899,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PackingSession' }
         '400':
-          description: Constraint violation (kgConsumed > kgRemaining, or negative variance without note)
+          description: Constraint violation (a lot's kgUsed > kgRemaining, negative variance without note, or conservation invariant violated)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }

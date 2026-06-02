@@ -79,7 +79,7 @@ describe('PackingSessionsService', () => {
         workerRate: { toString: () => '1.000' },
       }]);
       const tx = makeTx();
-      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
+      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' }, costPerKg: { toString: () => '2.000' } }]);
 
       setupTransaction(tx);
 
@@ -110,7 +110,7 @@ describe('PackingSessionsService', () => {
         workerRate: { toString: () => '1.000' },
       }]);
       const tx = makeTx();
-      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
+      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' }, costPerKg: { toString: () => '2.000' } }]);
 
       setupTransaction(tx);
 
@@ -126,7 +126,7 @@ describe('PackingSessionsService', () => {
       expect(caught.response.error).toMatch(/kgUsed exceeds lot kgRemaining/);
     });
 
-    it('Test 2: does NOT throw when kgUsed equals kgRemaining (boundary) and sets kgRemaining to "0.000"', async () => {
+    it('Test 2: does NOT throw when kgUsed equals kgRemaining (boundary) and decrements by exactly the input', async () => {
       const bagTypeId = '550e8400-e29b-41d4-a716-446655440001';
       const lotId     = '550e8400-e29b-41d4-a716-446655440000';
       const userId    = 'clerk-user-1';
@@ -141,7 +141,7 @@ describe('PackingSessionsService', () => {
       mockPrisma.packingSession.findUnique.mockResolvedValue({ id: sessionId, sessionLots: [] });
 
       const tx = makeTx();
-      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
+      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' }, costPerKg: { toString: () => '2.000' } }]);
       tx.stockLot.update.mockResolvedValue({});
       tx.packingSession.create.mockResolvedValue({ id: sessionId });
       tx.packingSessionLot.createMany.mockResolvedValue({ count: 1 });
@@ -157,7 +157,7 @@ describe('PackingSessionsService', () => {
       ).resolves.toBeDefined();
 
       expect(tx.stockLot.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ kgRemaining: '0.000' }) }),
+        expect.objectContaining({ data: expect.objectContaining({ kgRemaining: { decrement: '100.000' } }) }),
       );
     });
 
@@ -175,7 +175,7 @@ describe('PackingSessionsService', () => {
       }]);
 
       const tx = makeTx();
-      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
+      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' }, costPerKg: { toString: () => '2.000' } }]);
 
       setupTransaction(tx);
 
@@ -206,7 +206,7 @@ describe('PackingSessionsService', () => {
       mockPrisma.packingSession.findUnique.mockResolvedValue({ id: 'session-uuid-4', sessionLots: [] });
 
       const tx = makeTx();
-      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' } }]);
+      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '100.000' }, costPerKg: { toString: () => '2.000' } }]);
       tx.stockLot.update.mockResolvedValue({});
       tx.packingSession.create.mockResolvedValue({ id: 'session-uuid-4' });
       tx.packingSessionLot.createMany.mockResolvedValue({ count: 1 });
@@ -243,8 +243,8 @@ describe('PackingSessionsService', () => {
 
       const tx = makeTx();
       tx.stockLot.findMany.mockResolvedValue([
-        { id: lotId1, kgRemaining: { toString: () => '100.000' } },
-        { id: lotId2, kgRemaining: { toString: () => '100.000' } },
+        { id: lotId1, kgRemaining: { toString: () => '100.000' }, costPerKg: { toString: () => '2.000' } },
+        { id: lotId2, kgRemaining: { toString: () => '100.000' }, costPerKg: { toString: () => '3.000' } },
       ]);
       tx.stockLot.update.mockResolvedValue({});
       tx.packingSession.create.mockResolvedValue({ id: sessionId });
@@ -279,6 +279,120 @@ describe('PackingSessionsService', () => {
       expect(ps1.quantity + ps2.quantity).toBe(10); // sum preserved exactly
     });
 
+    it('Issue #8 per-lot: lot A (600kg) and lot B (410kg) each decrement by exactly their own input', async () => {
+      // 600 + 410 = 1010 kg in; 100 bags × 10 kg = 1000 kg out; variance 10 kg (note provided).
+      const lotA      = '550e8400-e29b-41d4-a716-aaaaaaaaaaaa';
+      const lotB      = '550e8400-e29b-41d4-a716-bbbbbbbbbbbb';
+      const bagTypeId = '550e8400-e29b-41d4-a716-446655440001';
+      const userId    = 'clerk-user-1';
+      const sessionId = 'session-uuid-perlot';
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
+      mockPrisma.bagType.findMany.mockResolvedValue([{
+        id: bagTypeId, nominalKg: { toString: () => '10.000' }, workerRate: { toString: () => '1.000' },
+      }]);
+      mockPrisma.packingSession.findUnique.mockResolvedValue({ id: sessionId, sessionLots: [] });
+
+      const tx = makeTx();
+      tx.stockLot.findMany.mockResolvedValue([
+        { id: lotA, kgRemaining: { toString: () => '1000.000' }, costPerKg: { toString: () => '2.000' } },
+        { id: lotB, kgRemaining: { toString: () => '1000.000' }, costPerKg: { toString: () => '3.000' } },
+      ]);
+      tx.stockLot.update.mockResolvedValue({});
+      tx.packingSession.create.mockResolvedValue({ id: sessionId });
+      tx.packingSessionLot.createMany.mockResolvedValue({ count: 2 });
+      tx.packedStock.createMany.mockResolvedValue({ count: 2 });
+      setupTransaction(tx);
+
+      await service.createPackingSession(
+        {
+          lotInputs: [{ lotId: lotA, kg: '600.000' }, { lotId: lotB, kg: '410.000' }],
+          bagsOutput: [{ bagTypeId, qty: 100 }],
+          varianceNote: '10 kg loss',
+        },
+        userId,
+      );
+
+      const updates = tx.stockLot.update.mock.calls.map((c: any) => c[0]);
+      const upA = updates.find((u: any) => u.where.id === lotA);
+      const upB = updates.find((u: any) => u.where.id === lotB);
+      expect(upA.data.kgRemaining).toEqual({ decrement: '600.000' });
+      expect(upB.data.kgRemaining).toEqual({ decrement: '410.000' });
+      // Exactly one decrement per distinct lot — no extra writes.
+      expect(updates.filter((u: any) => u.where.id === lotA)).toHaveLength(1);
+      expect(updates.filter((u: any) => u.where.id === lotB)).toHaveLength(1);
+    });
+
+    it('Issue #8 duplicate-lot: same lotId twice (300 + 200) decrements once by exactly 500 — no lost update', async () => {
+      const lotId     = '550e8400-e29b-41d4-a716-cccccccccccc';
+      const bagTypeId = '550e8400-e29b-41d4-a716-446655440001';
+      const userId    = 'clerk-user-1';
+      const sessionId = 'session-uuid-dup';
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
+      mockPrisma.bagType.findMany.mockResolvedValue([{
+        id: bagTypeId, nominalKg: { toString: () => '10.000' }, workerRate: { toString: () => '1.000' },
+      }]);
+      mockPrisma.packingSession.findUnique.mockResolvedValue({ id: sessionId, sessionLots: [] });
+
+      const tx = makeTx();
+      tx.stockLot.findMany.mockResolvedValue([
+        { id: lotId, kgRemaining: { toString: () => '1000.000' }, costPerKg: { toString: () => '2.000' } },
+      ]);
+      tx.stockLot.update.mockResolvedValue({});
+      tx.packingSession.create.mockResolvedValue({ id: sessionId });
+      tx.packingSessionLot.createMany.mockResolvedValue({ count: 1 });
+      tx.packedStock.createMany.mockResolvedValue({ count: 1 });
+      setupTransaction(tx);
+
+      await service.createPackingSession(
+        {
+          lotInputs: [{ lotId, kg: '300.000' }, { lotId, kg: '200.000' }],
+          bagsOutput: [{ bagTypeId, qty: 50 }],
+        },
+        userId,
+      );
+
+      const updates = tx.stockLot.update.mock.calls.map((c: any) => c[0]).filter((u: any) => u.where.id === lotId);
+      // Exactly ONE update for the lot, decrementing the SUM (500), not 300 or 200.
+      expect(updates).toHaveLength(1);
+      expect(updates[0].data.kgRemaining).toEqual({ decrement: '500.000' });
+
+      // Junction rows are aggregated to one row per distinct lot.
+      const junctionData = tx.packingSessionLot.createMany.mock.calls[0][0].data;
+      expect(junctionData).toHaveLength(1);
+      expect(junctionData[0].kgUsed).toBe('500.000');
+    });
+
+    it('Issue #8 conservation: rejects when output exceeds input beyond variance (invariant guard)', async () => {
+      // 100 kg in, 100 bags × 10 kg = 1000 kg out → variance -900, no note → CONSTRAINT_VIOLATION.
+      const lotId     = '550e8400-e29b-41d4-a716-dddddddddddd';
+      const bagTypeId = '550e8400-e29b-41d4-a716-446655440001';
+      const userId    = 'clerk-user-1';
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-1', clerkId: userId });
+      mockPrisma.bagType.findMany.mockResolvedValue([{
+        id: bagTypeId, nominalKg: { toString: () => '10.000' }, workerRate: { toString: () => '1.000' },
+      }]);
+
+      const tx = makeTx();
+      tx.stockLot.findMany.mockResolvedValue([
+        { id: lotId, kgRemaining: { toString: () => '1000.000' }, costPerKg: { toString: () => '2.000' } },
+      ]);
+      setupTransaction(tx);
+
+      let caught: any;
+      try {
+        await service.createPackingSession(
+          { lotInputs: [{ lotId, kg: '100.000' }], bagsOutput: [{ bagTypeId, qty: 100 }] },
+          userId,
+        );
+      } catch (e) { caught = e; }
+
+      expect(caught).toBeInstanceOf(BadRequestException);
+      expect(caught.response.code).toBe('CONSTRAINT_VIOLATION');
+    });
+
     it('Test 6: kgOutputTotal is exactly "8400.000" for 800 bags × 10.500 kg (no float drift)', async () => {
       const bagTypeId = '550e8400-e29b-41d4-a716-446655440001';
       const lotId     = '550e8400-e29b-41d4-a716-446655440000';
@@ -294,7 +408,7 @@ describe('PackingSessionsService', () => {
       mockPrisma.packingSession.findUnique.mockResolvedValue({ id: sessionId, sessionLots: [] });
 
       const tx = makeTx();
-      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '99999.000' } }]);
+      tx.stockLot.findMany.mockResolvedValue([{ id: lotId, kgRemaining: { toString: () => '99999.000' }, costPerKg: { toString: () => '2.000' } }]);
       tx.stockLot.update.mockResolvedValue({});
       tx.packingSession.create.mockResolvedValue({ id: sessionId });
       tx.packingSessionLot.createMany.mockResolvedValue({ count: 1 });
