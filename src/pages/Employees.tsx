@@ -120,7 +120,15 @@ export default function Employees() {
     if (!selectedWorker || payAmtNum <= 0) return
     logPayment.mutate(
       { id: selectedWorker.id, body: { amount: payAmtNum.toFixed(2), date: new Date().toISOString().slice(0, 10) } },
-      { onSuccess: () => { setPayModalOpen(false); setPayAmt('') } },
+      {
+        onSuccess: async () => {
+          setPayModalOpen(false)
+          setPayAmt('')
+          const result = await workersQ.refetch()
+          const updated = (result.data ?? []).find(w => w.id === selectedWorker?.id)
+          if (updated) setSelectedWorker(updated)
+        },
+      },
     )
   }
 

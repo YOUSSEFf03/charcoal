@@ -16,6 +16,8 @@ export interface ClientsQuery {
   page?: number
   limit?: number
   type?: string
+  excludeFillClient?: boolean
+  hasBalance?: boolean
 }
 
 const clientsKey = (params?: ClientsQuery) => ['clients', params ?? {}] as const
@@ -81,6 +83,30 @@ export function useOverdueClients() {
     // TODO: verify against Swagger — API.md names this CRMOverdueClient[]
     queryFn: async () => {
       const res = await api.get<Client[]>('/clients/overdue')
+      return res.data
+    },
+  })
+}
+
+export interface ClientsCounts {
+  allCount: number
+  balanceCount: number
+  overdueCount: number
+}
+
+/**
+ * Fetch tab counts for the Clients page (excludes fill_client).
+ * @param search - Optional name search to scope counts
+ * @returns React Query result of ClientsCounts
+ * GET /clients/counts
+ */
+export function useClientsCounts(search?: string) {
+  return useQuery({
+    queryKey: ['clients', 'counts', search ?? ''],
+    queryFn: async () => {
+      const res = await api.get<ClientsCounts>('/clients/counts', {
+        params: search ? { search } : {},
+      })
       return res.data
     },
   })

@@ -97,6 +97,8 @@ enum PaymentMethod {
   cash
   whish
   omt
+  bank_transfer
+  cheque
 }
 
 enum AdjustmentType {
@@ -120,6 +122,8 @@ model User {
   stockAdjustmentsMade      StockAdjustment[]  @relation("AdjustmentCountedBy")
   stockAdjustmentsApproved  StockAdjustment[]  @relation("AdjustmentApprovedBy")
   ordersCreated             ClientOrder[]      @relation("OrderCreatedBy")
+  ordersAsDriver            ClientOrder[]      @relation("OrderDriver")
+  supplierPaymentsLogged    SupplierPayment[]  @relation("SupplierPaymentLoggedBy")
   stockExitsLogged          StockExit[]        @relation("ExitLoggedBy")
   paymentsLogged            Payment[]          @relation("PaymentLoggedBy")
   bagPurchasesAdded         BagPurchase[]      @relation("BagPurchaseAddedBy")
@@ -163,10 +167,31 @@ model Supplier {
   notes          String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
-  containers   Container[]
-  stockLots    StockLot[]
-  productLines ContainerProductLine[]
+  containers       Container[]
+  stockLots        StockLot[]
+  productLines     ContainerProductLine[]
+  supplierPayments SupplierPayment[]
   @@map("suppliers")
+}
+
+model SupplierPayment {
+  id          String        @id @default(uuid())
+  supplierId  String        @map("supplier_id")
+  supplier    Supplier      @relation(fields: [supplierId], references: [id])
+  containerId String?       @map("container_id")
+  container   Container?    @relation(fields: [containerId], references: [id])
+  amount      Decimal       @db.Decimal(12, 2)
+  currency    Currency      @default(USD)
+  method      PaymentMethod @default(bank_transfer)
+  date        DateTime      @db.Date
+  notes       String?
+  loggedById  String        @map("logged_by_id")
+  loggedBy    User          @relation("SupplierPaymentLoggedBy", fields: [loggedById], references: [id])
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  @@index([supplierId])
+  @@index([date])
+  @@map("supplier_payments")
 }
 
 model Container {
@@ -184,7 +209,8 @@ model Container {
   productLines ContainerProductLine[]
   expenses     ContainerExpense[]
   discount     ContainerDiscount?
-  stockLots    StockLot[]
+  stockLots        StockLot[]
+  supplierPayments SupplierPayment[]
   @@index([status])
   @@index([supplierId])
   @@map("containers")
@@ -413,11 +439,14 @@ model ClientOrder {
   pricePerBag      Decimal     @db.Decimal(10, 2)
   currency         Currency
   status           OrderStatus @default(draft)
+  driverId         String?     @map("driver_id") @db.Text
+  driver           User?       @relation("OrderDriver", fields: [driverId], references: [id])
   createdById      String
   createdBy        User        @relation("OrderCreatedBy", fields: [createdById], references: [id])
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
   notes            String?
+  supplierName     String?     @map("supplier_name")
   shipments       Shipment[]
   packingSessions PackingSession[]
   stockExits      StockExit[]

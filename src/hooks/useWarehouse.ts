@@ -130,6 +130,22 @@ export function useUpdateStockExit() {
   })
 }
 
+/** Walk-in sales aggregate for KPI tiles — no page limit. GET /stock-exits/summary */
+export interface WalkInSummary {
+  bags: number
+  kg: string
+}
+
+export function useWalkInSummary(params: { dateFrom: string; dateTo: string }) {
+  return useQuery({
+    queryKey: ['stock-exits', 'summary', params],
+    queryFn: async () => {
+      const res = await api.get<WalkInSummary>('/stock-exits/summary', { params })
+      return res.data
+    },
+  })
+}
+
 /** List stock exits (sales log). GET /stock-exits */
 export function useStockExits(params?: { exitType?: string; dateFrom?: string; dateTo?: string; limit?: number; clientId?: string; lotId?: string }) {
   return useQuery({

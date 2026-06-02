@@ -3,7 +3,9 @@ import { api } from '../lib/api'
 import type {
   Supplier,
   SupplierDetail,
+  SupplierPayment,
   CreateSupplierDto,
+  CreateSupplierPaymentDto,
   UpdateSupplierDto,
   PaginatedResponse,
 } from '../types/api'
@@ -65,6 +67,45 @@ export function useCreateSupplier() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['suppliers'] })
+    },
+  })
+}
+
+/**
+ * List payments made to a supplier.
+ * GET /suppliers/:id/payments
+ */
+export function useSupplierPayments(supplierId: string) {
+  return useQuery({
+    queryKey: ['suppliers', supplierId, 'payments'],
+    queryFn: async () => {
+      const res = await api.get<PaginatedResponse<SupplierPayment>>(
+        `/suppliers/${supplierId}/payments`,
+        { params: { limit: 100 } },
+      )
+      return res.data
+    },
+    enabled: Boolean(supplierId),
+  })
+}
+
+/**
+ * Record a payment to a supplier.
+ * POST /suppliers/:id/payments
+ */
+export function useCreateSupplierPayment(supplierId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: CreateSupplierPaymentDto) => {
+      const res = await api.post<SupplierPayment>(
+        `/suppliers/${supplierId}/payments`,
+        body,
+      )
+      return res.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['suppliers', supplierId] })
+      qc.invalidateQueries({ queryKey: ['suppliers', supplierId, 'payments'] })
     },
   })
 }

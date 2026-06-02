@@ -1406,6 +1406,9 @@ export default function FillClientDetail() {
                     setPayBy('')
                     setPayRef('')
                     showToast(`Payment $${payAmt.toFixed(2)} logged`)
+                    paymentsQ.refetch()
+                    balanceQ.refetch()
+                    clientQ.refetch()
                   } catch (e: any) {
                     showToast(e?.error ?? 'Failed to log payment')
                   } finally {

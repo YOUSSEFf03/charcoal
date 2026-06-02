@@ -50,4 +50,14 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiProperty({ description: 'Driver user UUID (optional)', required: false })
+  @IsOptional()
+  @IsUUID()
+  driverId?: string;
+
+  @ApiProperty({ description: 'Charcoal supplier name (informational)', required: false })
+  @IsOptional()
+  @IsString()
+  supplierName?: string;
 }

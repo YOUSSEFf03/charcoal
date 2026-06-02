@@ -1,6 +1,6 @@
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useOrder } from '../hooks/useOrders'
+import { useOrder, useMarkOrderDelivered } from '../hooks/useOrders'
 import type { OrderStatus, ShipmentStatus } from '../types/api'
 
 function orderStatusMeta(s: OrderStatus): { cls: string; label: string } {
@@ -32,6 +32,7 @@ export default function OrderDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const orderQ = useOrder(id ?? '')
+  const markDelivered = useMarkOrderDelivered()
   const order = orderQ.data
 
   if (orderQ.isLoading) {
@@ -61,9 +62,12 @@ export default function OrderDetail() {
   }
 
   const statusMeta = orderStatusMeta(order.status)
-  const pricePerBag = parseFloat(order.pricePerBag)
-  const totalBags = order.bagLines.reduce((s, l) => s + l.quantity, 0)
-  const totalAmount = totalBags * pricePerBag
+  const isBagOrder = !!order.bagTypeId
+  const pricePerUnit = parseFloat(order.pricePerBag)
+  const totalKg = parseFloat(order.totalKgRequested)
+  const totalAmount = isBagOrder
+    ? order.bagLines.reduce((s, l) => s + l.quantity, 0) * pricePerUnit
+    : totalKg * pricePerUnit
   const invoice = order.invoices[0]
   const invoiceTotal = invoice ? parseFloat(invoice.total) : 0
   const invoicePaid = invoice ? parseFloat(invoice.paidAmount) : 0
@@ -78,7 +82,20 @@ export default function OrderDetail() {
           </a>
         )}
         <button className="btn"><i className="ti ti-edit" style={{ fontSize: 15 }} /> Edit</button>
-        <button className="btn primary"><i className="ti ti-truck" style={{ fontSize: 15 }} /> Assign trip</button>
+        {!['delivered', 'invoiced', 'paid'].includes(order.status) && (
+          <button
+            className="btn primary"
+            disabled={markDelivered.isPending}
+            onClick={() => {
+              if (confirm('Mark this order and all its shipments as delivered?')) {
+                markDelivered.mutate(order.id)
+              }
+            }}
+          >
+            <i className="ti ti-truck-delivery" style={{ fontSize: 15 }} />
+            {markDelivered.isPending ? 'Marking…' : 'Mark as delivered'}
+          </button>
+        )}
       </Topbar>
       <div className="content">
 
@@ -97,17 +114,18 @@ export default function OrderDetail() {
               <span className="meta-row"><i className="ti ti-users" /> <Link to={`/clients/${order.clientId}`} style={{ color: 'inherit' }}>{order.client.name}</Link></span>
               <span className="meta-row"><i className="ti ti-calendar" /> created {new Date(order.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
               <span className="meta-row"><i className="ti ti-currency-dollar" /> {order.currency}</span>
-              <span className="meta-row"><i className="ti ti-package" /> {order.charcoalType} · {order.grade}</span>
+              <span className="meta-row"><i className="ti ti-package" /> {order.charcoalType} · {order.grade}{order.supplierName ? ` · ${order.supplierName}` : ''}</span>
+              {order.driver && <span className="meta-row"><i className="ti ti-user" /> {order.driver.name}</span>}
             </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, minWidth: 300 }}>
             <div className="kpi-tile">
               <div className="kpi-tile-label">Total weight</div>
-              <div className="kpi-tile-value">{parseFloat(order.totalKgRequested).toLocaleString()}<span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 400 }}>&nbsp;kg</span></div>
-              <div className="kpi-tile-sub">{totalBags} bags</div>
+              <div className="kpi-tile-value">{totalKg.toLocaleString()}<span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 400 }}>&nbsp;kg</span></div>
+              <div className="kpi-tile-sub"><span className={`badge ${isBagOrder ? 'badge-blue' : 'badge-amber'}`}>{isBagOrder ? 'Bag order' : 'KG order'}</span></div>
             </div>
             <div className="kpi-tile green">
-              <div className="kpi-tile-label">Total</div>
+              <div className="kpi-tile-label">Est. total</div>
               <div className="kpi-tile-value">${totalAmount.toFixed(2)}</div>
               <div className="kpi-tile-sub">{order.shipments.length} shipments</div>
             </div>
@@ -122,31 +140,35 @@ export default function OrderDetail() {
             {/* Line items */}
             <div className="card">
               <div className="card-head">
-                <div className="card-title"><i className="ti ti-list" /> Line items</div>
-                <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>price set at time of sale</span>
+                <div className="card-title"><i className="ti ti-list" /> Order details</div>
+                <span className={`badge ${isBagOrder ? 'badge-blue' : 'badge-amber'}`}>
+                  {isBagOrder ? 'Bag order' : 'KG order'}
+                </span>
               </div>
-              <div style={{ background: 'var(--surface2)', display: 'grid', gridTemplateColumns: '1fr 120px 110px 110px 110px', gap: 12, padding: '7px 18px', fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.6px', borderBottom: '1px solid var(--border)' }}>
-                <span>Bag type</span>
+              <div style={{ background: 'var(--surface2)', display: 'grid', gridTemplateColumns: '1fr 130px 120px 120px', gap: 12, padding: '7px 18px', fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.6px', borderBottom: '1px solid var(--border)' }}>
+                <span>Charcoal</span>
                 <span style={{ textAlign: 'right' }}>Qty</span>
-                <span style={{ textAlign: 'right' }}>Nominal kg</span>
-                <span style={{ textAlign: 'right' }}>Price/bag</span>
-                <span style={{ textAlign: 'right' }}>Line total</span>
+                <span style={{ textAlign: 'right' }}>{isBagOrder ? 'Price / bag' : 'Price / kg'}</span>
+                <span style={{ textAlign: 'right' }}>Est. total</span>
               </div>
-              {order.bagLines.length === 0 && <div className="empty">No bag lines on this order.</div>}
-              {order.bagLines.map((l) => (
-                <div className="item-row" key={l.id}>
-                  <div>
-                    <div style={{ fontWeight: 500 }}>{l.bagTypeId}</div>
-                    <div className="meta">from packed stock · {order.charcoalType} {order.grade}</div>
+              <div className="item-row" style={{ display: 'grid', gridTemplateColumns: '1fr 130px 120px 120px', gap: 12 }}>
+                <div>
+                  <div style={{ fontWeight: 500 }}>
+                    {order.charcoalType} · Grade {order.grade}
+                    {order.supplierName && <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {order.supplierName}</span>}
                   </div>
-                  <div className="num">{l.quantity}</div>
-                  <div className="num" style={{ color: 'var(--text3)' }}>—</div>
-                  <div className="num">${pricePerBag.toFixed(2)}</div>
-                  <div className="num" style={{ fontWeight: 600 }}>${(l.quantity * pricePerBag).toFixed(2)}</div>
+                  <div className="meta">
+                    {isBagOrder
+                      ? order.bagType?.name ?? order.bagTypeId ?? 'Bag order'
+                      : 'Sold by weight (KG)'}
+                  </div>
                 </div>
-              ))}
+                <div className="num">{totalKg.toLocaleString()} kg</div>
+                <div className="num">${pricePerUnit.toFixed(2)}</div>
+                <div className="num" style={{ fontWeight: 600 }}>${totalAmount.toFixed(2)}</div>
+              </div>
               <div style={{ background: 'var(--surface2)', padding: '11px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 600 }}>
-                <span>Total · {totalBags} bags · {parseFloat(order.totalKgRequested).toLocaleString()} kg</span>
+                <span>{totalKg.toLocaleString()} kg requested · {order.currency}</span>
                 <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 15 }}>${totalAmount.toFixed(2)}</span>
               </div>
             </div>
@@ -170,7 +192,7 @@ export default function OrderDetail() {
                         </div>
                         <div className="ship-info">
                           <div className="ship-addr">{sh.address}</div>
-                          <div className="ship-meta">{sh.id}{sh.tripId ? ` · ${sh.tripId}` : ' · unassigned'}</div>
+                          <div className="ship-meta">{sh.id}</div>
                         </div>
                         <span className={`badge ${badge.cls}`}>{badge.label}</span>
                       </div>

@@ -14,6 +14,9 @@ export interface InvoicesQuery {
   status?: string
   page?: number
   limit?: number
+  search?: string
+  dateFrom?: string
+  dateTo?: string
 }
 
 const invoicesKey = (params?: InvoicesQuery) => ['invoices', params ?? {}] as const

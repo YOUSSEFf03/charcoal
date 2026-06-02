@@ -35,15 +35,30 @@ export class ClientsController {
     @Query('search') search?: string,
     @Query('type') type?: ClientType,
     @Query('isActive') isActiveRaw?: string,
+    @Query('excludeFillClient') excludeFillClientRaw?: string,
+    @Query('hasBalance') hasBalanceRaw?: string,
   ) {
     const isActive = isActiveRaw === 'true' ? true : isActiveRaw === 'false' ? false : undefined;
-    return this.clientsService.findAll(page, limit, search, type, isActive);
+    const excludeFillClient = excludeFillClientRaw === 'true';
+    const hasBalance =
+      hasBalanceRaw === 'true' ? true :
+      hasBalanceRaw === 'false' ? false :
+      undefined;
+    return this.clientsService.findAll(page, limit, search, type, isActive, excludeFillClient, hasBalance);
   }
 
   /**
-   * IMPORTANT: this route MUST come before /:id to avoid NestJS routing
-   * treating "overdue" as a UUID parameter.
+   * IMPORTANT: these routes MUST come before /:id to avoid NestJS routing
+   * treating "counts" or "overdue" as UUID parameters.
    */
+  @ApiOperation({ summary: 'Tab counts — allCount, balanceCount, overdueCount (excludes fill_client)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @Get('counts')
+  @Roles('owner', 'sales_rep')
+  getCounts(@Query('search') search?: string) {
+    return this.clientsService.getCounts(search);
+  }
+
   @ApiOperation({ summary: 'List overdue clients (balance > 0, last order > 30 days ago)' })
   @ApiResponse({ status: 200, description: 'OK' })
   @Get('overdue')

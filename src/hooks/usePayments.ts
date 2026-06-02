@@ -46,8 +46,11 @@ export function useCreatePayment() {
       qc.invalidateQueries({ queryKey: ['payments'] })
       qc.invalidateQueries({ queryKey: ['invoices'] })
       qc.invalidateQueries({ queryKey: ['clients'] })
+      qc.invalidateQueries({ queryKey: ['reports', 'client-ledger'] })
+      qc.invalidateQueries({ queryKey: ['reports', 'ar-summary'] })
       if (data.clientId) {
         qc.invalidateQueries({ queryKey: ['clients', data.clientId, 'balance'] })
+        qc.invalidateQueries({ queryKey: ['reports', 'client-ledger', data.clientId] })
       }
       // Refresh receiver balances so CashHandover page stays current
       if (data.receiverId) {

@@ -40,6 +40,21 @@ export class StockExitsController {
     return this.stockExitsService.findAll(page, limit, exitType, dateFrom, dateTo, clientId, lotId);
   }
 
+  /**
+   * IMPORTANT: must come before GET /:id so NestJS does not treat "summary"
+   * as a UUID parameter.
+   */
+  @ApiOperation({ summary: 'Walk-in sales aggregate for a date range (bags + kg, no page limit)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @Get('summary')
+  @Roles('owner', 'sales_rep')
+  getWalkInSummary(
+    @Query('dateFrom') dateFrom: string,
+    @Query('dateTo') dateTo: string,
+  ) {
+    return this.stockExitsService.getWalkInSummary(dateFrom, dateTo);
+  }
+
   @ApiOperation({ summary: 'Get a stock exit by ID' })
   @ApiResponse({ status: 200, description: 'OK' })
   @ApiResponse({ status: 404, description: 'Not found' })

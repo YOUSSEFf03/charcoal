@@ -5,12 +5,13 @@ import Topbar from '../components/layout/Topbar'
 import { useClient } from '../hooks/useClients'
 import { useInvoices } from '../hooks/useInvoices'
 import { useClientLedger } from '../hooks/useReports'
-import { useCreateOrder } from '../hooks/useOrders'
+import { useOrders, useCreateOrder } from '../hooks/useOrders'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { useStockExits } from '../hooks/useWarehouse'
 import { useCreatePayment } from '../hooks/usePayments'
 import { useReceivers } from '../hooks/useReceivers'
 import { useWorkers } from '../hooks/useWorkers'
+import { roundDp } from '../lib/money'
 
 /* ── local edit-form view-model types ── */
 interface Phone { number: string; label: string; meta: string; active: boolean; primary: boolean }
@@ -51,6 +52,7 @@ export default function ClientDetail() {
 
   // Live client + related data.
   const clientQ = useClient(cid)
+  const ordersQ = useOrders({ clientId: cid, limit: 200 })
   const invoicesQ = useInvoices({ clientId: cid, limit: 100 })
   const ledgerQ = useClientLedger(cid)
   const warehouseExitsQ = useStockExits({ clientId: cid, limit: 100 })
@@ -97,10 +99,18 @@ export default function ClientDetail() {
   const PAYMENTS = ledgerEntries
     .filter(e => e.type === 'payment')
     .map(e => ({ date: fmtDate(e.date), method: '—', inv: e.reference, by: '—', role: '', amount: parseFloat(e.credit), note: undefined as string | undefined }))
-  // Order rows derived from the ledger's invoice entries (orders share the ledger statement).
-  const ORDERS = ledgerEntries
-    .filter(e => e.type === 'invoice')
-    .map(e => ({ date: fmtDate(e.date), id: e.reference, char: '—', items: '—', total: parseFloat(e.debit), status: 'invoiced' }))
+  // Order rows from the real orders API — all orders regardless of invoice status.
+  const ORDERS = (ordersQ.data?.data ?? []).map(o => ({
+    date: fmtDate(o.createdAt),
+    id: o.id,
+    char: `${o.charcoalType} · ${o.grade}`,
+    bagTypeName: o.bagType?.name ?? null,
+    supplier: o.supplierName ?? null,
+    items: `${parseFloat(o.totalKgRequested).toLocaleString()} kg`,
+    total: parseFloat(o.pricePerBag),
+    status: o.status,
+    isBag: !!o.bagTypeId,
+  }))
   const ACTIVITY = ledgerEntries.slice(0, 6).map(e => ({
     type: e.type === 'payment' ? 'pay' : 'inv',
     text: e.type === 'payment'
@@ -155,8 +165,9 @@ export default function ClientDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [c?.id, c?.updatedAt, invoiceRows.length])
 
-  const orderSub = orderLines.reduce((s, l) => s + l.qty * l.price, 0)
-  const orderVat = orderSub * 0.11
+  // Sum per-line amounts rounded to cents first, avoiding float accumulation drift.
+  const orderSub = orderLines.reduce((s, l) => s + Math.round(l.qty * l.price * 100), 0) / 100
+  const orderVat = roundDp(orderSub * 0.11, 2)
 
   function showToast(msg: string) {
     setToast(msg)
@@ -188,7 +199,7 @@ export default function ClientDetail() {
     let rows: unknown[], header: string[], filename: string
     if (section === 'orders') {
       rows = filterByDate(ORDERS, ordFrom, ordTo)
-      header = ['Date', 'Order ID', 'Charcoal', 'Items', 'Total (USD)', 'Status']
+      header = ['Date', 'Order ID', 'Type', 'Charcoal', 'Weight (kg)', 'Status']
       filename = `${cid}-orders`
     } else if (section === 'invoices') {
       rows = filterByDate(INVOICES, invFrom, invTo)
@@ -202,7 +213,7 @@ export default function ClientDetail() {
     if (rows.length === 0) { showToast('No rows in that range'); return }
     const aoa: unknown[][] = [header]
     if (section === 'orders') {
-      ;(rows as typeof ORDERS).forEach(o => aoa.push([o.date, o.id, o.char, o.items, o.total, o.status]))
+      ;(rows as typeof ORDERS).forEach(o => aoa.push([o.date, o.id, o.isBag ? 'Bag' : 'KG', o.char, o.items, o.status]))
     } else if (section === 'invoices') {
       ;(rows as typeof INVOICES).forEach(i => aoa.push([i.date, i.id, i.order, i.amount, i.paid, i.amount - i.paid, i.status]))
     } else {
@@ -317,6 +328,9 @@ export default function ClientDetail() {
           showToast(`Payment ${fmt(amt)} logged`)
           setPayAmt('')
           setPayNote('')
+          clientQ.refetch()
+          ledgerQ.refetch()
+          invoicesQ.refetch()
         },
         onError: (err: any) => showToast(err?.error ?? 'Failed to log payment'),
       }
@@ -391,13 +405,13 @@ export default function ClientDetail() {
           <div style={{ display: 'flex', gap: 10 }}>
             <div className="kpi-tile amber" style={{ minWidth: 160 }}>
               <div className="kpi-tile-label">Outstanding balance</div>
-              <div className="kpi-tile-value">${client.outstandingBal.toFixed(2)}</div>
-              <div className="kpi-tile-sub">{client.openInvoices} open invoices</div>
+              <div className="kpi-tile-value">${outstandingBal.toFixed(2)}</div>
+              <div className="kpi-tile-sub">{openInvoices} open invoices</div>
             </div>
-            <div className={`kpi-tile ${client.daysSinceOrder > client.avgDays ? 'red' : ''}`} style={{ minWidth: 160 }}>
+            <div className={`kpi-tile ${daysSinceOrder > avgDays ? 'red' : ''}`} style={{ minWidth: 160 }}>
               <div className="kpi-tile-label">Days since last order</div>
-              <div className="kpi-tile-value">{client.daysSinceOrder}</div>
-              <div className="kpi-tile-sub">{client.daysSinceOrder > client.avgDays ? `+${client.daysSinceOrder - client.avgDays} vs avg · OVERDUE` : 'on track'}</div>
+              <div className="kpi-tile-value">{daysSinceOrder}</div>
+              <div className="kpi-tile-sub">{daysSinceOrder > avgDays ? `+${daysSinceOrder - avgDays} vs avg · OVERDUE` : 'on track'}</div>
             </div>
           </div>
         </div>
@@ -411,7 +425,7 @@ export default function ClientDetail() {
             <div className="card">
               <div className="card-head" style={{ flexWrap: 'wrap', gap: 10 }}>
                 <div className="card-title"><i className="ti ti-file-invoice" /> Order history
-                  <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>{ORDERS.length} orders · {fmt(ORDERS.reduce((s, o) => s + o.total, 0))} total</span>
+                  <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>{ORDERS.length} orders</span>
                 </div>
                 <div className="export-bar">
                   <span className="lbl">Export</span>
@@ -428,22 +442,32 @@ export default function ClientDetail() {
                   <tr>
                     <th style={{ width: 120 }}>Date</th>
                     <th>Order</th>
-                    <th>Items</th>
-                    <th className="right" style={{ width: 100 }}>Total</th>
+                    <th style={{ width: 60 }}>Type</th>
+                    <th>Weight</th>
                     <th style={{ width: 90 }}>Status</th>
                     <th className="right" style={{ width: 90 }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
+                  {ordersQ.isLoading && (
+                    <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0', fontSize: 13 }}>Loading…</td></tr>
+                  )}
+                  {!ordersQ.isLoading && ORDERS.length === 0 && (
+                    <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0', fontSize: 13 }}>No orders yet</td></tr>
+                  )}
                   {ORDERS.slice(0, shownOrders).map(o => (
                     <tr key={o.id} style={{ cursor: 'pointer' }} onClick={() => navigate('/orders/' + o.id)}>
                       <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>{o.date}</td>
                       <td>
                         <div style={{ fontWeight: 500 }}>{o.id}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text3)' }}>{o.char}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                          {o.char}
+                          {o.supplier ? ` · ${o.supplier}` : ''}
+                          {o.bagTypeName ? ` · ${o.bagTypeName}` : ''}
+                        </div>
                       </td>
+                      <td><span className={`badge ${o.isBag ? 'badge-blue' : 'badge-amber'}`}>{o.isBag ? 'Bag' : 'KG'}</span></td>
                       <td style={{ fontSize: 12.5, color: 'var(--text2)' }}>{o.items}</td>
-                      <td className="right num" style={{ fontWeight: 500 }}>{fmt(o.total)}</td>
                       <td>{statusBadge(o.status)}</td>
                       <td>
                         <div className="row-actions" onClick={e => e.stopPropagation()}>
@@ -905,7 +929,7 @@ export default function ClientDetail() {
                           type="number" step="0.01" min="0" value={l.price || ''} onChange={e => updateOrderLine(l.id, 'price', parseFloat(e.target.value) || 0)} placeholder="0.00" />
                       </td>
                       <td style={{ padding: 8, borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, textAlign: 'right', fontSize: 13 }}>
-                        {fmt(l.qty * l.price)}
+                        {fmt(roundDp(l.qty * l.price))}
                       </td>
                       <td style={{ padding: 8, borderTop: '1px solid var(--border)' }}>
                         <button style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: 'var(--text3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
@@ -989,7 +1013,7 @@ export default function ClientDetail() {
               </div>
             </div>
             <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 11.5, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>payment will deduct from outstanding ${client.outstandingBal.toFixed(2)}</span>
+              <span style={{ fontSize: 11.5, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>payment will deduct from outstanding ${outstandingBal.toFixed(2)}</span>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn" onClick={() => setPayModalOpen(false)}>Cancel</button>
                 <button className="btn green" onClick={savePayment}><i className="ti ti-check" style={{ fontSize: 15 }} /> Log payment</button>

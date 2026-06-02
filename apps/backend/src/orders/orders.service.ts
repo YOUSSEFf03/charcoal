@@ -25,12 +25,14 @@ export class OrdersService {
     limit: number,
     clientId?: string,
     status?: OrderStatus,
+    search?: string,
   ) {
     const skip = (page - 1) * limit;
 
     const where: Prisma.ClientOrderWhereInput = {
       ...(clientId ? { clientId } : {}),
       ...(status ? { status } : {}),
+      ...(search ? { client: { name: { contains: search, mode: 'insensitive' } } } : {}),
     };
 
     const [data, total] = await this.prisma.$transaction([
@@ -41,7 +43,7 @@ export class OrdersService {
         orderBy: { createdAt: 'desc' },
         include: {
           client: { select: { id: true, name: true } },
-          orderBagLines: { include: { bagType: true } },
+          bagType: { select: { id: true, name: true, nominalKg: true } },
         },
       }),
       this.prisma.clientOrder.count({ where }),
@@ -61,6 +63,8 @@ export class OrdersService {
       where: { id },
       include: {
         client: true,
+        driver: { select: { id: true, name: true } },
+        bagType: { select: { id: true, name: true, nominalKg: true } },
         shipments: { include: { bags: { include: { bagType: true } } } },
         orderBagLines: { include: { bagType: true } },
         invoices: true,
@@ -131,6 +135,8 @@ export class OrdersService {
           currency: dto.currency,
           createdById: user.id,
           ...(dto.notes ? { notes: dto.notes } : {}),
+          ...(dto.driverId ? { driverId: dto.driverId } : {}),
+          ...(dto.supplierName ? { supplierName: dto.supplierName } : {}),
         },
         include: {
           client: { select: { id: true, name: true } },
@@ -177,7 +183,28 @@ export class OrdersService {
           : {}),
         ...(dto.currency !== undefined ? { currency: dto.currency } : {}),
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+        ...(dto.driverId !== undefined ? { driverId: dto.driverId } : {}),
+        ...(dto.supplierName !== undefined ? { supplierName: dto.supplierName } : {}),
       },
+    });
+  }
+
+  /**
+   * Force-mark an order and all its pending shipments as delivered.
+   * Intended for owner use when the driver forgets to update status.
+   */
+  async markDelivered(id: string) {
+    await this.findOne(id);
+
+    const now = new Date();
+    await this.prisma.shipment.updateMany({
+      where: { orderId: id, status: { not: 'delivered' } },
+      data: { status: 'delivered', deliveredAt: now },
+    });
+
+    return this.prisma.clientOrder.update({
+      where: { id },
+      data: { status: 'delivered' },
     });
   }
 

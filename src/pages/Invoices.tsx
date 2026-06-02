@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Topbar from '../components/layout/Topbar'
 import { useInvoices, useIssueInvoice, useCancelInvoice } from '../hooks/useInvoices'
 import { usePayments, useCreatePayment } from '../hooks/usePayments'
@@ -6,6 +6,7 @@ import { useClients } from '../hooks/useClients'
 import { useArSummary } from '../hooks/useReports'
 import type { Invoice, InvoiceStatus, PaymentMethod } from '../types/api'
 import { useRate } from '../context/RateContext'
+import { roundDp } from '../lib/money'
 
 function statusBadge(status: string) {
   if (status === 'paid') return <span className="badge badge-green">Paid</span>
@@ -46,12 +47,45 @@ export default function Invoices() {
   const [usdAmt, setUsdAmt] = useState('')
   const [lbpAmt, setLbpAmt] = useState('')
   const [statusFilter, setStatusFilter] = useState('All status')
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [clientFilter, setClientFilter] = useState('')       // UUID or '' = all
+  const [dateRange, setDateRange] = useState('All time')
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
   // Invoice currently selected for the panel / pay modal.
   const [activeInvoice, setActiveInvoice] = useState<Invoice | null>(null)
 
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // Compute ISO date bounds from the date-range selector.
+  const today = new Date()
+  const { dateFrom, dateTo } = (() => {
+    if (dateRange === 'This month') return {
+      dateFrom: new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10),
+      dateTo: today.toISOString().slice(0, 10),
+    }
+    if (dateRange === 'Last month') return {
+      dateFrom: new Date(today.getFullYear(), today.getMonth() - 1, 1).toISOString().slice(0, 10),
+      dateTo: new Date(today.getFullYear(), today.getMonth(), 0).toISOString().slice(0, 10),
+    }
+    if (dateRange === 'Custom') return { dateFrom: customFrom || undefined, dateTo: customTo || undefined }
+    return { dateFrom: undefined, dateTo: undefined }
+  })()
+
   // Live data sources.
   const apiStatus = ({ 'Paid': 'paid', 'Partial': 'partially_paid', 'Unpaid': 'issued', 'Overdue': 'overdue' } as Record<string, string>)[statusFilter]
-  const invoicesQ = useInvoices({ status: apiStatus, limit: 100 })
+  const invoicesQ = useInvoices({
+    status: apiStatus,
+    clientId: clientFilter || undefined,
+    search: debouncedSearch || undefined,
+    dateFrom,
+    dateTo,
+    limit: 100,
+  })
   const paymentsQ = usePayments({ limit: 100 })
   // outstandingQ feeds the Outstanding tab TABLE only — not used for KPI numbers.
   const outstandingQ = useInvoices({ status: 'overdue', limit: 100 })
@@ -83,7 +117,7 @@ export default function Invoices() {
 
   const invoiceBalance = activeInvoice ? parseFloat(activeInvoice.total) : 0
   const invoicePaid = activeInvoice ? parseFloat(activeInvoice.paidAmount) : 0
-  const invoiceRemaining = invoiceBalance - invoicePaid
+  const invoiceRemaining = roundDp(invoiceBalance - invoicePaid, 2)
 
   function openPanel(inv: Invoice) {
     setActiveInvoice(inv)
@@ -95,7 +129,7 @@ export default function Invoices() {
     if (!activeInvoice) return
     const usd = parseFloat(usdAmt) || 0
     const lbp = parseFloat(lbpAmt) || 0
-    const total = usd + (rawRate > 0 ? lbp / rawRate : 0)
+    const total = roundDp(usd + (rawRate > 0 ? lbp / rawRate : 0), 2)
     if (total <= 0) return
     createPayment.mutate(
       {
@@ -119,8 +153,8 @@ export default function Invoices() {
 
   const usdNum = parseFloat(usdAmt) || 0
   const lbpNum = parseFloat(lbpAmt) || 0
-  const totalPay = usdNum + (rawRate > 0 ? lbpNum / rawRate : 0)
-  const remaining = invoiceRemaining - totalPay
+  const totalPay = roundDp(usdNum + (rawRate > 0 ? lbpNum / rawRate : 0), 2)
+  const remaining = roundDp(invoiceRemaining - totalPay, 2)
   const pct = invoiceRemaining > 0 ? Math.min(100, (totalPay / invoiceRemaining) * 100) : 0
 
   let recvBarClass = 'total-recv-bar none'
@@ -200,7 +234,15 @@ export default function Invoices() {
         {tab === 'invoices' && (
           <div className="card">
             <div className="filters">
-              <input className="filter-input" placeholder="Search invoices…" />
+              <div className="filter-input">
+                <i className="ti ti-search" />
+                <input
+                  type="text"
+                  placeholder="Search client name…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                />
+              </div>
               <select className="filter-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
                 <option>All status</option>
                 <option>Paid</option>
@@ -208,14 +250,43 @@ export default function Invoices() {
                 <option>Unpaid</option>
                 <option>Overdue</option>
               </select>
-              <select className="filter-select">
-                <option>All clients</option>
+              <select className="filter-select" value={clientFilter} onChange={e => setClientFilter(e.target.value)}>
+                <option value="">All clients</option>
+                {clientList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
-              <select className="filter-select">
+              <select className="filter-select" value={dateRange} onChange={e => setDateRange(e.target.value)}>
+                <option>All time</option>
                 <option>This month</option>
                 <option>Last month</option>
                 <option>Custom</option>
               </select>
+              {dateRange === 'Custom' && (
+                <>
+                  <input
+                    type="date"
+                    className="filter-select"
+                    value={customFrom}
+                    onChange={e => setCustomFrom(e.target.value)}
+                    style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}
+                  />
+                  <input
+                    type="date"
+                    className="filter-select"
+                    value={customTo}
+                    onChange={e => setCustomTo(e.target.value)}
+                    style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}
+                  />
+                </>
+              )}
+              {(search || clientFilter || dateRange !== 'All time') && (
+                <button
+                  className="btn"
+                  style={{ fontSize: 12 }}
+                  onClick={() => { setSearch(''); setClientFilter(''); setDateRange('All time'); setCustomFrom(''); setCustomTo('') }}
+                >
+                  Clear
+                </button>
+              )}
             </div>
             <table className="data-table">
               <thead>

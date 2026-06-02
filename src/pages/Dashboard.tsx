@@ -8,7 +8,6 @@ import { useContainers } from '../hooks/useContainers'
 import { useProfitLoss, useActivity } from '../hooks/useReports'
 import type { ActivityItem } from '../hooks/useReports'
 import { useWorkers } from '../hooks/useWorkers'
-import { useDriverTrips } from '../hooks/useDriverTrips'
 
 function fmtKg(value?: string | null) {
   const n = value != null ? parseFloat(value) : NaN
@@ -82,9 +81,8 @@ export default function Dashboard() {
   const dateTo = now.toISOString().slice(0, 10)
   const plQ = useProfitLoss({ dateFrom, dateTo })
 
-  const today = new Date().toISOString().slice(0, 10)
-  const todayTripsQ = useDriverTrips({ dateFrom: today, dateTo: today, limit: 10 })
-  const todayTrips = todayTripsQ.data?.data ?? []
+  const inDeliveryQ = useOrders({ status: 'partially_delivered', limit: 10 })
+  const inDeliveryOrders = inDeliveryQ.data?.data ?? []
 
   const activityQ = useActivity(30)
   const activityItems = activityQ.data ?? []
@@ -111,7 +109,7 @@ export default function Dashboard() {
     stockLotsQ.refetch()
     workersQ.refetch()
     plQ.refetch()
-    todayTripsQ.refetch()
+    inDeliveryQ.refetch()
     activityQ.refetch()
   }
 
@@ -246,37 +244,28 @@ export default function Dashboard() {
             </table>
           </div>
 
-          {/* Today's deliveries */}
+          {/* Orders in delivery */}
           <div className="card" style={{ animationDelay: '0.30s' }}>
             <div className="card-head">
-              <div className="card-title"><i className="ti ti-truck" /> Today's deliveries</div>
+              <div className="card-title"><i className="ti ti-truck" /> In delivery</div>
               <button className="card-action" onClick={() => navigate('/orders')}>Manage</button>
             </div>
-            {todayTripsQ.isLoading && <div className="empty">Loading…</div>}
-            {!todayTripsQ.isLoading && todayTrips.length === 0 && (
+            {inDeliveryQ.isLoading && <div className="empty">Loading…</div>}
+            {!inDeliveryQ.isLoading && inDeliveryOrders.length === 0 && (
               <div className="empty" style={{ padding: '20px 18px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
-                No trips today
+                No orders in delivery
               </div>
             )}
-            {todayTrips.map(trip => {
-              const statusBadge =
-                trip.status === 'completed' ? 'badge-green' :
-                trip.status === 'in_progress' ? 'badge-blue' : 'badge-gray'
-              const statusLabel =
-                trip.status === 'completed' ? 'Completed' :
-                trip.status === 'in_progress' ? 'In progress' : 'Planned'
-              const driverName = trip.driver?.name ?? trip.driverId.slice(0, 8)
-              const initials = driverName.trim().split(/\s+/).map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()
+            {inDeliveryOrders.map(order => {
+              const initials = order.client.name.trim().split(/\s+/).slice(0, 2).map((w: string) => w[0]).join('').toUpperCase()
               return (
-                <div className="delivery-row" key={trip.id}>
+                <div className="delivery-row" key={order.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/orders/${order.id}`)}>
                   <div className="driver-avatar">{initials}</div>
                   <div className="del-info">
-                    <div className="del-driver">{driverName}</div>
-                    <div className="del-stops">{trip.shipments?.length ?? 0} shipments · {trip.fuelCost ? `$${trip.fuelCost} fuel` : 'no expenses logged'}</div>
+                    <div className="del-driver">{order.client.name}</div>
+                    <div className="del-stops">{parseFloat(order.totalKgRequested).toLocaleString()} kg · {order.charcoalType}</div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                    <span className={`badge ${statusBadge}`}>{statusLabel}</span>
-                  </div>
+                  <span className="badge badge-blue">In delivery</span>
                 </div>
               )
             })}
@@ -493,7 +482,6 @@ export default function Dashboard() {
               {[
                 { bg: 'var(--red-bg)', ic: 'ti ti-alert-circle', icC: 'var(--red)', title: 'Al Rawda Restaurant overdue', sub: '+14 days · $840 outstanding', time: 'Just now', unread: true },
                 { bg: 'var(--accent2-bg)', ic: 'ti ti-clock', icC: 'var(--accent2)', title: 'Chez Michel overdue', sub: '+6 days · $320 outstanding', time: '2h ago', unread: true },
-                { bg: 'var(--blue-bg)', ic: 'ti ti-truck', icC: 'var(--blue)', title: 'MK trip in progress', sub: 'Stop 2 of 3 — Achrafieh in transit', time: '3h ago', unread: true },
                 { bg: 'var(--accent-bg)', ic: 'ti ti-box', icC: 'var(--accent)', title: 'Packing session completed', sub: '240 bags packed · session #PS-0842', time: 'Today 09:14', unread: false },
                 { bg: 'var(--accent-bg)', ic: 'ti ti-ship', icC: 'var(--accent)', title: 'Container CONT-0041 at port', sub: 'Al-Amin Trading · ETA May 28', time: 'Yesterday', unread: false },
               ].map((n, i) => (

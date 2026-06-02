@@ -35,8 +35,9 @@ export class InvoicesController {
     @Query('status') status?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('search') search?: string,
   ) {
-    return this.invoicesService.findAll(page, limit, clientId, status, dateFrom, dateTo);
+    return this.invoicesService.findAll(page, limit, clientId, status, dateFrom, dateTo, search);
   }
 
   @ApiOperation({ summary: 'Get an invoice by ID' })

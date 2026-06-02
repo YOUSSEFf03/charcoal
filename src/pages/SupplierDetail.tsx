@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useSupplier } from '../hooks/useSuppliers'
+import { useSupplier, useSupplierPayments, useCreateSupplierPayment } from '../hooks/useSuppliers'
 import { useContainers } from '../hooks/useContainers'
 
 function initialsOf(name?: string | null): string {
@@ -25,8 +25,20 @@ export default function SupplierDetail() {
   const supplierQuery = useSupplier(id ?? '')
   const supplier = supplierQuery.data
 
-  // Containers for this supplier from the API.
-  const containersQ = useContainers({ supplierId: id ?? '', limit: 20 })
+  // Containers + payments for this supplier.
+  const containersQ  = useContainers({ supplierId: id ?? '', limit: 20 })
+  const paymentsQ    = useSupplierPayments(id ?? '')
+  const createPaymentM = useCreateSupplierPayment(id ?? '')
+  const containers   = containersQ.data?.data ?? []
+  const payments     = paymentsQ.data?.data ?? []
+
+  // All KPIs come directly from the supplier detail response (computed server-side).
+  const totalSpent      = parseFloat(supplier?.totalSpentUsd    ?? '0') || 0
+  const totalPaid       = parseFloat(supplier?.totalPaidUsd     ?? '0') || 0
+  const outstanding     = parseFloat(supplier?.outstandingUsd   ?? '0') || 0
+  const totalKgReceived = parseFloat(supplier?.totalKgReceived  ?? '0') || 0
+  const totalKgRemaining= parseFloat(supplier?.totalKgRemaining ?? '0') || 0
+  const avgPricePerKg   = supplier?.avgPricePerKg != null ? parseFloat(supplier.avgPricePerKg) : null
 
   // Activity feed derived from real supplier fields.
   const activity = supplier
@@ -44,7 +56,8 @@ export default function SupplierDetail() {
   const [shownCont, setShownCont] = useState(5)
   const [payOpen, setPayOpen] = useState(false)
   const [payAmt, setPayAmt] = useState('')
-  const [payMethod, setPayMethod] = useState('bank transfer')
+  const [payMethod, setPayMethod] = useState('bank_transfer')
+  const [payCurrency, setPayCurrency] = useState('USD')
   const [payDate, setPayDateVal] = useState(new Date().toISOString().slice(0, 10))
   const [payRef, setPayRef] = useState('')
   const [toast, setToast] = useState('')
@@ -63,12 +76,19 @@ export default function SupplierDetail() {
   function savePay() {
     const amt = parseFloat(payAmt)
     if (!amt || amt <= 0) { showToast('Enter amount'); return }
-    setPayOpen(false)
-    showToast(`Payment ${money(amt)} recorded`)
-    setPayAmt('')
+    createPaymentM.mutate(
+      { amount: amt.toFixed(2), currency: payCurrency as any, method: payMethod as any, date: payDate, notes: payRef || undefined },
+      {
+        onSuccess: () => {
+          setPayOpen(false)
+          showToast(`Payment ${money(amt)} recorded`)
+          setPayAmt('')
+          setPayRef('')
+        },
+        onError: () => showToast('Failed to save payment'),
+      },
+    )
   }
-
-  const containers = containersQ.data?.data ?? []
 
   if (supplierQuery.isLoading) {
     return (
@@ -99,90 +119,78 @@ export default function SupplierDetail() {
   return (
     <>
       <Topbar title={supplier?.name ?? 'Supplier'}>
-        <button className="btn"><i className="ti ti-edit" style={{ fontSize: 15 }} /> Change info</button>
+        <button className="btn"><i className="ti ti-edit" style={{ fontSize: 15 }} /> Edit</button>
         <button className="btn primary" onClick={() => setPayOpen(true)}>
           <i className="ti ti-cash" style={{ fontSize: 15 }} /> Pay supplier
         </button>
       </Topbar>
       <div className="content">
 
-        {/* HERO */}
-        <div className="page-header" style={{ flexWrap: 'wrap', gap: 18 }}>
-          <div className="sup-hero">
-            <div className="sup-mono" style={{ background: 'var(--accent-bg)', color: 'var(--accent)' }}>{initialsOf(supplier?.name)}</div>
+        {/* ── HERO: outstanding balance is the star ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 20, alignItems: 'stretch', marginBottom: 16 }}>
+
+          {/* Left: supplier identity */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{
+              width: 56, height: 56, borderRadius: 12, flexShrink: 0,
+              background: 'var(--accent-bg)', color: 'var(--accent)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontWeight: 700, fontSize: '1.1rem', fontFamily: "'IBM Plex Mono',monospace",
+            }}>{initialsOf(supplier?.name)}</div>
             <div>
-              <h1 style={{ fontSize: 22, fontWeight: 600, letterSpacing: -0.5 }}>{supplier?.name ?? '—'}</h1>
-              {supplier?.notes && (
-                <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 2 }}>{supplier.notes}</div>
-              )}
-              <div className="page-header-meta">
-                {supplier?.country && (
-                  <span className="badge badge-gray">{supplier.country}</span>
-                )}
-                {supplier?.paymentTerms && (
-                  <span className="meta-row"><i className="ti ti-calendar" /> {supplier.paymentTerms}</span>
-                )}
-                {supplier?.leadTimeDays != null && (
-                  <span className="meta-row"><i className="ti ti-truck-delivery" /> {supplier.leadTimeDays}d lead time</span>
-                )}
+              <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: -0.5, margin: 0 }}>{supplier?.name ?? '—'}</h1>
+              <div className="page-header-meta" style={{ marginTop: 5 }}>
+                {supplier?.country && <span className="badge badge-gray">{supplier.country}</span>}
+                {supplier?.paymentTerms && <span className="meta-row"><i className="ti ti-calendar" /> {supplier.paymentTerms}</span>}
+                {supplier?.leadTimeDays != null && <span className="meta-row"><i className="ti ti-truck-delivery" /> {supplier.leadTimeDays}d lead</span>}
+                {supplier?.containerCount != null && <span className="meta-row"><i className="ti ti-ship" /> {supplier.containerCount} containers</span>}
               </div>
             </div>
           </div>
-          <div className="kpi-strip" style={{ minWidth: 0 }}>
-            <div className="kpi-tile">
-              <div className="kpi-tile-label">Containers received</div>
-              <div className="kpi-tile-value">{supplier?.containerCount ?? '—'}</div>
-              <div className="kpi-tile-sub">all time</div>
+
+          {/* Right: balance hero block */}
+          <div style={{
+            background: outstanding > 0 ? 'var(--accent2-bg)' : 'var(--accent-bg)',
+            border: `1.5px solid ${outstanding > 0 ? 'var(--accent2)' : 'var(--accent)'}`,
+            borderRadius: 12, padding: '18px 28px', textAlign: 'right', minWidth: 260,
+            display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4,
+          }}>
+            <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", textTransform: 'uppercase', letterSpacing: '0.8px', color: outstanding > 0 ? 'var(--accent2)' : 'var(--accent)', fontWeight: 600 }}>
+              We still owe
             </div>
-            <div className="kpi-tile">
-              <div className="kpi-tile-label">Total spent</div>
-              <div className="kpi-tile-value">{supplier ? `$${Number(supplier.totalSpentUsd).toLocaleString()}` : '—'}</div>
-              <div className="kpi-tile-sub">all time</div>
+            <div style={{ fontSize: '2.4rem', fontWeight: 800, letterSpacing: -1.5, fontFamily: "'IBM Plex Mono',monospace", color: outstanding > 0 ? 'var(--accent2)' : 'var(--accent)', lineHeight: 1 }}>
+              {outstanding > 0 ? money(outstanding) : totalSpent > 0 ? 'Settled' : '—'}
             </div>
-            <div className="kpi-tile">
-              <div className="kpi-tile-label">Active lots</div>
-              <div className="kpi-tile-value">{supplier?.activeLotCount ?? '—'}</div>
-              <div className="kpi-tile-sub">in warehouse</div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 16, marginTop: 6 }}>
+              <span style={{ fontSize: 12, color: 'var(--text2)' }}>
+                <span style={{ color: 'var(--text3)', marginRight: 4 }}>Total cost</span>
+                <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>{totalSpent > 0 ? money(totalSpent) : '—'}</span>
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--text2)' }}>
+                <span style={{ color: 'var(--text3)', marginRight: 4 }}>Paid</span>
+                <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>{totalPaid > 0 ? money(totalPaid) : '—'}</span>
+              </span>
             </div>
-            <div className="kpi-tile">
-              <div className="kpi-tile-label">We owe them</div>
-              <div className="kpi-tile-value">—</div>
-              <div className="kpi-tile-sub">not tracked</div>
-            </div>
-            <div className="kpi-tile">
-              <div className="kpi-tile-label">Avg price / kg</div>
-              <div className="kpi-tile-value">—</div>
-              <div className="kpi-tile-sub">not tracked</div>
-            </div>
+            <button className="btn green" onClick={() => setPayOpen(true)} style={{ marginTop: 10, fontSize: 13, fontWeight: 600, justifyContent: 'center' }}>
+              <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay supplier
+            </button>
           </div>
         </div>
 
-        {/* BALANCE CARD */}
-        <div className="balance-card">
-          <div className="bcell">
-            <span className="lbl">Money we still owe</span>
-            <span className="v">—</span>
-            <span className="sub">not tracked in this version</span>
-          </div>
-          <div className="vline" />
-          <div className="bcell">
-            <span className="lbl">Money paid this year</span>
-            <span className="v">—</span>
-            <span className="sub">not tracked in this version</span>
-          </div>
-          <div className="vline" />
-          <div className="bcell">
-            <span className="lbl">Average wait to pay</span>
-            <span className="v">—</span>
-            <span className="sub">not tracked</span>
-          </div>
-          <div className="vline" />
-          <div className="pay-action">
-            <button className="btn green" onClick={() => setPayOpen(true)} style={{ height: 42, fontSize: 14, fontWeight: 600, justifyContent: 'center' }}>
-              <i className="ti ti-cash" style={{ fontSize: 16 }} /> Pay supplier
-            </button>
-            <span style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'center', fontFamily: "'IBM Plex Mono',monospace" }}>USD · LBP · wire · cash</span>
-          </div>
+        {/* ── SECONDARY KPIs (smaller) ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+          {[
+            { label: 'Total kg received', value: totalKgReceived > 0 ? `${totalKgReceived.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg` : '—', sub: 'all time' },
+            { label: 'In stock', value: totalKgRemaining > 0 ? `${totalKgRemaining.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg` : '—', sub: `${supplier?.activeLotCount ?? 0} active lots` },
+            { label: 'Avg price / kg', value: avgPricePerKg != null ? money(avgPricePerKg) : '—', sub: 'weighted avg' },
+            { label: 'Payments made', value: payments.length > 0 ? String(payments.length) : '—', sub: 'recorded payments' },
+          ].map(k => (
+            <div key={k.label} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '12px 16px' }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>{k.label}</div>
+              <div style={{ fontSize: '1.15rem', fontWeight: 700, fontFamily: "'IBM Plex Mono',monospace", letterSpacing: -0.3 }}>{k.value}</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{k.sub}</div>
+            </div>
+          ))}
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 14 }}>
@@ -190,30 +198,42 @@ export default function SupplierDetail() {
           {/* LEFT */}
           <div className="stack">
 
-            {/* Charcoal types */}
+            {/* Charcoal types — derived from real stock lots */}
             <div className="card">
               <div className="card-head">
-                <div className="card-title"><i className="ti ti-flame" /> What we buy
-                  <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>{supplier?.charcoalTypes.length ?? 0} types</span>
+                <div className="card-title"><i className="ti ti-flame" /> Charcoal we bought
+                  <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>
+                    {(supplier?.purchasedTypes ?? []).length} types
+                  </span>
                 </div>
               </div>
-              {(supplier?.charcoalTypes ?? []).length === 0 ? (
-                <div className="empty">No charcoal types recorded for this supplier</div>
+              {(supplier?.purchasedTypes ?? []).length === 0 ? (
+                <div className="empty">No stock lots found for this supplier</div>
               ) : (
-                <>
-                  <div className="ctype-row head">
-                    <span>Charcoal type</span><span>Grade</span>
-                  </div>
-                  {(supplier?.charcoalTypes ?? []).map((t, i) => {
-                    const gradeCls = `grade-${t.grade}` as 'grade-A' | 'grade-B' | 'grade-C'
-                    return (
-                      <div className="ctype-row" key={i}>
-                        <span className="type-name">{t.type}</span>
-                        <span><span className={`grade-pill ${gradeCls}`}>Grade {t.grade}</span></span>
-                      </div>
-                    )
-                  })}
-                </>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Charcoal type</th>
+                      <th style={{ width: 90 }}>Grade</th>
+                      <th className="right" style={{ width: 110 }}>Total received</th>
+                      <th className="right" style={{ width: 110 }}>In stock</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(supplier?.purchasedTypes ?? []).map((t, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 500 }}>{t.type}</td>
+                        <td>
+                          <span className={`grade-pill grade-${t.grade}`}>Grade {t.grade}</span>
+                        </td>
+                        <td className="right num">{t.totalKg.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg</td>
+                        <td className="right num" style={{ color: t.kgRemaining > 0 ? 'var(--accent)' : 'var(--text3)', fontWeight: t.kgRemaining > 0 ? 600 : 400 }}>
+                          {t.kgRemaining > 0 ? `${t.kgRemaining.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </div>
 
@@ -242,19 +262,30 @@ export default function SupplierDetail() {
               )}
               {!containersQ.isLoading && containers.length > 0 && (
                 <>
-                  <div className="cont-sup-row head">
-                    <span>Arrived</span><span>Container #</span><span>Status</span><span />
-                  </div>
+                  <table className="data-table" style={{ borderBottom: '1px solid var(--border)' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ width: 120 }}>Arrived</th>
+                        <th>Container #</th>
+                        <th style={{ width: 100 }}>Status</th>
+                        <th style={{ width: 50 }} />
+                      </tr>
+                    </thead>
+                    <tbody>
                   {containers.slice(0, shownCont).map(c => (
-                    <div className="cont-sup-row" key={c.id} onClick={() => navigate('/containers/' + c.id)}>
-                      <span className="cdate">{c.arrivalDate ?? '—'}</span>
-                      <span className="cid">{c.number}</span>
-                      <span><span className="badge badge-green">{c.status}</span></span>
-                      <span className="row-actions" onClick={e => e.stopPropagation()}>
-                        <button className="icon-btn" onClick={() => navigate('/containers/' + c.id)}><i className="ti ti-arrow-up-right" /></button>
-                      </span>
-                    </div>
+                    <tr key={c.id} style={{ cursor: 'pointer' }} onClick={() => navigate('/containers/' + c.id)}>
+                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>{c.arrivalDate ?? '—'}</td>
+                      <td style={{ fontWeight: 500 }}>{c.number}</td>
+                      <td><span className={`badge ${c.status === 'arrived' ? 'badge-green' : c.status === 'port' ? 'badge-amber' : 'badge-gray'}`}>{c.status}</span></td>
+                      <td>
+                        <div className="row-actions" onClick={e => e.stopPropagation()}>
+                          <button className="icon-btn" onClick={() => navigate('/containers/' + c.id)}><i className="ti ti-arrow-up-right" /></button>
+                        </div>
+                      </td>
+                    </tr>
                   ))}
+                    </tbody>
+                  </table>
                   <div className="more-foot">
                     <span>showing {Math.min(shownCont, containers.length)} of {containersQ.data?.total ?? containers.length} containers</span>
                     {containers.length > 5 && (
@@ -281,11 +312,51 @@ export default function SupplierDetail() {
             {/* Payments history */}
             <div className="card">
               <div className="card-head">
-                <div className="card-title"><i className="ti ti-cash" /> Money we sent</div>
+                <div className="card-title">
+                  <i className="ti ti-cash" /> Money we sent
+                  <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>
+                    {payments.length} payment{payments.length !== 1 ? 's' : ''} · {totalPaid > 0 ? money(totalPaid) : '$0'} total
+                  </span>
+                </div>
+                <button className="card-action" onClick={() => setPayOpen(true)}>
+                  <i className="ti ti-plus" style={{ fontSize: 13 }} /> Add payment
+                </button>
               </div>
-              <div style={{ padding: '18px', color: 'var(--text3)', fontSize: 13 }}>
-                Supplier payments not tracked in this version.
-              </div>
+              {paymentsQ.isLoading && <div className="empty">Loading…</div>}
+              {!paymentsQ.isLoading && payments.length === 0 && (
+                <div className="empty">No payments recorded yet.</div>
+              )}
+              {!paymentsQ.isLoading && payments.length > 0 && (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 120 }}>Date</th>
+                      <th style={{ width: 110 }}>Method</th>
+                      <th>Note</th>
+                      <th>Logged by</th>
+                      <th className="right" style={{ width: 110 }}>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payments.map(p => (
+                      <tr key={p.id}>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>
+                          {new Date(p.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </td>
+                        <td><span className="badge badge-gray">{p.method.replace('_', ' ')}</span></td>
+                        <td style={{ fontSize: 12.5, color: 'var(--text2)' }}>
+                          {p.container ? <span style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{p.container.number}</span> : '—'}
+                          {p.notes && <span style={{ marginLeft: 6, color: 'var(--text3)' }}>{p.notes}</span>}
+                        </td>
+                        <td style={{ fontSize: 12.5, color: 'var(--text3)' }}>{p.loggedBy.name}</td>
+                        <td className="right num" style={{ fontWeight: 600, color: 'var(--accent)' }}>
+                          +{money(parseFloat(p.amount))} <span style={{ fontSize: 10, fontWeight: 400 }}>{p.currency}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
 
           </div>
@@ -384,57 +455,52 @@ export default function SupplierDetail() {
             <div className="modal-body">
               <div className="form-grid">
                 <div>
-                  <span className="field-label">When you paid</span>
+                  <span className="field-label">Date</span>
                   <input className="input" type="date" value={payDate} onChange={e => setPayDateVal(e.target.value)} />
                 </div>
                 <div>
-                  <span className="field-label">How you paid</span>
+                  <span className="field-label">Method</span>
                   <select className="select" value={payMethod} onChange={e => setPayMethod(e.target.value)}>
-                    {['bank transfer', 'cash', 'whish', 'omt', 'cheque'].map(m => <option key={m}>{m}</option>)}
-                  </select>
-                </div>
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <span className="field-label">Which shipment / bill is this for</span>
-                  <select className="select">
-                    <option>— not for a specific bill —</option>
+                    <option value="bank_transfer">Bank transfer</option>
+                    <option value="cash">Cash</option>
+                    <option value="cheque">Cheque</option>
+                    <option value="whish">Whish</option>
+                    <option value="omt">OMT</option>
                   </select>
                 </div>
                 <div>
-                  <span className="field-label">How much</span>
+                  <span className="field-label">Amount</span>
                   <input className="input num" type="number" value={payAmt} onChange={e => setPayAmt(e.target.value)} placeholder="0.00" />
                 </div>
                 <div>
                   <span className="field-label">Currency</span>
-                  <select className="select"><option>USD</option><option>EUR</option><option>LBP</option></select>
-                </div>
-                <div>
-                  <span className="field-label">Who sent the money</span>
-                  <select className="select"><option>Khalil Abi Nader (owner)</option><option>Rita Salameh (accounts)</option></select>
-                </div>
-                <div>
-                  <span className="field-label">From which account</span>
-                  <select className="select"><option>BLOM Bank · main USD</option><option>Bank Audi · LBP</option><option>Petty cash</option></select>
+                  <select className="select" value={payCurrency} onChange={e => setPayCurrency(e.target.value)}>
+                    <option value="USD">USD</option>
+                    <option value="LBP">LBP</option>
+                  </select>
                 </div>
                 <div style={{ gridColumn: '1 / -1' }}>
-                  <span className="field-label">Note or reference (optional)</span>
+                  <span className="field-label">Reference / note (optional)</span>
                   <input className="input" value={payRef} onChange={e => setPayRef(e.target.value)} placeholder="e.g. wire ref, cheque number" />
                 </div>
               </div>
-              <div style={{ marginTop: 14, padding: '11px 14px', background: 'var(--accent-bg)', border: '1px solid #a7f3d0', borderRadius: 'var(--radius)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontSize: 12, color: 'var(--accent)' }}>
-                  <strong>Balance not tracked in this version</strong>
-                  <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>record payment for reference only</div>
+              {outstanding > 0 && (
+                <div style={{ marginTop: 14, padding: '11px 14px', background: 'var(--accent2-bg)', borderRadius: 'var(--radius)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: 'var(--text2)' }}>Outstanding balance</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 18, fontWeight: 700, color: 'var(--accent2)' }}>{money(outstanding)}</span>
                 </div>
-                <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 22, fontWeight: 700, color: 'var(--text3)' }}>
-                  —
-                </div>
-              </div>
+              )}
             </div>
             <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 11.5, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>payment log</span>
+              <span style={{ fontSize: 11.5, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>
+                {payCurrency} payment · {supplier?.name}
+              </span>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn" onClick={() => setPayOpen(false)}>Cancel</button>
-                <button className="btn green" onClick={savePay}><i className="ti ti-check" style={{ fontSize: 15 }} /> Save payment</button>
+                <button className="btn green" onClick={savePay} disabled={createPaymentM.isPending}>
+                  <i className="ti ti-check" style={{ fontSize: 15 }} />
+                  {createPaymentM.isPending ? 'Saving…' : 'Save payment'}
+                </button>
               </div>
             </div>
           </div>

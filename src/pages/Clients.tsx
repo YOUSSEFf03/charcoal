@@ -1,13 +1,22 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useClients, useCreateClient, useAddPhone } from '../hooks/useClients'
-import { useOverdueClients } from '../hooks/useClients'
+import { useClients, useClientsCounts, useCreateClient, useAddPhone, useOverdueClients } from '../hooks/useClients'
 import { useCreatePayment } from '../hooks/usePayments'
 import type { Client, ClientType, Currency, PhoneLabel, PaymentMethod } from '../types/api'
 import { useRate } from '../context/RateContext'
+import { roundDp } from '../lib/money'
 
 type ClientTab = 'all' | 'alerts' | 'debit'
+
+const TYPE_LABEL_TO_ENUM: Partial<Record<string, ClientType>> = {
+  Restaurant: 'restaurant',
+  Shop: 'shop',
+  Wholesale: 'wholesale',
+  'Walk-in': 'walk_in',
+  Corporate: 'corporate',
+  Export: 'export',
+}
 
 // Map a client type enum to a badge colour class.
 function typeBadgeClass(t: ClientType): string {
@@ -39,7 +48,7 @@ export default function Clients() {
   const [newClientOpen, setNewClientOpen] = useState(false)
   const [rateOpen, setRateOpen] = useState(false)
   const [addPhoneOpen, setAddPhoneOpen] = useState(false)
-  const [showAll, setShowAll] = useState(false)
+  const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [fType, setFType] = useState('All types')
@@ -69,40 +78,55 @@ export default function Clients() {
     return () => clearTimeout(t)
   }, [search])
 
-  // Live client list — server-side search + pagination.
+  // Reset to page 1 when filters change.
+  useEffect(() => { setPage(1) }, [debouncedSearch, fType, fBalance])
+
+  const mappedType = TYPE_LABEL_TO_ENUM[fType]
+  const balanceFilter: boolean | undefined =
+    fBalance === 'Has balance' ? true :
+    fBalance === 'Clear' ? false :
+    undefined
+
+  // Live client list — server-side search, type, and balance filtering + pagination.
   const { data: clientsResp, isLoading, isError, refetch } = useClients({
     search: debouncedSearch || undefined,
-    page: 1,
-    limit: 100,
+    page,
+    limit: 50,
+    excludeFillClient: true,
+    type: mappedType,
+    hasBalance: fBalance === 'Overdue' ? undefined : balanceFilter,
   })
+
+  // Balances tab — full list of all clients with outstanding balance.
+  const { data: balancesResp } = useClients({
+    excludeFillClient: true,
+    hasBalance: true,
+    limit: 500,
+  })
+  const balanceClients = balancesResp?.data ?? []
+
+  const { data: counts } = useClientsCounts(debouncedSearch || undefined)
   const overdueQ = useOverdueClients()
+  const overdueClients = overdueQ.data ?? []
+
+  // When Overdue balance filter is active, show from the complete overdue list.
+  const displayClients = fBalance === 'Overdue'
+    ? overdueClients.filter(c => !mappedType || c.type === mappedType)
+    : clientsResp?.data ?? []
+
+  const totalCount = fBalance === 'Overdue' ? displayClients.length : (clientsResp?.total ?? 0)
+  const totalPages = Math.ceil(totalCount / 50)
+
   const createClient = useCreateClient()
   const addPhone = useAddPhone()
   const createPayment = useCreatePayment()
 
-  const allClients = (clientsResp?.data ?? []).filter(c => c.type !== 'fill_client')
-  const totalClients = clientsResp?.total ?? allClients.length
-  const overdueClients = overdueQ.data ?? []
-  const balanceClients = allClients.filter(c => parseFloat(c.balance) > 0)
-
-  // Client-side type / balance filters layered on top of the searched result set.
-  const filteredClients = allClients.filter(c => {
-    const matchType = fType === 'All types' || c.type === fType.toLowerCase().replace('-', '_')
-    const bal = parseFloat(c.balance)
-    const matchBalance = fBalance === 'Any balance' ||
-      (fBalance === 'Has balance' && bal > 0) ||
-      (fBalance === 'Clear' && bal === 0) ||
-      (fBalance === 'Overdue' && c.isOverdue)
-    return matchType && matchBalance
-  })
-  const displayedClients = showAll ? filteredClients : filteredClients.slice(0, 5)
-
   const usd = parseFloat(usdAmt) || 0
   const lbp = parseFloat(lbpAmt) || 0
-  const lbpAsUsd = rawRate > 0 ? lbp / rawRate : 0
-  const totalPay = usd + lbpAsUsd
+  const lbpAsUsd = rawRate > 0 ? roundDp(lbp / rawRate, 2) : 0
+  const totalPay = roundDp(usd + lbpAsUsd, 2)
   const outstanding = activeClient ? parseFloat(activeClient.balance) : 0
-  const remaining = outstanding - totalPay
+  const remaining = roundDp(outstanding - totalPay, 2)
 
   function showToast(msg: string) {
     setToast(msg)
@@ -192,9 +216,9 @@ export default function Clients() {
 
       <div className="tabs">
         {([
-          { key: 'all' as ClientTab, icon: 'ti-users', label: 'All clients', count: String(totalClients), countCls: '' },
+          { key: 'all' as ClientTab, icon: 'ti-users', label: 'All clients', count: String(counts?.allCount ?? 0), countCls: '' },
           { key: 'alerts' as ClientTab, icon: 'ti-bell', label: 'CRM alerts', count: String(overdueClients.length), countCls: 'red' },
-          { key: 'debit' as ClientTab, icon: 'ti-credit-card', label: 'Balances', count: String(balanceClients.length), countCls: '' },
+          { key: 'debit' as ClientTab, icon: 'ti-credit-card', label: 'Balances', count: String(counts?.balanceCount ?? 0), countCls: '' },
         ]).map(t => (
           <div key={t.key} className={`tab ${tab === t.key ? 'active' : ''}`} onClick={() => setTab(t.key)}>
             <i className={`ti ${t.icon}`} style={{ fontSize: 14 }} /> {t.label}
@@ -223,7 +247,7 @@ export default function Clients() {
                 <option>Has balance</option><option>Clear</option><option>Overdue</option>
               </select>
               <div className="filter-sep" />
-              <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>{filteredClients.length} clients</span>
+              <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>{totalCount} clients</span>
             </div>
             <div className="card">
               <table className="data-table">
@@ -254,7 +278,7 @@ export default function Clients() {
                       </td>
                     </tr>
                   )}
-                  {!isLoading && !isError && displayedClients.map(c => (
+                  {!isLoading && !isError && displayClients.map(c => (
                     <tr key={c.id} onClick={() => navigate('/clients/' + c.id)} style={{ cursor: 'pointer' }}>
                       <td>
                         <div style={{ fontWeight: 500 }}>{c.name}</div>
@@ -271,7 +295,7 @@ export default function Clients() {
                       <td><i className="ti ti-chevron-right" style={{ color: 'var(--text3)' }} /></td>
                     </tr>
                   ))}
-                  {!isLoading && !isError && filteredClients.length === 0 && (
+                  {!isLoading && !isError && displayClients.length === 0 && (
                     <tr>
                       <td colSpan={8} style={{ textAlign: 'center', padding: '40px 24px', color: 'var(--text3)' }}>
                         <i className="ti ti-users" style={{ fontSize: 28, display: 'block', marginBottom: 8 }} />
@@ -283,10 +307,15 @@ export default function Clients() {
                 </tbody>
               </table>
               <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface2)' }}>
-                <span style={{ fontSize: 12, color: 'var(--text3)' }}>Showing {displayedClients.length} of {filteredClients.length} clients</span>
-                <button style={{ fontSize: 12, color: 'var(--text3)', background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => setShowAll(s => !s)}>
-                  {showAll ? 'Show less ↑' : 'Show all →'}
-                </button>
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+                  {fBalance === 'Overdue' ? `${displayClients.length} overdue clients` : `Page ${page} of ${Math.max(1, totalPages)} · ${totalCount} total`}
+                </span>
+                {fBalance !== 'Overdue' && totalPages > 1 && (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>← Prev</button>
+                    <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>Next →</button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -359,8 +388,8 @@ export default function Clients() {
           <div className="fade-up">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 18 }}>
               {(() => {
-                const totalOwed = balanceClients.reduce((acc, c) => acc + parseFloat(c.balance), 0)
-                const overdueOwed = overdueClients.reduce((acc, c) => acc + parseFloat(c.balance), 0)
+                const totalOwed = roundDp(balanceClients.reduce((acc, c) => acc + parseFloat(c.balance), 0), 2)
+                const overdueOwed = roundDp(overdueClients.reduce((acc, c) => acc + parseFloat(c.balance), 0), 2)
                 const cards = [
                   { label: 'TOTAL OWED', val: fmtUsd(String(totalOwed)), vColor: 'var(--accent2)', sub: `${balanceClients.length} clients` },
                   { label: 'OVERDUE', val: fmtUsd(String(overdueOwed)), vColor: 'var(--red)', sub: `${overdueClients.length} clients` },

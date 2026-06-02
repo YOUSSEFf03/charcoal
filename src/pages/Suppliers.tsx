@@ -110,45 +110,65 @@ export default function Suppliers() {
 
         {!isLoading && !isError && (
           <div className="supplier-grid">
-            {suppliers.map((s, idx) => (
+            {suppliers.map((s, idx) => {
+              const outstanding = parseFloat(s.outstandingUsd ?? '0')
+              const paid        = parseFloat(s.totalPaidUsd   ?? '0')
+              return (
               <div key={s.id} className="sup-card" onClick={() => navigate('/suppliers/' + s.id)} style={{ cursor: 'pointer' }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{
-                      width: 44, height: 44, borderRadius: 10,
-                      background: colorOf(idx), color: '#fff',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontWeight: 700, fontSize: '1rem', fontFamily: 'IBM Plex Mono, monospace'
-                    }}>{initialsOf(s.name)}</div>
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: '1rem' }}>{s.name}</div>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text2)' }}>{s.country}</div>
+                {/* Header */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                  <div style={{
+                    width: 40, height: 40, borderRadius: 9, flexShrink: 0,
+                    background: colorOf(idx), color: '#fff',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontWeight: 700, fontSize: '0.9rem', fontFamily: 'IBM Plex Mono, monospace',
+                  }}>{initialsOf(s.name)}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.95rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text3)' }}>{s.country}{s.paymentTerms ? ` · ${s.paymentTerms}` : ''}</div>
+                  </div>
+                </div>
+
+                {/* Balance — the main focus */}
+                <div style={{
+                  background: outstanding > 0 ? 'var(--accent2-bg)' : 'var(--surface2)',
+                  borderRadius: 8, padding: '12px 14px', marginBottom: 12,
+                  border: `1px solid ${outstanding > 0 ? 'var(--accent2)' : 'var(--border)'}`,
+                }}>
+                  <div style={{ fontSize: 11, color: outstanding > 0 ? 'var(--accent2)' : 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3 }}>
+                    We still owe
+                  </div>
+                  <div style={{ fontSize: '1.6rem', fontWeight: 700, letterSpacing: -0.5, color: outstanding > 0 ? 'var(--accent2)' : 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>
+                    {outstanding > 0 ? `$${outstanding.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+                  </div>
+                  {paid > 0 && (
+                    <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 3, fontFamily: "'IBM Plex Mono',monospace" }}>
+                      ${paid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} paid
                     </div>
-                  </div>
-                  <span className="badge badge-green">active</span>
+                  )}
                 </div>
 
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
-                  {s.charcoalTypes.map((t, j) => (
+                {/* Charcoal types */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 10 }}>
+                  {s.charcoalTypes.slice(0, 3).map((t, j) => (
                     <span key={j} style={{
-                      fontSize: '0.73rem', padding: '2px 8px', borderRadius: 4,
-                      background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)'
-                    }}>{t.type} {t.grade}</span>
+                      fontSize: '0.71rem', padding: '2px 7px', borderRadius: 4,
+                      background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)',
+                    }}>{t.type} · {t.grade}</span>
                   ))}
+                  {s.charcoalTypes.length > 3 && (
+                    <span style={{ fontSize: '0.71rem', color: 'var(--text3)' }}>+{s.charcoalTypes.length - 3} more</span>
+                  )}
                 </div>
 
-                <div className="type-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: '12px 0', borderTop: '1px solid var(--border)' }}>
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{s.leadTimeDays != null ? `${s.leadTimeDays}d` : '—'}</div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text3)' }}>lead time</div>
-                  </div>
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{s.paymentTerms ?? '—'}</div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text3)' }}>terms</div>
-                  </div>
+                {/* Footer stats */}
+                <div style={{ display: 'flex', gap: 16, paddingTop: 10, borderTop: '1px solid var(--border)', fontSize: '0.75rem', color: 'var(--text3)' }}>
+                  <span><i className="ti ti-truck-delivery" style={{ fontSize: 12, marginRight: 3 }} />{s.leadTimeDays != null ? `${s.leadTimeDays}d lead` : '—'}</span>
+                  {s.charcoalTypes.length > 0 && <span><i className="ti ti-flame" style={{ fontSize: 12, marginRight: 3 }} />{s.charcoalTypes.length} type{s.charcoalTypes.length !== 1 ? 's' : ''}</span>}
                 </div>
               </div>
-            ))}
+            )})}
+
             {suppliers.length === 0 && (
               <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px 24px', color: 'var(--text3)' }}>
                 <i className="ti ti-truck" style={{ fontSize: 28, display: 'block', marginBottom: 8 }} />

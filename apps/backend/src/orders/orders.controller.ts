@@ -36,8 +36,9 @@ export class OrdersController {
     @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('clientId') clientId?: string,
     @Query('status') status?: OrderStatus,
+    @Query('search') search?: string,
   ) {
-    return this.ordersService.findAll(page, limit, clientId, status);
+    return this.ordersService.findAll(page, limit, clientId, status, search);
   }
 
   @ApiOperation({ summary: 'Get an order by ID' })
@@ -72,6 +73,15 @@ export class OrdersController {
     @Body() dto: UpdateOrderDto,
   ) {
     return this.ordersService.update(id, dto);
+  }
+
+  @ApiOperation({ summary: 'Mark order and all its shipments as delivered (owner override)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Patch(':id/mark-delivered')
+  @Roles('owner')
+  markDelivered(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ordersService.markDelivered(id);
   }
 
   @ApiOperation({ summary: 'Delete a draft order (no shipments)' })

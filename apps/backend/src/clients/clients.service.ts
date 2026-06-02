@@ -31,6 +31,9 @@ export class ClientsService {
    * @param limit - Items per page
    * @param search - Optional name substring filter (case-insensitive)
    * @param type - Optional ClientType filter
+   * @param isActive - Optional active status filter
+   * @param excludeFillClient - When true and type is not set, exclude fill_client type
+   * @param hasBalance - When defined, filter by whether client has an outstanding balance
    */
   async findAll(
     page: number,
@@ -38,14 +41,46 @@ export class ClientsService {
     search?: string,
     type?: ClientType,
     isActive?: boolean,
+    excludeFillClient?: boolean,
+    hasBalance?: boolean,
   ) {
     const skip = (page - 1) * limit;
 
     const where: Prisma.ClientWhereInput = {
       ...(search ? { name: { contains: search, mode: 'insensitive' } } : {}),
-      ...(type ? { type } : {}),
+      ...(type ? { type } : excludeFillClient ? { type: { not: 'fill_client' as ClientType } } : {}),
       ...(isActive !== undefined ? { isActive } : {}),
     };
+
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    if (hasBalance !== undefined) {
+      // Fetch all matching clients (no pagination) then filter by balance
+      const allClients = await this.prisma.client.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const withBalance = await Promise.all(
+        allClients.map(async (c) => {
+          const balance = await this.clientBalanceService.computeBalance(c.id);
+          const isOverdue = balance.gt(0) && c.lastOrderDate != null && c.lastOrderDate < thirtyDaysAgo;
+          return { ...c, balance: balance.toFixed(2), isOverdue };
+        }),
+      );
+
+      const filtered = withBalance.filter((c) =>
+        hasBalance ? parseFloat(c.balance) > 0 : parseFloat(c.balance) <= 0,
+      );
+
+      return {
+        data: filtered.slice(skip, skip + limit),
+        total: filtered.length,
+        page,
+        limit,
+      };
+    }
 
     const [data, total] = await this.prisma.$transaction([
       this.prisma.client.findMany({
@@ -60,11 +95,44 @@ export class ClientsService {
     const dataWithBalance = await Promise.all(
       data.map(async (c) => {
         const balance = await this.clientBalanceService.computeBalance(c.id);
-        return { ...c, balance: balance.toFixed(2) };
+        const isOverdue = balance.gt(0) && c.lastOrderDate != null && c.lastOrderDate < thirtyDaysAgo;
+        return { ...c, balance: balance.toFixed(2), isOverdue };
       }),
     );
 
     return { data: dataWithBalance, total, page, limit };
+  }
+
+  /**
+   * Return tab counts for the Clients page (excludes fill_client).
+   *
+   * @param search - Optional name substring filter
+   * @returns allCount, balanceCount, overdueCount
+   */
+  async getCounts(search?: string) {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const where: Prisma.ClientWhereInput = {
+      type: { not: 'fill_client' as ClientType },
+      ...(search ? { name: { contains: search, mode: 'insensitive' } } : {}),
+    };
+
+    const clients = await this.prisma.client.findMany({ where });
+
+    const results = await Promise.all(
+      clients.map(async (c) => {
+        const balance = await this.clientBalanceService.computeBalance(c.id);
+        const isOverdue = balance.gt(0) && c.lastOrderDate != null && c.lastOrderDate < thirtyDaysAgo;
+        return { balance, isOverdue };
+      }),
+    );
+
+    const allCount = clients.length;
+    const balanceCount = results.filter((r) => r.balance.gt(0)).length;
+    const overdueCount = results.filter((r) => r.isOverdue).length;
+
+    return { allCount, balanceCount, overdueCount };
   }
 
   /**

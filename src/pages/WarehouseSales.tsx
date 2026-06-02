@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect } from 'react'
 import Topbar from '../components/layout/Topbar'
 import { useBagTypes } from '../hooks/useBagTypes'
-import { useStockLots, usePackedStockSummary, usePackedStockRecords, useStockExits, useCreateStockExit, useUpdateStockExit } from '../hooks/useWarehouse'
+import { useStockLots, usePackedStockSummary, usePackedStockRecords, useStockExits, useCreateStockExit, useUpdateStockExit, useWalkInSummary } from '../hooks/useWarehouse'
 import { useClients } from '../hooks/useClients'
 import { useWorkers } from '../hooks/useWorkers'
 import { useReceivers } from '../hooks/useReceivers'
 import { useCreatePayment } from '../hooks/usePayments'
 import { useRate } from '../context/RateContext'
+import { roundDp } from '../lib/money'
 
 type SaleMode = 'packed' | 'kg'
 type SaleTab = 'entry' | 'log'
@@ -43,14 +44,31 @@ export default function WarehouseSales() {
   const rawRate = rateCtx.rawRate
 
   const packedRecordsQ = usePackedStockRecords({ limit: 200 })
-  const exitsQ = useStockExits({ exitType: 'walk_in', limit: 100 })
+
+  // Log tab date filter — must be declared before exitsQ uses them.
+  const thirtyDaysAgoStr = (() => {
+    const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10)
+  })()
+  const [logDateFrom, setLogDateFrom] = useState(thirtyDaysAgoStr)
+  const [logDateTo, setLogDateTo] = useState('')
+
+  const exitsQ = useStockExits({
+    exitType: 'walk_in',
+    dateFrom: logDateFrom || undefined,
+    dateTo: logDateTo || undefined,
+    limit: 100,
+  })
 
   const today = new Date().toISOString().slice(0, 10)
   const weekStart = (() => {
     const d = new Date(); d.setDate(d.getDate() - d.getDay()); return d.toISOString().slice(0, 10)
   })()
-  const todayExitsQ = useStockExits({ exitType: 'walk_in', dateFrom: today, dateTo: today, limit: 200 })
-  const weekExitsQ = useStockExits({ exitType: 'walk_in', dateFrom: weekStart, dateTo: today, limit: 200 })
+  // KPI: backend-aggregated totals (no page limit, accurate for any volume).
+  const todaySummaryQ = useWalkInSummary({ dateFrom: today, dateTo: today })
+  const weekSummaryQ  = useWalkInSummary({ dateFrom: weekStart, dateTo: today })
+
+  // Paginated exits list — kept for the today's log table and cash-box totals only.
+  const todayExitsQ = useStockExits({ exitType: 'walk_in', dateFrom: today, dateTo: today, limit: 100 })
   const createExit = useCreateStockExit()
   const createPayment = useCreatePayment()
 
@@ -58,16 +76,6 @@ export default function WarehouseSales() {
   const activeLots = lotsQ.data?.data ?? []
   const apiClients = clientsQ.data?.data ?? []
   const packedRecords = packedRecordsQ.data ?? []
-
-  // KPI computations from real exit data
-  function sumExits(exits: any[]) {
-    return exits.reduce((acc, e) => ({
-      bags: acc.bags + e.quantity,
-      kg: acc.kg + (e.bagType ? parseFloat(e.bagType.nominalKg) * e.quantity : 0),
-    }), { bags: 0, kg: 0 })
-  }
-  const todaySum = sumExits(todayExitsQ.data?.data ?? [])
-  const weekSum  = sumExits(weekExitsQ.data?.data ?? [])
   const totalBagsInStock = (packedSummaryQ.data ?? []).reduce((s, p) => s + p.totalBags, 0)
 
   // Map bagTypeId → available bags in stock
@@ -162,8 +170,8 @@ export default function WarehouseSales() {
 
   // Totals
   function lineTotalUSD(ln: PackedLine) {
-    const sub = (parseFloat(ln.qty) || 0) * (parseFloat(ln.price) || 0)
-    return ln.curr === 'LBP' ? (rawRate > 0 ? sub / rawRate : 0) : sub
+    const sub = roundDp((parseFloat(ln.qty) || 0) * (parseFloat(ln.price) || 0), 2)
+    return ln.curr === 'LBP' ? roundDp(rawRate > 0 ? sub / rawRate : 0, 2) : sub
   }
 
   let totalUSD = 0
@@ -178,12 +186,13 @@ export default function WarehouseSales() {
         parts.push(`${qty}×${bt.name} @ ${ln.curr === 'USD' ? '$' : ''}${ln.price}${ln.curr === 'LBP' ? ' LL' : ''}`)
       totalUSD += lineTotalUSD(ln)
     })
+    totalUSD = roundDp(totalUSD, 2)
     breakdown = parts.length ? parts.join(' · ') : 'Add bag, qty and price'
   } else {
     const w = parseFloat(kgWeight) || 0
     const p = parseFloat(kgPrice) || 0
-    const sub = w * p
-    totalUSD = kgCurr === 'LBP' ? (rawRate > 0 ? sub / rawRate : 0) : sub
+    const sub = roundDp(w * p, 2)
+    totalUSD = kgCurr === 'LBP' ? roundDp(rawRate > 0 ? sub / rawRate : 0, 2) : sub
     const lot = activeLots.find(l => l.id === kgLotId)
     breakdown = w > 0 && p > 0
       ? `${w} kg × ${kgCurr === 'USD' ? '$' : ''}${p}${kgCurr === 'LBP' ? ' LL' : ''}/kg · ${lot?.charcoalType || ''} Grade ${lot?.grade || ''}`
@@ -192,8 +201,8 @@ export default function WarehouseSales() {
 
   const usdNum = parseFloat(rcvUsd) || 0
   const lbpNum = parseFloat(rcvLbp) || 0
-  const lbpEq = rawRate > 0 ? lbpNum / rawRate : 0
-  const totalRecv = usdNum + lbpEq
+  const lbpEq = rawRate > 0 ? roundDp(lbpNum / rawRate, 2) : 0
+  const totalRecv = roundDp(usdNum + lbpEq, 2)
 
   let recvBarCls = 'recv-bar none'
   let recvLabel = 'Enter amount received above'
@@ -257,7 +266,7 @@ export default function WarehouseSales() {
           const take = Math.min(rec.quantity, remaining)
           try {
             const bt = bagTypes.find(b => b.id === ln.bagTypeId)
-            const lineAmt = bt ? take * (parseFloat(ln.price) || 0) * (ln.curr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1) : 0
+            const lineAmt = bt ? roundDp(take * (parseFloat(ln.price) || 0) * (ln.curr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1), 2) : 0
             await createExit.mutateAsync({
               packedStockId: rec.id,
               bagTypeId: ln.bagTypeId,
@@ -291,7 +300,7 @@ export default function WarehouseSales() {
         return
       }
       try {
-        const kgAmt = kgNum * (parseFloat(kgPrice) || 0) * (kgCurr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1)
+        const kgAmt = roundDp(kgNum * (parseFloat(kgPrice) || 0) * (kgCurr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1), 2)
         await createExit.mutateAsync({
           lotId: lot.id,
           kgQuantity: kgNum,
@@ -341,7 +350,7 @@ export default function WarehouseSales() {
 
   // Cash box — derived from today's real exit data
   const todayExits = todayExitsQ.data?.data ?? []
-  const cashBoxCollected = todayExits.reduce((s, e) => s + (e.amount ? parseFloat(e.amount) : 0), 0)
+  const cashBoxCollected = roundDp(todayExits.reduce((s, e) => s + (e.amount ? parseFloat(e.amount) : 0), 0), 2)
   const cashBoxOnAccountCount = todayExits.filter((e: any) => e.clientId && !e.amount).length
   const cashBoxTotal2 = cashBoxCollected
 
@@ -375,21 +384,21 @@ export default function WarehouseSales() {
           <div className="kpi">
             <div className="kpi-label">Bags sold today</div>
             <div className="kpi-value">
-              {todayExitsQ.isLoading ? '—' : todaySum.bags.toLocaleString()}
+              {todaySummaryQ.isLoading ? '—' : (todaySummaryQ.data?.bags ?? 0).toLocaleString()}
               <span style={{ fontSize: 13, fontWeight: 400, color: 'var(--text3)' }}> bags</span>
             </div>
             <div className="kpi-sub">
-              {todayExitsQ.isLoading ? '' : `${todaySum.kg.toFixed(1)} kg · ${todayExitsQ.data?.total ?? 0} exits`}
+              {todaySummaryQ.isLoading ? '' : `${parseFloat(todaySummaryQ.data?.kg ?? '0').toFixed(1)} kg · ${todayExitsQ.data?.total ?? 0} exits`}
             </div>
           </div>
           <div className="kpi">
             <div className="kpi-label">This week</div>
             <div className="kpi-value">
-              {weekExitsQ.isLoading ? '—' : weekSum.bags.toLocaleString()}
+              {weekSummaryQ.isLoading ? '—' : (weekSummaryQ.data?.bags ?? 0).toLocaleString()}
               <span style={{ fontSize: 13, fontWeight: 400, color: 'var(--text3)' }}> bags</span>
             </div>
             <div className="kpi-sub">
-              {weekExitsQ.isLoading ? '' : `${weekSum.kg.toFixed(1)} kg · ${weekExitsQ.data?.total ?? 0} exits`}
+              {weekSummaryQ.isLoading ? '' : `${parseFloat(weekSummaryQ.data?.kg ?? '0').toFixed(1)} kg`}
             </div>
           </div>
           <div className="kpi">
@@ -854,9 +863,31 @@ export default function WarehouseSales() {
           <div className="card">
             <div className="card-head">
               <div className="card-title"><i className="ti ti-list" /> Warehouse sales log</div>
-              <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>
-                {exitsQ.data?.total ?? 0} exits recorded
-              </span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  type="date"
+                  className="filter-select"
+                  value={logDateFrom}
+                  onChange={e => setLogDateFrom(e.target.value)}
+                  style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}
+                />
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>to</span>
+                <input
+                  type="date"
+                  className="filter-select"
+                  value={logDateTo}
+                  onChange={e => setLogDateTo(e.target.value)}
+                  style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}
+                />
+                {(logDateFrom || logDateTo) && (
+                  <button className="btn" style={{ fontSize: 12 }} onClick={() => { setLogDateFrom(''); setLogDateTo('') }}>
+                    All dates
+                  </button>
+                )}
+                <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", marginLeft: 4 }}>
+                  {exitsQ.data?.total ?? 0} exits
+                </span>
+              </div>
             </div>
             {exitsQ.isLoading && <div className="empty">Loading…</div>}
             {!exitsQ.isLoading && (exitsQ.data?.data ?? []).length === 0 && (

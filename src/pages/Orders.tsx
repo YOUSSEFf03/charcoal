@@ -1,10 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useOrders, useCreateOrder } from '../hooks/useOrders'
+import { useOrders, useCreateOrder, useMarkOrderDelivered, useDeleteOrder } from '../hooks/useOrders'
 import { useClients } from '../hooks/useClients'
 import { useCreateShipment, useConfirmDelivery, useLogReturn, useLogActualWeight, useShipments } from '../hooks/useShipments'
-import { useDriverTrips } from '../hooks/useDriverTrips'
 import type { OrderStatus, ClientOrder } from '../types/api'
 
 // Map an order status enum to a badge colour + display label.
@@ -40,15 +39,11 @@ interface Shipment { id: number; addr: string; b2: number; b5: number; b10: numb
 
 export default function Orders() {
   const navigate = useNavigate()
-  const [tab, setTab] = useState<'orders' | 'trips'>('orders')
   const [panelOpen, setPanelOpen] = useState(false)
   const [newOrderOpen, setNewOrderOpen] = useState(false)
   const [receiptOpen, setReceiptOpen] = useState(false)
   const [filterOpen, setFilterOpen] = useState(false)
-  const [expensesOpen, setExpensesOpen] = useState(false)
-  const [newTripOpen, setNewTripOpen] = useState(false)
   const [invoiceOpen, setInvoiceOpen] = useState(false)
-  const [assignOpen, setAssignOpen] = useState(false)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [addShipPanelOpen, setAddShipPanelOpen] = useState(false)
   const [payMethod, setPayMethod] = useState('Cash')
@@ -65,31 +60,31 @@ export default function Orders() {
 
   // Filter state
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [fStatus, setFStatus] = useState('All statuses')
 
-  // Live orders + client name lookup. (Search is applied client-side — the
-  // orders list endpoint filters by status only.)
-  const ordersQ = useOrders({ status: statusParam(fStatus), limit: 100 })
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // Live orders — search and status both filtered server-side.
+  const ordersQ = useOrders({ status: statusParam(fStatus), search: debouncedSearch || undefined, limit: 100 })
   const clientsQ = useClients({ limit: 100 })
   const createOrder = useCreateOrder()
   const createShipment = useCreateShipment()
   const confirmDelivery = useConfirmDelivery()
   const logReturn = useLogReturn()
   const logActualWeight = useLogActualWeight()
-  const driverTripsQ = useDriverTrips({ limit: 50 })
   const panelShipmentsQ = useShipments({ orderId: selectedOrderId ?? undefined })
+  const markDelivered = useMarkOrderDelivered()
+  const deleteOrder = useDeleteOrder()
 
   const orders = ordersQ.data?.data ?? []
   const orderTotal = ordersQ.data?.total ?? orders.length
+  const selectedOrder = orders.find(o => o.id === selectedOrderId) ?? null
   const clientList = clientsQ.data?.data ?? []
   const clientNameById = new Map(clientList.map(c => [c.id, c.name]))
-
-  // Expenses state
-  interface ExpRow { id: number; desc: string; amt: string }
-  const [expenses, setExpenses] = useState<ExpRow[]>([
-    { id: 1, desc: 'Fuel', amt: '' },
-    { id: 2, desc: 'Parking', amt: '' },
-  ])
 
   const adj = (shipIdx: number, key: string, delta: number) => {
     setBagCounts(prev => {
@@ -109,25 +104,13 @@ export default function Orders() {
     setShipments(prev => prev.filter(s => s.id !== id))
   }
 
-  function addExpenseRow() {
-    setExpenses(prev => [...prev, { id: Date.now(), desc: '', amt: '' }])
-  }
-  function removeExpenseRow(id: number) {
-    setExpenses(prev => prev.filter(e => e.id !== id))
-  }
-
   function showToast(msg: string) {
     setToast(msg)
     setTimeout(() => setToast(''), 2800)
   }
 
-  // Status is filtered server-side; free-text search (client name / order id)
-  // is applied client-side over the returned page.
-  const filteredOrders = orders.filter(o => {
-    if (!search) return true
-    const q = search.toLowerCase()
-    return o.id.toLowerCase().includes(q) || (clientNameById.get(o.clientId) ?? '').toLowerCase().includes(q)
-  })
+  // Both search and status are filtered server-side; `orders` is the final set.
+  const filteredOrders = orders
 
   // Create-order submit from the in-page modal (full builder lives in NewOrder.tsx).
   function submitNewOrder() {
@@ -172,27 +155,14 @@ export default function Orders() {
     <>
       <Topbar title="Orders & Delivery">
         <button className="btn" onClick={() => setFilterOpen(true)}><i className="ti ti-filter" style={{ fontSize: 15 }} /> Filter</button>
-        <button className="btn primary" onClick={() => setNewOrderOpen(true)}>
+        <button className="btn primary" onClick={() => navigate('/orders/new')}>
           <i className="ti ti-plus" style={{ fontSize: 15 }} /> New order
         </button>
       </Topbar>
 
-      <div className="tabs">
-        <div className={`tab ${tab === 'orders' ? 'active' : ''}`} onClick={() => setTab('orders')}>
-          <i className="ti ti-file-invoice" style={{ fontSize: 14 }} /> Orders
-          <span className="tab-count">{orderTotal}</span>
-        </div>
-        <div className={`tab ${tab === 'trips' ? 'active' : ''}`} onClick={() => setTab('trips')}>
-          <i className="ti ti-truck" style={{ fontSize: 14 }} /> Driver trips
-          <span className="tab-count blue">{driverTripsQ.data?.total ?? 0}</span>
-        </div>
-      </div>
-
       <div className="content">
 
-        {/* ORDERS TAB */}
-        {tab === 'orders' && (
-          <div className="fade-up">
+        <div className="fade-up">
             <div className="filters">
               <div className="filter-input">
                 <i className="ti ti-search" />
@@ -242,16 +212,46 @@ export default function Orders() {
                         <span className={`badge ${meta.badge}`}>{meta.label}</span>
                       </div>
                       <div className="order-meta">
-                        <span><i className="ti ti-flame" />{o.charcoalType} · {o.grade}</span>
-                        <span><i className="ti ti-weight" />{parseFloat(o.totalKgRequested).toLocaleString()} kg requested</span>
+                        <span>
+                          <i className="ti ti-flame" />
+                          {o.charcoalType} · {o.grade}
+                          {o.supplierName ? ` · ${o.supplierName}` : ''}
+                          {o.bagType?.name ? ` · ${o.bagType.name}` : ''}
+                        </span>
+                        <span><i className="ti ti-weight" />{parseFloat(o.totalKgRequested).toLocaleString()} kg</span>
+                        <span className={`badge ${o.bagTypeId ? 'badge-blue' : 'badge-amber'}`} style={{ fontSize: 10 }}>{o.bagTypeId ? 'Bag' : 'KG'}</span>
                       </div>
                     </div>
                     <div className="order-right">
                       <div className="order-total">
                         <div className="order-total-val">{fmtUsd(o.pricePerBag)}</div>
-                        <div className="order-total-lbl">{o.currency} · /bag</div>
+                        <div className="order-total-lbl">{o.currency} · {o.bagTypeId ? '/bag' : '/kg'}</div>
                       </div>
-                      <span className={`badge ${meta.badge}`}>{meta.label}</span>
+                      <div style={{ display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
+                        <button
+                          className="btn"
+                          style={{ padding: '5px 10px' }}
+                          onClick={() => navigate(`/orders/${o.id}`)}
+                          title="Edit order"
+                        >
+                          <i className="ti ti-edit" style={{ fontSize: 14 }} />
+                        </button>
+                        {o.status === 'draft' && (
+                          <button
+                            className="btn"
+                            style={{ padding: '5px 10px', color: 'var(--red)' }}
+                            disabled={deleteOrder.isPending}
+                            title="Delete order"
+                            onClick={() => {
+                              if (confirm('Delete this draft order? This cannot be undone.')) {
+                                deleteOrder.mutate(o.id, { onSuccess: () => showToast('Order deleted') })
+                              }
+                            }}
+                          >
+                            <i className="ti ti-trash" style={{ fontSize: 14 }} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -264,58 +264,7 @@ export default function Orders() {
                 <button className="btn" style={{ marginTop: 12 }} onClick={() => { setSearch(''); setFStatus('All statuses') }}>Clear filters</button>
               </div>
             )}
-          </div>
-        )}
-
-        {/* TRIPS TAB */}
-        {tab === 'trips' && (
-          <div className="fade-up">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-              <div style={{ fontSize: 13, color: 'var(--text2)' }}>Today's active trips — Thursday 21 May 2026</div>
-              <button className="btn primary" onClick={() => setNewTripOpen(true)}><i className="ti ti-plus" style={{ fontSize: 14 }} /> New trip</button>
-            </div>
-
-            {driverTripsQ.isLoading && [0, 1].map(i => (
-              <div key={i} className="trip-card">
-                <div className="trip-head">
-                  <div className="driver-badge" style={{ background: 'var(--surface2)' }}><div className="skeleton" style={{ width: 24, height: 24, borderRadius: 6 }} /></div>
-                  <div className="trip-info">
-                    <div className="skeleton" style={{ width: 120, height: 13, marginBottom: 5 }} />
-                    <div className="skeleton" style={{ width: 80, height: 11 }} />
-                  </div>
-                </div>
-              </div>
-            ))}
-            {driverTripsQ.isError && <div className="empty">Failed to load trips.<div><button className="btn" style={{ marginTop: 10 }} onClick={() => driverTripsQ.refetch()}>Retry</button></div></div>}
-            {!driverTripsQ.isLoading && !driverTripsQ.isError && (driverTripsQ.data?.data ?? []).length === 0 && (
-              <div className="empty">No trips found for this period.</div>
-            )}
-            {!driverTripsQ.isLoading && !driverTripsQ.isError && (driverTripsQ.data?.data ?? []).map(trip => {
-              const statusBadge = trip.status === 'completed' ? 'badge-green' : trip.status === 'in_progress' ? 'badge-blue' : 'badge-gray'
-              const statusLabel = trip.status === 'completed' ? 'Completed' : trip.status === 'in_progress' ? 'In progress' : 'Planned'
-              const driverLabel = trip.driverId.slice(0, 2).toUpperCase()
-              return (
-                <div key={trip.id} className="trip-card">
-                  <div className="trip-head">
-                    <div className="driver-badge" style={{ background: 'var(--blue-bg)', color: 'var(--blue)' }}>{driverLabel}</div>
-                    <div className="trip-info">
-                      <div className="trip-driver">Driver {driverLabel}</div>
-                      <div className="trip-meta">Trip {trip.id.slice(0, 8)} · {trip.startedAt ? new Date(trip.startedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'not started'}</div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span className={`badge ${statusBadge}`}>{statusLabel}</span>
-                    </div>
-                  </div>
-                  <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-                      {trip.fuelCost ? `Fuel: $${parseFloat(trip.fuelCost).toFixed(2)}` : 'No expenses logged'}
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
+        </div>
       </div>
 
       {/* ORDER DETAIL PANEL */}
@@ -393,8 +342,38 @@ export default function Orders() {
           </div>
         </div>
         <div className="panel-footer">
+          {selectedOrder && !['delivered', 'invoiced', 'paid'].includes(selectedOrder.status) && (
+            <button
+              className="panel-btn pbtn-green"
+              disabled={markDelivered.isPending}
+              onClick={() => {
+                if (selectedOrderId && confirm('Mark this order and all its shipments as delivered?')) {
+                  markDelivered.mutate(selectedOrderId, { onSuccess: () => { setPanelOpen(false); showToast('Order marked as delivered') } })
+                }
+              }}
+            >
+              <i className="ti ti-truck-delivery" style={{ fontSize: 13 }} />
+              {markDelivered.isPending ? 'Marking…' : 'Mark as delivered'}
+            </button>
+          )}
+          <button className="panel-btn pbtn-ghost" onClick={() => { setPanelOpen(false); navigate(`/orders/${selectedOrderId}`) }}>
+            <i className="ti ti-edit" style={{ fontSize: 13 }} /> Edit
+          </button>
+          {selectedOrder?.status === 'draft' && (
+            <button
+              className="panel-btn pbtn-ghost"
+              style={{ color: 'var(--red)' }}
+              disabled={deleteOrder.isPending}
+              onClick={() => {
+                if (selectedOrderId && confirm('Delete this draft order? This cannot be undone.')) {
+                  deleteOrder.mutate(selectedOrderId, { onSuccess: () => { setPanelOpen(false); showToast('Order deleted') } })
+                }
+              }}
+            >
+              <i className="ti ti-trash" style={{ fontSize: 13 }} /> Delete
+            </button>
+          )}
           <button className="panel-btn pbtn-ghost" onClick={() => { setPanelOpen(false); setInvoiceOpen(true) }}><i className="ti ti-file-invoice" style={{ fontSize: 13 }} /> Generate invoice</button>
-          <button className="panel-btn pbtn-green" onClick={() => { setPanelOpen(false); setAssignOpen(true) }}><i className="ti ti-truck" style={{ fontSize: 13 }} /> Assign to trip</button>
         </div>
       </div>
 
@@ -576,94 +555,6 @@ export default function Orders() {
         </div>
       )}
 
-      {/* LOG EXPENSES MODAL */}
-      {expensesOpen && (
-        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setExpensesOpen(false)}>
-          <div className="modal" style={{ width: 460 }}>
-            <div className="modal-head">
-              <div>
-                <div className="modal-title"><i className="ti ti-gas-station" style={{ fontSize: 14, marginRight: 6 }} />Log trip expenses</div>
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Trip #TRP-0091 · Mohammed Khalil</div>
-              </div>
-              <button className="panel-close-btn" onClick={() => setExpensesOpen(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {expenses.map((e, i) => (
-                  <div key={e.id} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                    <input className="form-input" style={{ flex: 1, margin: 0 }} placeholder="Description" value={e.desc} onChange={ev => setExpenses(prev => prev.map(r => r.id === e.id ? { ...r, desc: ev.target.value } : r))} />
-                    <input className="form-input" style={{ width: 100, margin: 0 }} type="number" placeholder="$0.00" value={e.amt} onChange={ev => setExpenses(prev => prev.map(r => r.id === e.id ? { ...r, amt: ev.target.value } : r))} />
-                    {expenses.length > 1 && (
-                      <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', fontSize: 16, padding: 0 }} onClick={() => removeExpenseRow(e.id)}>
-                        <i className="ti ti-x" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <button className="btn" style={{ marginTop: 12, fontSize: 12 }} onClick={addExpenseRow}><i className="ti ti-plus" style={{ fontSize: 12 }} /> Add row</button>
-              <div style={{ marginTop: 14, padding: '10px 12px', background: 'var(--surface2)', borderRadius: 'var(--radius)', display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                <span style={{ color: 'var(--text2)' }}>Total expenses</span>
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${expenses.reduce((s, e) => s + (parseFloat(e.amt) || 0), 0).toFixed(2)}</span>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn" onClick={() => setExpensesOpen(false)}>Cancel</button>
-              <button className="btn primary" onClick={() => { setExpensesOpen(false); showToast('Expenses logged for TRP-0091') }}><i className="ti ti-check" style={{ fontSize: 14 }} /> Save expenses</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* NEW TRIP MODAL */}
-      {newTripOpen && (
-        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setNewTripOpen(false)}>
-          <div className="modal" style={{ width: 500, maxHeight: '85vh', overflowY: 'auto' }}>
-            <div className="modal-head" style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>
-              <div className="modal-title"><i className="ti ti-truck" style={{ fontSize: 14, marginRight: 6 }} />New trip</div>
-              <button className="panel-close-btn" onClick={() => setNewTripOpen(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">Driver</label>
-                <select className="form-input">
-                  <option>Select driver…</option>
-                  <option>Mohammed Khalil (MK)</option>
-                  <option>Ahmad Hassan (AH)</option>
-                  <option>Joseph Nasr (JN)</option>
-                </select>
-              </div>
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Planned departure</label>
-                  <input className="form-input" type="time" defaultValue="13:00" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Date</label>
-                  <input className="form-input" type="date" defaultValue="2026-05-21" />
-                </div>
-              </div>
-              <div className="divider" />
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Stops / orders to include</div>
-              {['ORD-0283 — Byblos BBQ Supply (2 stops)', 'ORD-0282 — Cedar Grill House (1 stop)'].map((o, i) => (
-                <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border)', cursor: 'pointer', fontSize: 13 }}>
-                  <input type="checkbox" defaultChecked={i === 0} />
-                  {o}
-                </label>
-              ))}
-              <div className="form-group" style={{ marginTop: 14, marginBottom: 0 }}>
-                <label className="form-label">Notes (optional)</label>
-                <input className="form-input" type="text" placeholder="Any instructions for the driver…" />
-              </div>
-            </div>
-            <div className="modal-footer" style={{ position: 'sticky', bottom: 0, background: 'var(--surface)' }}>
-              <button className="btn" onClick={() => setNewTripOpen(false)}>Cancel</button>
-              <button className="btn primary" onClick={() => { setNewTripOpen(false); showToast('Trip #TRP-0093 created') }}><i className="ti ti-check" style={{ fontSize: 14 }} /> Create trip</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* GENERATE INVOICE MODAL */}
       {invoiceOpen && (
         <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setInvoiceOpen(false)}>
@@ -716,44 +607,6 @@ export default function Orders() {
             <div className="modal-footer">
               <button className="btn" onClick={() => setInvoiceOpen(false)}>Cancel</button>
               <button className="btn primary" onClick={() => { setInvoiceOpen(false); showToast('Invoice INV-0342 generated') }}><i className="ti ti-check" style={{ fontSize: 14 }} /> Generate invoice</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ASSIGN TO TRIP MODAL */}
-      {assignOpen && (
-        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setAssignOpen(false)}>
-          <div className="modal" style={{ width: 440 }}>
-            <div className="modal-head">
-              <div>
-                <div className="modal-title"><i className="ti ti-truck" style={{ fontSize: 14, marginRight: 6 }} />Assign to trip</div>
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>ORD-0284 · Al Rawda Restaurant · 3 shipments</div>
-              </div>
-              <button className="panel-close-btn" onClick={() => setAssignOpen(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 12 }}>Select an existing trip or create a new one.</div>
-              {[
-                { id: 'TRP-0091', driver: 'Mohammed Khalil (MK)', status: 'badge-blue', st: 'In progress', stops: '3 stops · Hamra area', active: true },
-                { id: 'TRP-0092', driver: 'Ahmad Hassan (AH)', status: 'badge-gray', st: 'Planned', stops: '2 stops · North Lebanon', active: false },
-              ].map((t, i) => (
-                <label key={i} style={{ display: 'flex', gap: 12, padding: '10px 12px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', marginBottom: 8, cursor: 'pointer', alignItems: 'center' }}>
-                  <input type="radio" name="trip" defaultChecked={i === 0} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 500, fontSize: 13 }}>{t.id} — {t.driver}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{t.stops}</div>
-                  </div>
-                  <span className={`badge ${t.status}`}>{t.st}</span>
-                </label>
-              ))}
-              <button className="btn" style={{ width: '100%', justifyContent: 'center', marginTop: 4 }} onClick={() => { setAssignOpen(false); setNewTripOpen(true) }}>
-                <i className="ti ti-plus" style={{ fontSize: 13 }} /> Create new trip
-              </button>
-            </div>
-            <div className="modal-footer">
-              <button className="btn" onClick={() => setAssignOpen(false)}>Cancel</button>
-              <button className="btn primary" onClick={() => { setAssignOpen(false); showToast('ORD-0284 assigned to TRP-0091') }}><i className="ti ti-check" style={{ fontSize: 14 }} /> Assign</button>
             </div>
           </div>
         </div>

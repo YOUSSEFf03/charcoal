@@ -54,6 +54,7 @@ export class InvoicesService {
     status?: string,
     dateFrom?: string,
     dateTo?: string,
+    search?: string,
   ) {
     const skip = (page - 1) * limit;
 
@@ -62,6 +63,7 @@ export class InvoicesService {
 
     const where: Prisma.InvoiceWhereInput = {
       ...(clientId ? { clientId } : {}),
+      ...(search ? { client: { name: { contains: search, mode: 'insensitive' } } } : {}),
       ...(isOverdue
         ? {
             status: { in: ['issued', 'partially_paid'] as InvoiceStatus[] },

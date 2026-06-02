@@ -14,6 +14,7 @@ export interface OrdersQuery {
   status?: string
   page?: number
   limit?: number
+  search?: string
 }
 
 const ordersKey = (params?: OrdersQuery) => ['orders', params ?? {}] as const
@@ -84,6 +85,25 @@ export function useUpdateOrder() {
       return res.data
     },
     onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ['orders'] })
+      qc.invalidateQueries({ queryKey: ['orders', id] })
+    },
+  })
+}
+
+/**
+ * Force-mark an order as delivered (owner override when driver forgets).
+ * @returns mutation accepting the order id (string)
+ * PATCH /orders/:id/mark-delivered
+ */
+export function useMarkOrderDelivered() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await api.patch<ClientOrder>(`/orders/${id}/mark-delivered`, {})
+      return res.data
+    },
+    onSuccess: (_data, id) => {
       qc.invalidateQueries({ queryKey: ['orders'] })
       qc.invalidateQueries({ queryKey: ['orders', id] })
     },

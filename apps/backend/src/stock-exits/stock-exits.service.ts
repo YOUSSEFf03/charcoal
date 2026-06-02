@@ -95,6 +95,56 @@ export class StockExitsService {
   }
 
   /**
+   * Aggregate walk-in sales totals for a date range without a page limit.
+   *
+   * Returns:
+   *   bags — SUM(quantity) across all walk_in packed-bag exits in the range
+   *   kg   — SUM(quantity × nominalKg) per bag type, accumulated with Decimal
+   *
+   * Uses groupBy+aggregate inside a transaction so both reads are consistent.
+   * This is the source of truth for the KPI tiles; the paginated list endpoint
+   * must never be used to compute totals (page cap → undercount).
+   */
+  async getWalkInSummary(dateFrom: string, dateTo: string): Promise<{ bags: number; kg: string }> {
+    const from = new Date(dateFrom);
+    const to = new Date(dateTo);
+
+    // Inline where objects — spreading StockExitWhereInput into groupBy's where
+    // triggers a Prisma/TS circular-reference error, so both are written explicitly.
+    const dateFilter = { gte: from, lte: to };
+
+    const [bagSum, byBagType] = await Promise.all([
+      this.prisma.stockExit.aggregate({
+        where: { exitType: 'walk_in', date: dateFilter, quantity: { not: null } },
+        _sum: { quantity: true },
+      }),
+      this.prisma.stockExit.groupBy({
+        by: ['bagTypeId'],
+        where: { exitType: 'walk_in', date: dateFilter, quantity: { not: null }, bagTypeId: { not: null } },
+        _sum: { quantity: true },
+      }),
+    ]);
+
+    // Resolve nominalKg for each bag type that appears in the grouped results.
+    const bagTypeIds = byBagType.map((g) => g.bagTypeId).filter(Boolean) as string[];
+    const bagTypes = bagTypeIds.length
+      ? await this.prisma.bagType.findMany({
+          where: { id: { in: bagTypeIds } },
+          select: { id: true, nominalKg: true },
+        })
+      : [];
+    const nominalKgById = new Map(bagTypes.map((bt) => [bt.id, bt.nominalKg]));
+
+    const totalKg = byBagType.reduce((sum, g) => {
+      const qty = g._sum.quantity ?? 0;
+      const nomKg = g.bagTypeId ? (nominalKgById.get(g.bagTypeId) ?? new Decimal(0)) : new Decimal(0);
+      return sum.plus(new Decimal(nomKg.toString()).mul(qty));
+    }, new Decimal(0));
+
+    return { bags: bagSum._sum.quantity ?? 0, kg: totalKg.toFixed(3) };
+  }
+
+  /**
    * Update mutable fields on an existing exit (amount, recipient).
    * Identity and audit fields (loggedById, exitType, date) are immutable after creation.
    */

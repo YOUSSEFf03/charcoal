@@ -63,7 +63,7 @@ export type InvoiceStatus =
   | 'paid'
   | 'cancelled';
 
-export type PaymentMethod = 'cash' | 'whish' | 'omt';
+export type PaymentMethod = 'cash' | 'whish' | 'omt' | 'bank_transfer' | 'cheque';
 
 export type AdjustmentType = 'lot' | 'packed_stock';
 
@@ -220,6 +220,10 @@ export interface Supplier {
   notes: string | null; // AR
   createdAt: string;
   updatedAt: string;
+  // enriched by findAll
+  totalSpentUsd: string;
+  totalPaidUsd: string;
+  outstandingUsd: string;
 }
 
 export interface CreateSupplierDto {
@@ -238,8 +242,38 @@ export type UpdateSupplierDto = Partial<CreateSupplierDto>;
 /** GET /suppliers/:id — includes purchase history rollup. */
 export interface SupplierDetail extends Supplier {
   containerCount: number;
-  totalSpentUsd: string; // Decimal
   activeLotCount: number;
+  totalKgReceived: string;
+  totalKgRemaining: string;
+  totalSpentUsd: string;
+  totalPaidUsd: string;
+  outstandingUsd: string;
+  avgPricePerKg: string | null;
+  purchasedTypes: { type: string; grade: string; totalKg: number; kgRemaining: number }[];
+}
+
+export interface SupplierPayment {
+  id: string;
+  supplierId: string;
+  containerId: string | null;
+  container: { id: string; number: string } | null;
+  amount: string;
+  currency: Currency;
+  method: PaymentMethod;
+  date: string;
+  notes: string | null;
+  loggedById: string;
+  loggedBy: { id: string; name: string };
+  createdAt: string;
+}
+
+export interface CreateSupplierPaymentDto {
+  amount: string;
+  currency: Currency;
+  method: PaymentMethod;
+  date: string;
+  containerId?: string;
+  notes?: string;
 }
 
 // ----------------------------------------------------------------------------
@@ -632,17 +666,22 @@ export interface ClientOrder {
   grade: string;
   totalKgRequested: string; // Decimal
   bagTypeId: string | null;
+  bagType: { id: string; name: string; nominalKg: string } | null;
   pricePerBag: string; // Decimal
   currency: Currency;
   status: OrderStatus;
   createdById: string;
   createdAt: string;
   updatedAt: string;
-  notes: string | null; // AR
+  notes: string | null;
+  supplierName: string | null;
+  driverId: string | null;
 }
 
 export interface ClientOrderDetail extends ClientOrder {
   client: Pick<Client, 'id' | 'name' | 'type' | 'currency'>;
+  bagType: { id: string; name: string; nominalKg: string } | null;
+  driver: { id: string; name: string } | null;
   bagLines: OrderBagLine[];
   shipments: Shipment[];
   invoices: Invoice[];
@@ -663,6 +702,8 @@ export interface CreateOrderDto {
   currency?: Currency;
   bagLines?: CreateOrderBagLineDto[];
   notes?: string | null;
+  driverId?: string;
+  supplierName?: string;
 }
 
 export interface UpdateOrderDto {

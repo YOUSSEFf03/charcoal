@@ -6,6 +6,7 @@ import { useBagTypes } from '../hooks/useBagTypes'
 import { useClients } from '../hooks/useClients'
 import { useInvoices } from '../hooks/useInvoices'
 import { useRate } from '../context/RateContext'
+import { roundDp } from '../lib/money'
 
 function usd(value?: string | null) {
   const n = value != null ? parseFloat(value) : NaN
@@ -182,7 +183,7 @@ export default function Reports() {
               <div style={{ padding: '24px 28px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '1fr 1px 1fr 1px 1fr 1px 1fr', gap: 0 }}>
                 {(() => {
                   const revenue = pnl ? parseFloat(pnl.revenue) : 0
-                  const totalCosts = pnl ? parseFloat(pnl.cogs) + parseFloat(pnl.bagCost) + parseFloat(pnl.varianceCost) + parseFloat(pnl.deliveryCost) : 0
+                  const totalCosts = pnl ? roundDp(parseFloat(pnl.cogs) + parseFloat(pnl.bagCost) + parseFloat(pnl.varianceCost) + parseFloat(pnl.deliveryCost), 2) : 0
                   const gross = pnl ? parseFloat(pnl.grossProfit) : 0
                   const margin = revenue > 0 ? ((gross / revenue) * 100).toFixed(1) : '0.0'
                   return [
@@ -223,7 +224,7 @@ export default function Reports() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
               {[
                 { title: 'Revenue breakdown', icon: 'ti-trending-up', iconColor: 'var(--accent)', rows: [['Total revenue', usd(pnl?.revenue), 'green']], total: ['Total revenue', usd(pnl?.revenue)] },
-                { title: 'Cost breakdown', icon: 'ti-trending-down', iconColor: 'var(--red)', ownerTag: true, rows: [['COGS (charcoal cost)', usd(pnl?.cogs), 'red'], ['Bag costs', usd(pnl?.bagCost), 'red'], ['Packing variances', usd(pnl?.varianceCost), 'amber'], ['Delivery expenses', usd(pnl?.deliveryCost), 'red']], total: ['Total costs', pnl ? `$${(parseFloat(pnl.cogs) + parseFloat(pnl.bagCost) + parseFloat(pnl.varianceCost) + parseFloat(pnl.deliveryCost)).toLocaleString('en-US', { maximumFractionDigits: 0 })}` : '—', 'var(--red)'] },
+                { title: 'Cost breakdown', icon: 'ti-trending-down', iconColor: 'var(--red)', ownerTag: true, rows: [['COGS (charcoal cost)', usd(pnl?.cogs), 'red'], ['Bag costs', usd(pnl?.bagCost), 'red'], ['Packing variances', usd(pnl?.varianceCost), 'amber'], ['Delivery expenses', usd(pnl?.deliveryCost), 'red']], total: ['Total costs', pnl ? `$${roundDp(parseFloat(pnl.cogs) + parseFloat(pnl.bagCost) + parseFloat(pnl.varianceCost) + parseFloat(pnl.deliveryCost), 2).toLocaleString('en-US', { maximumFractionDigits: 0 })}` : '—', 'var(--red)'] },
               ].map(block => (
                 <div key={block.title} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
                   <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -325,9 +326,9 @@ export default function Reports() {
 
             {/* Summary across all workers */}
             {!workersQ.isLoading && allWorkers.length > 0 && (() => {
-              const totalEarned = allWorkers.reduce((s, w) => s + parseFloat(w.totalEarned), 0)
-              const totalPaid   = allWorkers.reduce((s, w) => s + parseFloat(w.totalPaid), 0)
-              const totalOwed   = allWorkers.reduce((s, w) => s + parseFloat(w.totalOwed), 0)
+              const totalEarned = roundDp(allWorkers.reduce((s, w) => s + parseFloat(w.totalEarned), 0), 2)
+              const totalPaid   = roundDp(allWorkers.reduce((s, w) => s + parseFloat(w.totalPaid), 0), 2)
+              const totalOwed   = roundDp(allWorkers.reduce((s, w) => s + parseFloat(w.totalOwed), 0), 2)
               return (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 14 }}>
                   <SvCard label="Total earned (all workers)" value={usd(String(totalEarned))} sub={`${allWorkers.length} worker${allWorkers.length !== 1 ? 's' : ''}`} />
