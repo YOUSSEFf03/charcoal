@@ -264,13 +264,13 @@ Roles are stored in Clerk's `publicMetadata` and extracted from the JWT on each 
 1. `lot.kg_remaining >= 0` at all times
 2. `packed_stock.qty >= 0` at all times
 3. Packing sessions cannot consume more than available in lot
-4. Shipments cannot dispatch more bags than exist in packed stock
+4. No path consumes more than FREE packed stock (qty − reserved_quantity); reserved bags are protected
 5. Every stock exit must have: exit_type, bag_type, qty, logged_by, date
-6. Every adjustment must have: reason, before, after, approved_by (owner only)
+6. Every adjustment must have: reason, server-resolved before, after, status; approved_by ≠ counted_by, set on approval
 7. Negative variance requires explanation before session closes
 8. Lots from different suppliers are never merged
 9. Container expenses added post-arrival recalculate cost_per_kg on all linked lots
-10. Physical count adjustments require owner approval (no auto-correction)
+10. Physical count adjustments require owner approval (no auto-correction); a non-owner counter submits a pending adjustment that applies no stock change until an owner approves it
 11. Phone numbers never deleted, only marked inactive
 12. Client balance always computed from invoices − payments
 

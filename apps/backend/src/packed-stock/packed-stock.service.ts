@@ -86,7 +86,7 @@ export class PackedStockService {
 
     const bagTypeTotals = new Map<
       string,
-      { bagTypeName: string; nominalKg: Decimal; totalBags: number; totalNominalKg: Decimal }
+      { bagTypeName: string; nominalKg: Decimal; totalBags: number; reservedBags: number; totalNominalKg: Decimal }
     >();
 
     for (const ps of packedStocks) {
@@ -96,21 +96,27 @@ export class PackedStockService {
       const existing = bagTypeTotals.get(ps.bagTypeId);
       if (existing) {
         existing.totalBags += ps.quantity;
+        existing.reservedBags += ps.reservedQuantity;
         existing.totalNominalKg = existing.totalNominalKg.plus(lineNominalKg);
       } else {
         bagTypeTotals.set(ps.bagTypeId, {
           bagTypeName: ps.bagType.name,
           nominalKg,
           totalBags: ps.quantity,
+          reservedBags: ps.reservedQuantity,
           totalNominalKg: lineNominalKg,
         });
       }
     }
 
+    // BUG-E (P2): expose reserved + available so the frontend availability check draws
+    // against FREE bags (quantity − reservedQuantity), not raw quantity.
     return Array.from(bagTypeTotals.entries()).map(([bagTypeId, entry]) => ({
       bagTypeId,
       bagTypeName: entry.bagTypeName,
       totalBags: entry.totalBags,
+      reservedBags: entry.reservedBags,
+      availableBags: Math.max(0, entry.totalBags - entry.reservedBags),
       totalNominalKg: entry.totalNominalKg.toFixed(3),
     }));
   }

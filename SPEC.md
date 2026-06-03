@@ -254,12 +254,21 @@ The business buys empty bags to pack charcoal into. This is a real cost.
 - Bag cost is factored into profitability calculations (not into `cost_per_kg` of the lot, but as a separate line in P&L)
 
 ### Physical stock count
-- Triggered by owner only — no fixed schedule
 - Done lot by lot (raw zone) and bag type by bag type (packed zone)
-- For each item: owner enters the physically counted quantity
-- System calculates: `difference = system_quantity − counted_quantity`
-- If difference ≠ 0: owner must enter a reason, then approve the adjustment
-- A `stock_adjustment` record is created with: date, user, before, after, difference, reason
+- For each item: the counter enters the physically counted quantity
+- System calculates `difference = qty_after − qty_before`, where **`qty_before` is always the
+  live system value resolved server-side at apply time** (never trusted from the client)
+- **Two-step approval (BUG-H):**
+  - An **owner** submitting a count self-approves: the adjustment is created `approved` and the
+    stock delta is applied immediately (the owner-driven `POST /reports/physical-count` path).
+  - A **non-owner counter** (accountant/worker) submits a **pending** `stock_adjustment` via
+    `POST /stock-adjustments` — **no stock change yet**. An owner then **approves** (delta
+    applied, distinct `approved_by` recorded) or **rejects** (discarded). `counted_by` and
+    `approved_by` are always distinct identities for an approved pending count.
+- The stock delta is applied via an atomic increment/decrement against the live value, never an
+  absolute set; a count may not drive packed quantity below `reserved_quantity`.
+- A `stock_adjustment` record is created with: date, counted_by, before, after, difference,
+  reason, status
 - **The system never auto-corrects silently**
 
 ### System stock formula
@@ -595,14 +604,18 @@ Maintain supplier profiles for procurement reference.
 
 ### Report: Profit & Loss
 ```
-Revenue = Σ all paid invoices (in USD equivalent)
-COGS = Σ (kg sold × cost_per_kg per lot) for all exits
+Revenue = Σ paidAmount for all partially_paid and paid invoices, converted to USD at the stored
+          exchange rate (cash basis). 'issued' invoices contribute 0 — only collected cash counts.
+COGS = Σ (kg sold × cost_per_kg per lot) at exit time (exit-accrual basis)
 Bag cost = Σ (bags sold × cost_per_bag per bag type)
 Variances = Σ (session.variance_kg × lot.cost_per_kg) for all sessions
 Delivery expenses = Σ driver trip expenses
 Container expenses = Σ all container expenses (already in cost_per_kg but shown separately)
 
 Gross profit = Revenue − COGS − Bag cost − Variances − Delivery expenses
+
+Note: Revenue (cash basis) and COGS (exit-accrual basis) use different timing by design.
+Gross profit timing skews when payment lags stock exit — this asymmetry is intentional.
 ```
 Filterable by: date range, charcoal type, client, client type
 
@@ -858,12 +871,13 @@ id                uuid PK
 adjustment_type   enum          — lot | packed_stock
 lot_id            uuid nullable FK → Stock lot
 packed_stock_id   uuid nullable FK → Packed stock
-qty_before        decimal
+qty_before        decimal       — resolved server-side from the live value at apply time
 qty_after         decimal
-difference        decimal       — qty_after − qty_before
+difference        decimal       — qty_after − qty_before; stock moves by this delta atomically
 reason            text          — required, Arabic supported
+status            enum          — pending | approved | rejected (default approved)
 counted_by        uuid FK → User
-approved_by       uuid FK → Owner
+approved_by       uuid nullable FK → Owner  — null while pending; set distinct from counted_by on approval
 date              date
 ```
 
@@ -1043,12 +1057,17 @@ variance_kg = kg_consumed − Σ (bags_output[type].quantity × bag_type[type].n
 
 ### P&L gross profit
 ```
-revenue = Σ invoice.total (convert all to USD using exchange rate at time of invoice)
-cogs = Σ (stock_exit.quantity × bag_type.nominal_kg × source_lot.cost_per_kg)
+revenue = Σ invoice.paidAmount for 'partially_paid' and 'paid' invoices, converted to USD at the
+          stored exchange rate (cash basis — only collected amounts, not billed amounts)
+cogs = Σ (stock_exit.quantity × bag_type.nominal_kg × source_lot.cost_per_kg) at exit time
+       (exit-accrual basis)
 bag_cost = Σ (stock_exit.quantity × bag_type.cost_per_bag) for order exits only
 variance_cost = Σ (session.variance_kg × session.lot.cost_per_kg)
 delivery_cost = Σ driver_trip.fuel_cost + Σ driver_trip.other_expenses
 gross_profit = revenue − cogs − bag_cost − variance_cost − delivery_cost
+
+Revenue and COGS use different timing by design. Gross profit timing skews when payment lags
+stock exit — this asymmetry is intentional per spec.
 ```
 
 ---
@@ -1112,16 +1131,23 @@ These are hard rules. The system must enforce them at the data layer, not just t
 CONSTRAINT 1:  lot.kg_remaining >= 0 at all times
 CONSTRAINT 2:  packed_stock.qty >= 0 at all times
 CONSTRAINT 3:  session.kg_consumed <= lot.kg_remaining (before session starts)
-CONSTRAINT 4:  shipment bag qty <= available packed_stock.qty per bag type
+CONSTRAINT 4:  Any packed-stock consumer (shipment, sale, exit, adjustment) draws against FREE
+               quantity = packed_stock.qty − packed_stock.reserved_quantity, per bag type. Σ
+               reserved_quantity ≤ Σ qty at all times — reserved bags are never consumable by a
+               non-shipment path (enforced on the backend AND in the frontend availability check)
 CONSTRAINT 5:  Every stock exit has: exit_type, bag_type_id, quantity, logged_by, date
-CONSTRAINT 6:  Every stock adjustment has: reason, before, after, approved_by (owner only)
+CONSTRAINT 6:  Every stock adjustment has: reason, before (server-resolved from the live value),
+               after, status; approved_by is set only on approval and must differ from counted_by.
+               Stock changes only via atomic deltas, never an absolute set-from-snapshot
 CONSTRAINT 7:  session.variance_kg < 0 is an error — requires explanation before session closes
 CONSTRAINT 8:  Costs are never blended across lots — same type from different suppliers = separate lots
 CONSTRAINT 9:  Container expenses can be added after arrival — cost_per_kg on lot must recalculate
 CONSTRAINT 10: Price is set at time of sale — no pre-set price list enforced by system
 CONSTRAINT 11: Total profit is visible to owner role only
 CONSTRAINT 12: cost_per_kg is visible to owner and accountant only — never shown to sales rep or worker
-CONSTRAINT 13: Physical count adjustments require owner approval — no silent auto-correction
+CONSTRAINT 13: Physical count adjustments require owner approval — no silent auto-correction. A
+               non-owner counter submits a PENDING adjustment that applies NO stock change until
+               an owner approves it; counter and approver must be distinct identities
 CONSTRAINT 14: Phone numbers on clients are never deleted — only marked inactive
 CONSTRAINT 15: Client balance is always computed from invoice and payment records — never manually set
 ```

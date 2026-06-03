@@ -391,6 +391,7 @@ describe('ShipmentsService', () => {
         .mockResolvedValueOnce({
           id: shipmentId,
           orderId,
+          status: 'delivered',
           bags: [
             { bagTypeId: bagTypeId1, quantity: 3 },
             { bagTypeId: bagTypeId2, quantity: 7 },
@@ -426,6 +427,150 @@ describe('ShipmentsService', () => {
         where: { id: stockId2 },
         data: { quantity: { increment: 7 } },
       });
+    });
+
+    // =========================================================================
+    // Helper: build a minimal tx for logReturn status-guard tests
+    // =========================================================================
+
+    function makeReturnTx(shipmentStatus: string, includeDeliveredBags = false) {
+      const shipmentBags = includeDeliveredBags
+        ? [{ bagTypeId: 'bag-d5-1', quantity: 4 }]
+        : [];
+
+      const mockTx = {
+        shipment: {
+          findUnique: fn().mockResolvedValue({
+            id: 'ship-return-guard',
+            orderId: 'order-guard',
+            status: shipmentStatus,
+            bags: shipmentBags,
+          }),
+          update: fn().mockResolvedValue({ id: 'ship-return-guard', status: 'returned' }),
+          findMany: fn().mockResolvedValue([{ status: 'returned' }]),
+        },
+        packedStock: {
+          findFirst: fn().mockResolvedValue({ id: 'ps-guard-1', bagTypeId: 'bag-d5-1', quantity: 10 }),
+          update: fn().mockResolvedValue({}),
+        },
+        clientOrder: { update: fn().mockResolvedValue({}) },
+      };
+      return mockTx;
+    }
+
+    // =========================================================================
+    // TEST D1: logReturn rejects a 'pending' shipment with INVALID_TRANSITION
+    // =========================================================================
+
+    it('D1: logReturn rejects a pending shipment with INVALID_TRANSITION', async () => {
+      const tx = makeReturnTx('pending');
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(
+        service.logReturn('ship-return-guard', {} as any, 'clerk-1'),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'INVALID_TRANSITION' }),
+      });
+
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.shipment.update).not.toHaveBeenCalled();
+    });
+
+    // =========================================================================
+    // TEST D2: logReturn rejects a 'loaded' shipment with INVALID_TRANSITION
+    // =========================================================================
+
+    it('D2: logReturn rejects a loaded shipment with INVALID_TRANSITION', async () => {
+      const tx = makeReturnTx('loaded');
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(
+        service.logReturn('ship-return-guard', {} as any, 'clerk-1'),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'INVALID_TRANSITION' }),
+      });
+
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.shipment.update).not.toHaveBeenCalled();
+    });
+
+    // =========================================================================
+    // TEST D3: logReturn rejects an already-'returned' shipment (double-return guard)
+    // =========================================================================
+
+    it('D3: logReturn rejects an already-returned shipment with INVALID_TRANSITION', async () => {
+      const tx = makeReturnTx('returned');
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(
+        service.logReturn('ship-return-guard', {} as any, 'clerk-1'),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'INVALID_TRANSITION' }),
+      });
+
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.shipment.update).not.toHaveBeenCalled();
+    });
+
+    // =========================================================================
+    // TEST D4: logReturn rejects a 'cancelled' shipment with INVALID_TRANSITION
+    // =========================================================================
+
+    it('D4: logReturn rejects a cancelled shipment with INVALID_TRANSITION', async () => {
+      const tx = makeReturnTx('cancelled');
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(
+        service.logReturn('ship-return-guard', {} as any, 'clerk-1'),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'INVALID_TRANSITION' }),
+      });
+
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.shipment.update).not.toHaveBeenCalled();
+    });
+
+    // =========================================================================
+    // TEST D5: logReturn succeeds for a 'delivered' shipment
+    // =========================================================================
+
+    it('D5: logReturn succeeds for a delivered shipment and restores stock + sets status to returned', async () => {
+      const tx = makeReturnTx('delivered', /* includeDeliveredBags */ true);
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(
+        service.logReturn('ship-return-guard', {} as any, 'clerk-1'),
+      ).resolves.not.toThrow();
+
+      // Stock must have been restored
+      expect(tx.packedStock.update).toHaveBeenCalledTimes(1);
+      expect(tx.packedStock.update.mock.calls[0][0]).toMatchObject({
+        where: { id: 'ps-guard-1' },
+        data: { quantity: { increment: 4 } },
+      });
+
+      // Shipment status must be set to 'returned'
+      expect(tx.shipment.update).toHaveBeenCalledTimes(1);
+      expect(tx.shipment.update.mock.calls[0][0]).toMatchObject({
+        where: { id: 'ship-return-guard' },
+        data: expect.objectContaining({ status: 'returned' }),
+      });
+    });
+
+    // =========================================================================
+    // TEST D6: logReturn rejects before any stock mutation — reservation cannot leak
+    // =========================================================================
+
+    it('D6: logReturn with pending status causes zero stock mutations (no reservation leak)', async () => {
+      const tx = makeReturnTx('pending');
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(
+        service.logReturn('ship-return-guard', {} as any, 'clerk-1'),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(tx.packedStock.update).toHaveBeenCalledTimes(0);
+      expect(tx.shipment.update).toHaveBeenCalledTimes(0);
     });
   });
 });

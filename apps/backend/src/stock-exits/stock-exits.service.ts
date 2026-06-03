@@ -191,6 +191,9 @@ export class StockExitsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      // Warning: walk_in exits with amount != null count in P&L walk-in revenue.
+      // Only create these for anonymous (no-invoice) sales. Invoice-linked walk-ins
+      // use WalkInSalesService with amount=null.
       const commonData = {
         exitType: dto.exitType,
         date: new Date(dto.date),
@@ -242,9 +245,12 @@ export class StockExitsService {
         }
         const packedStock = await tx.packedStock.findUnique({ where: { id: dto.packedStockId } });
         if (!packedStock) throw new NotFoundException({ error: 'Packed stock not found', code: 'NOT_FOUND' });
-        if (packedStock.quantity - dto.quantity < 0) {
+        // BUG-E (P2): consumers must draw against FREE quantity (quantity − reservedQuantity),
+        // never raw quantity — bags reserved for a pending shipment are not available to a sale/exit.
+        const freeQuantity = packedStock.quantity - packedStock.reservedQuantity;
+        if (freeQuantity - dto.quantity < 0) {
           throw new BadRequestException({
-            error: `Insufficient packed stock — available: ${packedStock.quantity}, requested: ${dto.quantity}`,
+            error: `Insufficient packed stock — available: ${freeQuantity}, requested: ${dto.quantity}`,
             code: 'CONSTRAINT_VIOLATION',
           });
         }

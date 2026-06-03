@@ -78,9 +78,10 @@ export default function WarehouseSales() {
   const packedRecords = packedRecordsQ.data ?? []
   const totalBagsInStock = (packedSummaryQ.data ?? []).reduce((s, p) => s + p.totalBags, 0)
 
-  // Map bagTypeId → available bags in stock
+  // Map bagTypeId → AVAILABLE bags in stock (free = totalBags − reservedBags).
+  // BUG-E (P2): bags reserved for pending shipments must not show as available for sale.
   const bagStockMap = new Map<string, number>(
-    (packedSummaryQ.data ?? []).map(p => [p.bagTypeId, p.totalBags])
+    (packedSummaryQ.data ?? []).map(p => [p.bagTypeId, p.availableBags])
   )
 
   // Receivers: real workers + custom receivers from Settings
@@ -263,10 +264,11 @@ export default function WarehouseSales() {
       }
 
       // Each line is drawn from the oldest packed-stock record for its bag type.
+      // BUG-E (P2): only FREE bags (quantity − reservedQuantity) are sellable.
       const bagsPayload: { packedStockId: string; bagTypeId: string; bagTypeName: string; quantity: number; pricePerBag: string; currency: 'USD' | 'LBP' }[] = []
       for (const ln of activeLines) {
         const rec = packedRecords
-          .filter(r => r.bagTypeId === ln.bagTypeId && r.quantity > 0)
+          .filter(r => r.bagTypeId === ln.bagTypeId && (r.quantity - (r.reservedQuantity ?? 0)) > 0)
           .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())[0]
         if (!rec) { showToast('No packed stock record found for a selected bag type'); return }
         const bt = bagTypes.find(b => b.id === ln.bagTypeId)
@@ -326,14 +328,15 @@ export default function WarehouseSales() {
       for (const ln of activeLines) {
         const qty = parseInt(ln.qty)
         // Find packed stock records for this bag type sorted by oldest first
+        // BUG-E (P2): draw FIFO from FREE bags only (quantity − reservedQuantity).
         const records = packedRecords
-          .filter(r => r.bagTypeId === ln.bagTypeId && r.quantity > 0)
+          .filter(r => r.bagTypeId === ln.bagTypeId && (r.quantity - (r.reservedQuantity ?? 0)) > 0)
           .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
 
         let remaining = qty
         for (const rec of records) {
           if (remaining <= 0) break
-          const take = Math.min(rec.quantity, remaining)
+          const take = Math.min(rec.quantity - (rec.reservedQuantity ?? 0), remaining)
           try {
             const bt = bagTypes.find(b => b.id === ln.bagTypeId)
             const lineAmt = bt ? roundDp(take * (parseFloat(ln.price) || 0) * (ln.curr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1), 2) : 0

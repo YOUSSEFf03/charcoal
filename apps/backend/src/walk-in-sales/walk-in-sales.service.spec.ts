@@ -58,7 +58,7 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
       _invoice: null as any,
       _payment: null as any,
       packedStock: {
-        findUnique: fn().mockResolvedValue({ id: packedStockId, quantity: 100 }),
+        findUnique: fn().mockResolvedValue({ id: packedStockId, quantity: 100, reservedQuantity: 0 }),
         update: fn().mockResolvedValue({}),
       },
       stockExit: { create: fn().mockResolvedValue({ id: 'exit-1' }) },
@@ -158,6 +158,31 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     expect(tx.payment.create).not.toHaveBeenCalled(); // no $0 payment
   });
 
+  // ── TEST A1 ─────────────────────────────────────────────────────────────────
+  // Verifies the null-amount invariant: a walk-in exit linked to an invoice
+  // must have amount=null so it is excluded from the walk-in P&L aggregate
+  // (which only sums non-null amounts for anonymous exits).
+  it('A1: WalkInSalesService.create sets amount=null on the created StockExit', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+    mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+    settings.getExchangeRate.mockResolvedValue(89550);
+    calculator.recomputeStatus.mockResolvedValue({ paidAmount: '120.00', status: 'paid' });
+    const tx = makeTx();
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    await service.create(baseDto({ receivedUsd: '120.00' }), clerkId);
+
+    expect(tx.stockExit.create).toHaveBeenCalledTimes(1);
+    const stockExitData = tx.stockExit.create.mock.calls[0][0].data;
+    // Must be exactly null — not undefined and not a numeric value.
+    // undefined would be a missing field (accidental), a number would break
+    // the P&L filter (amount: { not: null }) and double-count revenue.
+    expect(stockExitData.amount).toBeNull();
+    expect(stockExitData.amount).not.toBeUndefined();
+    expect(typeof stockExitData.amount).not.toBe('number');
+    expect(typeof stockExitData.amount).not.toBe('string');
+  });
+
   it('throws NOT_FOUND when the client does not exist', async () => {
     mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
     mockPrisma.client.findUnique.mockResolvedValue(null);
@@ -169,9 +194,26 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
     settings.getExchangeRate.mockResolvedValue(89550);
     const tx = makeTx();
-    tx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 3 }); // only 3, need 10
+    tx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 3, reservedQuantity: 0 }); // only 3, need 10
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
     await expect(service.create(baseDto({}), clerkId)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  // ── BUG-E (P2): reserved-stock protection ────────────────────────────────────
+  // A walk-in sale must draw against FREE quantity (quantity − reservedQuantity).
+  // Here 100 bags exist but 95 are reserved for a pending shipment → only 5 free;
+  // a request for 10 must be rejected and write nothing, even though raw quantity ≥ 10.
+  it('BUG-E: cannot consume bags reserved for a pending shipment (draws free quantity only)', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+    mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+    settings.getExchangeRate.mockResolvedValue(89550);
+    const tx = makeTx();
+    tx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 100, reservedQuantity: 95 });
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    await expect(service.create(baseDto({}), clerkId)).rejects.toBeInstanceOf(BadRequestException);
+    expect(tx.packedStock.update).not.toHaveBeenCalled();
+    expect(tx.stockExit.create).not.toHaveBeenCalled();
   });
 });

@@ -331,6 +331,15 @@ export class ShipmentsService {
         throw new NotFoundException({ error: 'Shipment not found', code: 'NOT_FOUND' });
       }
 
+      // Only delivered shipments may be returned; pre-delivery, use cancelShipment.
+      if (shipment.status !== 'delivered') {
+        throw new BadRequestException({
+          message: `Cannot return shipment ${shipment.id}: status is '${shipment.status}', only 'delivered' shipments may be returned. Use cancelShipment for pre-delivery cancellations.`,
+          error: `Cannot return shipment ${shipment.id}: status is '${shipment.status}', only 'delivered' shipments may be returned. Use cancelShipment for pre-delivery cancellations.`,
+          code: 'INVALID_TRANSITION',
+        });
+      }
+
       // Step 2: For each ShipmentBag, return quantity to first available PackedStock
       for (const bag of shipment.bags) {
         const stock = await tx.packedStock.findFirst({

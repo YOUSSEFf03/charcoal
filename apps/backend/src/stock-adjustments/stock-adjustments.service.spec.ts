@@ -24,7 +24,7 @@ describe('StockAdjustmentsService', () => {
   let service: StockAdjustmentsService;
 
   const mockPrisma = {
-    stockAdjustment: { findMany: fn(), findUnique: fn(), create: fn(), count: fn() },
+    stockAdjustment: { findMany: fn(), findUnique: fn(), create: fn(), update: fn(), count: fn() },
     stockLot: { findUnique: fn(), update: fn() },
     packedStock: { findUnique: fn(), update: fn() },
     user: { findUnique: fn() },
@@ -117,7 +117,7 @@ describe('StockAdjustmentsService', () => {
       const dbUserId = 'db-user-uuid-1';
       const lotId = '550e8400-e29b-41d4-a716-446655440000';
 
-      mockPrisma.user.findUnique.mockResolvedValue({ id: dbUserId, clerkId });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: dbUserId, clerkId, role: 'owner' });
       const tx = setupTransaction();
       tx.stockLot.findUnique.mockResolvedValue({
         id: lotId,
@@ -151,7 +151,7 @@ describe('StockAdjustmentsService', () => {
       const clerkId = 'clerk-owner-1';
       const lotId = '550e8400-e29b-41d4-a716-446655440000';
 
-      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId, role: 'owner' });
       const tx = setupTransaction();
       tx.stockLot.findUnique.mockResolvedValue({
         id: lotId,
@@ -183,7 +183,7 @@ describe('StockAdjustmentsService', () => {
       const clerkId = 'clerk-owner-1';
       const lotId = '550e8400-e29b-41d4-a716-446655440000';
 
-      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId, role: 'owner' });
       const tx = setupTransaction();
       tx.stockLot.findUnique.mockResolvedValue({
         id: lotId,
@@ -214,7 +214,7 @@ describe('StockAdjustmentsService', () => {
       const clerkId = 'clerk-owner-1';
       const lotId = '550e8400-e29b-41d4-a716-446655440000';
 
-      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-uuid-1', clerkId, role: 'owner' });
       const tx = setupTransaction();
       tx.stockLot.findUnique.mockResolvedValue({
         id: lotId,
@@ -236,6 +236,239 @@ describe('StockAdjustmentsService', () => {
           clerkId,
         ),
       ).resolves.toBeDefined();
+    });
+
+    // =====================================================================
+    // BUG-F (P4): qtyBefore is resolved server-side from the LIVE row;
+    // a forged/stale client qtyBefore is ignored.
+    // =====================================================================
+    it('BUG-F: ignores client qtyBefore and resolves it from the live lot value', async () => {
+      const clerkId = 'clerk-owner-1';
+      const lotId = '550e8400-e29b-41d4-a716-446655440000';
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user', clerkId, role: 'owner' });
+      const tx = setupTransaction();
+      // Live value is 70, but the client lies that qtyBefore was 100.
+      tx.stockLot.findUnique.mockResolvedValue({ id: lotId, kgRemaining: { toString: () => '70.000' } });
+      tx.stockLot.update.mockResolvedValue({});
+      tx.stockAdjustment.create.mockResolvedValue({ id: 'adj-f' });
+
+      await service.create(
+        {
+          adjustmentType: 'lot' as any,
+          lotId,
+          qtyBefore: '100.000', // forged — must be ignored
+          qtyAfter: '60.000',
+          reason: 'Recount',
+          date: '2024-01-15',
+        },
+        clerkId,
+      );
+
+      // qtyBefore persisted = live 70, NOT the client's 100.
+      const createData = tx.stockAdjustment.create.mock.calls[0][0].data;
+      expect(createData.qtyBefore).toBe('70.000');
+      // difference = 60 − 70 = −10 (from the live value), not 60 − 100 = −40.
+      expect(createData.difference).toBe('-10.000');
+      // Stock changed by the atomic delta −10 (Decimal-precision string), never an absolute set to 60.
+      expect(tx.stockLot.update.mock.calls[0][0].data.kgRemaining).toEqual({ increment: '-10.000' });
+    });
+
+    it('BUG-F/G: packed_stock create applies an atomic delta against the live value, not an absolute set', async () => {
+      const clerkId = 'clerk-owner-1';
+      const psId = '550e8400-e29b-41d4-a716-446655440099';
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user', clerkId, role: 'owner' });
+      const tx = setupTransaction();
+      tx.packedStock.findUnique.mockResolvedValue({ id: psId, quantity: 50, reservedQuantity: 0 });
+      tx.packedStock.update.mockResolvedValue({});
+      tx.stockAdjustment.create.mockResolvedValue({ id: 'adj-ps' });
+
+      await service.create(
+        {
+          adjustmentType: 'packed_stock' as any,
+          packedStockId: psId,
+          qtyBefore: '999', // forged
+          qtyAfter: '45',
+          reason: 'Recount',
+          date: '2024-01-15',
+        },
+        clerkId,
+      );
+
+      // delta = 45 − 50 = −5 applied atomically; qtyBefore persisted = live 50.
+      expect(tx.packedStock.update.mock.calls[0][0].data.quantity).toEqual({ increment: -5 });
+      expect(tx.stockAdjustment.create.mock.calls[0][0].data.qtyBefore).toBe('50.000');
+    });
+
+    it('BUG-E: packed_stock create rejected when qtyAfter drops below reserved', async () => {
+      const clerkId = 'clerk-owner-1';
+      const psId = '550e8400-e29b-41d4-a716-446655440099';
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user', clerkId, role: 'owner' });
+      const tx = setupTransaction();
+      tx.packedStock.findUnique.mockResolvedValue({ id: psId, quantity: 50, reservedQuantity: 40 });
+
+      await expect(
+        service.create(
+          { adjustmentType: 'packed_stock' as any, packedStockId: psId, qtyBefore: '50', qtyAfter: '30', reason: 'x', date: '2024-01-15' },
+          clerkId,
+        ),
+      ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }) });
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // =====================================================================
+  // BUG-G (P4): reverse/edit by inverse DELTA against the live value,
+  // never an absolute restore that clobbers later activity.
+  // =====================================================================
+  describe('remove() / update() — atomic delta reversal (BUG-G)', () => {
+    it('remove() applies the INVERSE of the adjustment difference, not an absolute restore', async () => {
+      const adjId = 'adj-1';
+      const psId = 'ps-9';
+      // Original adjustment: qtyBefore 100 → qtyAfter 90, difference −10.
+      // Since then a sale dropped live stock to 70. Deleting must add back +10 (→ 80),
+      // NOT restore to the stale qtyBefore of 100.
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: adjId, adjustmentType: 'packed_stock', packedStockId: psId, lotId: null,
+            status: 'approved',
+            qtyBefore: { toString: () => '100.000' },
+            difference: { toString: () => '-10.000' },
+          }),
+          delete: fn().mockResolvedValue({}),
+        },
+        stockLot: { update: fn() },
+        packedStock: { update: fn().mockResolvedValue({}) },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.remove(adjId);
+
+      // Inverse of −10 is +10, applied atomically — NOT `quantity: 100`.
+      expect(tx.packedStock.update.mock.calls[0][0].data.quantity).toEqual({ increment: 10 });
+    });
+
+    it('update() applies the DELTA between new and old qtyAfter, not an absolute set', async () => {
+      const adjId = 'adj-2';
+      const lotId = 'lot-9';
+      // Original qtyAfter 90; editing to 85 means stock must drop by 5 (delta −5),
+      // applied atomically against whatever the live value is now.
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: adjId, adjustmentType: 'lot', lotId, packedStockId: null,
+            status: 'approved',
+            qtyBefore: { toString: () => '100.000' },
+            qtyAfter:  { toString: () => '90.000' },
+            difference: { toString: () => '-10.000' },
+          }),
+          update: fn().mockResolvedValue({ id: adjId }),
+        },
+        stockLot: { update: fn().mockResolvedValue({}) },
+        packedStock: { update: fn() },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.update(adjId, { qtyAfter: '85.000' });
+
+      // delta = 85 − 90 = −5 applied atomically (Decimal string); difference recorded = 85 − 100 = −15.
+      expect(tx.stockLot.update.mock.calls[0][0].data.kgRemaining).toEqual({ increment: '-5.000' });
+      expect(tx.stockAdjustment.update.mock.calls[0][0].data.difference).toBe('-15.000');
+    });
+  });
+
+  // =====================================================================
+  // BUG-H (workflow): two-step pending-approval flow.
+  // =====================================================================
+  describe('approval workflow (BUG-H)', () => {
+    it('a NON-OWNER counter submits a PENDING adjustment with NO stock change', async () => {
+      const clerkId = 'clerk-worker';
+      const psId = '550e8400-e29b-41d4-a716-446655440099';
+
+      // Counter is a worker, not an owner.
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'worker-db', clerkId, role: 'worker' });
+      const tx = setupTransaction();
+      tx.packedStock.findUnique.mockResolvedValue({ id: psId, quantity: 50, reservedQuantity: 0 });
+      tx.stockAdjustment.create.mockImplementation((a: any) => Promise.resolve({ id: 'adj-pending', ...a.data }));
+
+      await service.create(
+        { adjustmentType: 'packed_stock' as any, packedStockId: psId, qtyBefore: '50', qtyAfter: '45', reason: 'count', date: '2024-01-15' },
+        clerkId,
+      );
+
+      // No stock mutation while pending.
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      const data = tx.stockAdjustment.create.mock.calls[0][0].data;
+      expect(data.status).toBe('pending');
+      expect(data.approvedById).toBeNull();
+      expect(data.countedById).toBe('worker-db');
+    });
+
+    it('owner approve() applies the atomic delta and records a DISTINCT approver', async () => {
+      const clerkId = 'clerk-owner';
+      const psId = 'ps-approve';
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'owner-db', clerkId, role: 'owner' });
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: 'adj-1', adjustmentType: 'packed_stock', packedStockId: psId, lotId: null,
+            status: 'pending', countedById: 'worker-db',
+            qtyAfter: { toString: () => '45' },
+          }),
+          update: fn().mockImplementation((a: any) => Promise.resolve({ id: 'adj-1', ...a.data })),
+        },
+        stockLot: { findUnique: fn(), update: fn() },
+        packedStock: { findUnique: fn().mockResolvedValue({ id: psId, quantity: 50, reservedQuantity: 0 }), update: fn().mockResolvedValue({}) },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.approve('adj-1', clerkId);
+
+      // Delta applied at approval time: 45 − live 50 = −5, atomic.
+      expect(tx.packedStock.update.mock.calls[0][0].data.quantity).toEqual({ increment: -5 });
+      const upd = tx.stockAdjustment.update.mock.calls[0][0].data;
+      expect(upd.status).toBe('approved');
+      expect(upd.approvedById).toBe('owner-db');
+      // counter ≠ approver
+      expect(upd.approvedById).not.toBe('worker-db');
+    });
+
+    it('approve() is rejected when the approver is the same identity as the counter', async () => {
+      const clerkId = 'clerk-owner';
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'same-db', clerkId, role: 'owner' });
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: 'adj-1', adjustmentType: 'packed_stock', packedStockId: 'ps', lotId: null,
+            status: 'pending', countedById: 'same-db', qtyAfter: { toString: () => '45' },
+          }),
+          update: fn(),
+        },
+        stockLot: { update: fn() },
+        packedStock: { findUnique: fn(), update: fn() },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.approve('adj-1', clerkId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+    });
+
+    it('reject() discards a pending adjustment with no stock change', async () => {
+      const clerkId = 'clerk-owner';
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'owner-db', clerkId, role: 'owner' });
+      mockPrisma.stockAdjustment.findUnique.mockResolvedValue({ id: 'adj-1', status: 'pending', adjustmentType: 'lot', lotId: 'lot-1' });
+      mockPrisma.stockAdjustment.update.mockImplementation((a: any) => Promise.resolve({ id: 'adj-1', ...a.data }));
+
+      const result: any = await service.reject('adj-1', clerkId);
+
+      expect(result.status).toBe('rejected');
+      expect(mockPrisma.stockLot.update).not.toHaveBeenCalled();
     });
   });
 });

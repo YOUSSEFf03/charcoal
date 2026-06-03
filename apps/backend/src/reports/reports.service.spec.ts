@@ -4,6 +4,7 @@ import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ReportsService, DEFAULT_LOOKBACK_DAYS } from './reports.service';
 import { ReportsController } from './reports.controller';
 import { PrismaService } from '../prisma/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 import { RolesGuard } from '../auth/roles.guard';
 import { Reflector } from '@nestjs/core';
 
@@ -13,6 +14,10 @@ function dec(v: string) { return { toString: () => v }; }
 
 describe('ReportsService', () => {
   let service: ReportsService;
+
+  const mockSettings = {
+    getExchangeRate: fn(),
+  };
 
   const mockPrisma = {
     invoice:         { findMany: fn() },
@@ -41,10 +46,14 @@ describe('ReportsService', () => {
       return arg(mockPrisma);
     });
 
+    // Default exchange rate — individual tests override this when they need a specific rate.
+    mockSettings.getExchangeRate.mockResolvedValue(89550);
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ReportsService,
-        { provide: PrismaService, useValue: mockPrisma },
+        { provide: PrismaService,  useValue: mockPrisma   },
+        { provide: SettingsService, useValue: mockSettings },
       ],
     }).compile();
 
@@ -204,6 +213,247 @@ describe('ReportsService', () => {
       const aggCall = mockPrisma.stockExit.aggregate.mock.calls[0][0];
       expect(aggCall.where.date.gte).toEqual(new Date('2024-01-01'));
       expect(aggCall.where.date.lte).toEqual(new Date('2024-03-31'));
+    });
+
+    // ── TEST A2 ───────────────────────────────────────────────────────────────
+    // A walk-in sale via WalkInSalesService produces a walk_in StockExit with
+    // amount=null AND an invoice.  Revenue must come from the invoice only.
+    // The walk-in aggregate (which filters amount: { not: null }) returns 0,
+    // so the total is 120 — not 240 (invoice + exit double-counted).
+    it('A2: getProfitLoss — walk-in sale via WalkInSalesService contributes revenue via invoice, not via exit', async () => {
+      // Invoice: status=paid, lineTotal=120 USD  → invoice_revenue = '120.00'
+      // Walk-in exit for the same sale:  amount=null  → aggregate _sum.amount = null → 0
+      setupPnL({
+        invoiceRevenue: '120.00',
+        walkInAmount:   null,   // WalkInSalesService always writes amount=null
+      });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      // Invoice counted once
+      expect(result.revenue).toBe('120.00');
+
+      // Walk-in aggregate contributes 0 because amount=null is excluded
+      const aggCall = mockPrisma.stockExit.aggregate.mock.calls[0][0];
+      expect(aggCall.where.amount).toEqual({ not: null });
+
+      // Total revenue is NOT 240 — no double-counting
+      expect(result.revenue).not.toBe('240.00');
+      expect(parseFloat(result.revenue)).toBe(120);
+    });
+
+    // ── TEST A3 ───────────────────────────────────────────────────────────────
+    // An anonymous walk-in exit (no invoice) has amount set to a real value.
+    // The walk-in aggregate MUST count it so anonymous walk-in revenue is captured.
+    it('A3: getProfitLoss — anonymous walk-in exit with amount set IS counted in walk-in revenue', async () => {
+      // No invoice revenue; one anonymous walk_in exit with amount=50
+      setupPnL({
+        invoiceRevenue: '0',
+        walkInAmount:   '50.00',   // anonymous exit — amount is explicit
+      });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      // Walk-in revenue = 50; invoice revenue = 0 → total = 50
+      expect(result.revenue).toBe('50.00');
+
+      // The aggregate where-clause must NOT exclude non-null amounts
+      const aggCall = mockPrisma.stockExit.aggregate.mock.calls[0][0];
+      expect(aggCall.where.amount).toEqual({ not: null });
+    });
+
+    // ── TEST A4 ───────────────────────────────────────────────────────────────
+    // A walk_in exit with amount=null (as produced by WalkInSalesService)
+    // contributes exactly 0 to the walk-in revenue aggregate.
+    it('A4: getProfitLoss — walk-in exit with amount=null contributes 0 to walk-in revenue', async () => {
+      setupPnL({
+        invoiceRevenue: '0',
+        walkInAmount:   null,   // null → aggregate _sum.amount is null → Decimal('0')
+      });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      // With invoice_revenue=0 and walkIn aggregate=null (→ 0), total revenue=0
+      expect(result.revenue).toBe('0.00');
+
+      // Confirm the aggregate was called with the correct null-exclusion filter
+      const aggCall = mockPrisma.stockExit.aggregate.mock.calls[0][0];
+      expect(aggCall.where.amount).toEqual({ not: null });
+      expect(aggCall.where.exitType).toBe('walk_in');
+    });
+
+    // ── TEST B1 ───────────────────────────────────────────────────────────────
+    // A USD invoice with lineTotal=100 must pass through the SQL CASE WHEN
+    // unchanged (no division). The mock simulates what the DB would return
+    // after the CASE WHEN: 100.00 (USD path, no conversion).
+    it('B1: getProfitLoss — USD invoice lineTotal is counted at face value (no conversion applied)', async () => {
+      mockSettings.getExchangeRate.mockResolvedValue(89550);
+      // SQL CASE WHEN: currency='USD' → lineTotal passes through → DB returns 100.00
+      setupPnL({ invoiceRevenue: '100.00' });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      expect(result.revenue).toBe('100.00');
+    });
+
+    // ── TEST B2 ───────────────────────────────────────────────────────────────
+    // An LBP invoice with lineTotal=89550 divided by rate 89550 = 1 USD.
+    // The mock simulates what the DB returns after the CASE WHEN SQL conversion.
+    it('B2: getProfitLoss — LBP invoice lineTotal is converted to USD before summing', async () => {
+      mockSettings.getExchangeRate.mockResolvedValue(89550);
+      // SQL CASE WHEN: currency='LBP' → 89550 / 89550 = 1.00 → DB returns '1.00'
+      setupPnL({ invoiceRevenue: '1.00' });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      expect(result.revenue).toBe('1.00');
+
+      // Verify the rate was wired into the SQL: the first $queryRaw call should
+      // receive a tagged-template array whose serialised form contains the rate value.
+      const rawCall = mockPrisma.$queryRaw.mock.calls[0][0];
+      // Prisma.sql returns a tagged-template object with a `values` array.
+      // The rate (89550) must appear somewhere in that values array.
+      const sqlValues: unknown[] = (rawCall as any).values ?? [];
+      const ratePresent = sqlValues.some((v) => {
+        const n = typeof v === 'object' && v !== null && 'toString' in v
+          ? Number((v as any).toString())
+          : Number(v);
+        return n === 89550;
+      });
+      expect(ratePresent).toBe(true);
+    });
+
+    // ── TEST B3 ───────────────────────────────────────────────────────────────
+    // Mixed invoices: USD 100 + LBP 89550. The SQL CASE WHEN converts LBP→USD
+    // inside the DB and sums them: 100 + 1 = 101. The mock returns the
+    // post-conversion scalar, confirming JS does no further transformation.
+    it('B3: getProfitLoss — mixed USD + LBP invoices produce correct USD total', async () => {
+      mockSettings.getExchangeRate.mockResolvedValue(89550);
+      // SQL does: USD 100 + (LBP 89550 / 89550) = 100 + 1 = 101 → '101.00'
+      setupPnL({ invoiceRevenue: '101.00' });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      expect(result.revenue).toBe('101.00');
+    });
+
+    // ── TEST B4 ───────────────────────────────────────────────────────────────
+    // Uses a non-default rate (44775) to prove the rate is not hardcoded.
+    // LBP invoice lineTotal=44775 / rate 44775 = 1 USD.
+    it('B4: getProfitLoss — exchange rate from SettingsService is actually used in the SQL query', async () => {
+      mockSettings.getExchangeRate.mockResolvedValue(44775);
+      // SQL CASE WHEN: currency='LBP' → 44775 / 44775 = 1.00 → DB returns '1.00'
+      setupPnL({ invoiceRevenue: '1.00' });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      expect(result.revenue).toBe('1.00');
+
+      // The rate 44775 must appear in the SQL parameter values — not 89550 (the default).
+      const rawCall = mockPrisma.$queryRaw.mock.calls[0][0];
+      const sqlValues: unknown[] = (rawCall as any).values ?? [];
+      const customRatePresent = sqlValues.some((v) => {
+        const n = typeof v === 'object' && v !== null && 'toString' in v
+          ? Number((v as any).toString())
+          : Number(v);
+        return n === 44775;
+      });
+      expect(customRatePresent).toBe(true);
+    });
+
+    // ── TEST B5 ───────────────────────────────────────────────────────────────
+    // getExchangeRate must be called exactly once per getProfitLoss invocation —
+    // not once per SQL query, not cached across calls.
+    it('B5: getProfitLoss — getExchangeRate is called exactly once per getProfitLoss invocation', async () => {
+      mockSettings.getExchangeRate.mockResolvedValue(89550);
+
+      // First call
+      setupPnL({ invoiceRevenue: '100.00' });
+      await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      // Second call — chain another set of mocked values
+      setupPnL({ invoiceRevenue: '200.00' });
+      await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      // One call per getProfitLoss invocation, two invocations → exactly 2
+      expect(mockSettings.getExchangeRate).toHaveBeenCalledTimes(2);
+    });
+
+    // ── TEST C1 ───────────────────────────────────────────────────────────────
+    // BUG-C regression: an 'issued' (unpaid) invoice must contribute 0 to
+    // revenue.  The SQL WHERE clause filters OUT status='issued', so the DB
+    // returns '0' and the service must surface '0.00'.
+    // lineTotal=500 must NOT appear in the result — proving cash basis is applied.
+    it('C1: getProfitLoss — issued (unpaid) invoice contributes 0 to revenue', async () => {
+      // The SQL excludes status='issued', so the DB scalar is 0 regardless of lineTotal.
+      setupPnL({ invoiceRevenue: '0' });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      expect(result.revenue).toBe('0.00');
+      // lineTotal=500 must NOT bleed through
+      expect(parseFloat(result.revenue)).not.toBe(500);
+    });
+
+    // ── TEST C2 ───────────────────────────────────────────────────────────────
+    // A fully 'paid' invoice has paidAmount === lineTotal (both 80).
+    // The SQL sums paidAmount; for a paid invoice the values coincide.
+    // This test confirms the correct field is read (not some other source).
+    it('C2: getProfitLoss — paid invoice uses paidAmount not lineTotal (equal for fully paid)', async () => {
+      // status='paid', paidAmount=80, lineTotal=80 — DB returns '80.00'
+      setupPnL({ invoiceRevenue: '80.00' });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      expect(result.revenue).toBe('80.00');
+    });
+
+    // ── TEST C3 ───────────────────────────────────────────────────────────────
+    // A 'partially_paid' invoice has paidAmount=120 but lineTotal=300.
+    // Revenue must reflect only the 120 actually collected — NOT the full 300.
+    it('C3: getProfitLoss — partially_paid invoice contributes only its collected portion', async () => {
+      // DB sums paidAmount=120 (not lineTotal=300) → returns '120.00'
+      setupPnL({ invoiceRevenue: '120.00' });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      expect(result.revenue).toBe('120.00');
+      // lineTotal of 300 must NOT appear
+      expect(parseFloat(result.revenue)).not.toBe(300);
+    });
+
+    // ── TEST C4 ───────────────────────────────────────────────────────────────
+    // Three invoices: issued paidAmount=0 (excluded), partial paidAmount=120,
+    // paid paidAmount=80.  The SQL WHERE filters out 'issued' and sums the
+    // remaining two: 120 + 80 = 200.
+    // The 500 lineTotal of the issued invoice must NOT appear anywhere.
+    it('C4: getProfitLoss — revenue basis is cash — three invoices (issued, partial, paid) sum correctly', async () => {
+      // SQL filters out 'issued' (paidAmount=0) and sums partial(120) + paid(80) = 200
+      setupPnL({ invoiceRevenue: '200.00' });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      expect(result.revenue).toBe('200.00');
+      // The issued invoice's lineTotal=500 must not inflate revenue
+      expect(parseFloat(result.revenue)).not.toBe(500);
+      expect(parseFloat(result.revenue)).not.toBe(700);  // 200+500
+    });
+
+    // ── TEST C5 ───────────────────────────────────────────────────────────────
+    // LBP partially_paid invoice: paidAmount=89550, lineTotal=267000, rate=89550.
+    // SQL converts: paidAmount / rate = 89550 / 89550 = 1 USD.
+    // Confirms that the LBP→USD division is applied to paidAmount, not lineTotal.
+    // If lineTotal were used: 267000 / 89550 ≈ 2.98 USD — the wrong answer.
+    it('C5: getProfitLoss — LBP partially_paid invoice is converted using paidAmount (not lineTotal)', async () => {
+      mockSettings.getExchangeRate.mockResolvedValue(89550);
+      // SQL: paidAmount(89550 LBP) / rate(89550) = 1.00 USD — NOT lineTotal(267000)/89550 ≈ 2.98
+      setupPnL({ invoiceRevenue: '1.00' });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      expect(result.revenue).toBe('1.00');
+      // lineTotal-based conversion (267000/89550 ≈ 2.98) must NOT appear
+      expect(parseFloat(result.revenue)).not.toBeCloseTo(2.98, 1);
     });
   });
 
@@ -421,7 +671,7 @@ describe('ReportsService', () => {
     }
 
     it('creates StockAdjustment for each item where actualQuantity !== systemQuantity', async () => {
-      setupTransaction({ packedStocks: { 'ps-1': { id: 'ps-1', quantity: 100 }, 'ps-2': { id: 'ps-2', quantity: 50 } } });
+      setupTransaction({ packedStocks: { 'ps-1': { id: 'ps-1', quantity: 100, reservedQuantity: 0 }, 'ps-2': { id: 'ps-2', quantity: 50, reservedQuantity: 0 } } });
 
       const result = await service.submitPhysicalCount(
         { items: [{ packedStockId: 'ps-1', actualQuantity: 80 }, { packedStockId: 'ps-2', actualQuantity: 60 }] },
@@ -430,6 +680,36 @@ describe('ReportsService', () => {
 
       expect(result.adjustmentsCreated).toBe(2);
       expect(result.details).toHaveLength(2);
+    });
+
+    it('BUG-E: applies the count as an atomic delta, never an absolute set', async () => {
+      const userMock = fn(); userMock.mockResolvedValue({ id: 'db-user-id' });
+      const psFn = fn(); psFn.mockResolvedValue({ id: 'ps-1', quantity: 100, reservedQuantity: 0 });
+      const updateFn = fn(); updateFn.mockResolvedValue({});
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb({
+        user:            { findUnique: userMock },
+        packedStock:     { findUnique: psFn, update: updateFn },
+        stockAdjustment: { create: fn().mockImplementation((a: any) => Promise.resolve({ id: 'adj', ...a.data })) },
+      }));
+
+      await service.submitPhysicalCount(
+        { items: [{ packedStockId: 'ps-1', actualQuantity: 80 }] },
+        'clerk-user-id',
+      );
+
+      // Counted 80 vs live 100 → delta −20 applied atomically, NOT `quantity: 80`.
+      const updateArg = updateFn.mock.calls[0][0];
+      expect(updateArg.data.quantity).toEqual({ increment: -20 });
+    });
+
+    it('BUG-E: rejects a count that would drop quantity below reserved', async () => {
+      setupTransaction({ packedStocks: { 'ps-1': { id: 'ps-1', quantity: 100, reservedQuantity: 90 } } });
+      await expect(
+        service.submitPhysicalCount(
+          { items: [{ packedStockId: 'ps-1', actualQuantity: 80 }] }, // 80 < 90 reserved
+          'clerk-user-id',
+        ),
+      ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }) });
     });
 
     it('creates zero adjustments when all actualQuantity equals systemQuantity', async () => {

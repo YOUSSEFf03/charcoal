@@ -107,6 +107,12 @@ enum AdjustmentType {
   packed_stock
 }
 
+enum AdjustmentStatus {
+  pending
+  approved
+  rejected
+}
+
 model User {
   id        String    @id @default(uuid())
   clerkId   String    @unique
@@ -399,15 +405,17 @@ model StockAdjustment {
   qtyAfter       Decimal        @db.Decimal(10, 3)
   difference     Decimal        @db.Decimal(10, 3)
   reason         String
+  status         AdjustmentStatus @default(approved)
   countedById    String
   countedBy      User           @relation("AdjustmentCountedBy", fields: [countedById], references: [id])
-  approvedById   String
-  approvedBy     User           @relation("AdjustmentApprovedBy", fields: [approvedById], references: [id])
+  approvedById   String?
+  approvedBy     User?          @relation("AdjustmentApprovedBy", fields: [approvedById], references: [id])
   date           DateTime       @db.Date
   createdAt      DateTime       @default(now())
   @@index([packedStockId])
   @@index([lotId])
   @@index([date])
+  @@index([status])
   @@map("stock_adjustments")
 }
 

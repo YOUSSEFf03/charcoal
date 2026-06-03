@@ -34,8 +34,9 @@ export class StockAdjustmentsController {
     @Query('adjustmentType') adjustmentType?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('status') status?: string,
   ) {
-    return this.stockAdjustmentsService.findAll(page, limit, adjustmentType, dateFrom, dateTo);
+    return this.stockAdjustmentsService.findAll(page, limit, adjustmentType, dateFrom, dateTo, status);
   }
 
   @ApiOperation({ summary: 'Get stock adjustment by ID' })
@@ -69,17 +70,46 @@ export class StockAdjustmentsController {
     return this.stockAdjustmentsService.remove(id);
   }
 
-  @ApiOperation({ summary: 'Create stock adjustment with owner approval (CONSTRAINT 6 + 13)' })
-  @ApiResponse({ status: 201, description: 'Created' })
+  @ApiOperation({
+    summary: 'Create stock adjustment (BUG-H two-step flow). Owner self-approves and applies immediately; ' +
+      'a counter (accountant/worker) submits a PENDING adjustment that an owner must approve.',
+  })
+  @ApiResponse({ status: 201, description: 'Created (approved if owner, pending otherwise)' })
   @ApiResponse({ status: 400, description: 'Bad request' })
   @ApiResponse({ status: 404, description: 'Not found' })
   @ApiResponse({ status: 422, description: 'Validation error' })
   @Post()
-  @Roles('owner')
+  @Roles('owner', 'accountant', 'worker')
   create(
     @Body() dto: CreateStockAdjustmentDto,
     @CurrentUser() user: ClerkUser,
   ) {
     return this.stockAdjustmentsService.create(dto, user.userId);
+  }
+
+  @ApiOperation({ summary: 'Approve a pending stock adjustment (owner only) — applies the atomic delta' })
+  @ApiResponse({ status: 200, description: 'Approved and applied' })
+  @ApiResponse({ status: 400, description: 'Not pending, or approver equals counter' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Post(':id/approve')
+  @Roles('owner')
+  approve(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: ClerkUser,
+  ) {
+    return this.stockAdjustmentsService.approve(id, user.userId);
+  }
+
+  @ApiOperation({ summary: 'Reject a pending stock adjustment (owner only) — discards it, no stock change' })
+  @ApiResponse({ status: 200, description: 'Rejected' })
+  @ApiResponse({ status: 400, description: 'Not pending' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Post(':id/reject')
+  @Roles('owner')
+  reject(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: ClerkUser,
+  ) {
+    return this.stockAdjustmentsService.reject(id, user.userId);
   }
 }

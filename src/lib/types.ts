@@ -475,6 +475,8 @@ export interface PackedStock {
   lotId: string;
   bagTypeId: string;
   quantity: number;
+  /** Bags committed to pending shipments — not available for sale/exit (free = quantity − reservedQuantity). */
+  reservedQuantity: number;
   sessionId: string;
   createdAt: string;
   updatedAt: string;
@@ -485,6 +487,10 @@ export interface PackedStockSummary {
   bagTypeId: string;
   bagTypeName: string;
   totalBags: number;
+  /** Bags reserved for pending shipments. */
+  reservedBags: number;
+  /** Bags free to sell/exit (totalBags − reservedBags, floored at 0). */
+  availableBags: number;
   totalNominalKg: string;
 }
 

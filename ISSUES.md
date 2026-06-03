@@ -1,5 +1,116 @@
 # Known Issues
 
+## Shipments Module
+
+### Issue — logReturn missing status guard ✓ Fixed (BUG-D)
+
+**Page:** Shipments → Log return
+
+**Problem:** `logReturn` did not validate that a shipment had `status = 'delivered'` before
+accepting a return. Pre-delivery shipments (status `pending`, `loaded`) could be marked as
+`returned`, violating the business rule that only delivered goods can be returned.
+
+**Root cause:** The guard was missing.
+
+**Fix:** Added an atomic status check inside the transaction at the start of `logReturn`
+(shipments.service.ts line 334–340). Any non-delivered shipment throws `BadRequestException`
+with code `INVALID_TRANSITION`. The error message directs the caller to use `cancelShipment`
+for pre-delivery cancellations.
+
+**Invariant now enforced:** Only shipments with `status = 'delivered'` may transition to
+`returned`; all other statuses are rejected.
+
+## Warehouse Sales Module
+
+### Issue — Walk-in sale to registered client creates no invoice ✓ Fixed (BUG-A)
+
+**Page:** Warehouse sales → Enter sale (registered client, packed bags)
+
+**Problem:** When a walk-in customer (any client, registered or not) purchased packed bags at the
+warehouse, a `StockExit` with `amount` was created for revenue tracking. However, **invoiced walk-in
+exits were never given a null amount**, so they mixed with true walk-in cash sales in P&L reporting.
+Later, when the P&L aggregated walk-in revenue, it double-counted: exits linked to invoices contributed
+their `amount` field, and the same revenue was counted again in the invoice-revenue sum.
+
+**Root cause:** Pattern P4 — walk-in exits lacked an explicit convention to distinguish invoiced from
+cash sales. The P&L report did not filter them.
+
+**Fix:** Added a **structural invariant**: walk-in exits linked to invoices (via `WalkInSalesService`)
+**always set `amount = null`**. This makes them invisible to the walk-in aggregate in `getProfitLoss`
+(which filters `amount: { not: null }`, line 116). Revenue is counted once — in the invoice aggregate
+using `paidAmount`. The `WalkInSalesService.create` now atomically creates the invoice, payment,
+stock exit, and explicitly passes `amount: null` to the exit. Documented in reports.service.ts
+lines 108–112.
+
+**Invariant now enforced:** `exitType = 'walk_in'` AND linked to an invoice → `amount = null`.
+P&L walk-in aggregate sums only non-null amounts, eliminating the double-count.
+
+## Reports Module — P&L Currency Handling
+
+### Issue — P&L components lack per-record currency metadata (partial fix)
+
+**Affected method:** `ReportsService.getProfitLoss`
+
+#### Invoice revenue ✓ Fixed (BUG-C closed)
+**What changed:** Invoice revenue now sums `inv."paidAmount"` (cash basis) instead of
+`jsonb_array_elements(inv."lines") → lineTotal` (accrual basis). The WHERE clause now reads
+`status IN ('partially_paid', 'paid')` — `'issued'` invoices are excluded because they have
+collected 0. LBP invoices are divided by the global exchange rate via
+`CASE WHEN inv."currency" = 'LBP' THEN inv."paidAmount"::numeric / rate ELSE inv."paidAmount"::numeric END`.
+The rate is resolved once per call from `SettingsService.getExchangeRate()`.
+
+**Why:** Spec requires cash-basis revenue; the prior accrual approach inflated revenue with
+unpaid (`issued`) invoices and counted full billed amounts even for partially-collected debts.
+
+**Known residual:** Revenue (cash basis) and COGS (exit-accrual basis) use different timing.
+Gross profit skews when payment lags stock exit — this asymmetry is accepted per spec.
+A schema migration to add a per-invoice exchange-rate snapshot (`exchangeRateSnapshot`) remains
+a separate future item (see "Remaining limitation" below).
+
+**Remaining limitation:** All historical LBP invoices are converted at *today's* global rate.
+There is no per-invoice rate snapshot. To fix this properly, an `exchangeRateSnapshot` column
+should be added to the `invoices` table and populated at invoice-issue time.
+
+#### Walk-in exit amounts — deferred (no currency column on stock_exits)
+`StockExit.amount` has no `currency` column. These amounts are assumed USD. New-flow walk-in
+exits (via `POST /walk-in-sales`) never populate `amount` directly — the invoice/payment pair
+captures the revenue — so this path is mostly zero in practice. Legacy anonymous cash sales
+(direct `POST /stock-exits`) may have stored LBP amounts.
+
+**Migration needed:** Add `currency Currency @default(USD)` to `stock_exits` and backfill any
+legacy rows before applying a conversion in `getProfitLoss`.
+
+#### BagPurchase.totalCost — deferred (no currency column on bag_purchases)
+`BagPurchase.totalCost` has no `currency` column. Assumed USD. Local packaging suppliers in
+Lebanon likely invoice in LBP; if so, the P&L bag cost is understated when the LBP amount is
+treated as a USD amount.
+
+**Migration needed:** Add `currency Currency @default(USD)` to `bag_purchases` (or `USD` /
+`LBP` based on actual purchasing practice) before applying a conversion.
+
+#### DriverTrip fuelCost and otherExpenses — deferred (no currency column on driver_trips)
+`DriverTrip.fuelCost` and the `amount` fields inside the `otherExpenses` JSONB array have no
+currency metadata. Assumed USD. Fuel and incidental trip expenses in Lebanon are typically
+paid in LBP.
+
+**Migration needed:** Add `currency Currency @default(USD)` to `driver_trips` for `fuelCost`,
+and add a `currency` key to each object in the `otherExpenses` JSONB array. Apply conversion
+in `getProfitLoss` once the column exists.
+
+#### StockLot.costPerKg (COGS and variance_cost) — deferred (no currency column on stock_lots/containers)
+`costPerKg` is derived from `ContainerProductLine.pricePerTon`. Neither `stock_lots` nor
+`containers` nor `container_product_lines` has a `currency` column. Assumed USD because import
+charcoal is priced in USD internationally.
+
+**Migration needed:** Add `currency Currency @default(USD)` to `container_product_lines` (and
+propagate to `stock_lots.costPerKg`) to make the assumption explicit and to support non-USD
+import contracts.
+
+#### Single global exchange rate — known limitation
+All currency conversions use the single value returned by `SettingsService.getExchangeRate()`.
+This is the current rate, applied retroactively to all historical records. A rate history table
+with effective dates would allow accurate conversion of any past period.
+
 ## Packing Module
 
 ### Issue #8 — Incorrect stock deduction and waste handling with multiple charcoal types ✓ Fixed
@@ -108,3 +219,102 @@ exit + USD-hardcoded payment block was removed. Anonymous walk-ins are unchanged
 **Invariants now enforced:** client balance = Σinvoices − Σpayments and never negative from
 an un-invoiced sale; every payment is stored in the client's currency; no movement is
 recorded with a 0 amount due to a missing rate.
+
+## Inventory — Reservations & Stock Adjustments (Batch 4)
+
+### Issue — Packed-stock consumers ignore reservedQuantity ✓ Fixed (BUG-E)
+
+**Pages:** Warehouse sales (stock exit + walk-in), Physical count, Stock adjustments
+
+**Problem:** The shipment fix (BUG-2) added `PackedStock.reservedQuantity` and taught
+`createShipment`/`confirmDelivery`/`cancelShipment` to respect it, but every OTHER consumer
+that drains packed stock still validated and decremented **raw** `quantity`, ignoring the
+reserved portion. A sale or exit could therefore consume bags already committed to a pending
+shipment, driving `reservedQuantity > quantity` and leaving the shipment unfulfillable.
+
+**Root cause (pattern P2 — a concept enforced in one path but not all):** free-quantity was
+checked only where the reservation was created, not where stock is otherwise consumed.
+
+**Audited consumers and the fix (all now draw against FREE quantity = `quantity − reservedQuantity`):**
+- `stock-exits.service.ts` MODE B (packed bags) — validates/decrements against free quantity.
+- `walk-in-sales.service.ts` — same.
+- `reports.service.ts` `submitPhysicalCount` — rejects a count below `reservedQuantity` and
+  now applies the change as an atomic delta (also a P4 fix, see BUG-G).
+- `stock-adjustments.service.ts` `create` — rejects a packed `qtyAfter` below `reservedQuantity`.
+- `packed-stock.service.ts` `findSummary` — now returns `reservedBags` and `availableBags`
+  so clients can show only sellable stock.
+- Frontend `WarehouseSales.tsx` — availability map uses `availableBags`; FIFO drain loops draw
+  `quantity − reservedQuantity` per record. `PackedStock`/`PackedStockSummary` types extended.
+
+`confirmDelivery` is intentionally unchanged: it consumes the bags it itself reserved and
+drains its own reservation in lockstep.
+
+**Invariant now enforced:** Σ reservedQuantity ≤ Σ quantity at all times; no non-shipment
+consumer can draw reserved stock, enforced on the backend AND in the frontend availability check.
+
+**Known residual (design note, not fixed here):** `reservedQuantity` is an unkeyed aggregate
+counter on the row, so `confirmDelivery`'s proportional release can release a *different*
+shipment's reservation on a shared bag-type row. Recommended follow-up: pin reservations to
+the shipment (per-shipment reservation rows) so releases are unambiguous.
+
+### Issue — Stock adjustment trusts client qtyBefore ✓ Fixed (BUG-F)
+
+**Page:** Stock adjustments → Create
+
+**Problem:** `create()` computed `difference = qtyAfter − dto.qtyBefore` and set the stock to
+`dto.qtyAfter` absolutely, trusting the client's `qtyBefore` even though the field is
+documented as "resolved server-side". A forged or stale `qtyBefore` fabricated the audit
+`difference` and the system-vs-counted reconciliation, and any change between count and submit
+was clobbered.
+
+**Root cause (pattern P4 — absolute set-from-snapshot):** the before-value came from the
+request, not the live row.
+
+**Fix:** `qtyBefore` is now read from the live lot/packed-stock row **inside the transaction**;
+`difference` is computed from that live value; the client `qtyBefore` is ignored entirely.
+
+**Invariant now enforced:** a stock adjustment's `qtyBefore` equals the live system value at
+apply time (server-resolved).
+
+### Issue — Adjustment edit/reverse restores a stale absolute snapshot ✓ Fixed (BUG-G)
+
+**Page:** Stock adjustments → Edit / Delete
+
+**Problem:** `update()` set `kgRemaining/quantity = newQtyAfter` and `remove()` restored
+`= qtyBefore` — absolute writes that ignored any activity since the adjustment. Deleting an
+adjustment after a later sale fabricated or destroyed stock.
+
+**Root cause (pattern P4):** reversal/edit wrote an absolute snapshot instead of an inverse delta.
+
+**Fix (mirrors the packing-session reversal):** `remove()` applies the **inverse of the
+adjustment's own `difference`** via atomic `{ increment }`; `update()` applies the **delta
+between the new and old `qtyAfter`** atomically. Stock is never set absolutely. Reversal/edit
+only touch stock for an **approved** adjustment (a pending one never moved stock — see BUG-H).
+
+**Invariant now enforced:** adjustment create/edit/reverse change stock only via atomic deltas
+against the live value; deleting/editing after later activity leaves that activity intact.
+
+### Issue — No real physical-count approval flow ✓ Fixed (BUG-H)
+
+**Page:** Stock adjustments → Submit / Approve
+
+**Problem:** `create()` was owner-only, applied immediately, and set
+`approvedById = countedById = caller`, so the two schema fields were always identical, there
+was no "pending" state, the reconciliation report's "pending approvals" could never populate,
+and a non-owner counter could not submit for owner approval.
+
+**Fix:** Added `AdjustmentStatus { pending | approved | rejected }` and a `status` column
+(migration `20260603030000_add_adjustment_status`; existing rows default to `approved`,
+`approvedById` made nullable). Two-step flow:
+- An **owner** caller self-approves (status `approved`, delta applied immediately) — legacy
+  behaviour preserved, including the owner-driven `POST /reports/physical-count`.
+- A **non-owner counter** (accountant/worker) `POST /stock-adjustments` creates a **pending**
+  adjustment with **no stock change** and `approvedById = null`.
+- `POST /stock-adjustments/:id/approve` (owner only) re-resolves `qtyBefore` from the live
+  value, applies the atomic delta, sets `status = approved` and a distinct `approvedById`
+  (must differ from `countedById`).
+- `POST /stock-adjustments/:id/reject` (owner only) discards a pending adjustment, no stock change.
+- `GET /stock-adjustments?status=pending` serves the reconciliation "pending approvals" list.
+
+**Invariant now enforced:** a pending adjustment makes no stock change until an owner approves;
+counter and approver are distinct identities.

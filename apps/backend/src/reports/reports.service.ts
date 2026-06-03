@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 import { SubmitPhysicalCountDto } from './dto/physical-count.dto';
 
 interface DateRangeFilter {
@@ -34,15 +35,24 @@ function buildDateFilterWithDefault(from?: string, to?: string): DateRangeFilter
 
 @Injectable()
 export class ReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly settingsService: SettingsService,
+  ) {}
 
   /**
    * P&L report — CONSTRAINT 11: restricted to owner role.
    *
+   * Revenue basis: CASH — sums inv."paidAmount" from 'partially_paid' and 'paid' invoices only.
+   *   'issued' invoices contribute 0 (excluded). 'partially_paid' contribute their collected portion.
+   * COGS basis: EXIT-ACCRUAL — sums cost at time of stock exit (kgQuantity × costPerKg).
+   * Currency: all components converted to USD using the single rate from SettingsService (resolved once).
+   * Known asymmetry: gross profit timing skews when payment lags stock exit — intentional per spec.
+   *
    * All six components are computed server-side (no in-memory row folds):
-   *   revenue       = SQL jsonb_array_elements SUM(lineTotal)  (invoices)
-   *               + aggregate SUM(amount)                      (walk-in exits)
-   *   cogs          = raw SQL NUMERIC SUM with LEFT JOINs
+   *   revenue       = SQL SUM(paidAmount converted to USD)                      (invoices, cash basis)
+   *               + aggregate SUM(amount)                                       (walk-in exits)
+   *   cogs          = raw SQL NUMERIC SUM with LEFT JOINs                       (exit-accrual basis)
    *   bag_cost      = aggregate SUM(totalCost)
    *   variance_cost = LATERAL SQL weighted-avg per session (varianceKg > 0 only)
    *   delivery_cost = aggregate SUM(fuelCost)
@@ -61,6 +71,10 @@ export class ReportsService {
   }) {
     const dateFilter = buildDateFilterWithDefault(filters.dateFrom, filters.dateTo);
 
+    // Resolve exchange rate ONCE — all currency conversions within this call use the same rate.
+    // Rate is LBP per 1 USD (e.g. 89550 means 1 USD = 89,550 LBP).
+    const rate = new Decimal(await this.settingsService.getExchangeRate());
+
     const [
       invoiceRevenueResult,
       walkInAgg,
@@ -71,18 +85,31 @@ export class ReportsService {
       otherExpensesResult,
     ] = await Promise.all([
 
-      // ── invoice revenue — sum JSON lineTotal in DB (no row hydration) ───────
+      // ── invoice revenue — cash basis: sum paidAmount (not lineTotal) ─────────
+      // Only 'partially_paid' and 'paid' invoices contribute; 'issued' are excluded (0 collected).
+      // paidAmount already reflects partial collections; 'paid' invoices have paidAmount = total.
+      // LBP invoices are divided by the exchange rate; USD invoices pass through unchanged.
+      // LIMITATION: uses today's global rate for all historical LBP invoices. A per-invoice
+      // rate snapshot would require a schema migration (tracked in ISSUES.md).
       this.prisma.$queryRaw<[{ invoice_revenue: string }]>(Prisma.sql`
-        SELECT COALESCE(SUM((line->>'lineTotal')::numeric), 0::numeric)::text AS invoice_revenue
+        SELECT COALESCE(SUM(
+          CASE WHEN inv."currency" = 'LBP'
+               THEN inv."paidAmount"::numeric / ${rate}::numeric
+               ELSE inv."paidAmount"::numeric
+          END
+        ), 0::numeric)::text AS invoice_revenue
         FROM "invoices" inv
-        CROSS JOIN LATERAL jsonb_array_elements(inv."lines") AS line
-        WHERE inv."status" IN ('issued', 'partially_paid', 'paid')
+        WHERE inv."status" IN ('partially_paid', 'paid')
         ${dateFilter.gte ? Prisma.sql`AND inv."issuedAt" >= ${dateFilter.gte}` : Prisma.empty}
         ${dateFilter.lte ? Prisma.sql`AND inv."issuedAt" <= ${dateFilter.lte}` : Prisma.empty}
         ${filters.clientId ? Prisma.sql`AND inv."clientId" = ${filters.clientId}` : Prisma.empty}
       `),
 
       // ── walk-in revenue — DB aggregate ──────────────────────────────────────
+      // Only non-null amounts counted — walk-in exits linked to invoices are always null
+      // (see WalkInSalesService). StockExit has NO currency column; these amounts are
+      // assumed USD. If LBP walk-in exits exist (legacy anonymous cash sales), a schema
+      // migration to add a currency column on stock_exits is required (tracked in ISSUES.md).
       this.prisma.stockExit.aggregate({
         where: {
           exitType: 'walk_in',
@@ -94,6 +121,10 @@ export class ReportsService {
       }),
 
       // ── COGS — raw SQL SUM (NUMERIC precision, no JS float math) ────────────
+      // costPerKg is derived from container import pricing (ContainerProductLine.pricePerTon).
+      // Neither StockLot nor Container has a currency column; costPerKg is assumed USD
+      // (all import purchases are priced in USD). A currency column on stock_lots/containers
+      // would make this explicit (tracked in ISSUES.md).
       this.prisma.$queryRaw<[{ cogs: string }]>(Prisma.sql`
         SELECT COALESCE(SUM(
           CASE
@@ -116,6 +147,9 @@ export class ReportsService {
       `),
 
       // ── bag_cost — DB aggregate ──────────────────────────────────────────────
+      // BagPurchase.totalCost has NO currency column; assumed USD. If bags are purchased
+      // in LBP (local packaging suppliers), a schema migration to add a currency column
+      // on bag_purchases is required (tracked in ISSUES.md).
       this.prisma.bagPurchase.aggregate({
         where: { date: dateFilter },
         _sum:  { totalCost: true },
@@ -123,6 +157,7 @@ export class ReportsService {
 
       // ── variance_cost — LATERAL SQL weighted avg per session (no row fetch) ──
       // varianceKg > 0 = real packing loss (dust, breakage); negatives excluded.
+      // costPerKg assumed USD — same basis as COGS above (tracked in ISSUES.md).
       this.prisma.$queryRaw<[{ variance_cost: string }]>(Prisma.sql`
         SELECT COALESCE(SUM(
           ps."varianceKg" *
@@ -149,12 +184,16 @@ export class ReportsService {
       `),
 
       // ── delivery: fuelCost — DB aggregate ───────────────────────────────────
+      // DriverTrip.fuelCost has NO currency column; assumed USD. If fuel is paid in LBP,
+      // a schema migration to add a currency column on driver_trips is required (tracked in ISSUES.md).
       this.prisma.driverTrip.aggregate({
         where: { status: 'completed', completedAt: dateFilter },
         _sum:  { fuelCost: true },
       }),
 
       // ── delivery: otherExpenses — LATERAL SQL (no row fetch) ────────────────
+      // DriverTrip.otherExpenses JSONB amounts have NO currency field; assumed USD.
+      // Same limitation as fuelCost above (tracked in ISSUES.md).
       this.prisma.$queryRaw<[{ other_expenses: string }]>(Prisma.sql`
         SELECT COALESCE(SUM((exp->>'amount')::numeric), 0::numeric)::text AS other_expenses
         FROM "driver_trips" dt
@@ -166,6 +205,8 @@ export class ReportsService {
     ]);
 
     const invoiceRevenue = new Decimal(invoiceRevenueResult[0]?.invoice_revenue ?? '0');
+    // walk-in exit amounts have no currency column; assumed USD for now.
+    // If LBP walk-in exits exist, a schema migration to add currency is required (tracked in ISSUES.md).
     const walkInRevenue  = new Decimal(walkInAgg._sum.amount?.toString() ?? '0');
     const revenue        = invoiceRevenue.plus(walkInRevenue);
 
@@ -669,11 +710,25 @@ export class ReportsService {
           }
           if (item.actualQuantity === ps.quantity) return null;
 
+          // BUG-E (P2): a physical count must not strand reservations — the counted total
+          // cannot drop below bags already reserved for pending shipments.
+          if (item.actualQuantity < ps.reservedQuantity) {
+            throw new BadRequestException({
+              error: `Counted quantity ${item.actualQuantity} is below reserved ${ps.reservedQuantity} for PackedStock ${ps.id}`,
+              code: 'CONSTRAINT_VIOLATION',
+            });
+          }
+
+          // qtyBefore is resolved from the LIVE row (ps.quantity), never from the client.
           const qtyBefore  = new Decimal(ps.quantity);
           const qtyAfter   = new Decimal(item.actualQuantity);
           const difference = qtyAfter.minus(qtyBefore);
 
-          await tx.packedStock.update({ where: { id: ps.id }, data: { quantity: item.actualQuantity } });
+          // BUG-G (P4): apply the delta atomically against the live value, never an absolute set.
+          await tx.packedStock.update({
+            where: { id: ps.id },
+            data: { quantity: { increment: difference.toNumber() } },
+          });
 
           return tx.stockAdjustment.create({
             data: {

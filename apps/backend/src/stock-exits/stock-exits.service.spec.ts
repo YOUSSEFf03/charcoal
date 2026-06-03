@@ -124,7 +124,7 @@ describe('StockExitsService', () => {
         stockExit: { create: fn() },
       };
 
-      mockTx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 20, bagTypeId });
+      mockTx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 20, reservedQuantity: 0, bagTypeId });
       mockTx.packedStock.update.mockResolvedValue({});
       mockTx.stockExit.create.mockResolvedValue({ id: 'exit-uuid-1' });
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockTx));
@@ -167,7 +167,7 @@ describe('StockExitsService', () => {
       };
 
       // Only 3 bags available — requesting 10
-      mockTx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 3, bagTypeId });
+      mockTx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 3, reservedQuantity: 0, bagTypeId });
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockTx));
 
       const dto: CreateStockExitDto = {
@@ -186,6 +186,42 @@ describe('StockExitsService', () => {
       // Neither the decrement nor the exit record must be written when validation fails.
       // In production the transaction rolls back; in the unit test the mocks confirm
       // neither call was made before the throw.
+      expect(mockTx.packedStock.update).not.toHaveBeenCalled();
+      expect(mockTx.stockExit.create).not.toHaveBeenCalled();
+    });
+
+    // =========================================================================
+    // Test 5: BUG-E (P2) — stock exit must draw against FREE quantity
+    // (quantity − reservedQuantity); reserved bags belong to a pending shipment.
+    // =========================================================================
+
+    it('BUG-E: cannot consume bags reserved for a pending shipment (free quantity only)', async () => {
+      const clerkId = 'clerk-user-stockexit-3';
+      const packedStockId = 'packed-stock-uuid-3';
+      const bagTypeId = 'bag-type-uuid-se-3';
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-3', clerkId });
+
+      const mockTx = {
+        packedStock: { findUnique: fn(), update: fn() },
+        stockExit: { create: fn() },
+      };
+
+      // 20 bags exist but 18 are reserved → only 2 free; a request for 5 must be rejected.
+      mockTx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 20, reservedQuantity: 18, bagTypeId });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockTx));
+
+      const dto: CreateStockExitDto = {
+        packedStockId,
+        bagTypeId,
+        quantity: 5,
+        exitType: 'sample' as any,
+        date: '2024-06-01',
+      };
+
+      await expect(service.create(dto, clerkId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
       expect(mockTx.packedStock.update).not.toHaveBeenCalled();
       expect(mockTx.stockExit.create).not.toHaveBeenCalled();
     });

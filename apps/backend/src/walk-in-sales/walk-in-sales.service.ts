@@ -100,9 +100,12 @@ export class WalkInSalesService {
         if (!stock) {
           throw new NotFoundException({ error: `Packed stock not found: ${bag.packedStockId}`, code: 'NOT_FOUND' });
         }
-        if (stock.quantity - bag.quantity < 0) {
+        // BUG-E (P2): draw against FREE quantity (quantity − reservedQuantity), never raw —
+        // bags reserved for a pending shipment must not be consumable by a walk-in sale.
+        const freeQuantity = stock.quantity - stock.reservedQuantity;
+        if (freeQuantity - bag.quantity < 0) {
           throw new BadRequestException({
-            error: `Insufficient packed stock — available: ${stock.quantity}, requested: ${bag.quantity}`,
+            error: `Insufficient packed stock — available: ${freeQuantity}, requested: ${bag.quantity}`,
             code: 'CONSTRAINT_VIOLATION',
           });
         }
@@ -121,6 +124,7 @@ export class WalkInSalesService {
             date: new Date(dto.date),
             clientId: dto.clientId,
             loggedById: user.id,
+            amount: null, // null keeps invoiced walk-in out of the P&L walk-in aggregate
             ...(dto.recipient ? { recipient: dto.recipient } : {}),
             ...(dto.notes ? { reason: dto.notes } : {}),
           },
