@@ -317,6 +317,9 @@ model BagPurchase {
   quantity   Int
   unitCost   Decimal  @db.Decimal(10, 4)
   totalCost  Decimal  @db.Decimal(10, 2)
+  /// BUG-L (P5): currency of unitCost/totalCost. Local packaging suppliers may invoice in
+  /// LBP. Defaults USD. P&L converts LBP bag cost to USD by the stored rate.
+  currency   Currency @default(USD)
   date       DateTime @db.Date
   addedById  String
   addedBy    User     @relation("BagPurchaseAddedBy", fields: [addedById], references: [id])
@@ -333,17 +336,40 @@ model PackedStock {
   bagTypeId  String
   bagType    BagType        @relation(fields: [bagTypeId], references: [id])
   quantity   Int
+  /// BUG-I (P1): denormalized cache of Σ(reservations.quantity) for this row, kept in
+  /// lockstep with the keyed ShipmentReservation rows. FREE quantity = quantity −
+  /// reservedQuantity. Never mutated independently of a reservation row.
   reservedQuantity Int      @default(0)
   sessionId  String
   session    PackingSession @relation(fields: [sessionId], references: [id])
   createdAt  DateTime       @default(now())
   updatedAt  DateTime       @updatedAt
-  stockExits  StockExit[]
-  adjustments StockAdjustment[]
+  stockExits   StockExit[]
+  adjustments  StockAdjustment[]
+  reservations ShipmentReservation[]
   @@index([bagTypeId])
   @@index([lotId])
   @@index([sessionId])
   @@map("packed_stocks")
+}
+
+/// BUG-I (P1): per-shipment reservation. Pins reserved bags to the shipment that holds
+/// them so a release can never free another shipment's reservation on a shared bag-type
+/// row. createShipment creates these FIFO; confirmDelivery / cancelShipment / logReturn
+/// release only the rows belonging to that shipment. PackedStock.reservedQuantity is the
+/// denormalized Σ(quantity) of a row's reservations and moves only with these rows.
+model ShipmentReservation {
+  id            String      @id @default(uuid())
+  shipmentId    String
+  shipment      Shipment    @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  packedStockId String
+  packedStock   PackedStock @relation(fields: [packedStockId], references: [id])
+  quantity      Int
+  createdAt     DateTime    @default(now())
+  @@unique([shipmentId, packedStockId])
+  @@index([shipmentId])
+  @@index([packedStockId])
+  @@map("shipment_reservations")
 }
 
 model Setting {
@@ -497,7 +523,8 @@ model Shipment {
   notes       String?
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
-  bags ShipmentBag[]
+  bags         ShipmentBag[]
+  reservations ShipmentReservation[]
   @@index([tripId])
   @@index([status])
   @@index([orderId])
@@ -521,6 +548,10 @@ model DriverTrip {
   driver        User       @relation("TripDriver", fields: [driverId], references: [id])
   status        TripStatus @default(planned)
   fuelCost      Decimal?   @db.Decimal(10, 2)
+  /// BUG-M (P5): currency of fuelCost. Fuel is typically paid in LBP. Defaults USD. Each
+  /// object inside otherExpenses JSONB also carries its own `currency` key. P&L converts
+  /// both fuelCost and each otherExpenses[].amount to USD by the stored/embedded rate.
+  fuelCurrency  Currency   @default(USD)
   otherExpenses Json       @default("[]")
   startedAt     DateTime?
   completedAt   DateTime?
@@ -551,6 +582,10 @@ model StockExit {
   clientId      String?
   client        Client?      @relation(fields: [clientId], references: [id])
   amount          Decimal?     @db.Decimal(10, 2)
+  /// BUG-K (P5): currency of `amount` for amount-bearing exits (anonymous walk-in / by-kg
+  /// cash sales). Defaults USD. P&L converts LBP exits to USD by the stored rate. Exits
+  /// with amount=null (invoice-linked walk-ins, BUG-A) ignore this.
+  currency        Currency     @default(USD)
   collectedBy     String?
   collectedById   String?
   collectedByUser User?        @relation("ExitCollectedBy", fields: [collectedById], references: [id])
@@ -577,6 +612,11 @@ model Invoice {
   subtotal   Decimal       @db.Decimal(10, 2)
   total      Decimal       @db.Decimal(10, 2)
   currency   Currency
+  /// BUG-J (P5): LBP-per-USD exchange rate captured at issue time. P&L converts this
+  /// invoice's LBP revenue using its OWN snapshot, not today's global rate, so past
+  /// revenue is stable when the global rate changes. Null only for never-issued drafts
+  /// (which never contribute to P&L). USD invoices ignore it.
+  exchangeRateSnapshot Decimal? @db.Decimal(18, 6)
   status     InvoiceStatus @default(draft)
   paidAmount Decimal       @db.Decimal(10, 2) @default(0)
   issuedAt   DateTime?

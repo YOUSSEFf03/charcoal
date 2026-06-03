@@ -146,6 +146,8 @@ export interface BagsOutputLine {
 export interface TripOtherExpense {
   description: string; // AR
   amount: number;
+  /** BUG-M: currency of this expense amount; defaults USD when omitted. */
+  currency?: Currency;
 }
 
 export interface InvoiceLineItem {
@@ -453,6 +455,8 @@ export interface BagPurchase {
   quantity: number;
   unitCost: string; // Decimal
   totalCost: string; // Decimal — quantity * unitCost
+  /** BUG-L: currency of unitCost/totalCost; defaults USD. */
+  currency: Currency;
   date: string; // ISO date
   addedById: string;
   notes: string | null;
@@ -462,6 +466,8 @@ export interface CreateBagPurchaseDto {
   bagTypeId: string;
   quantity: number;
   unitCost: string;
+  /** BUG-L: currency of the cost; defaults USD when omitted. */
+  currency?: Currency;
   date: string;
   notes?: string | null;
 }
@@ -786,6 +792,8 @@ export interface DriverTrip {
   driverId: string;
   status: TripStatus;
   fuelCost: string | null; // Decimal
+  /** BUG-M: currency of fuelCost; defaults USD. */
+  fuelCurrency: Currency;
   otherExpenses: TripOtherExpense[];
   startedAt: string | null;
   completedAt: string | null;
@@ -809,6 +817,8 @@ export interface CreateDriverTripDto {
 
 export interface UpdateDriverTripDto {
   fuelCost?: string | null;
+  /** BUG-M: currency of fuelCost; defaults USD when omitted. */
+  fuelCurrency?: Currency;
   otherExpenses?: TripOtherExpense[];
   notes?: string | null;
   shipmentIds?: string[]; // re-assign bundled shipments
@@ -837,6 +847,8 @@ export interface StockExit {
   orderId: string | null;
   clientId: string | null;
   amount: string | null; // Decimal — sale amount for walk_in exits
+  /** BUG-K: currency of `amount`; defaults USD. Only meaningful when amount != null. */
+  currency: Currency;
   collectedBy: string | null;
   collectedById: string | null;
   loggedById: string;
@@ -859,6 +871,8 @@ export interface CreateStockExitDto {
   orderId?: string | null;
   clientId?: string | null;
   amount?: string; // walk_in sale price
+  /** BUG-K: currency of `amount`; defaults USD when omitted. */
+  currency?: Currency;
   collectedById?: string;
   date: string;
 }
@@ -877,6 +891,8 @@ export interface Invoice {
   currency: Currency;
   status: InvoiceStatus;
   paidAmount: string; // Decimal
+  /** BUG-J: LBP-per-USD rate snapshotted at issue time; null for never-issued drafts. */
+  exchangeRateSnapshot: string | null; // Decimal
   issuedAt: string | null;
   dueDate: string | null; // ISO date
   createdAt: string;

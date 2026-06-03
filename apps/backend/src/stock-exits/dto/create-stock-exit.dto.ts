@@ -9,7 +9,7 @@ import {
   IsUUID,
   Min,
 } from 'class-validator';
-import { ExitType } from '@prisma/client';
+import { Currency, ExitType } from '@prisma/client';
 import { ApiProperty } from '@nestjs/swagger';
 
 /**
@@ -82,11 +82,20 @@ export class CreateStockExitDto {
   @IsUUID('all')
   clientId?: string;
 
-  @ApiProperty({ description: 'Sale amount in USD (for client account balance)', required: false })
+  @ApiProperty({ description: 'Sale amount (for client account balance)', required: false })
   @IsOptional()
   @IsNumber()
   @Min(0)
   amount?: number;
+
+  /**
+   * BUG-K (P5): currency of `amount`. Defaults USD when omitted (backward compatible).
+   * P&L converts LBP amount-bearing exits to USD using the stored rate.
+   */
+  @ApiProperty({ description: 'Currency of `amount` (defaults USD)', enum: Currency, required: false })
+  @IsOptional()
+  @IsEnum(Currency)
+  currency?: Currency;
 
   @ApiProperty({ description: 'UUID of the user who collected the cash (preferred)', required: false })
   @IsOptional()

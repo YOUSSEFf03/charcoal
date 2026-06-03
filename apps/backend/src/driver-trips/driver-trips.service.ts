@@ -194,14 +194,22 @@ export class DriverTripsService {
       throw new NotFoundException({ error: 'Trip not found', code: 'NOT_FOUND' });
     });
 
+    // BUG-M (P5): persist the currency of fuelCost and embed a per-item currency on each
+    // otherExpenses element (default USD) so P&L can convert LBP fuel/incidentals to USD.
+    const normalizedOtherExpenses = dto.otherExpenses?.map((e) => ({
+      ...e,
+      currency: e.currency ?? 'USD',
+    }));
+
     return this.prisma.driverTrip.update({
       where: { id },
       data: {
         status: 'completed',
         completedAt: new Date(),
         ...(dto.fuelCost !== undefined ? { fuelCost: dto.fuelCost } : {}),
-        ...(dto.otherExpenses !== undefined
-          ? { otherExpenses: dto.otherExpenses as unknown as Prisma.InputJsonValue }
+        ...(dto.fuelCurrency !== undefined ? { fuelCurrency: dto.fuelCurrency } : {}),
+        ...(normalizedOtherExpenses !== undefined
+          ? { otherExpenses: normalizedOtherExpenses as unknown as Prisma.InputJsonValue }
           : {}),
       },
     });

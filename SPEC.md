@@ -152,6 +152,18 @@ A positive balance means the client owes money. This is their debit.
 ### 4.7 Price at time of sale
 There is no pre-set price list per client. The sales rep enters the price per bag when creating each order. This is intentional — a walk-in buyer purchasing one bag pays a different price than a restaurant ordering 300kg of the same product.
 
+### 4.8 Packed-stock reservations (shipment-keyed)
+When a shipment is created it RESERVES packed bags so concurrent shipments cannot jointly over-allocate the same bag type. Reservations are **keyed to the shipment**: each `(shipment, packedStock)` chunk is its own `ShipmentReservation` row. A row's `reservedQuantity` is a denormalized cache equal to the sum of that row's reservation rows.
+
+- **Free quantity** available to any non-shipment consumer (walk-in sale, stock exit, physical count, adjustment) is always `quantity − reservedQuantity`.
+- A reservation is released **only by the shipment that holds it**: delivery consumes that shipment's own reservation rows (and the matching physical bags); cancellation deletes only that shipment's rows. Delivering or cancelling one shipment can never free another shipment's reserved bags on a shared row.
+- Invariant: Σ reservations per packed-stock row ≤ its `quantity` at all times.
+
+### 4.9 Currency on amount-bearing records
+Every record that stores a monetary amount carries the currency needed to interpret it; the P&L report (`getProfitLoss`) converts each to USD rather than silently assuming USD:
+- **Invoices** snapshot their issue-time LBP-per-USD rate (`exchangeRateSnapshot`); P&L values each LBP invoice by its OWN snapshot so historical revenue is stable when the global rate moves.
+- **Stock exits** (`currency`), **bag purchases** (`currency`), and **driver trips** (`fuelCurrency` plus a per-item `currency` inside `otherExpenses`) record their currency at entry time; P&L converts LBP amounts to USD by the current global rate. Default is USD.
+
 ---
 
 ## 5. Module 1 — Container Tracker
@@ -604,12 +616,15 @@ Maintain supplier profiles for procurement reference.
 
 ### Report: Profit & Loss
 ```
-Revenue = Σ paidAmount for all partially_paid and paid invoices, converted to USD at the stored
-          exchange rate (cash basis). 'issued' invoices contribute 0 — only collected cash counts.
+Revenue = Σ paidAmount for all partially_paid and paid invoices, each LBP invoice converted to
+          USD by its OWN issue-time exchangeRateSnapshot (cash basis; BUG-J). 'issued' invoices
+          contribute 0 — only collected cash counts. Plus Σ amount-bearing walk-in/anonymous
+          exits, each converted to USD by its stored currency (BUG-K).
 COGS = Σ (kg sold × cost_per_kg per lot) at exit time (exit-accrual basis)
-Bag cost = Σ (bags sold × cost_per_bag per bag type)
+Bag cost = Σ (bags purchased × cost), each converted to USD by its stored currency (BUG-L)
 Variances = Σ (session.variance_kg × lot.cost_per_kg) for all sessions
-Delivery expenses = Σ driver trip expenses
+Delivery expenses = Σ driver trip fuel + otherExpenses, each converted to USD by its stored
+                    currency / per-item currency (BUG-M)
 Container expenses = Σ all container expenses (already in cost_per_kg but shown separately)
 
 Gross profit = Revenue − COGS − Bag cost − Variances − Delivery expenses

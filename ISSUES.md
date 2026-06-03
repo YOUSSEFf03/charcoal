@@ -47,7 +47,7 @@ P&L walk-in aggregate sums only non-null amounts, eliminating the double-count.
 
 ## Reports Module — P&L Currency Handling
 
-### Issue — P&L components lack per-record currency metadata (partial fix)
+### Issue — P&L components lack per-record currency metadata (invoices, stock_exits, bag_purchases, driver_trips ✓ Fixed; stock_lots/containers deferred)
 
 **Affected method:** `ReportsService.getProfitLoss`
 
@@ -64,38 +64,48 @@ unpaid (`issued`) invoices and counted full billed amounts even for partially-co
 
 **Known residual:** Revenue (cash basis) and COGS (exit-accrual basis) use different timing.
 Gross profit skews when payment lags stock exit — this asymmetry is accepted per spec.
-A schema migration to add a per-invoice exchange-rate snapshot (`exchangeRateSnapshot`) remains
-a separate future item (see "Remaining limitation" below).
 
-**Remaining limitation:** All historical LBP invoices are converted at *today's* global rate.
-There is no per-invoice rate snapshot. To fix this properly, an `exchangeRateSnapshot` column
-should be added to the `invoices` table and populated at invoice-issue time.
+#### Per-invoice exchange-rate snapshot ✓ Fixed (BUG-J, P5)
+**Problem:** `getProfitLoss` converted historical LBP invoices at *today's* global rate, so
+past revenue shifted whenever the rate changed.
+**Fix:** Added `invoices.exchangeRateSnapshot` (Decimal; migration
+`20260603050000_add_invoice_exchange_rate_snapshot`), populated at issue time from
+`SettingsService.getExchangeRate` in **every** issue path — `InvoicesService.issue` and
+`WalkInSalesService.create`. `getProfitLoss` now divides each LBP invoice by its OWN snapshot
+(`COALESCE(inv."exchangeRateSnapshot", <global>)`), so past revenue is stable. USD invoices
+unchanged.
+**Backfill (one-time approximation):** all already-issued rows were stamped with the current
+global rate — identical to the pre-fix behaviour, so P&L output is unchanged immediately after
+migration; only invoices issued afterwards capture their true issue-time rate. Un-issued drafts
+stay NULL and never reach P&L.
 
-#### Walk-in exit amounts — deferred (no currency column on stock_exits)
-`StockExit.amount` has no `currency` column. These amounts are assumed USD. New-flow walk-in
-exits (via `POST /walk-in-sales`) never populate `amount` directly — the invoice/payment pair
-captures the revenue — so this path is mostly zero in practice. Legacy anonymous cash sales
-(direct `POST /stock-exits`) may have stored LBP amounts.
+#### Walk-in / anonymous exit amounts ✓ Fixed (BUG-K, P5)
+**Problem:** `StockExit.amount` had no currency, so P&L valued legacy anonymous LBP cash sales
+as USD.
+**Fix:** Added `stock_exits.currency` (Currency, default USD; migration
+`20260603060000_add_stock_exit_currency`), captured on every amount-bearing exit
+(`StockExitsService.create`). `getProfitLoss` converts LBP exits by the global rate. Invoice-
+linked walk-in exits keep `amount = null` (BUG-A invariant) and contribute 0 regardless.
+**Backfill:** column default stamps every existing row USD (prior P&L treated them as USD).
 
-**Migration needed:** Add `currency Currency @default(USD)` to `stock_exits` and backfill any
-legacy rows before applying a conversion in `getProfitLoss`.
+#### BagPurchase.totalCost ✓ Fixed (BUG-L, P5)
+**Problem:** `BagPurchase.totalCost` had no currency; LBP packaging purchases were understated
+when treated as USD.
+**Fix:** Added `bag_purchases.currency` (Currency, default USD; migration
+`20260603070000_add_bag_purchase_currency`), captured in `BagPurchasesService.create`. P&L
+converts LBP bag cost by the global rate.
+**Backfill:** column default stamps every existing row USD; reclassify genuinely-LBP historical
+rows manually if records show otherwise.
 
-#### BagPurchase.totalCost — deferred (no currency column on bag_purchases)
-`BagPurchase.totalCost` has no `currency` column. Assumed USD. Local packaging suppliers in
-Lebanon likely invoice in LBP; if so, the P&L bag cost is understated when the LBP amount is
-treated as a USD amount.
-
-**Migration needed:** Add `currency Currency @default(USD)` to `bag_purchases` (or `USD` /
-`LBP` based on actual purchasing practice) before applying a conversion.
-
-#### DriverTrip fuelCost and otherExpenses — deferred (no currency column on driver_trips)
-`DriverTrip.fuelCost` and the `amount` fields inside the `otherExpenses` JSONB array have no
-currency metadata. Assumed USD. Fuel and incidental trip expenses in Lebanon are typically
-paid in LBP.
-
-**Migration needed:** Add `currency Currency @default(USD)` to `driver_trips` for `fuelCost`,
-and add a `currency` key to each object in the `otherExpenses` JSONB array. Apply conversion
-in `getProfitLoss` once the column exists.
+#### DriverTrip fuelCost and otherExpenses ✓ Fixed (BUG-M, P5)
+**Problem:** `DriverTrip.fuelCost` and each `otherExpenses[].amount` had no currency; LBP fuel
+and incidentals were misvalued as USD.
+**Fix:** Added `driver_trips.fuelCurrency` (Currency, default USD) and a per-item `currency` key
+inside the `otherExpenses` JSONB (migration `20260603080000_add_driver_trip_fuel_currency`),
+captured in `DriverTripsService.completeTrip`. `getProfitLoss` converts both `fuelCost` and each
+`otherExpenses[].amount` to USD by the stored/embedded currency.
+**Backfill:** `fuelCurrency` defaults USD; existing `otherExpenses` elements lacking a currency
+key are stamped USD by the migration.
 
 #### StockLot.costPerKg (COGS and variance_cost) — deferred (no currency column on stock_lots/containers)
 `costPerKg` is derived from `ContainerProductLine.pricePerTon`. Neither `stock_lots` nor
@@ -252,10 +262,49 @@ drains its own reservation in lockstep.
 **Invariant now enforced:** Σ reservedQuantity ≤ Σ quantity at all times; no non-shipment
 consumer can draw reserved stock, enforced on the backend AND in the frontend availability check.
 
-**Known residual (design note, not fixed here):** `reservedQuantity` is an unkeyed aggregate
-counter on the row, so `confirmDelivery`'s proportional release can release a *different*
-shipment's reservation on a shared bag-type row. Recommended follow-up: pin reservations to
-the shipment (per-shipment reservation rows) so releases are unambiguous.
+**Known residual (design note) ✓ Fixed (BUG-I)** — see "Reservations are an unkeyed
+aggregate counter" below.
+
+### Issue — Reservations are an unkeyed aggregate counter ✓ Fixed (BUG-I)
+
+**Pages:** Shipments → Create / Confirm delivery / Cancel / Log return
+
+**Problem:** `PackedStock.reservedQuantity` was a single integer per row, not tied to any
+shipment. `confirmDelivery` released the reservation proportionally
+(`releaseReserved = min(take, row.reservedQuantity)`), so on a bag-type row shared by two
+pending shipments it could release the WRONG shipment's reservation. Failure mode: shipment B
+delivers and frees bags shipment A had reserved → a walk-in sells them → A then delivers short
+despite having reserved. Σ reserved stayed correct, but per-shipment protection was lost.
+
+**Root cause (pattern P1 — positional/aggregate identity instead of a real key):** the
+reservation was an unkeyed counter, so a release had no way to know whose bags it was freeing.
+
+**Fix:** Added a keyed `ShipmentReservation` table (`shipmentId`, `packedStockId`, `quantity`,
+unique on `(shipmentId, packedStockId)`; migration `20260603040000_add_shipment_reservations`).
+- `createShipment` walks packed stock FIFO and upserts a reservation row per
+  `(shipment, packedStock)` chunk, incrementing the denormalized `reservedQuantity` cache in
+  lockstep (cache = Σ of a row's reservations).
+- `confirmDelivery` drains the EXACT rows this shipment reserved (its own reservation rows),
+  decrements `quantity` and `reservedQuantity` by this shipment's hold only, and deletes the
+  consumed reservation rows. The proportional cross-shipment release is gone.
+- `cancelShipment` deletes only this shipment's reservation rows and decrements the cache by
+  exactly what this shipment held.
+- `logReturn` is unchanged for reservations — a delivered shipment already had its reservation
+  rows consumed at delivery; the return only restores physical `quantity`.
+
+`PackedStock.reservedQuantity` is retained as a denormalized cache so every BUG-E free-quantity
+consumer (`quantity − reservedQuantity`) keeps working unchanged.
+
+**Backfill (documented one-time approximation):** the exact original allocation was never
+recorded, so for each still-pending/loaded shipment the migration replays the same FIFO
+allocation against each row's current `reservedQuantity` capacity (in shipment-creation order)
+and emits one reservation row per `(shipment, packedStock)` chunk. The reconstructed Σ per row
+equals the existing `reservedQuantity` exactly, so the cache stays consistent and the BUG-E
+invariant is unchanged — only the per-shipment attribution is reconstructed.
+
+**Invariant now enforced:** each shipment's reservation is released only by that same shipment;
+a walk-in/exit can never consume bags another pending shipment reserved. Σ reservations per row
+≤ quantity at all times.
 
 ### Issue — Stock adjustment trusts client qtyBefore ✓ Fixed (BUG-F)
 

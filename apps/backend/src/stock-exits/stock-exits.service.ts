@@ -203,6 +203,9 @@ export class StockExitsService {
         ...(dto.orderId ? { orderId: dto.orderId } : {}),
         ...(dto.clientId ? { clientId: dto.clientId } : {}),
         ...(dto.amount != null ? { amount: dto.amount.toFixed(2) } : {}),
+        // BUG-K (P5): capture the amount's currency so P&L can convert LBP cash sales.
+        // Defaults USD (column default) when omitted; only meaningful when amount != null.
+        ...(dto.currency ? { currency: dto.currency } : {}),
         ...collectorFields,
       };
 

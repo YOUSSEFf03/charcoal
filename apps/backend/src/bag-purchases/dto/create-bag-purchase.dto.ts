@@ -1,5 +1,6 @@
 import {
   IsDateString,
+  IsEnum,
   IsInt,
   IsNumberString,
   IsOptional,
@@ -7,6 +8,7 @@ import {
   IsUUID,
   Min,
 } from 'class-validator';
+import { Currency } from '@prisma/client';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateBagPurchaseDto {
@@ -26,6 +28,15 @@ export class CreateBagPurchaseDto {
   @ApiProperty({ description: 'Total cost (decimal string)', example: '4250.00' })
   @IsNumberString()
   totalCost: string;
+
+  /**
+   * BUG-L (P5): currency of unitCost/totalCost. Defaults USD when omitted.
+   * P&L converts LBP bag cost to USD using the stored rate.
+   */
+  @ApiProperty({ description: 'Currency of the cost (defaults USD)', enum: Currency, required: false })
+  @IsOptional()
+  @IsEnum(Currency)
+  currency?: Currency;
 
   @ApiProperty({ description: 'Purchase date (ISO 8601)', example: '2024-01-15' })
   @IsDateString()

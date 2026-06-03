@@ -6,6 +6,7 @@ import { validate } from 'class-validator';
 import { InvoicesService } from './invoices.service';
 import { InvoiceCalculatorService } from './invoice-calculator.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 import { InvoiceLineDto } from './dto/invoice-line.dto';
 
 // ---------------------------------------------------------------------------
@@ -48,14 +49,21 @@ describe('InvoicesService', () => {
     recomputeStatus: jest.fn() as any,
   };
 
+  // BUG-J: issue() now resolves the exchange rate to snapshot it on the invoice.
+  const mockSettings = {
+    getExchangeRate: jest.fn() as any,
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockSettings.getExchangeRate.mockResolvedValue(89550);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         InvoicesService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: InvoiceCalculatorService, useValue: mockCalculator },
+        { provide: SettingsService, useValue: mockSettings },
       ],
     }).compile();
 
@@ -309,9 +317,12 @@ describe('InvoicesService', () => {
           data: expect.objectContaining({
             status: 'issued',
             issuedAt: expect.any(Date),
+            // BUG-J (P5): the issue-time rate is snapshotted onto the invoice.
+            exchangeRateSnapshot: '89550',
           }),
         }),
       );
+      expect(mockSettings.getExchangeRate).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({ status: 'issued' });
     });
   });

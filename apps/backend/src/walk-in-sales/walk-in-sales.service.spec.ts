@@ -101,6 +101,8 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     const invArg = tx.invoice.create.mock.calls[0][0].data;
     expect(invArg.status).toBe('issued');
     expect(invArg.total).toBe('120.00');
+    // BUG-J (P5): the issue-time rate is snapshotted on the walk-in invoice too.
+    expect(invArg.exchangeRateSnapshot).toBe('89550');
     // Payment created and linked to the invoice.
     const payArg = tx.payment.create.mock.calls[0][0].data;
     expect(payArg.invoiceId).toBe('inv-1');
@@ -125,6 +127,8 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     expect(invArg.currency).toBe('LBP');
     // 12 USD × 90000 = 1,080,000 LBP per bag × 10 = 10,800,000 total.
     expect(invArg.total).toBe('10800000.00');
+    // BUG-J (P5): snapshot captures the 90000 rate used at issue time.
+    expect(invArg.exchangeRateSnapshot).toBe('90000');
 
     const payArg = tx.payment.create.mock.calls[0][0].data;
     expect(payArg.currency).toBe('LBP');

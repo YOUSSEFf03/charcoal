@@ -77,24 +77,27 @@ export class ReportsService {
 
     const [
       invoiceRevenueResult,
-      walkInAgg,
+      walkInResult,
       cogsResult,
-      bagCostAgg,
+      bagCostResult,
       varianceCostResult,
-      fuelAgg,
+      fuelResult,
       otherExpensesResult,
     ] = await Promise.all([
 
       // ── invoice revenue — cash basis: sum paidAmount (not lineTotal) ─────────
       // Only 'partially_paid' and 'paid' invoices contribute; 'issued' are excluded (0 collected).
       // paidAmount already reflects partial collections; 'paid' invoices have paidAmount = total.
-      // LBP invoices are divided by the exchange rate; USD invoices pass through unchanged.
-      // LIMITATION: uses today's global rate for all historical LBP invoices. A per-invoice
-      // rate snapshot would require a schema migration (tracked in ISSUES.md).
+      // BUG-J (P5): each LBP invoice is divided by its OWN issue-time rate snapshot
+      // (inv."exchangeRateSnapshot"), so historical revenue does not move when the global
+      // rate changes. The global `rate` is used only as a defensive fallback for any legacy
+      // issued row whose snapshot is somehow null (the backfill stamped all issued rows).
+      // USD invoices pass through unchanged.
       this.prisma.$queryRaw<[{ invoice_revenue: string }]>(Prisma.sql`
         SELECT COALESCE(SUM(
           CASE WHEN inv."currency" = 'LBP'
-               THEN inv."paidAmount"::numeric / ${rate}::numeric
+               THEN inv."paidAmount"::numeric
+                    / NULLIF(COALESCE(inv."exchangeRateSnapshot", ${rate}::numeric), 0)
                ELSE inv."paidAmount"::numeric
           END
         ), 0::numeric)::text AS invoice_revenue
@@ -105,20 +108,24 @@ export class ReportsService {
         ${filters.clientId ? Prisma.sql`AND inv."clientId" = ${filters.clientId}` : Prisma.empty}
       `),
 
-      // ── walk-in revenue — DB aggregate ──────────────────────────────────────
+      // ── walk-in revenue — raw SQL with per-row currency conversion (BUG-K) ───
       // Only non-null amounts counted — walk-in exits linked to invoices are always null
-      // (see WalkInSalesService). StockExit has NO currency column; these amounts are
-      // assumed USD. If LBP walk-in exits exist (legacy anonymous cash sales), a schema
-      // migration to add a currency column on stock_exits is required (tracked in ISSUES.md).
-      this.prisma.stockExit.aggregate({
-        where: {
-          exitType: 'walk_in',
-          amount:   { not: null },
-          date:     dateFilter,
-          ...(filters.clientId ? { clientId: filters.clientId } : {}),
-        },
-        _sum: { amount: true },
-      }),
+      // (see WalkInSalesService). BUG-K (P5): each exit now carries a `currency`; LBP
+      // amounts are divided by the global rate, USD pass through. Legacy rows backfilled USD.
+      this.prisma.$queryRaw<[{ walk_in_revenue: string }]>(Prisma.sql`
+        SELECT COALESCE(SUM(
+          CASE WHEN se."currency" = 'LBP'
+               THEN se."amount"::numeric / NULLIF(${rate}::numeric, 0)
+               ELSE se."amount"::numeric
+          END
+        ), 0::numeric)::text AS walk_in_revenue
+        FROM "stock_exits" se
+        WHERE se."exitType" = 'walk_in'
+          AND se."amount" IS NOT NULL
+        ${dateFilter.gte ? Prisma.sql`AND se."date" >= ${dateFilter.gte}` : Prisma.empty}
+        ${dateFilter.lte ? Prisma.sql`AND se."date" <= ${dateFilter.lte}` : Prisma.empty}
+        ${filters.clientId ? Prisma.sql`AND se."clientId" = ${filters.clientId}` : Prisma.empty}
+      `),
 
       // ── COGS — raw SQL SUM (NUMERIC precision, no JS float math) ────────────
       // costPerKg is derived from container import pricing (ContainerProductLine.pricePerTon).
@@ -146,14 +153,21 @@ export class ReportsService {
         ${dateFilter.lte ? Prisma.sql`AND se."date" <= ${dateFilter.lte}` : Prisma.empty}
       `),
 
-      // ── bag_cost — DB aggregate ──────────────────────────────────────────────
-      // BagPurchase.totalCost has NO currency column; assumed USD. If bags are purchased
-      // in LBP (local packaging suppliers), a schema migration to add a currency column
-      // on bag_purchases is required (tracked in ISSUES.md).
-      this.prisma.bagPurchase.aggregate({
-        where: { date: dateFilter },
-        _sum:  { totalCost: true },
-      }),
+      // ── bag_cost — raw SQL with per-row currency conversion (BUG-L) ──────────
+      // BUG-L (P5): each bag purchase carries a `currency`; LBP totals are divided by the
+      // global rate, USD pass through. Legacy rows backfilled USD.
+      this.prisma.$queryRaw<[{ bag_cost: string }]>(Prisma.sql`
+        SELECT COALESCE(SUM(
+          CASE WHEN bp."currency" = 'LBP'
+               THEN bp."totalCost"::numeric / NULLIF(${rate}::numeric, 0)
+               ELSE bp."totalCost"::numeric
+          END
+        ), 0::numeric)::text AS bag_cost
+        FROM "bag_purchases" bp
+        WHERE 1=1
+        ${dateFilter.gte ? Prisma.sql`AND bp."date" >= ${dateFilter.gte}` : Prisma.empty}
+        ${dateFilter.lte ? Prisma.sql`AND bp."date" <= ${dateFilter.lte}` : Prisma.empty}
+      `),
 
       // ── variance_cost — LATERAL SQL weighted avg per session (no row fetch) ──
       // varianceKg > 0 = real packing loss (dust, breakage); negatives excluded.
@@ -183,19 +197,32 @@ export class ReportsService {
         ${dateFilter.lte ? Prisma.sql`AND ps."date" <= ${dateFilter.lte}` : Prisma.empty}
       `),
 
-      // ── delivery: fuelCost — DB aggregate ───────────────────────────────────
-      // DriverTrip.fuelCost has NO currency column; assumed USD. If fuel is paid in LBP,
-      // a schema migration to add a currency column on driver_trips is required (tracked in ISSUES.md).
-      this.prisma.driverTrip.aggregate({
-        where: { status: 'completed', completedAt: dateFilter },
-        _sum:  { fuelCost: true },
-      }),
+      // ── delivery: fuelCost — raw SQL with per-row currency conversion (BUG-M) ─
+      // BUG-M (P5): fuelCost now carries `fuelCurrency`; LBP fuel is divided by the global
+      // rate, USD pass through. Legacy rows backfilled USD.
+      this.prisma.$queryRaw<[{ fuel_cost: string }]>(Prisma.sql`
+        SELECT COALESCE(SUM(
+          CASE WHEN dt."fuelCurrency" = 'LBP'
+               THEN COALESCE(dt."fuelCost", 0)::numeric / NULLIF(${rate}::numeric, 0)
+               ELSE COALESCE(dt."fuelCost", 0)::numeric
+          END
+        ), 0::numeric)::text AS fuel_cost
+        FROM "driver_trips" dt
+        WHERE dt."status" = 'completed'
+        ${dateFilter.gte ? Prisma.sql`AND dt."completedAt" >= ${dateFilter.gte}` : Prisma.empty}
+        ${dateFilter.lte ? Prisma.sql`AND dt."completedAt" <= ${dateFilter.lte}` : Prisma.empty}
+      `),
 
-      // ── delivery: otherExpenses — LATERAL SQL (no row fetch) ────────────────
-      // DriverTrip.otherExpenses JSONB amounts have NO currency field; assumed USD.
-      // Same limitation as fuelCost above (tracked in ISSUES.md).
+      // ── delivery: otherExpenses — LATERAL SQL with per-item currency (BUG-M) ─
+      // BUG-M (P5): each JSONB element now carries a `currency`; LBP items are divided by
+      // the global rate, USD (or missing → treated USD) pass through. Backfilled to USD.
       this.prisma.$queryRaw<[{ other_expenses: string }]>(Prisma.sql`
-        SELECT COALESCE(SUM((exp->>'amount')::numeric), 0::numeric)::text AS other_expenses
+        SELECT COALESCE(SUM(
+          CASE WHEN (exp->>'currency') = 'LBP'
+               THEN (exp->>'amount')::numeric / NULLIF(${rate}::numeric, 0)
+               ELSE (exp->>'amount')::numeric
+          END
+        ), 0::numeric)::text AS other_expenses
         FROM "driver_trips" dt
         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(dt."otherExpenses", '[]'::jsonb)) AS exp
         WHERE dt."status" = 'completed'
@@ -205,16 +232,17 @@ export class ReportsService {
     ]);
 
     const invoiceRevenue = new Decimal(invoiceRevenueResult[0]?.invoice_revenue ?? '0');
-    // walk-in exit amounts have no currency column; assumed USD for now.
-    // If LBP walk-in exits exist, a schema migration to add currency is required (tracked in ISSUES.md).
-    const walkInRevenue  = new Decimal(walkInAgg._sum.amount?.toString() ?? '0');
+    // BUG-K (P5): walk-in exit amounts are converted per-row by their stored currency.
+    const walkInRevenue  = new Decimal(walkInResult[0]?.walk_in_revenue ?? '0');
     const revenue        = invoiceRevenue.plus(walkInRevenue);
 
     const cogs         = new Decimal(cogsResult[0]?.cogs ?? '0');
-    const bagCost      = new Decimal(bagCostAgg._sum.totalCost?.toString() ?? '0');
+    // BUG-L (P5): bag cost converted per-row by stored currency.
+    const bagCost      = new Decimal(bagCostResult[0]?.bag_cost ?? '0');
     const varianceCost = new Decimal(varianceCostResult[0]?.variance_cost ?? '0');
 
-    const fuelCost      = new Decimal(fuelAgg._sum.fuelCost?.toString() ?? '0');
+    // BUG-M (P5): fuel + per-item incidentals converted by stored currency.
+    const fuelCost      = new Decimal(fuelResult[0]?.fuel_cost ?? '0');
     const otherExpenses = new Decimal(otherExpensesResult[0]?.other_expenses ?? '0');
     const deliveryCost  = fuelCost.plus(otherExpenses);
 

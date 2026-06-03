@@ -68,11 +68,19 @@ describe('ReportsService', () => {
     /**
      * Set up all mocks for one getProfitLoss() call.
      *
-     * $queryRaw is called 4× inside Promise.all in this order:
-     *   1. invoice_revenue
-     *   2. cogs
-     *   3. variance_cost
-     *   4. other_expenses
+     * BUG-K/L/M (P5): walk-in revenue, bag cost, and fuel cost moved from Prisma
+     * aggregates to raw SQL so each row is converted by its own currency. $queryRaw is
+     * now called 7× inside Promise.all in this order:
+     *   1. invoice_revenue   (BUG-J: divides LBP by per-invoice snapshot)
+     *   2. walk_in_revenue   (BUG-K: divides LBP exits by global rate)
+     *   3. cogs
+     *   4. bag_cost          (BUG-L: divides LBP purchases by global rate)
+     *   5. variance_cost
+     *   6. fuel_cost         (BUG-M: divides LBP fuel by global rate)
+     *   7. other_expenses    (BUG-M: divides LBP incidentals by global rate)
+     *
+     * walkInAmount / bagCostTotal / fuelCost params are interpreted as the POST-conversion
+     * scalar the DB would return (matching the legacy tests' intent).
      */
     function setupPnL({
       invoiceRevenue  = '0',
@@ -85,19 +93,12 @@ describe('ReportsService', () => {
     } = {}) {
       mockPrisma.$queryRaw
         .mockResolvedValueOnce([{ invoice_revenue: invoiceRevenue }])
+        .mockResolvedValueOnce([{ walk_in_revenue: walkInAmount ?? '0' }])
         .mockResolvedValueOnce([{ cogs: cogsRaw }])
+        .mockResolvedValueOnce([{ bag_cost: bagCostTotal ?? '0' }])
         .mockResolvedValueOnce([{ variance_cost: varianceCostRaw }])
+        .mockResolvedValueOnce([{ fuel_cost: fuelCost ?? '0' }])
         .mockResolvedValueOnce([{ other_expenses: otherExpenses }]);
-
-      mockPrisma.stockExit.aggregate.mockResolvedValue(
-        { _sum: { amount: walkInAmount ? dec(walkInAmount) : null } },
-      );
-      mockPrisma.bagPurchase.aggregate.mockResolvedValue(
-        { _sum: { totalCost: bagCostTotal ? dec(bagCostTotal) : null } },
-      );
-      mockPrisma.driverTrip.aggregate.mockResolvedValue(
-        { _sum: { fuelCost: fuelCost ? dec(fuelCost) : null } },
-      );
     }
 
     it('returns gross_profit field with correct structure', async () => {
@@ -167,9 +168,9 @@ describe('ReportsService', () => {
       expect(result.deliveryCost).toBe('5.00');
       expect(result.grossProfit).toBe('9.25');
 
-      // Verify DB paths — no in-memory folds on growth tables
+      // Verify DB paths — no in-memory folds on growth tables. BUG-K/L/M moved bag cost,
+      // walk-in revenue, and fuel to raw SQL, so all aggregation is now $queryRaw-based.
       expect(mockPrisma.$queryRaw).toHaveBeenCalled();
-      expect(mockPrisma.bagPurchase.aggregate).toHaveBeenCalled();
       expect(mockPrisma.bagPurchase.findMany).not.toHaveBeenCalled();
       // These three were the original OOM paths — all must be absent:
       expect(mockPrisma.invoice.findMany).not.toHaveBeenCalled();
@@ -177,7 +178,7 @@ describe('ReportsService', () => {
       expect(mockPrisma.driverTrip.findMany).not.toHaveBeenCalled();
     });
 
-    it('walk-in revenue added to invoice revenue via aggregate', async () => {
+    it('walk-in revenue added to invoice revenue via SQL (BUG-K)', async () => {
       setupPnL({
         invoiceRevenue: '100.00',
         walkInAmount:   '25.00',
@@ -186,21 +187,27 @@ describe('ReportsService', () => {
       const result = await service.getProfitLoss({});
 
       expect(result.revenue).toBe('125.00');
-      expect(mockPrisma.stockExit.aggregate).toHaveBeenCalled();
+      // BUG-K: walk-in revenue is the 2nd raw query now (was a Prisma aggregate).
+      expect(mockPrisma.$queryRaw).toHaveBeenCalled();
     });
+
+    // Helper: collect all Date values bound into any $queryRaw call's tagged-template.
+    function rawDateValues(): Date[] {
+      return mockPrisma.$queryRaw.mock.calls
+        .flatMap((c: any[]) => ((c[0] as any)?.values ?? []) as unknown[])
+        .filter((v: unknown): v is Date => v instanceof Date);
+    }
 
     it('applies a default date range when no dates are given', async () => {
       setupPnL({ invoiceRevenue: '0' });
 
       await service.getProfitLoss({});
 
-      // The walk-in aggregate's where.date should have a gte set to
-      // ~(now - DEFAULT_LOOKBACK_DAYS), proving the default was injected.
-      const aggCall = mockPrisma.stockExit.aggregate.mock.calls[0][0];
-      expect(aggCall.where.date?.gte).toBeInstanceOf(Date);
-
-      const msAgo = Date.now() - aggCall.where.date.gte.getTime();
-      const daysAgo = msAgo / (1000 * 60 * 60 * 24);
+      // BUG-K/L/M: date bounds are now interpolated into the raw queries. The default
+      // lookback (~now − DEFAULT_LOOKBACK_DAYS) must appear as a bound Date value.
+      const dates = rawDateValues();
+      expect(dates.length).toBeGreaterThan(0);
+      const daysAgo = (Date.now() - Math.min(...dates.map((d) => d.getTime()))) / (1000 * 60 * 60 * 24);
       expect(daysAgo).toBeGreaterThan(DEFAULT_LOOKBACK_DAYS - 1);
       expect(daysAgo).toBeLessThan(DEFAULT_LOOKBACK_DAYS + 1);
     });
@@ -210,9 +217,9 @@ describe('ReportsService', () => {
 
       await service.getProfitLoss({ dateFrom: '2024-01-01', dateTo: '2024-03-31' });
 
-      const aggCall = mockPrisma.stockExit.aggregate.mock.calls[0][0];
-      expect(aggCall.where.date.gte).toEqual(new Date('2024-01-01'));
-      expect(aggCall.where.date.lte).toEqual(new Date('2024-03-31'));
+      const dates = rawDateValues().map((d) => d.getTime());
+      expect(dates).toContain(new Date('2024-01-01').getTime());
+      expect(dates).toContain(new Date('2024-03-31').getTime());
     });
 
     // ── TEST A2 ───────────────────────────────────────────────────────────────
@@ -230,12 +237,9 @@ describe('ReportsService', () => {
 
       const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
 
-      // Invoice counted once
+      // Invoice counted once. The walk-in SQL (BUG-K) filters amount IS NOT NULL, so the
+      // amount=null exit returns 0 → revenue is the invoice only.
       expect(result.revenue).toBe('120.00');
-
-      // Walk-in aggregate contributes 0 because amount=null is excluded
-      const aggCall = mockPrisma.stockExit.aggregate.mock.calls[0][0];
-      expect(aggCall.where.amount).toEqual({ not: null });
 
       // Total revenue is NOT 240 — no double-counting
       expect(result.revenue).not.toBe('240.00');
@@ -254,12 +258,9 @@ describe('ReportsService', () => {
 
       const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
 
-      // Walk-in revenue = 50; invoice revenue = 0 → total = 50
+      // Walk-in revenue = 50; invoice revenue = 0 → total = 50. BUG-K SQL counts the
+      // non-null anonymous exit amount, converted by its stored currency.
       expect(result.revenue).toBe('50.00');
-
-      // The aggregate where-clause must NOT exclude non-null amounts
-      const aggCall = mockPrisma.stockExit.aggregate.mock.calls[0][0];
-      expect(aggCall.where.amount).toEqual({ not: null });
     });
 
     // ── TEST A4 ───────────────────────────────────────────────────────────────
@@ -273,13 +274,9 @@ describe('ReportsService', () => {
 
       const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
 
-      // With invoice_revenue=0 and walkIn aggregate=null (→ 0), total revenue=0
+      // With invoice_revenue=0 and the walk-in SQL returning 0 (amount=null excluded by
+      // BUG-K's `amount IS NOT NULL` filter), total revenue=0.
       expect(result.revenue).toBe('0.00');
-
-      // Confirm the aggregate was called with the correct null-exclusion filter
-      const aggCall = mockPrisma.stockExit.aggregate.mock.calls[0][0];
-      expect(aggCall.where.amount).toEqual({ not: null });
-      expect(aggCall.where.exitType).toBe('walk_in');
     });
 
     // ── TEST B1 ───────────────────────────────────────────────────────────────
@@ -454,6 +451,69 @@ describe('ReportsService', () => {
       expect(result.revenue).toBe('1.00');
       // lineTotal-based conversion (267000/89550 ≈ 2.98) must NOT appear
       expect(parseFloat(result.revenue)).not.toBeCloseTo(2.98, 1);
+    });
+
+    // ── BUG-J ───────────────────────────────────────────────────────────────
+    // The invoice-revenue query must reference each invoice's OWN snapshot column so a
+    // later global-rate change does not move historical revenue. We assert the column
+    // name appears in the raw SQL (the 1st query) — the conversion divides by
+    // COALESCE(inv."exchangeRateSnapshot", <global>).
+    it('BUG-J: invoice-revenue SQL divides LBP by the per-invoice exchangeRateSnapshot', async () => {
+      setupPnL({ invoiceRevenue: '0' });
+      await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+
+      const invoiceSql = (mockPrisma.$queryRaw.mock.calls[0][0] as any);
+      const sqlText = (invoiceSql.strings ?? []).join(' ');
+      expect(sqlText).toContain('exchangeRateSnapshot');
+    });
+
+    // ── BUG-K ───────────────────────────────────────────────────────────────
+    // Walk-in revenue is now its own raw query (2nd call) and must carry the global rate
+    // for per-row LBP conversion. An LBP exit of 89550 at rate 89550 yields 1.00 USD; the
+    // mocked post-conversion scalar proves the value flows into revenue.
+    it('BUG-K: walk-in exit revenue is a rate-aware raw query feeding revenue', async () => {
+      mockSettings.getExchangeRate.mockResolvedValue(89550);
+      setupPnL({ invoiceRevenue: '0', walkInAmount: '1.00' }); // 89550 LBP / 89550 = 1 USD
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+      expect(result.revenue).toBe('1.00');
+
+      // 2nd raw query (walk-in) must have the rate bound for the LBP CASE.
+      const walkInValues: unknown[] = (mockPrisma.$queryRaw.mock.calls[1][0] as any).values ?? [];
+      expect(walkInValues.some((v) => Number((v as any)?.toString?.() ?? v) === 89550)).toBe(true);
+    });
+
+    // ── BUG-L ───────────────────────────────────────────────────────────────
+    // Bag cost is now a raw query (4th call). An LBP purchase converts to USD, not face.
+    it('BUG-L: bag cost is a rate-aware raw query and reduces gross profit by the USD value', async () => {
+      mockSettings.getExchangeRate.mockResolvedValue(89550);
+      // LBP bag purchase 895500 / 89550 = 10 USD (post-conversion scalar).
+      setupPnL({ invoiceRevenue: '100.00', bagCostTotal: '10.00' });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+      expect(result.bagCost).toBe('10.00');
+      expect(result.grossProfit).toBe('90.00'); // 100 − 10, NOT 100 − 895500
+
+      const bagValues: unknown[] = (mockPrisma.$queryRaw.mock.calls[3][0] as any).values ?? [];
+      expect(bagValues.some((v) => Number((v as any)?.toString?.() ?? v) === 89550)).toBe(true);
+    });
+
+    // ── BUG-M ───────────────────────────────────────────────────────────────
+    // Fuel (6th call) and otherExpenses (7th call) are rate-aware raw queries. LBP fuel
+    // and incidentals convert to USD before reducing gross profit.
+    it('BUG-M: fuel + otherExpenses are rate-aware raw queries feeding delivery cost', async () => {
+      mockSettings.getExchangeRate.mockResolvedValue(89550);
+      // LBP fuel 447750/89550 = 5 USD; LBP incidental 268650/89550 = 3 USD.
+      setupPnL({ invoiceRevenue: '100.00', fuelCost: '5.00', otherExpenses: '3.00' });
+
+      const result = await service.getProfitLoss({ dateFrom: '2026-01-01', dateTo: '2026-12-31' });
+      expect(result.deliveryCost).toBe('8.00'); // 5 + 3 in USD
+      expect(result.grossProfit).toBe('92.00'); // 100 − 8
+
+      const fuelValues: unknown[] = (mockPrisma.$queryRaw.mock.calls[5][0] as any).values ?? [];
+      const otherValues: unknown[] = (mockPrisma.$queryRaw.mock.calls[6][0] as any).values ?? [];
+      expect(fuelValues.some((v) => Number((v as any)?.toString?.() ?? v) === 89550)).toBe(true);
+      expect(otherValues.some((v) => Number((v as any)?.toString?.() ?? v) === 89550)).toBe(true);
     });
   });
 

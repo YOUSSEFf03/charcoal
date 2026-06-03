@@ -83,6 +83,9 @@ export class BagPurchasesService {
         quantity: dto.quantity,
         unitCost: dto.unitCost,
         totalCost: dto.totalCost,
+        // BUG-L (P5): capture cost currency so P&L can convert LBP bag purchases.
+        // Defaults USD (column default) when omitted.
+        ...(dto.currency ? { currency: dto.currency } : {}),
         date: new Date(dto.date),
         notes: dto.notes,
         addedById: user.id,

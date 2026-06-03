@@ -6,6 +6,7 @@ import {
 import { InvoiceStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoiceCalculatorService } from './invoice-calculator.service';
+import { SettingsService } from '../settings/settings.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 
@@ -14,6 +15,7 @@ export class InvoicesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly calculator: InvoiceCalculatorService,
+    private readonly settings: SettingsService,
   ) {}
 
   /*
@@ -241,6 +243,11 @@ export class InvoicesService {
    * @throws NotFoundException if invoice not found
    */
   async issue(id: string) {
+    // BUG-J (P5): resolve the LBP-per-USD rate at issue time and snapshot it on the
+    // invoice so P&L converts this invoice's LBP revenue at the rate in effect now,
+    // never a later global rate. Resolved before the tx — settings are not mutated here.
+    const rate = await this.settings.getExchangeRate();
+
     return this.prisma.$transaction(async (tx) => {
       const invoice = await tx.invoice.findUnique({ where: { id } });
       if (!invoice) {
@@ -254,6 +261,7 @@ export class InvoicesService {
         data: {
           status: 'issued',
           issuedAt: new Date(),
+          exchangeRateSnapshot: rate.toString(),
         },
       });
     });

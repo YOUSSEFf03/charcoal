@@ -71,17 +71,20 @@ export class ShipmentsService {
   }
 
   /**
-   * Create a shipment and RESERVE packed stock for it (BUG-2 / P2).
+   * Create a shipment and RESERVE packed stock for it, pinned to the shipment (BUG-I / P1).
    *
-   * The old version only validated `Σ quantity` and never reserved, so two concurrent
-   * shipments for the same bag type could each pass validation and jointly exceed the
-   * available stock — an over-allocation. We now reserve before acting:
+   * The original fix (BUG-2) only kept an unkeyed `reservedQuantity` counter per
+   * packed-stock row, so a release could free a DIFFERENT shipment's reservation on a
+   * shared bag-type row. We now record a keyed {@link ShipmentReservation} row per
+   * (shipment, packedStock) chunk so every reservation belongs to exactly one shipment.
    *
-   *   For each bag line, walk packed-stock rows FIFO (createdAt asc) and atomically
-   *   `increment reservedQuantity`, validating each row against its FREE quantity
-   *   (`quantity − reservedQuantity`). If the full line cannot be reserved the whole
-   *   transaction rolls back. Reservation does NOT decrement `quantity` — the physical
-   *   bags only leave at delivery; cancel/return releases the reservation.
+   *   For each bag line, walk packed-stock rows FIFO (createdAt asc) and validate each row
+   *   against its FREE quantity (`quantity − reservedQuantity`). For each chunk taken we
+   *   upsert a ShipmentReservation row AND increment the row's denormalized
+   *   `reservedQuantity` cache in lockstep (cache always equals Σ of the row's
+   *   reservations). If the full line cannot be reserved the whole transaction rolls back.
+   *   Reservation does NOT decrement `quantity` — physical bags leave only at delivery;
+   *   cancel/return releases this shipment's reservation rows.
    *
    * The reservation walk uses the same FIFO order as {@link confirmDelivery} and
    * {@link cancelShipment} so reserve, drain, and release stay consistent.
@@ -92,7 +95,24 @@ export class ShipmentsService {
    */
   async createShipment(dto: CreateShipmentDto, _userId: string) {
     return this.prisma.$transaction(async (tx) => {
-      // Reserve each bag line FIFO before creating the shipment.
+      // Create the shipment first so reservation rows can reference its id.
+      const shipment = await tx.shipment.create({
+        data: {
+          orderId: dto.orderId,
+          address: dto.address,
+          nominalKg: dto.nominalKg,
+          ...(dto.tripId ? { tripId: dto.tripId } : {}),
+          ...(dto.notes ? { notes: dto.notes } : {}),
+          bags: {
+            create: dto.bags.map((b) => ({
+              bagTypeId: b.bagTypeId,
+              quantity: b.quantity,
+            })),
+          },
+        },
+      });
+
+      // Reserve each bag line FIFO, pinning each chunk to this shipment.
       for (const bag of dto.bags) {
         let remaining = bag.quantity;
 
@@ -106,6 +126,25 @@ export class ShipmentsService {
           const free = stock.quantity - stock.reservedQuantity;
           if (free <= 0) continue;
           const take = Math.min(free, remaining);
+
+          // Keyed reservation row for (shipment, packedStock). Two bag lines of the same
+          // shipment that land on the same row accumulate into one reservation.
+          await tx.shipmentReservation.upsert({
+            where: {
+              shipmentId_packedStockId: {
+                shipmentId: shipment.id,
+                packedStockId: stock.id,
+              },
+            },
+            create: {
+              shipmentId: shipment.id,
+              packedStockId: stock.id,
+              quantity: take,
+            },
+            update: { quantity: { increment: take } },
+          });
+
+          // Keep the denormalized cache in lockstep with the keyed rows.
           await tx.packedStock.update({
             where: { id: stock.id },
             data: { reservedQuantity: { increment: take } },
@@ -122,20 +161,8 @@ export class ShipmentsService {
         }
       }
 
-      return tx.shipment.create({
-        data: {
-          orderId: dto.orderId,
-          address: dto.address,
-          nominalKg: dto.nominalKg,
-          ...(dto.tripId ? { tripId: dto.tripId } : {}),
-          ...(dto.notes ? { notes: dto.notes } : {}),
-          bags: {
-            create: dto.bags.map((b) => ({
-              bagTypeId: b.bagTypeId,
-              quantity: b.quantity,
-            })),
-          },
-        },
+      return tx.shipment.findUnique({
+        where: { id: shipment.id },
         include: {
           bags: { include: { bagType: true } },
         },
@@ -185,71 +212,69 @@ export class ShipmentsService {
 
     // Delivery FIFO drain: scales with (bag types × stock entries); 15 s covers large shipments without hanging the pool indefinitely.
     return this.prisma.$transaction(async (tx) => {
-      // Step 1: Fetch shipment with bags and order
+      // Step 1: Fetch shipment with bags, order, and THIS shipment's reservation rows.
       const shipment = await tx.shipment.findUnique({
         where: { id },
-        include: { bags: true, order: true },
+        include: {
+          bags: true,
+          order: true,
+          reservations: { include: { packedStock: true } },
+        },
       });
       if (!shipment) {
         throw new NotFoundException({ error: 'Shipment not found', code: 'NOT_FOUND' });
       }
 
-      // Step 3: For each ShipmentBag, drain packed stock FIFO
-      for (const bag of shipment.bags) {
-        let remaining = bag.quantity;
+      // BUG-I (P1): drain the EXACT rows this shipment reserved, never bags another
+      // pending shipment reserved. Delivery consumes this shipment's own reservation
+      // rows (and the matching physical quantity) — proportional cross-shipment release
+      // is gone. Process reservations FIFO (the same packed-stock createdAt order used
+      // to reserve) for deterministic, per-shipment-keyed draining.
+      const reservations = [...shipment.reservations].sort(
+        (a, b) => a.packedStock.createdAt.getTime() - b.packedStock.createdAt.getTime(),
+      );
 
-        const stocks = await tx.packedStock.findMany({
-          where: { bagTypeId: bag.bagTypeId, quantity: { gt: 0 } },
-          orderBy: { createdAt: 'asc' },
-        });
+      for (const reservation of reservations) {
+        const take = reservation.quantity;
+        if (take <= 0) continue;
 
-        for (const stock of stocks) {
-          if (remaining <= 0) break;
-
-          const take = Math.min(stock.quantity, remaining);
-
-          // CONSTRAINT 2: guard against going negative
-          if (stock.quantity - take < 0) {
-            throw new BadRequestException({
-              error: `Packed stock would go negative for stock id ${stock.id}`,
-              code: 'CONSTRAINT_VIOLATION',
-            });
-          }
-
-          // BUG-2: delivery consumes the physical bags AND releases the reservation
-          // that createShipment placed. Decrement reservedQuantity by the portion this
-          // row actually held (never below 0) so quantity and reservedQuantity stay aligned.
-          const releaseReserved = Math.min(take, stock.reservedQuantity);
-          await tx.packedStock.update({
-            where: { id: stock.id },
-            data: {
-              quantity: { decrement: take },
-              ...(releaseReserved > 0 ? { reservedQuantity: { decrement: releaseReserved } } : {}),
-            },
-          });
-
-          // CONSTRAINT 5: loggedById comes from user.id, NEVER from DTO
-          await tx.stockExit.create({
-            data: {
-              packedStockId: stock.id,
-              bagTypeId: bag.bagTypeId,
-              quantity: take,
-              exitType: 'order',
-              orderId: shipment.orderId,
-              loggedById: user.id,
-              date: new Date(),
-            },
-          });
-
-          remaining -= take;
-        }
-
-        if (remaining > 0) {
+        // CONSTRAINT 2: guard against going negative. The reserved quantity can never
+        // exceed the row's physical quantity (Σ reservations ≤ quantity invariant), so
+        // this is a defensive check.
+        if (reservation.packedStock.quantity - take < 0) {
           throw new BadRequestException({
-            error: `Insufficient packed stock for bagTypeId ${bag.bagTypeId}`,
+            error: `Packed stock would go negative for stock id ${reservation.packedStockId}`,
             code: 'CONSTRAINT_VIOLATION',
           });
         }
+
+        // Consume the physical bags AND release ONLY this shipment's reservation on this
+        // row: decrement quantity by `take` and the denormalized reservedQuantity cache
+        // by the same amount (this shipment's exact hold). Other shipments' reservations
+        // on the same row are untouched.
+        await tx.packedStock.update({
+          where: { id: reservation.packedStockId },
+          data: {
+            quantity: { decrement: take },
+            reservedQuantity: { decrement: take },
+          },
+        });
+
+        // Remove the consumed reservation row — its bags have physically left.
+        await tx.shipmentReservation.delete({ where: { id: reservation.id } });
+
+        // CONSTRAINT 5: loggedById comes from user.id, NEVER from DTO
+        await tx.stockExit.create({
+          data: {
+            packedStockId: reservation.packedStockId,
+            bagTypeId: reservation.packedStock.bagTypeId,
+            quantity: take,
+            exitType: 'order',
+            orderId: shipment.orderId,
+            loggedById: user.id,
+            date: new Date(),
+          },
+        });
       }
 
       // Step 4: Mark shipment as delivered
@@ -340,7 +365,10 @@ export class ShipmentsService {
         });
       }
 
-      // Step 2: For each ShipmentBag, return quantity to first available PackedStock
+      // Step 2: For each ShipmentBag, return quantity to first available PackedStock.
+      // BUG-I (P1): a delivered shipment already had its keyed reservation rows consumed
+      // and deleted at confirmDelivery, so there is nothing to release here — the return
+      // only restores physical `quantity`. reservedQuantity is intentionally untouched.
       for (const bag of shipment.bags) {
         const stock = await tx.packedStock.findFirst({
           where: { bagTypeId: bag.bagTypeId },
@@ -394,12 +422,14 @@ export class ShipmentsService {
   }
 
   /**
-   * Cancel a pending shipment and RELEASE its packed-stock reservation (BUG-2 / P2).
+   * Cancel a pending shipment and RELEASE its packed-stock reservation (BUG-I / P1).
    *
    * Only a shipment that has not yet been delivered or returned can be cancelled —
    * those terminal states have already adjusted physical `quantity`, so re-releasing
-   * a reservation would double-count. Cancel decrements `reservedQuantity` ONLY
-   * (never `quantity`), walking the same FIFO order used to reserve, and never below 0.
+   * a reservation would double-count. Cancel deletes ONLY this shipment's keyed
+   * {@link ShipmentReservation} rows and decrements each affected row's denormalized
+   * `reservedQuantity` cache by exactly the amount this shipment held — never another
+   * shipment's reservation, and `quantity` is never touched.
    *
    * @param id - Shipment UUID
    * @throws NotFoundException if the shipment does not exist
@@ -409,7 +439,7 @@ export class ShipmentsService {
     return this.prisma.$transaction(async (tx) => {
       const shipment = await tx.shipment.findUnique({
         where: { id },
-        include: { bags: true },
+        include: { reservations: true },
       });
       if (!shipment) {
         throw new NotFoundException({ error: 'Shipment not found', code: 'NOT_FOUND' });
@@ -423,23 +453,17 @@ export class ShipmentsService {
         });
       }
 
-      // Release the reservation for each bag line, FIFO, never below zero.
-      for (const bag of shipment.bags) {
-        let remaining = bag.quantity;
-        const stocks = await tx.packedStock.findMany({
-          where: { bagTypeId: bag.bagTypeId, reservedQuantity: { gt: 0 } },
-          orderBy: { createdAt: 'asc' },
-        });
-        for (const stock of stocks) {
-          if (remaining <= 0) break;
-          const release = Math.min(stock.reservedQuantity, remaining);
+      // Release ONLY this shipment's reservation rows; decrement each row's cache by the
+      // exact amount this shipment reserved on it. Other shipments are unaffected.
+      for (const reservation of shipment.reservations) {
+        if (reservation.quantity > 0) {
           await tx.packedStock.update({
-            where: { id: stock.id },
-            data: { reservedQuantity: { decrement: release } },
+            where: { id: reservation.packedStockId },
+            data: { reservedQuantity: { decrement: reservation.quantity } },
           });
-          remaining -= release;
         }
       }
+      await tx.shipmentReservation.deleteMany({ where: { shipmentId: id } });
 
       await tx.shipment.update({
         where: { id },

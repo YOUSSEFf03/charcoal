@@ -142,6 +142,9 @@ export class WalkInSalesService {
           status: 'issued',
           issuedAt: new Date(dto.date),
           paidAmount: '0',
+          // BUG-J (P5): snapshot the issue-time LBP-per-USD rate so P&L values this
+          // invoice's LBP revenue at the rate in effect now, not a future global rate.
+          exchangeRateSnapshot: rawRate.toString(),
         },
       });
 
