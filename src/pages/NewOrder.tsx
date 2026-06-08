@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useClients } from '../hooks/useClients'
+import { useClients, useClient } from '../hooks/useClients'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { usePackedStockSummary, useStockLots } from '../hooks/useWarehouse'
 import { useCreateOrder } from '../hooks/useOrders'
@@ -35,10 +35,15 @@ export default function NewOrder() {
   const [orderMode, setOrderMode] = useState<'bag' | 'kg'>('bag')
 
   // ── Client search ─────────────────────────────────────────────────────────
+  const [searchParams] = useSearchParams()
+  const preselectedClientId = searchParams.get('clientId') ?? ''
+
   const [clientSearch, setClientSearch] = useState('')
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [showClientDrop, setShowClientDrop] = useState(false)
   const clientRef = useRef<HTMLDivElement>(null)
+
+  const preselectedClientQ = useClient(preselectedClientId)
 
   // ── Data queries ──────────────────────────────────────────────────────────
   const clientsQ = useClients({ search: clientSearch || undefined, limit: 20 })
@@ -80,6 +85,12 @@ export default function NewOrder() {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
+
+  useEffect(() => {
+    if (preselectedClientQ.data && !selectedClient) {
+      setSelectedClient(preselectedClientQ.data)
+    }
+  }, [preselectedClientQ.data])
 
   // ── Summaries ─────────────────────────────────────────────────────────────
   const bagSubtotal = bagLines.reduce((s, l) => s + Math.round(l.qty * l.price * 100), 0) / 100
@@ -142,6 +153,7 @@ export default function NewOrder() {
           pricePerBag: (firstLine.price || 0).toFixed(2),
           currency: selectedClient.currency as any,
           notes: notes || null,
+          bagLines: lines.map(l => ({ bagTypeId: l.bagTypeId, quantity: l.qty })),
           ...(driverId ? { driverId } : {}),
         },
         { onSuccess: (created) => navigate('/orders/' + created.id) },
@@ -375,7 +387,6 @@ export default function NewOrder() {
               {orderMode === 'kg' && (
                 <>
                   {kgLines.map(l => {
-                    const lot = stockLots.find(s => s.id === l.lotId)
                     return (
                       <div
                         key={l.id}
@@ -403,11 +414,6 @@ export default function NewOrder() {
                               </option>
                             ))}
                           </select>
-                          {lot && (
-                            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, fontFamily: "'IBM Plex Mono',monospace" }}>
-                              {parseFloat(lot.kgRemaining).toFixed(0)} kg remaining
-                            </div>
-                          )}
                         </div>
                         <div>
                           <span className="lbl" style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4, display: 'block' }}>
@@ -510,12 +516,28 @@ export default function NewOrder() {
                   {orderMode === 'bag' ? 'Bag order' : 'KG order'}
                 </span>
               </div>
-              {orderMode === 'bag' && (
-                <div className="sum-row">
-                  <span className="lbl">Items</span>
-                  <span className="val">{bagLines.length} lines · {bagTotalBags} bags</span>
+              {orderMode === 'bag' && bagLines.some(l => l.bagTypeId && l.qty > 0) && (
+                <div style={{ margin: '8px 0', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+                  {bagLines.filter(l => l.bagTypeId && l.qty > 0).map(l => {
+                    const bt = bagTypes.find(b => b.id === l.bagTypeId)
+                    return (
+                      <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', color: 'var(--text2)' }}>
+                        <span style={{ flex: 1 }}>{bt?.name ?? l.bagTypeId}</span>
+                        <span style={{ fontFamily: "'IBM Plex Mono',monospace", marginLeft: 8 }}>
+                          {l.qty} bags · {(l.qty * l.kgPerBag).toFixed(0)} kg
+                        </span>
+                        <span style={{ fontFamily: "'IBM Plex Mono',monospace", marginLeft: 12, fontWeight: 600, color: 'var(--text)' }}>
+                          ${roundDp(l.qty * l.price).toFixed(2)}
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
+              <div className="sum-row">
+                <span className="lbl">Total bags</span>
+                <span className="val">{bagTotalBags} bags</span>
+              </div>
               <div className="sum-row">
                 <span className="lbl">Nominal kg</span>
                 <span className="val">{totalKg.toFixed(0)} kg</span>

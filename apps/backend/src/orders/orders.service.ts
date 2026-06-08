@@ -5,12 +5,16 @@ import {
 } from '@nestjs/common';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { InvoicesService } from '../invoices/invoices.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly invoices: InvoicesService,
+  ) {}
 
   /**
    * Return a paginated list of orders with optional filters.
@@ -192,6 +196,10 @@ export class OrdersService {
   /**
    * Force-mark an order and all its pending shipments as delivered.
    * Intended for owner use when the driver forgets to update status.
+   *
+   * After marking the order delivered, a draft invoice is automatically created
+   * via createFromOrder(). createFromOrder() is idempotent — safe to call even
+   * if the order was already delivered or already has an invoice.
    */
   async markDelivered(id: string) {
     await this.findOne(id);
@@ -202,10 +210,29 @@ export class OrdersService {
       data: { status: 'delivered', deliveredAt: now },
     });
 
-    return this.prisma.clientOrder.update({
+    const order = await this.prisma.clientOrder.update({
       where: { id },
       data: { status: 'delivered' },
     });
+
+    // Auto-create and immediately issue the invoice. Not wrapped in a transaction
+    // with the status update — if this fails the order is still marked delivered
+    // and the owner can use POST /orders/:id/invoice to generate it manually.
+    await this.invoices.createFromOrder(id, undefined, true);
+
+    return order;
+  }
+
+  /**
+   * Generate (or return existing) invoice for a delivered order.
+   * Delegates to createFromOrder() which is idempotent.
+   *
+   * @param id - ClientOrder UUID
+   * @throws NotFoundException if order not found
+   * @throws BadRequestException if order is not delivered
+   */
+  async createInvoiceForOrder(id: string) {
+    return this.invoices.createFromOrder(id);
   }
 
   /**

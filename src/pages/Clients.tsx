@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useClients, useClientsCounts, useCreateClient, useAddPhone, useOverdueClients } from '../hooks/useClients'
 import { useCreatePayment } from '../hooks/usePayments'
+import { useOrders } from '../hooks/useOrders'
 import type { Client, ClientType, Currency, PhoneLabel, PaymentMethod } from '../types/api'
 import { useRate } from '../context/RateContext'
 import { roundDp } from '../lib/money'
@@ -117,6 +118,29 @@ export default function Clients() {
   const totalCount = fBalance === 'Overdue' ? displayClients.length : (clientsResp?.total ?? 0)
   const totalPages = Math.ceil(totalCount / 50)
 
+  // Fetch all uninvoiced orders once so we can add them to c.balance.
+  // c.balance = invoices - payments; orders without invoices are missing until we add them here.
+  const uninvoicedOrdersQ = useOrders({ limit: 500 })
+  const uninvoicedByClient = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const o of uninvoicedOrdersQ.data?.data ?? []) {
+      if (!['confirmed', 'partially_delivered', 'delivered'].includes(o.status)) continue
+      const isBag = !!o.bagTypeId
+      const totalKg = parseFloat(o.totalKgRequested)
+      const pricePerUnit = parseFloat(o.pricePerBag)
+      const nominalKg = o.bagType ? parseFloat(o.bagType.nominalKg) : 1
+      const orderTotal = isBag && nominalKg > 0
+        ? Math.round(totalKg / nominalKg) * pricePerUnit
+        : totalKg * pricePerUnit
+      map.set(o.clientId, (map.get(o.clientId) ?? 0) + orderTotal)
+    }
+    return map
+  }, [uninvoicedOrdersQ.data])
+
+  function trueBalance(c: Client): number {
+    return parseFloat(c.balance) + (uninvoicedByClient.get(c.id) ?? 0)
+  }
+
   const createClient = useCreateClient()
   const addPhone = useAddPhone()
   const createPayment = useCreatePayment()
@@ -125,7 +149,7 @@ export default function Clients() {
   const lbp = parseFloat(lbpAmt) || 0
   const lbpAsUsd = rawRate > 0 ? roundDp(lbp / rawRate, 2) : 0
   const totalPay = roundDp(usd + lbpAsUsd, 2)
-  const outstanding = activeClient ? parseFloat(activeClient.balance) : 0
+  const outstanding = activeClient ? trueBalance(activeClient) : 0
   const remaining = roundDp(outstanding - totalPay, 2)
 
   function showToast(msg: string) {
@@ -288,10 +312,10 @@ export default function Clients() {
                       <td style={{ color: 'var(--text2)' }}>{fmtDate(c.lastOrderDate)}</td>
                       <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>{c.avgOrderDays ? `${Math.round(parseFloat(c.avgOrderDays))} days` : '—'}</td>
                       <td>
-                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: parseFloat(c.balance) > 0 ? (c.isOverdue ? 'var(--red)' : 'var(--accent2)') : 'var(--text)' }}>{fmtUsd(c.balance)}</div>
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: trueBalance(c) > 0 ? (c.isOverdue ? 'var(--red)' : 'var(--accent2)') : 'var(--text)' }}>{fmtUsd(String(trueBalance(c)))}</div>
                       </td>
                       <td><span className="badge badge-gray">{c.currency}</span></td>
-                      <td><span className={`badge ${c.isOverdue ? 'badge-red' : parseFloat(c.balance) > 0 ? 'badge-gray' : 'badge-green'}`}>{c.isOverdue ? 'Overdue' : parseFloat(c.balance) > 0 ? 'On account' : 'Clear'}</span></td>
+                      <td><span className={`badge ${c.isOverdue ? 'badge-red' : trueBalance(c) > 0 ? 'badge-gray' : 'badge-green'}`}>{c.isOverdue ? 'Overdue' : trueBalance(c) > 0 ? 'On account' : 'Clear'}</span></td>
                       <td><i className="ti ti-chevron-right" style={{ color: 'var(--text3)' }} /></td>
                     </tr>
                   ))}
@@ -374,7 +398,7 @@ export default function Clients() {
                     <div className="alert-right">
                       <div className="alert-days2" style={{ color: 'var(--accent2)' }}>overdue</div>
                       <div className="alert-days-lbl">CRM alert</div>
-                      <div className="alert-bal" style={{ color: 'var(--accent2)' }}>owes {fmtUsd(a.balance)}</div>
+                      <div className="alert-bal" style={{ color: 'var(--accent2)' }}>owes {fmtUsd(String(trueBalance(a)))}</div>
                     </div>
                   </div>
                 </div>
@@ -388,7 +412,7 @@ export default function Clients() {
           <div className="fade-up">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 18 }}>
               {(() => {
-                const totalOwed = roundDp(balanceClients.reduce((acc, c) => acc + parseFloat(c.balance), 0), 2)
+                const totalOwed = roundDp(balanceClients.reduce((acc, c) => acc + trueBalance(c), 0), 2)
                 const overdueOwed = roundDp(overdueClients.reduce((acc, c) => acc + parseFloat(c.balance), 0), 2)
                 const cards = [
                   { label: 'TOTAL OWED', val: fmtUsd(String(totalOwed)), vColor: 'var(--accent2)', sub: `${balanceClients.length} clients` },
@@ -420,8 +444,8 @@ export default function Clients() {
                       <td><div style={{ fontWeight: 500 }}>{c.name}</div></td>
                       <td style={{ fontSize: 12, color: 'var(--text3)' }}>{c.type}</td>
                       <td><span className="badge badge-gray">{c.currency}</span></td>
-                      <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: c.isOverdue ? 'var(--red)' : 'var(--text)' }}>{fmtUsd(c.balance)}</td>
-                      <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text2)' }}>{Math.round(parseFloat(c.balance) * rawRate).toLocaleString()} LL</td>
+                      <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: c.isOverdue ? 'var(--red)' : 'var(--text)' }}>{fmtUsd(String(trueBalance(c)))}</td>
+                      <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text2)' }}>{Math.round(trueBalance(c) * rawRate).toLocaleString()} LL</td>
                       <td><span className={`badge ${c.isOverdue ? 'badge-red' : 'badge-gray'}`}>{c.isOverdue ? 'Overdue' : 'On account'}</span></td>
                     </tr>
                   ))}

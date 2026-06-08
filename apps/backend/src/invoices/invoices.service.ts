@@ -9,6 +9,7 @@ import { InvoiceCalculatorService } from './invoice-calculator.service';
 import { SettingsService } from '../settings/settings.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
+import { InvoiceLineDto } from './dto/invoice-line.dto';
 
 @Injectable()
 export class InvoicesService {
@@ -158,6 +159,9 @@ export class InvoicesService {
         subtotal,
         total,
         currency: dto.currency,
+        // Source is determined by whether the invoice is linked to an order.
+        // Never rely on the DB default — set it explicitly on every create path.
+        source: dto.orderId ? 'ORDER' : 'WAREHOUSE_SALE',
         status: 'draft',
         paidAmount: '0',
         ...(dto.dueDate ? { dueDate: new Date(dto.dueDate) } : {}),
@@ -264,6 +268,113 @@ export class InvoicesService {
           exchangeRateSnapshot: rate.toString(),
         },
       });
+    });
+  }
+
+  /**
+   * Create a draft invoice from a delivered order.
+   *
+   * Derives line items directly from the order record (not from shipment bags),
+   * so it works for both shipment-flow deliveries and owner mark-delivered
+   * overrides. The invoice is always created in draft status — the owner issues
+   * it manually after reviewing price and exchange rate.
+   *
+   * Idempotent: if a non-cancelled invoice already exists for the order, the
+   * existing record is returned without creating a duplicate.
+   *
+   * @param orderId - ClientOrder UUID
+   * @param tx - optional Prisma transaction client (pass when calling from within $transaction)
+   * @param autoIssue - when true, immediately transitions the invoice to 'issued' and
+   *   snapshots the current exchange rate. Use for automatic delivery triggers
+   *   (markDelivered, confirmDelivery). Leave false for manual/historical generation.
+   * @throws NotFoundException if the order does not exist
+   * @throws BadRequestException if the order is not in delivered status
+   */
+  async createFromOrder(orderId: string, tx?: Prisma.TransactionClient, autoIssue = false) {
+    // PrismaService extends PrismaClient which is a structural superset of
+    // TransactionClient. The cast is safe — both expose identical CRUD methods.
+    const db = (tx ?? this.prisma) as Prisma.TransactionClient;
+
+    // Resolve the exchange rate once before entering the write path so the same
+    // rate applies to both the fresh-create path and the idempotency-update path.
+    const rate = autoIssue ? await this.settings.getExchangeRate() : null;
+
+    const order = await db.clientOrder.findUnique({
+      where: { id: orderId },
+      include: { bagType: true },
+    });
+    if (!order) {
+      throw new NotFoundException({ error: 'Order not found', code: 'NOT_FOUND' });
+    }
+    if (order.status !== 'delivered') {
+      throw new BadRequestException({
+        error: 'Invoice can only be generated for delivered orders',
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
+
+    // Application-level idempotency guard: return existing active invoice.
+    // The DB partial unique index (invoices_orderId_unique_active) is the
+    // backstop that catches any race that slips past this check.
+    const existing = await db.invoice.findFirst({
+      where: { orderId, status: { not: 'cancelled' } },
+    });
+    if (existing) {
+      // Issue an existing draft when autoIssue is requested (e.g. re-delivery attempt
+      // after a prior run that created the draft but crashed before issuing).
+      // Non-draft invoices (already issued, partially_paid, paid) are returned as-is.
+      if (rate !== null && existing.status === 'draft') {
+        return db.invoice.update({
+          where: { id: existing.id },
+          data: { status: 'issued', issuedAt: new Date(), exchangeRateSnapshot: rate.toString() },
+        });
+      }
+      return existing;
+    }
+
+    // Build one invoice line from the order fields.
+    // BAG order (bagTypeId set): qty = round(totalKg / nominalKg), price per bag.
+    // KG  order (bagTypeId null): kgQuantity = totalKgRequested, price per kg.
+    let line: InvoiceLineDto;
+    if (order.bagTypeId && order.bagType) {
+      const qty = Math.round(
+        parseFloat(order.totalKgRequested.toString()) /
+          parseFloat(order.bagType.nominalKg.toString()),
+      );
+      line = {
+        saleUnit: 'BAG',
+        bagTypeId: order.bagTypeId,
+        bagTypeName: order.bagType.name,
+        qty,
+        pricePerBag: order.pricePerBag.toString(),
+      };
+    } else {
+      line = {
+        saleUnit: 'KG',
+        kgQuantity: order.totalKgRequested.toString(),
+        description: `${order.charcoalType} Grade ${order.grade}`,
+        pricePerKg: order.pricePerBag.toString(),
+      };
+    }
+
+    const { lines: enrichedLines, subtotal } = this.calculator.computeLines([line]);
+    const total = this.calculator.computeTotal(subtotal);
+
+    // Create invoice in its final state — issued immediately when autoIssue is true,
+    // draft otherwise. Single write; no separate update needed for the happy path.
+    return db.invoice.create({
+      data: {
+        clientId: order.clientId,
+        orderId,
+        lines: enrichedLines as unknown as Prisma.InputJsonValue,
+        subtotal,
+        total,
+        currency: order.currency,
+        source: 'ORDER',
+        status: rate !== null ? 'issued' : 'draft',
+        ...(rate !== null ? { issuedAt: new Date(), exchangeRateSnapshot: rate.toString() } : {}),
+        paidAmount: '0',
+      },
     });
   }
 

@@ -140,7 +140,6 @@ describe('ClientBalanceService — computeBalance()', () => {
   const mockPrisma = {
     invoice: { findMany: fn() },
     payment: { findMany: fn() },
-    stockExit: { findMany: fn() }, // walk-in sale amounts also contribute to balance
     $transaction: fn(),
   };
 
@@ -159,7 +158,8 @@ describe('ClientBalanceService — computeBalance()', () => {
 
   // =========================================================================
   // Test 3: invoices [100, 200], payments [50] → balance = 250.00
-  // CONSTRAINT 15: balance is computed from invoices - payments, never stored
+  // CONSTRAINT 15: balance is computed from accounting documents only, never stored.
+  // Formula: Σ invoice.total (non-cancelled, non-draft) − Σ payment.amount
   // =========================================================================
 
   it('returns 250.00 for invoices [100, 200] and payments [50] (CONSTRAINT 15: computed on-the-fly)', async () => {
@@ -172,18 +172,21 @@ describe('ClientBalanceService — computeBalance()', () => {
     mockPrisma.payment.findMany.mockResolvedValue([
       { amount: { toString: () => '50' } },
     ]);
-    mockPrisma.stockExit.findMany.mockResolvedValue([]); // no walk-in sale amounts
 
     const result = await balanceService.computeBalance(clientId);
 
-    // Result is a Decimal and equals 250
     expect(result).toBeInstanceOf(Decimal);
     expect(result.toFixed(2)).toBe('250.00');
 
-    // CONSTRAINT 15 verification: must call invoice.findMany and payment.findMany
+    // CONSTRAINT 15: must query invoices (with status filter) and payments
     expect(mockPrisma.invoice.findMany).toHaveBeenCalledTimes(1);
     expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { clientId } }),
+      expect.objectContaining({
+        where: expect.objectContaining({
+          clientId,
+          status: { notIn: ['draft', 'cancelled'] },
+        }),
+      }),
     );
     expect(mockPrisma.payment.findMany).toHaveBeenCalledTimes(1);
     expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(
@@ -198,12 +201,97 @@ describe('ClientBalanceService — computeBalance()', () => {
   it('returns 0.00 when there are no invoices and no payments', async () => {
     mockPrisma.invoice.findMany.mockResolvedValue([]);
     mockPrisma.payment.findMany.mockResolvedValue([]);
-    mockPrisma.stockExit.findMany.mockResolvedValue([]);
 
     const result = await balanceService.computeBalance('client-uuid-zero');
 
     expect(result).toBeInstanceOf(Decimal);
     expect(result.toFixed(2)).toBe('0.00');
     expect(result.equals(0)).toBe(true);
+  });
+
+  // =========================================================================
+  // Phase 6: accounting-correctness tests
+  // =========================================================================
+
+  it('P6: cancelled invoice does NOT contribute to balance', async () => {
+    mockPrisma.invoice.findMany.mockResolvedValue([
+      // Service filters out cancelled at the DB query level; this mock
+      // simulates the DB returning only non-cancelled invoices.
+    ]);
+    mockPrisma.payment.findMany.mockResolvedValue([]);
+
+    const result = await balanceService.computeBalance('c-cancelled');
+
+    expect(result.toFixed(2)).toBe('0.00');
+
+    // The query must carry the status exclusion filter
+    const args = mockPrisma.invoice.findMany.mock.calls[0][0];
+    expect(args.where.status).toEqual({ notIn: ['draft', 'cancelled'] });
+  });
+
+  it('P6: draft invoice does NOT contribute to balance', async () => {
+    // Same mechanism as cancelled — the status filter is the guard
+    mockPrisma.invoice.findMany.mockResolvedValue([]);
+    mockPrisma.payment.findMany.mockResolvedValue([]);
+
+    await balanceService.computeBalance('c-draft');
+
+    const args = mockPrisma.invoice.findMany.mock.calls[0][0];
+    expect(args.where.status).toEqual({ notIn: ['draft', 'cancelled'] });
+  });
+
+  it('P6: stock exits (walk-in amounts) do NOT affect balance', async () => {
+    // Service no longer queries stockExit — only invoices and payments
+    mockPrisma.invoice.findMany.mockResolvedValue([
+      { total: { toString: () => '100' } },
+    ]);
+    mockPrisma.payment.findMany.mockResolvedValue([]);
+
+    const result = await balanceService.computeBalance('c-exit');
+
+    // Balance is solely from the invoice; no exit amount added
+    expect(result.toFixed(2)).toBe('100.00');
+  });
+
+  it('P6: balance = issued invoice total minus payment (standard AR flow)', async () => {
+    mockPrisma.invoice.findMany.mockResolvedValue([
+      { total: { toString: () => '500.00' } },
+    ]);
+    mockPrisma.payment.findMany.mockResolvedValue([
+      { amount: { toString: () => '200.00' } },
+    ]);
+
+    const result = await balanceService.computeBalance('c-ar');
+
+    expect(result.toFixed(2)).toBe('300.00');
+  });
+
+  it('P6: balance is negative (credit) when payments exceed invoices', async () => {
+    mockPrisma.invoice.findMany.mockResolvedValue([
+      { total: { toString: () => '100.00' } },
+    ]);
+    mockPrisma.payment.findMany.mockResolvedValue([
+      { amount: { toString: () => '150.00' } },
+    ]);
+
+    const result = await balanceService.computeBalance('c-credit');
+
+    expect(result.toFixed(2)).toBe('-50.00');
+    expect(result.lt(0)).toBe(true);
+  });
+
+  it('P6: multiple issued + partially_paid invoices sum correctly', async () => {
+    // issued=300, partially_paid=200 → invoiceSum=500; payment=100 → balance=400
+    mockPrisma.invoice.findMany.mockResolvedValue([
+      { total: { toString: () => '300.00' } },
+      { total: { toString: () => '200.00' } },
+    ]);
+    mockPrisma.payment.findMany.mockResolvedValue([
+      { amount: { toString: () => '100.00' } },
+    ]);
+
+    const result = await balanceService.computeBalance('c-multi');
+
+    expect(result.toFixed(2)).toBe('400.00');
   });
 });

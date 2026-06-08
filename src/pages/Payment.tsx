@@ -5,6 +5,7 @@ import { useToast } from '../context/ToastContext'
 import { useClients } from '../hooks/useClients'
 import { useInvoices } from '../hooks/useInvoices'
 import { useCreatePayment } from '../hooks/usePayments'
+import { useArSummary } from '../hooks/useReports'
 import type { CreatePaymentDto, PaymentMethod } from '../types/api'
 
 const METHODS: { id: PaymentMethod; label: string; sub: string; icon: string }[] = [
@@ -34,6 +35,9 @@ export default function Payment() {
   const invoices = selectedClientId ? (invoicesRes?.data ?? []) : []
 
   const createPayment = useCreatePayment()
+  const arQ = useArSummary()
+  const totalOutstanding = parseFloat(arQ.data?.totalOutstanding ?? '0')
+  const totalCollected = parseFloat(arQ.data?.totalCollected ?? '0')
 
   const BALANCE = selectedClient ? Number(selectedClient.balance) : 0
   const applied_total = Math.min(amount, BALANCE)
@@ -104,12 +108,12 @@ export default function Payment() {
             <small>logged {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} · by Khalil (owner)</small>
           </h1>
           <div className="hero-stat">
-            <div className="v amber">$16,240</div>
-            <div className="k">total owed to us</div>
+            <div className="v amber">{arQ.isLoading ? '…' : `$${totalOutstanding.toLocaleString('en-US', { maximumFractionDigits: 2 })}`}</div>
+            <div className="k">total outstanding</div>
           </div>
           <div className="hero-stat">
-            <div className="v green">$4,820</div>
-            <div className="k">collected this month</div>
+            <div className="v green">{arQ.isLoading ? '…' : `$${totalCollected.toLocaleString('en-US', { maximumFractionDigits: 2 })}`}</div>
+            <div className="k">collected (all time)</div>
           </div>
         </div>
 
@@ -209,10 +213,10 @@ export default function Payment() {
                   <div key={inv.id} className={`apply-row ${on ? 'sel' : ''}`}>
                     <div className={`check ${on ? 'on' : ''}`} onClick={() => setSelectedInvoiceId(on ? '' : inv.id)} />
                     <div>
-                      <div className="inv-id">{inv.id}</div>
+                      <div className="inv-id" title={inv.id}>{inv.displayId ?? inv.id}</div>
                       <div className="inv-due">{inv.dueDate ? `due ${new Date(inv.dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : inv.status}</div>
                     </div>
-                    <div style={{ fontSize: 12.5, color: 'var(--text2)' }}>{inv.lines.map(l => `${l.qty}× ${l.bagTypeName}`).join(' + ')}</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--text2)' }}>{inv.lines.map(l => l.saleUnit === 'KG' ? `${l.kgQuantity}kg ${l.description}` : `${l.qty}× ${l.bagTypeName}`).join(' + ')}</div>
                     <div className="num">${outstanding.toFixed(2)}</div>
                     <div style={{ textAlign: 'right' }}><span className="age-pill ok">{inv.status}</span></div>
                     <input

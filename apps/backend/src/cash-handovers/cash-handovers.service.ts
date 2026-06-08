@@ -29,17 +29,14 @@ async function debitAccount(
   referenceId: string,
   date: Date,
 ) {
-  await tx.userAccount.upsert({
+  const account = await tx.userAccount.upsert({
     where:  { userId },
     update: { balance: { decrement: amount.toNumber() } },
     create: { userId, balance: amount.negated().toNumber() },
   });
-  const account = await tx.userAccount.findUnique({ where: { userId } });
-  if (account) {
-    await tx.accountEntry.create({
-      data: { accountId: account.id, amount: amount.negated().toFixed(2), type: 'handover', referenceId, description: 'Cash handover', date },
-    });
-  }
+  await tx.accountEntry.create({
+    data: { accountId: account.id, amount: amount.negated().toFixed(2), type: 'handover', referenceId, description: 'Cash handover', date },
+  });
 }
 
 @Injectable()
@@ -126,7 +123,8 @@ export class CashHandoversService {
       }),
     ]);
 
-    const totalCollected = entries.filter(e => e.amount.gt ? e.amount.gt(0) : parseFloat(e.amount.toString()) > 0)
+    const totalCollected = entries
+      .filter(e => new Decimal(e.amount.toString()).gt(0))
       .reduce((s, e) => s.plus(e.amount.toString()), new Decimal(0));
     const totalHandedOver = entries.filter(e => parseFloat(e.amount.toString()) < 0)
       .reduce((s, e) => s.plus(new Decimal(e.amount.toString()).abs()), new Decimal(0));

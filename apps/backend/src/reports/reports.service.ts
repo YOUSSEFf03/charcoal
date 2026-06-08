@@ -532,11 +532,46 @@ export class ReportsService {
     return { data, total, page, limit };
   }
 
+  // ── Ledger description helpers ───────────────────────────────────────────────
+
+  private buildInvoiceDescription(source: string | null, lines: any[]): string {
+    const prefix = source === 'WAREHOUSE_SALE' ? 'Warehouse Sale' : 'Order Sale';
+    if (!lines || lines.length === 0) return prefix;
+    const lineDescs = lines.map((l: any) => {
+      if (l.saleUnit === 'KG') {
+        return `${l.kgQuantity} kg ${l.description ?? ''}`.trim();
+      }
+      // BAG line — saleUnit may be absent on pre-Phase-3 lines; treat absent as BAG.
+      const qty  = l.qty ?? 0;
+      const name = l.bagTypeName ?? '';
+      return `${qty} × ${name}`;
+    });
+    return `${prefix} · ${lineDescs.join(' · ')}`;
+  }
+
+  private buildPaymentDescription(method: string): string {
+    const map: Record<string, string> = {
+      cash:          'Cash Payment',
+      whish:         'Whish',
+      omt:           'OMT',
+      bank_transfer: 'Bank Transfer',
+      cheque:        'Cheque Payment',
+    };
+    return map[method] ?? 'Payment';
+  }
+
   /**
    * Client ledger — chronological invoice/payment list with running balance.
+   *
+   * Phase 5 changes:
+
+   *   - Cancelled and draft invoices excluded (accounting correctness).
+   *   - openingBalance computed from pre-period aggregate when dateFrom is set.
+   *   - description built from invoice.lines + source and payment.method.
+   *   - displayId included for human-readable references.
+   *   - Sort tie-breaking: debits (invoices) before credits (payments) on same date.
+   *
    * CONSTRAINT 15: balance always computed from records, never stored.
-   * Running balance requires per-entry ordering, so in-memory fold is
-   * correct here (bounded by clientId + date filter).
    */
   async getClientLedger(
     clientId: string,
@@ -547,45 +582,86 @@ export class ReportsService {
     const client = await this.prisma.client.findUnique({ where: { id: clientId } });
     if (!client) throw new NotFoundException({ error: 'Client not found', code: 'NOT_FOUND' });
 
+    // ── Opening balance — aggregate of all non-cancelled invoices and payments
+    // strictly BEFORE dateFrom.  Zero when no start-date filter is supplied.
+    let openingBalance = new Decimal(0);
+    if (dateFilter?.gte) {
+      const [priorInv, priorPay] = await Promise.all([
+        this.prisma.invoice.aggregate({
+          where: {
+            clientId,
+            status: { notIn: ['draft', 'cancelled'] },
+            issuedAt: { lt: dateFilter.gte },
+          },
+          _sum: { total: true },
+        }),
+        this.prisma.payment.aggregate({
+          where: { clientId, date: { lt: dateFilter.gte } },
+          _sum: { amount: true },
+        }),
+      ]);
+      openingBalance = new Decimal(priorInv._sum.total?.toString()  ?? '0')
+        .minus(new Decimal(priorPay._sum.amount?.toString() ?? '0'));
+    }
+
+    // ── Period entries ────────────────────────────────────────────────────────
     const [invoices, payments] = await Promise.all([
       this.prisma.invoice.findMany({
         where: {
           clientId,
-          status: { not: 'draft' },
+          status: { notIn: ['draft', 'cancelled'] },
           ...(dateFilter ? { issuedAt: dateFilter } : {}),
         },
-        select: { id: true, issuedAt: true, createdAt: true, total: true },
+        select: {
+          id: true, displayId: true, issuedAt: true, createdAt: true,
+          total: true, source: true, lines: true,
+        },
         orderBy: { issuedAt: 'asc' },
       }),
       this.prisma.payment.findMany({
         where: { clientId, ...(dateFilter ? { date: dateFilter } : {}) },
-        select: { id: true, date: true, amount: true },
+        select: { id: true, displayId: true, date: true, amount: true, method: true },
         orderBy: { date: 'asc' },
       }),
     ]);
 
     type EntryItem =
-      | { kind: 'invoice'; date: Date; id: string; total: Decimal }
-      | { kind: 'payment'; date: Date; id: string; amount: Decimal };
+      | { kind: 'invoice'; date: Date; id: string; displayId: string | null;
+          total: Decimal; source: string | null; lines: any[] }
+      | { kind: 'payment'; date: Date; id: string; displayId: string | null;
+          amount: Decimal; method: string };
 
     const items: EntryItem[] = [
       ...invoices.map((inv) => ({
-        kind:  'invoice' as const,
-        date:  inv.issuedAt ?? inv.createdAt,
-        id:    inv.id,
-        total: new Decimal(inv.total.toString()),
+        kind:      'invoice' as const,
+        date:      inv.issuedAt ?? inv.createdAt,
+        id:        inv.id,
+        displayId: inv.displayId,
+        total:     new Decimal(inv.total.toString()),
+        source:    inv.source as string | null,
+        lines:     (inv.lines ?? []) as any[],
       })),
       ...payments.map((pmt) => ({
-        kind:   'payment' as const,
-        date:   pmt.date instanceof Date ? pmt.date : new Date(pmt.date),
-        id:     pmt.id,
-        amount: new Decimal(pmt.amount.toString()),
+        kind:      'payment' as const,
+        date:      pmt.date instanceof Date ? pmt.date : new Date(pmt.date),
+        id:        pmt.id,
+        displayId: pmt.displayId,
+        amount:    new Decimal(pmt.amount.toString()),
+        method:    pmt.method as string,
       })),
     ];
 
-    items.sort((a, b) => a.date.getTime() - b.date.getTime());
+    // Chronological; debits before credits on the same timestamp.
+    items.sort((a, b) => {
+      const diff = a.date.getTime() - b.date.getTime();
+      if (diff !== 0) return diff;
+      if (a.kind === 'invoice' && b.kind === 'payment') return -1;
+      if (a.kind === 'payment' && b.kind === 'invoice') return  1;
+      return 0;
+    });
 
-    let runningBalance = new Decimal(0);
+    // ── Running balance fold ──────────────────────────────────────────────────
+    let runningBalance = new Decimal(openingBalance);
     const entries = items.map((item) => {
       if (item.kind === 'invoice') {
         runningBalance = runningBalance.plus(item.total);
@@ -593,6 +669,8 @@ export class ReportsService {
           date:           item.date,
           type:           'invoice' as const,
           reference:      item.id,
+          displayId:      item.displayId,
+          description:    this.buildInvoiceDescription(item.source, item.lines),
           debit:          item.total.toFixed(2),
           credit:         '0.00',
           runningBalance: runningBalance.toFixed(2),
@@ -603,6 +681,8 @@ export class ReportsService {
           date:           item.date,
           type:           'payment' as const,
           reference:      item.id,
+          displayId:      item.displayId,
+          description:    this.buildPaymentDescription(item.method),
           debit:          '0.00',
           credit:         item.amount.toFixed(2),
           runningBalance: runningBalance.toFixed(2),
@@ -610,7 +690,13 @@ export class ReportsService {
       }
     });
 
-    return { clientId, currency: client.currency, entries, balance: runningBalance.toFixed(2) };
+    return {
+      clientId,
+      currency:       client.currency,
+      openingBalance: openingBalance.toFixed(2),
+      entries,
+      balance:        runningBalance.toFixed(2),
+    };
   }
 
   /**

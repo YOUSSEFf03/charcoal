@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { OrderStatus, Prisma, ShipmentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { InvoicesService } from '../invoices/invoices.service';
 import { CreateShipmentDto } from './dto/create-shipment.dto';
 import { ConfirmDeliveryDto } from './dto/confirm-delivery.dto';
 import { LogReturnDto } from './dto/log-return.dto';
@@ -12,7 +13,10 @@ import { UpdateActualWeightDto } from './dto/update-actual-weight.dto';
 
 @Injectable()
 export class ShipmentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly invoices: InvoicesService,
+  ) {}
 
   /**
    * Return a paginated list of shipments.
@@ -309,7 +313,15 @@ export class ShipmentsService {
         });
       }
 
-      // Step 6: Optional payment at delivery
+      // Step 6: Auto-create and immediately issue invoice when ALL shipments are
+      // delivered. Runs inside the same transaction — invoice write is atomic with
+      // the stock drain and order status update.
+      // createFromOrder() is idempotent — safe if markDelivered() already ran.
+      if (allDelivered) {
+        await this.invoices.createFromOrder(shipment.orderId, tx, true);
+      }
+
+      // Step 7: Optional payment at delivery
       if (dto.paymentAmount && dto.paymentMethod) {
         await tx.payment.create({
           data: {

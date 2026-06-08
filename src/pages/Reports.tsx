@@ -303,9 +303,9 @@ export default function Reports() {
               <DataTable
                 headers={['Session', 'Date', 'Lot', 'kg consumed', 'kg output', 'Variance', 'Var. cost']}
                 rows={(variance?.data ?? []).map(r => [
-                  <Mono>{r.sessionId.slice(0, 8)}</Mono>,
+                  <Mono>{r.sessionDisplayId ?? r.sessionId.slice(0, 8)}</Mono>,
                   <span style={{ color: 'var(--text2)' }}>{new Date(r.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>,
-                  <span>{r.lots.map(l => l.lotId.slice(0, 8)).join(', ') || '—'}</span>,
+                  <span>{r.lots.map(l => l.displayId ?? `${l.charcoalType}·${l.grade}`).join(', ') || '—'}</span>,
                   <Mono>{parseFloat(r.kgConsumed).toFixed(0)} kg</Mono>,
                   <Mono>{parseFloat(r.kgOutputTotal).toFixed(0)} kg</Mono>,
                   <Mono color="var(--accent2)">{parseFloat(r.varianceKg).toFixed(1)} kg</Mono>,

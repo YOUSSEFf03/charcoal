@@ -1,6 +1,7 @@
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useOrder, useMarkOrderDelivered } from '../hooks/useOrders'
+import { useOrder, useMarkOrderDelivered, useGenerateOrderInvoice } from '../hooks/useOrders'
+import { useBagTypes } from '../hooks/useBagTypes'
 import type { OrderStatus, ShipmentStatus } from '../types/api'
 
 function orderStatusMeta(s: OrderStatus): { cls: string; label: string } {
@@ -33,6 +34,10 @@ export default function OrderDetail() {
   const navigate = useNavigate()
   const orderQ = useOrder(id ?? '')
   const markDelivered = useMarkOrderDelivered()
+  const generateInvoice = useGenerateOrderInvoice()
+  const bagTypesQ = useBagTypes()
+  const bagTypeById = new Map((bagTypesQ.data ?? []).map(b => [b.id, b]))
+  const bagTypeNameById = new Map((bagTypesQ.data ?? []).map(b => [b.id, b.name]))
   const order = orderQ.data
 
   if (orderQ.isLoading) {
@@ -62,12 +67,16 @@ export default function OrderDetail() {
   }
 
   const statusMeta = orderStatusMeta(order.status)
+  const orderDisplay = order.displayId ?? `#${order.id.slice(0, 8).toUpperCase()}`
   const isBagOrder = !!order.bagTypeId
   const pricePerUnit = parseFloat(order.pricePerBag)
   const totalKg = parseFloat(order.totalKgRequested)
-  const totalAmount = isBagOrder
-    ? order.bagLines.reduce((s, l) => s + l.quantity, 0) * pricePerUnit
-    : totalKg * pricePerUnit
+  const totalBags = isBagOrder
+    ? (order.bagLines.length > 0
+        ? order.bagLines.reduce((s, l) => s + l.quantity, 0)
+        : order.bagType ? Math.round(totalKg / parseFloat(order.bagType.nominalKg)) : 0)
+    : 0
+  const totalAmount = isBagOrder ? totalBags * pricePerUnit : totalKg * pricePerUnit
   const invoice = order.invoices[0]
   const invoiceTotal = invoice ? parseFloat(invoice.total) : 0
   const invoicePaid = invoice ? parseFloat(invoice.paidAmount) : 0
@@ -75,7 +84,7 @@ export default function OrderDetail() {
 
   return (
     <>
-      <Topbar title={order.id}>
+      <Topbar title={orderDisplay}>
         {invoice && (
           <a className="btn" href={`/invoice/${invoice.id}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
             <i className="ti ti-printer" style={{ fontSize: 15 }} /> Print invoice
@@ -96,6 +105,20 @@ export default function OrderDetail() {
             {markDelivered.isPending ? 'Marking…' : 'Mark as delivered'}
           </button>
         )}
+        {order.status === 'delivered' && order.invoices.length === 0 && (
+          <button
+            className="btn primary"
+            disabled={generateInvoice.isPending}
+            onClick={() => {
+              generateInvoice.mutate(order.id, {
+                onSuccess: (inv: any) => navigate(`/invoice/${inv.id}`),
+              })
+            }}
+          >
+            <i className="ti ti-receipt" style={{ fontSize: 15 }} />
+            {generateInvoice.isPending ? 'Generating…' : 'Generate Invoice'}
+          </button>
+        )}
       </Topbar>
       <div className="content">
 
@@ -109,7 +132,7 @@ export default function OrderDetail() {
               <span style={{ color: 'var(--text3)' }}>·</span>
               <span className={`badge ${statusMeta.cls}`}>{statusMeta.label}</span>
             </div>
-            <h1 style={{ fontSize: 22, fontWeight: 600, letterSpacing: -0.5 }}>{order.id} · {order.client.name}</h1>
+            <h1 style={{ fontSize: 22, fontWeight: 600, letterSpacing: -0.5 }} title={order.id}>{orderDisplay} · {order.client.name}</h1>
             <div className="page-header-meta">
               <span className="meta-row"><i className="ti ti-users" /> <Link to={`/clients/${order.clientId}`} style={{ color: 'inherit' }}>{order.client.name}</Link></span>
               <span className="meta-row"><i className="ti ti-calendar" /> created {new Date(order.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
@@ -120,9 +143,15 @@ export default function OrderDetail() {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, minWidth: 300 }}>
             <div className="kpi-tile">
-              <div className="kpi-tile-label">Total weight</div>
-              <div className="kpi-tile-value">{totalKg.toLocaleString()}<span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 400 }}>&nbsp;kg</span></div>
-              <div className="kpi-tile-sub"><span className={`badge ${isBagOrder ? 'badge-blue' : 'badge-amber'}`}>{isBagOrder ? 'Bag order' : 'KG order'}</span></div>
+              <div className="kpi-tile-label">{isBagOrder ? 'Total bags' : 'Total weight'}</div>
+              <div className="kpi-tile-value">
+                {isBagOrder ? totalBags : totalKg.toLocaleString()}
+                <span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 400 }}>&nbsp;{isBagOrder ? 'bags' : 'kg'}</span>
+              </div>
+              <div className="kpi-tile-sub">
+                <span className={`badge ${isBagOrder ? 'badge-blue' : 'badge-amber'}`}>{isBagOrder ? 'Bag order' : 'KG order'}</span>
+                {isBagOrder && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 4 }}>{totalKg.toLocaleString()} kg</span>}
+              </div>
             </div>
             <div className="kpi-tile green">
               <div className="kpi-tile-label">Est. total</div>
@@ -151,24 +180,47 @@ export default function OrderDetail() {
                 <span style={{ textAlign: 'right' }}>{isBagOrder ? 'Price / bag' : 'Price / kg'}</span>
                 <span style={{ textAlign: 'right' }}>Est. total</span>
               </div>
-              <div className="item-row" style={{ display: 'grid', gridTemplateColumns: '1fr 130px 120px 120px', gap: 12 }}>
-                <div>
-                  <div style={{ fontWeight: 500 }}>
-                    {order.charcoalType} · Grade {order.grade}
-                    {order.supplierName && <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {order.supplierName}</span>}
+              {isBagOrder && order.bagLines.length > 0 ? (
+                order.bagLines.map(l => {
+                  const bt = bagTypeById.get(l.bagTypeId)
+                  const lineKg = bt ? l.quantity * parseFloat(bt.nominalKg) : 0
+                  const lineTotal = l.quantity * pricePerUnit
+                  return (
+                    <div className="item-row" key={l.id} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 120px 120px', gap: 12 }}>
+                      <div>
+                        <div style={{ fontWeight: 500 }}>{bt?.name ?? l.bagTypeId}</div>
+                        <div className="meta">{order.charcoalType} · Grade {order.grade}</div>
+                      </div>
+                      <div className="num">{l.quantity} bags · {lineKg.toFixed(0)} kg</div>
+                      <div className="num">${pricePerUnit.toFixed(2)}</div>
+                      <div className="num" style={{ fontWeight: 600 }}>${lineTotal.toFixed(2)}</div>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="item-row" style={{ display: 'grid', gridTemplateColumns: '1fr 130px 120px 120px', gap: 12 }}>
+                  <div>
+                    <div style={{ fontWeight: 500 }}>
+                      {order.charcoalType} · Grade {order.grade}
+                      {order.supplierName && <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {order.supplierName}</span>}
+                    </div>
+                    <div className="meta">
+                      {isBagOrder
+                        ? order.bagType?.name ?? order.bagTypeId ?? 'Bag order'
+                        : 'Sold by weight (KG)'}
+                    </div>
                   </div>
-                  <div className="meta">
-                    {isBagOrder
-                      ? order.bagType?.name ?? order.bagTypeId ?? 'Bag order'
-                      : 'Sold by weight (KG)'}
+                  <div className="num">
+                    {isBagOrder ? `${totalBags} bags · ${totalKg.toLocaleString()} kg` : `${totalKg.toLocaleString()} kg`}
                   </div>
+                  <div className="num">${pricePerUnit.toFixed(2)}</div>
+                  <div className="num" style={{ fontWeight: 600 }}>${totalAmount.toFixed(2)}</div>
                 </div>
-                <div className="num">{totalKg.toLocaleString()} kg</div>
-                <div className="num">${pricePerUnit.toFixed(2)}</div>
-                <div className="num" style={{ fontWeight: 600 }}>${totalAmount.toFixed(2)}</div>
-              </div>
+              )}
               <div style={{ background: 'var(--surface2)', padding: '11px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 600 }}>
-                <span>{totalKg.toLocaleString()} kg requested · {order.currency}</span>
+                <span>
+                  {isBagOrder ? `${totalBags} bags · ${totalKg.toLocaleString()} kg` : `${totalKg.toLocaleString()} kg`} · {order.currency}
+                </span>
                 <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 15 }}>${totalAmount.toFixed(2)}</span>
               </div>
             </div>
@@ -192,13 +244,13 @@ export default function OrderDetail() {
                         </div>
                         <div className="ship-info">
                           <div className="ship-addr">{sh.address}</div>
-                          <div className="ship-meta">{sh.id}</div>
+                          <div className="ship-meta" title={sh.id}>{sh.displayId ?? sh.id}</div>
                         </div>
                         <span className={`badge ${badge.cls}`}>{badge.label}</span>
                       </div>
                       <div className="ship-body">
                         <div className="bag-pills">
-                          {sh.bags.map(b => <span className="bag-pill" key={b.id}>{b.quantity} × {b.bagTypeId}</span>)}
+                          {sh.bags.map(b => <span className="bag-pill" key={b.id}>{b.quantity} × {bagTypeNameById.get(b.bagTypeId) ?? b.bagTypeId}</span>)}
                         </div>
                         <div className="ship-weights">
                           <div>
@@ -271,7 +323,7 @@ export default function OrderDetail() {
                 <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {[
                     { label: 'Status', value: <span className="badge badge-amber">{invoice.status.replace('_', ' ')}</span> },
-                    { label: 'Invoice #', value: <span style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{invoice.id}</span> },
+                    { label: 'Invoice #', value: <span style={{ fontFamily: "'IBM Plex Mono',monospace" }} title={invoice.id}>{invoice.displayId ?? invoice.id}</span> },
                     { label: 'Total', value: <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>${money(invoice.total)}</span> },
                     { label: 'Paid', value: <span style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--accent)', fontWeight: 600 }}>+${money(invoice.paidAmount)}</span> },
                   ].map((row, i) => (

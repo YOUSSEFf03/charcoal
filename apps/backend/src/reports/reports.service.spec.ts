@@ -20,7 +20,7 @@ describe('ReportsService', () => {
   };
 
   const mockPrisma = {
-    invoice:         { findMany: fn() },
+    invoice:         { findMany: fn(), aggregate: fn() },
     stockExit:       { findMany: fn(), aggregate: fn() },
     bagPurchase:     { findMany: fn(), aggregate: fn() },
     packingSession:  { findMany: fn(), aggregate: fn(), count: fn() },
@@ -28,7 +28,7 @@ describe('ReportsService', () => {
     stockLot:        { findMany: fn(), count: fn() },
     container:       { findMany: fn(), count: fn() },
     client:          { findUnique: fn() },
-    payment:         { findMany: fn() },
+    payment:         { findMany: fn(), aggregate: fn() },
     worker:          { findUnique: fn() },
     workerPayment:   { findMany: fn(), aggregate: fn() },
     packedStock:     { findMany: fn(), findUnique: fn(), update: fn() },
@@ -701,6 +701,125 @@ describe('ReportsService', () => {
     it('throws NotFoundException when client does not exist', async () => {
       mockPrisma.client.findUnique.mockResolvedValue(null);
       await expect(service.getClientLedger('nonexistent', {})).rejects.toThrow(NotFoundException);
+    });
+
+    // ── Phase 5: cancelled invoices excluded ──────────────────────────────────
+    it('P5: query filters out cancelled and draft invoices', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      await service.getClientLedger('c-1', {});
+
+      const args = mockPrisma.invoice.findMany.mock.calls[0][0];
+      expect(args.where.status).toEqual({ notIn: ['draft', 'cancelled'] });
+    });
+
+    // ── Phase 5: description built from source + lines (invoice) and method (payment) ─
+    it('P5: description built for invoice (Order Sale) and payment (Cash Payment)', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      const invDate = new Date('2024-06-01');
+      const pmtDate = new Date('2024-06-05');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        { id: 'inv-1', displayId: 'INV-001', issuedAt: invDate, createdAt: invDate,
+          total: dec('200.00'), source: 'ORDER', lines: [] },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'pmt-1', displayId: 'PAY-001', date: pmtDate,
+          amount: dec('100.00'), method: 'cash' },
+      ]);
+
+      const result = await service.getClientLedger('c-1', {});
+
+      expect(result.entries[0].description).toBe('Order Sale');
+      expect(result.entries[0].displayId).toBe('INV-001');
+      expect(result.entries[1].description).toBe('Cash Payment');
+      expect(result.entries[1].displayId).toBe('PAY-001');
+    });
+
+    it('P5: description is "Warehouse Sale" when source is WAREHOUSE_SALE', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      const d = new Date('2024-07-01');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        { id: 'inv-2', displayId: null, issuedAt: d, createdAt: d,
+          total: dec('50.00'), source: 'WAREHOUSE_SALE', lines: [] },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-1', {});
+
+      expect(result.entries[0].description).toBe('Warehouse Sale');
+    });
+
+    it('P5: description falls back to "Payment" for unknown payment method', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'pmt-2', displayId: null, date: new Date('2024-06-10'),
+          amount: dec('30.00'), method: 'barter' },
+      ]);
+
+      const result = await service.getClientLedger('c-1', {});
+
+      expect(result.entries[0].description).toBe('Payment');
+    });
+
+    // ── Phase 5: opening balance computed from pre-period aggregate ───────────
+    it('P5: openingBalance is 0 when no dateFrom is provided', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-1', {});
+
+      expect(result.openingBalance).toBe('0.00');
+    });
+
+    it('P5: openingBalance = priorInvoiceTotal − priorPaymentTotal when dateFrom is set', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      mockPrisma.invoice.aggregate.mockResolvedValue({ _sum: { total: dec('300.00') } });
+      mockPrisma.payment.aggregate.mockResolvedValue({ _sum: { amount: dec('100.00') } });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-1', { dateFrom: '2024-06-01' });
+
+      expect(result.openingBalance).toBe('200.00');
+      expect(result.balance).toBe('200.00'); // no period entries, closing = opening
+    });
+
+    it('P5: opening balance aggregate excludes draft and cancelled invoices', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      mockPrisma.invoice.aggregate.mockResolvedValue({ _sum: { total: dec('0.00') } });
+      mockPrisma.payment.aggregate.mockResolvedValue({ _sum: { amount: dec('0.00') } });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      await service.getClientLedger('c-1', { dateFrom: '2024-06-01' });
+
+      const aggArgs = mockPrisma.invoice.aggregate.mock.calls[0][0];
+      expect(aggArgs.where.status).toEqual({ notIn: ['draft', 'cancelled'] });
+    });
+
+    // ── Phase 5: deterministic sort — debits before credits on same day ───────
+    it('P5: on same date invoice appears before payment (debit before credit)', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      const sameDay = new Date('2024-09-01T12:00:00Z');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        { id: 'inv-10', displayId: null, issuedAt: sameDay, createdAt: sameDay,
+          total: dec('100.00'), source: null, lines: [] },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'pmt-10', displayId: null, date: sameDay,
+          amount: dec('40.00'), method: 'cash' },
+      ]);
+
+      const result = await service.getClientLedger('c-1', {});
+
+      expect(result.entries[0].type).toBe('invoice');
+      expect(result.entries[1].type).toBe('payment');
+      expect(result.entries[0].runningBalance).toBe('100.00');
+      expect(result.entries[1].runningBalance).toBe('60.00');
     });
   });
 

@@ -61,6 +61,7 @@ export default function Packing() {
   // Charcoal-lot dropdown options derived from in-stock lots.
   const LOTS = (stockLotsQ.data?.data ?? []).map(l => ({
     id: l.id,
+    displayId: l.displayId,
     label: `${l.charcoalType} · ${l.grade}`,
     supplier: l.supplierId,
     available: parseFloat(l.kgRemaining),
@@ -124,7 +125,7 @@ export default function Packing() {
       bagQty,
       charcoal: (s.sessionLots ?? []).map(sl => ({
         lotId: sl.lotId,
-        label: sl.lot ? `${sl.lot.charcoalType} · ${sl.lot.grade}` : sl.lotId.slice(0, 8),
+        label: sl.lot ? `${sl.lot.charcoalType} · ${sl.lot.grade}` : sl.lotId,
         kg: parseFloat(sl.kgUsed),
       })),
       charIn,
@@ -480,7 +481,7 @@ export default function Packing() {
                   <div className="row-field">
                     <select className="row-select" value={row.lotIdx} onChange={e => updateEditCharRow(row.id, { lotIdx: parseInt(e.target.value) })}>
                       <option value={-1} disabled>Select charcoal lot…</option>
-                      {LOTS.map((l, i) => <option key={l.id} value={i}>{l.label} · {l.id.slice(0, 8)}</option>)}
+                      {LOTS.map((l, i) => <option key={l.id} value={i}>{l.label} · {l.displayId ?? l.id.slice(0, 8)}</option>)}
                     </select>
                   </div>
                   <div className="row-field">
@@ -667,7 +668,7 @@ export default function Packing() {
                       {idx === 0 && <span className="row-lbl">Charcoal lot · grade</span>}
                       <select className="row-select" value={row.lotIdx} onChange={e => updateCharRow(row.id, { lotIdx: parseInt(e.target.value) })}>
                         <option value={-1} disabled>Select charcoal lot…</option>
-                        {LOTS.map((l, i) => <option key={l.id} value={i}>{l.label} · {l.id}</option>)}
+                        {LOTS.map((l, i) => <option key={l.id} value={i}>{l.label} · {l.displayId ?? l.id}</option>)}
                       </select>
                     </div>
                     <div className="row-field">

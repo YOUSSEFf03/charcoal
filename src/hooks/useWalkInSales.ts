@@ -11,11 +11,27 @@ export interface WalkInBagLine {
   currency: 'USD' | 'LBP'
 }
 
-/** Payload for POST /walk-in-sales. */
+/**
+ * One by-kg line in a walk-in sale (Phase 4).
+ * Draws from a raw stock lot; price is quoted in its own currency.
+ */
+export interface WalkInKgLine {
+  lotId: string
+  kgQuantity: string    // decimal string, e.g. "500.000"
+  description: string   // charcoal type + grade snapshot for the invoice line
+  pricePerKg: string    // decimal string
+  currency: 'USD' | 'LBP'
+}
+
+/**
+ * Payload for POST /walk-in-sales.
+ * At least one of `bags` or `kgLines` must be non-empty.
+ */
 export interface CreateWalkInSaleDto {
   clientId: string
   date: string
-  bags: WalkInBagLine[]
+  bags?: WalkInBagLine[]
+  kgLines?: WalkInKgLine[]
   receivedUsd?: string
   receivedLbp?: string
   method: 'cash' | 'whish' | 'omt' | 'bank_transfer' | 'cheque'
@@ -26,11 +42,10 @@ export interface CreateWalkInSaleDto {
 
 /**
  * Record a walk-in sale to a REGISTERED client in one atomic backend call:
- * stock exit + issued invoice + payment (in the client's currency).
+ * stock exit(s) + issued invoice + optional payment (in the client's currency).
  *
- * Replaces the old two-call flow (separate exit + USD-hardcoded payment) that left
- * the client balance negative and recorded the wrong currency. Anonymous walk-ins
- * still use POST /stock-exits via useCreateStockExit.
+ * Supports packed-bag lines, by-kg lines, or a mix of both in a single invoice.
+ * Anonymous walk-ins still use POST /stock-exits via useCreateStockExit.
  *
  * POST /walk-in-sales
  */
@@ -47,7 +62,10 @@ export function useCreateWalkInSale() {
       qc.invalidateQueries({ queryKey: ['payments'] })
       qc.invalidateQueries({ queryKey: ['clients'] })
       qc.invalidateQueries({ queryKey: ['packed-stock'] })
+      qc.invalidateQueries({ queryKey: ['packed-stock-records'] })
       qc.invalidateQueries({ queryKey: ['warehouse', 'walk-in-summary'] })
+      // Invalidate lot data — kgRemaining changes for KG sales.
+      qc.invalidateQueries({ queryKey: ['stock-lots'] })
       if (vars.clientId) {
         qc.invalidateQueries({ queryKey: ['clients', vars.clientId, 'balance'] })
       }

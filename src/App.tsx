@@ -49,7 +49,9 @@ export default function App() {
 
         {/* Public — no auth required */}
         <Route path="/sign-in" element={<SignIn />} />
-        <Route path="/invoice/:id" element={<InvoicePrint />} />
+
+        {/* Protected standalone — no sidebar, no layout */}
+        <Route path="/invoice/:id" element={<Guard><InvoicePrint /></Guard>} />
 
         {/* Protected standalone — driver mobile (driver + owner only) */}
         <Route

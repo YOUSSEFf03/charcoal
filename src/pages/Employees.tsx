@@ -53,7 +53,6 @@ export default function Employees() {
   const [editName, setEditName]   = useState('')
   const [editPhone, setEditPhone] = useState('')
   const [empName, setEmpName]   = useState('')
-  const [empRole, setEmpRole]   = useState<'Driver' | 'Worker'>('Driver')
   const [empPhone, setEmpPhone] = useState('')
   const [empRate, setEmpRate]   = useState('')
 
@@ -273,24 +272,14 @@ export default function Employees() {
                   <label className="form-label">Full name</label>
                   <input className="form-input" type="text" placeholder="e.g. Ali Karimi" value={empName} onChange={e => setEmpName(e.target.value)} />
                 </div>
-                <div className="form-group">
-                  <label className="form-label">Role</label>
-                  <div style={{ display: 'flex', gap: 10 }}>
-                    {(['Driver', 'Worker'] as const).map(r => (
-                      <div key={r} onClick={() => setEmpRole(r)} style={{ flex: 1, padding: '10px 14px', borderRadius: 'var(--radius)', border: `1.5px solid ${empRole === r ? 'var(--text)' : 'var(--border)'}`, background: empRole === r ? 'var(--text)' : 'var(--surface)', color: empRole === r ? '#fff' : 'var(--text2)', textAlign: 'center', cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
-                        <i className={`ti ${r === 'Driver' ? 'ti-truck' : 'ti-package'}`} style={{ marginRight: 6 }} />{r}
-                      </div>
-                    ))}
-                  </div>
-                </div>
                 <div className="form-row">
                   <div className="form-group">
                     <label className="form-label">Phone</label>
                     <input className="form-input" type="tel" placeholder="+961 3 000 000" value={empPhone} onChange={e => setEmpPhone(e.target.value)} />
                   </div>
                   <div className="form-group">
-                    <label className="form-label">{empRole === 'Driver' ? 'Rate per day ($)' : 'Rate per bag ($)'}</label>
-                    <input className="form-input" type="number" placeholder={empRole === 'Driver' ? '35' : '0.20'} step="0.01" value={empRate} onChange={e => setEmpRate(e.target.value)} />
+                    <label className="form-label">Rate per bag ($)</label>
+                    <input className="form-input" type="number" placeholder="0.20" step="0.01" value={empRate} onChange={e => setEmpRate(e.target.value)} />
                   </div>
                 </div>
               </div>

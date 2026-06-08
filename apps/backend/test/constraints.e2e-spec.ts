@@ -837,9 +837,9 @@ describe('CONSTRAINT 10: Price accepted as-is at time of sale — no price-list 
     const result = calculator.computeLines([
       { bagTypeId: 'bt-1', bagTypeName: 'Standard', qty: 10, pricePerBag: '12.50' },
     ]);
-
-    expect(result.lines[0].pricePerBag).toBe('12.50');
-    expect(result.lines[0].lineTotal).toBe('125.00');
+    const line = result.lines[0] as import('../src/invoices/invoice-calculator.service').EnrichedBagLine;
+    expect(line.pricePerBag).toBe('12.50');
+    expect(line.lineTotal).toBe('125.00');
     expect(result.subtotal).toBe('125.00');
   });
 
@@ -849,8 +849,9 @@ describe('CONSTRAINT 10: Price accepted as-is at time of sale — no price-list 
     const result = calculator.computeLines([
       { bagTypeId: 'bt-2', bagTypeName: 'Premium', qty: 1, pricePerBag: arbitraryPrice },
     ]);
-    expect(result.lines[0].pricePerBag).toBe(arbitraryPrice);
-    expect(result.lines[0].lineTotal).toBe('999999.99');
+    const line = result.lines[0] as import('../src/invoices/invoice-calculator.service').EnrichedBagLine;
+    expect(line.pricePerBag).toBe(arbitraryPrice);
+    expect(line.lineTotal).toBe('999999.99');
   });
 
   it('violation: zero price is also accepted — system does not enforce minimum price', () => {

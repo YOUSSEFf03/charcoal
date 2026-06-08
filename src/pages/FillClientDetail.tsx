@@ -21,7 +21,7 @@ let _fjBagId = 1
 const DRIVERS: string[] = []
 
 interface PickupItem { id: string; qty: number; wasted: number }
-interface PickupRecord { id: string; date: string; driver: string; paid: boolean; items: PickupItem[] }
+interface PickupRecord { id: string; displayId?: string; date: string; driver: string; paid: boolean; items: PickupItem[] }
 const PICKUPS: PickupRecord[] = []
 
 function calcPickup(_p: PickupRecord) {
@@ -1435,7 +1435,7 @@ export default function FillClientDetail() {
               <div className="compose-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.2px' }}><i className="ti ti-truck" style={{ marginRight: 8 }} />{p.id}</div>
+                    <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.2px' }}><i className="ti ti-truck" style={{ marginRight: 8 }} />{p.displayId ?? p.id}</div>
                     <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'IBM Plex Mono',monospace", marginTop: 3 }}>{p.date} · {p.driver}</div>
                   </div>
                   <span style={{

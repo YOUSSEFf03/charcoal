@@ -150,13 +150,32 @@ export interface TripOtherExpense {
   currency?: Currency;
 }
 
-export interface InvoiceLineItem {
+/** BAG line — bags sold by count. Present on all historical invoices after Phase 1 migration. */
+export interface BagInvoiceLine {
+  saleUnit?: 'BAG'; // optional: absent on pre-Phase-3 BAG lines; treat absent as 'BAG'
   bagTypeId: string;
   bagTypeName: string;
   qty: number;
   pricePerBag: number;
-  lineTotal: number; // qty * pricePerBag
+  lineTotal: number;
 }
+
+/** KG line — charcoal sold by weight. Introduced in Phase 3. */
+export interface KgInvoiceLine {
+  saleUnit: 'KG';
+  kgQuantity: string;   // decimal string, 3dp
+  description: string;  // charcoal type + grade snapshot
+  pricePerKg: string;   // decimal string
+  lineTotal: number;
+}
+
+/**
+ * Union of all invoice line variants.
+ * Discriminate on `line.saleUnit === 'KG'` — everything else is a BAG line.
+ * All existing code that reads bagTypeName/qty/pricePerBag continues to work
+ * on BagInvoiceLine; new code branches on the discriminator first.
+ */
+export type InvoiceLineItem = BagInvoiceLine | KgInvoiceLine;
 
 export interface WorkerRate {
   bagTypeId: string;
@@ -212,6 +231,7 @@ export interface ClerkWebhookEvent {
 
 export interface Supplier {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "S-001"
   name: string; // AR
   country: string;
   contactPersons: ContactPerson[];
@@ -256,6 +276,7 @@ export interface SupplierDetail extends Supplier {
 
 export interface SupplierPayment {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "PI-0001"
   supplierId: string;
   containerId: string | null;
   container: { id: string; number: string } | null;
@@ -324,6 +345,7 @@ export interface ContainerDiscount {
 
 export interface Container {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "CON-001"
   number: string;
   supplierId: string;
   status: ContainerStatus;
@@ -395,6 +417,7 @@ export interface SetContainerDiscountDto {
 
 export interface StockLot {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "G-001"
   charcoalType: string;
   grade: string;
   supplierId: string;
@@ -451,6 +474,7 @@ export type UpdateBagTypeDto = Partial<CreateBagTypeDto>;
 
 export interface BagPurchase {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "BP-001"
   bagTypeId: string;
   quantity: number;
   unitCost: string; // Decimal
@@ -509,11 +533,12 @@ export interface PackingSessionLot {
   sessionId: string;
   lotId: string;
   kgUsed: string; // Decimal
-  lot?: { id: string; charcoalType: string; grade: string; costPerKg: string | null };
+  lot?: { id: string; displayId?: string; charcoalType: string; grade: string; costPerKg: string | null };
 }
 
 export interface PackingSession {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "PK-001"
   workerId: string;
   workerEntityId?: string | null;
   mode: PackingMode;
@@ -576,6 +601,7 @@ export interface CompletePackingSessionDto {
 
 export interface StockAdjustment {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "ADJ-001"
   adjustmentType: AdjustmentType;
   lotId: string | null;
   packedStockId: string | null;
@@ -605,6 +631,7 @@ export interface CreateStockAdjustmentDto {
 
 export interface Client {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "C-001"
   name: string; // AR
   type: ClientType;
   currency: Currency;
@@ -647,15 +674,18 @@ export interface ToggleClientPhoneDto {
 export interface ClientLedgerEntry {
   date: string;
   type: 'invoice' | 'payment';
-  reference: string; // invoice id or payment id
-  debit: string; // invoice total
-  credit: string; // payment amount
+  reference: string; // UUID — use for links
+  displayId: string | null;
+  description: string;
+  debit: string;
+  credit: string;
   runningBalance: string;
 }
 
 export interface ClientLedger {
   clientId: string;
   currency: Currency;
+  openingBalance: string;
   entries: ClientLedgerEntry[];
   balance: string;
 }
@@ -673,6 +703,7 @@ export interface OrderBagLine {
 
 export interface ClientOrder {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "SO-0001"
   clientId: string;
   charcoalType: string;
   grade: string;
@@ -745,6 +776,7 @@ export interface ShipmentBag {
 
 export interface Shipment {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "SH-001"
   orderId: string;
   tripId: string | null;
   address: string; // AR
@@ -789,6 +821,7 @@ export interface DeliverShipmentDto {
 
 export interface DriverTrip {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "T-001"
   driverId: string;
   status: TripStatus;
   fuelCost: string | null; // Decimal
@@ -834,6 +867,7 @@ export interface UpdateDriverTripStatusDto {
 
 export interface StockExit {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "EX-001"
   // Mode 1 — packed bags:
   packedStockId: string | null;
   bagTypeId: string | null;
@@ -883,6 +917,7 @@ export interface CreateStockExitDto {
 
 export interface Invoice {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "SI-0001"
   orderId: string | null;
   clientId: string;
   lines: InvoiceLineItem[];
@@ -905,16 +940,28 @@ export interface InvoiceDetail extends Invoice {
   balanceDue: string; // total - paidAmount
 }
 
-export interface CreateInvoiceLineDto {
+export interface CreateBagInvoiceLineDto {
+  saleUnit?: 'BAG';
   bagTypeId: string;
+  bagTypeName: string;
   qty: number;
-  pricePerBag: number;
+  pricePerBag: string;
 }
+
+export interface CreateKgInvoiceLineDto {
+  saleUnit: 'KG';
+  kgQuantity: string;
+  description: string;
+  pricePerKg: string;
+}
+
+export type CreateInvoiceLineDto = CreateBagInvoiceLineDto | CreateKgInvoiceLineDto;
 
 export interface CreateInvoiceDto {
   clientId: string;
   orderId?: string | null; // null for walk-in
   lines: CreateInvoiceLineDto[];
+  currency: string;
   dueDate?: string | null;
 }
 
@@ -935,6 +982,7 @@ export interface IssueInvoiceDto {
 
 export interface Payment {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "RV-0001"
   clientId: string;
   invoiceId: string | null;
   amount: string; // Decimal
@@ -942,6 +990,7 @@ export interface Payment {
   method: PaymentMethod;
   date: string; // ISO date
   loggedById: string;
+  loggedBy?: { id: string; name: string };
   notes: string | null;
   receiverId: string | null;
   receiverName: string | null;
@@ -966,6 +1015,7 @@ export interface CreatePaymentDto {
 
 export interface Worker {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "W-001"
   name: string; // AR
   phone: string | null;
   ratesPerBagType: WorkerRate[];
@@ -1064,10 +1114,11 @@ export interface StockValueReport {
 
 export interface VarianceReportRow {
   sessionId: string;
+  sessionDisplayId?: string;
   date: string;
   workerId: string;
   workerName: string;
-  lots: { lotId: string; charcoalType: string; grade: string; kgUsed: string }[];
+  lots: { lotId: string; displayId?: string; charcoalType: string; grade: string; kgUsed: string }[];
   kgConsumed: string;
   kgOutputTotal: string;
   varianceKg: string;
@@ -1159,6 +1210,7 @@ export interface DashboardSummary {
 
 export interface GeneralExpense {
   id: string;
+  displayId?: string; // human-readable reference code, e.g. "GE-001"
   description: string;
   amount: string;        // Decimal string
   isRecurring: boolean;

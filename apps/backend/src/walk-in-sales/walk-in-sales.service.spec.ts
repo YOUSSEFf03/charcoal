@@ -19,14 +19,19 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
   let service: WalkInSalesService;
 
   const mockPrisma = { user: { findUnique: fn() }, client: { findUnique: fn() }, $transaction: fn() } as any;
-  // Real-ish calculator: sum qty*price.
+  // Real-ish calculator: handles both BAG (qty × pricePerBag) and KG (kgQuantity × pricePerKg).
   const calculator = {
     computeLines: (lines: any[]) => {
       let subtotal = 0;
       const enriched = lines.map((l) => {
+        if (l.saleUnit === 'KG') {
+          const lineTotal = parseFloat(l.kgQuantity) * parseFloat(l.pricePerKg);
+          subtotal += lineTotal;
+          return { saleUnit: 'KG', kgQuantity: parseFloat(l.kgQuantity).toFixed(3), description: l.description, pricePerKg: parseFloat(l.pricePerKg).toFixed(2), lineTotal: lineTotal.toFixed(2) };
+        }
         const lineTotal = parseFloat(l.pricePerBag) * l.qty;
         subtotal += lineTotal;
-        return { ...l, pricePerBag: parseFloat(l.pricePerBag).toFixed(2), lineTotal: lineTotal.toFixed(2) };
+        return { saleUnit: 'BAG', ...l, pricePerBag: parseFloat(l.pricePerBag).toFixed(2), lineTotal: lineTotal.toFixed(2) };
       });
       return { lines: enriched, subtotal: subtotal.toFixed(2) };
     },
@@ -53,12 +58,18 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
   const bagTypeId = 'bag-1';
   const packedStockId = 'ps-1';
 
+  const lotId = 'lot-1';
+
   function makeTx() {
     return {
       _invoice: null as any,
       _payment: null as any,
       packedStock: {
         findUnique: fn().mockResolvedValue({ id: packedStockId, quantity: 100, reservedQuantity: 0 }),
+        update: fn().mockResolvedValue({}),
+      },
+      stockLot: {
+        findUnique: fn().mockResolvedValue({ id: lotId, kgRemaining: { toString: () => '1000.000' } }),
         update: fn().mockResolvedValue({}),
       },
       stockExit: { create: fn().mockResolvedValue({ id: 'exit-1' }) },
@@ -84,6 +95,17 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     } as any;
   }
 
+  function kgDto(over: Partial<any> = {}) {
+    return {
+      clientId,
+      date: '2026-06-03',
+      kgLines: [{ lotId, kgQuantity: '500.000', description: 'BBQ Hardwood Grade A', pricePerKg: '2.50', currency: 'USD' }],
+      method: 'cash',
+      recipient: 'Acme',
+      ...over,
+    } as any;
+  }
+
   it('BUG-3: creates exit + ISSUED invoice + payment in one tx; balance = invoices − payments (≥0)', async () => {
     mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
     mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
@@ -101,6 +123,8 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     const invArg = tx.invoice.create.mock.calls[0][0].data;
     expect(invArg.status).toBe('issued');
     expect(invArg.total).toBe('120.00');
+    // Phase 2: walk-in invoices are always WAREHOUSE_SALE, never ORDER.
+    expect(invArg.source).toBe('WAREHOUSE_SALE');
     // BUG-J (P5): the issue-time rate is snapshotted on the walk-in invoice too.
     expect(invArg.exchangeRateSnapshot).toBe('89550');
     // Payment created and linked to the invoice.
@@ -219,5 +243,150 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     await expect(service.create(baseDto({}), clerkId)).rejects.toBeInstanceOf(BadRequestException);
     expect(tx.packedStock.update).not.toHaveBeenCalled();
     expect(tx.stockExit.create).not.toHaveBeenCalled();
+  });
+
+  // ── Phase 4: KG warehouse sale ───────────────────────────────────────────────
+
+  it('Phase 4 — KG sale: creates stockExit + issued invoice with KG lines, amount=null', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+    mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+    settings.getExchangeRate.mockResolvedValue(89550);
+    const tx = makeTx();
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    // 500 kg × $2.50 = $1,250 total; nothing received yet.
+    await service.create(kgDto({}), clerkId);
+
+    // StockExit created with kgQuantity, lotId, amount=null.
+    expect(tx.stockExit.create).toHaveBeenCalledTimes(1);
+    const exitData = tx.stockExit.create.mock.calls[0][0].data;
+    expect(exitData.lotId).toBe(lotId);
+    expect(exitData.kgQuantity).toBe('500.000');
+    expect(exitData.exitType).toBe('walk_in');
+    expect(exitData.amount).toBeNull();
+
+    // Lot kgRemaining decremented.
+    expect(tx.stockLot.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: lotId },
+        data:  { kgRemaining: '500.000' }, // 1000 − 500
+      }),
+    );
+
+    // Invoice created as ISSUED with correct KG line.
+    expect(tx.invoice.create).toHaveBeenCalledTimes(1);
+    const invData = tx.invoice.create.mock.calls[0][0].data;
+    expect(invData.status).toBe('issued');
+    expect(invData.source).toBe('WAREHOUSE_SALE');
+    expect(invData.total).toBe('1250.00');
+    const lines = invData.lines as any[];
+    expect(lines).toHaveLength(1);
+    expect(lines[0].saleUnit).toBe('KG');
+    expect(lines[0].kgQuantity).toBe('500.000');
+    expect(lines[0].description).toBe('BBQ Hardwood Grade A');
+    expect(lines[0].pricePerKg).toBe('2.50');
+    expect(lines[0].lineTotal).toBe('1250.00');
+
+    // No payment when nothing received.
+    expect(tx.payment.create).not.toHaveBeenCalled();
+  });
+
+  it('Phase 4 — KG sale with payment: invoice paid and payment linked', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+    mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+    settings.getExchangeRate.mockResolvedValue(89550);
+    calculator.recomputeStatus.mockResolvedValue({ paidAmount: '1250.00', status: 'paid' });
+    const tx = makeTx();
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    await service.create(kgDto({ receivedUsd: '1250.00' }), clerkId);
+
+    const payData = tx.payment.create.mock.calls[0][0].data;
+    expect(payData.invoiceId).toBe('inv-1');
+    expect(payData.amount).toBe('1250.00');
+    expect(payData.currency).toBe('USD');
+  });
+
+  it('Phase 4 — KG sale: rejects when kgQuantity exceeds lot.kgRemaining', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+    mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+    settings.getExchangeRate.mockResolvedValue(89550);
+    const tx = makeTx();
+    // Only 100 kg available, 500 requested.
+    tx.stockLot.findUnique.mockResolvedValue({ id: lotId, kgRemaining: { toString: () => '100.000' } });
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    await expect(service.create(kgDto({}), clerkId)).rejects.toBeInstanceOf(BadRequestException);
+    expect(tx.stockLot.update).not.toHaveBeenCalled();
+    expect(tx.stockExit.create).not.toHaveBeenCalled();
+    expect(tx.invoice.create).not.toHaveBeenCalled();
+  });
+
+  it('Phase 4 — KG sale: amount=null so P&L walk-in aggregate does not double-count', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+    mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+    settings.getExchangeRate.mockResolvedValue(89550);
+    calculator.recomputeStatus.mockResolvedValue({ paidAmount: '1250.00', status: 'paid' });
+    const tx = makeTx();
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    await service.create(kgDto({ receivedUsd: '1250.00' }), clerkId);
+
+    const exitData = tx.stockExit.create.mock.calls[0][0].data;
+    // Must be exactly null — a number would feed P&L walkInRevenue and double-count.
+    expect(exitData.amount).toBeNull();
+  });
+
+  it('Phase 4 — KG sale with LBP client: price converted from USD to LBP', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+    mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'LBP' });
+    settings.getExchangeRate.mockResolvedValue(90000); // 90,000 LBP per USD
+    const tx = makeTx();
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    // pricePerKg: $2.50 USD → 225,000 LBP; 500 kg × 225,000 = 112,500,000 LBP total
+    await service.create(kgDto({}), clerkId);
+
+    const invData = tx.invoice.create.mock.calls[0][0].data;
+    expect(invData.currency).toBe('LBP');
+    expect(invData.total).toBe('112500000.00');
+    const lines = invData.lines as any[];
+    expect(lines[0].pricePerKg).toBe('225000.00'); // 2.50 × 90000
+  });
+
+  it('Phase 4 — rejects when both bags and kgLines are absent/empty', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+    mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+    settings.getExchangeRate.mockResolvedValue(89550);
+    const dto = { clientId, date: '2026-06-03', method: 'cash', bags: [], kgLines: [] } as any;
+    await expect(service.create(dto, clerkId)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('Phase 4 — mixed BAG + KG sale: single invoice with both line types', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+    mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+    settings.getExchangeRate.mockResolvedValue(89550);
+    const tx = makeTx();
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    // BAG: 10 × $12 = $120; KG: 500 × $2.50 = $1,250; total = $1,370
+    await service.create(
+      { ...baseDto({}), kgLines: [{ lotId, kgQuantity: '500.000', description: 'BBQ Hardwood Grade A', pricePerKg: '2.50', currency: 'USD' }] } as any,
+      clerkId,
+    );
+
+    // Both a bag exit and a kg exit created.
+    expect(tx.stockExit.create).toHaveBeenCalledTimes(2);
+    // Packed stock decremented for bags.
+    expect(tx.packedStock.update).toHaveBeenCalledTimes(1);
+    // Lot kgRemaining decremented for kg.
+    expect(tx.stockLot.update).toHaveBeenCalledTimes(1);
+    // Single invoice with both line types.
+    const invData = tx.invoice.create.mock.calls[0][0].data;
+    const lines = invData.lines as any[];
+    expect(lines).toHaveLength(2);
+    expect(lines[0].saleUnit).toBe('BAG');
+    expect(lines[1].saleUnit).toBe('KG');
+    expect(invData.total).toBe('1370.00');
   });
 });

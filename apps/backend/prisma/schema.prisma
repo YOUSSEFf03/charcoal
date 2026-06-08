@@ -94,6 +94,11 @@ enum InvoiceStatus {
   cancelled
 }
 
+enum InvoiceSource {
+  ORDER
+  WAREHOUSE_SALE
+}
+
 enum PaymentMethod {
   cash
   whish
@@ -183,6 +188,7 @@ model Supplier {
 
 model SupplierPayment {
   id          String        @id @default(uuid())
+  displayId   String?       @unique @map("display_id")
   supplierId  String        @map("supplier_id")
   supplier    Supplier      @relation(fields: [supplierId], references: [id])
   containerId String?       @map("container_id")
@@ -469,6 +475,7 @@ model Client {
 
 model ClientOrder {
   id               String      @id @default(uuid())
+  displayId        String?     @unique @map("display_id")
   clientId         String
   client           Client      @relation(fields: [clientId], references: [id])
   charcoalType     String
@@ -604,6 +611,7 @@ model StockExit {
 
 model Invoice {
   id         String        @id @default(uuid())
+  displayId  String?       @unique @map("display_id")
   orderId    String?
   order      ClientOrder?  @relation(fields: [orderId], references: [id])
   clientId   String
@@ -612,6 +620,12 @@ model Invoice {
   subtotal   Decimal       @db.Decimal(10, 2)
   total      Decimal       @db.Decimal(10, 2)
   currency   Currency
+  /// Identifies the business flow that created this invoice.
+  /// ORDER         = invoice raised against a customer order (shipment-based delivery).
+  /// WAREHOUSE_SALE = invoice raised from a direct warehouse sale (walk-in, no prior order).
+  /// Defaults ORDER so that all invoices created before this field existed are treated
+  /// as order invoices (correct — the walk-in invoice path was added later).
+  source     InvoiceSource @default(ORDER)
   /// BUG-J (P5): LBP-per-USD exchange rate captured at issue time. P&L converts this
   /// invoice's LBP revenue using its OWN snapshot, not today's global rate, so past
   /// revenue is stable when the global rate changes. Null only for never-issued drafts
@@ -633,6 +647,7 @@ model Invoice {
 
 model Payment {
   id         String        @id @default(uuid())
+  displayId  String?       @unique @map("display_id")
   clientId   String
   client     Client        @relation(fields: [clientId], references: [id])
   invoiceId  String?

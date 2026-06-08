@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { InvoicesService } from '../invoices/invoices.service';
 
 // ---------------------------------------------------------------------------
 // Shared mock factory helpers
@@ -17,7 +18,7 @@ function fn(): any {
 // Test suite
 // ---------------------------------------------------------------------------
 
-describe('OrdersService — remove()', () => {
+describe('OrdersService', () => {
   let service: OrdersService;
 
   const mockPrisma = {
@@ -31,7 +32,12 @@ describe('OrdersService — remove()', () => {
       findMany: fn(),
       count: fn(),
     },
+    shipment: { updateMany: fn() },
     $transaction: fn(),
+  };
+
+  const mockInvoices = {
+    createFromOrder: jest.fn() as any,
   };
 
   beforeEach(async () => {
@@ -41,6 +47,7 @@ describe('OrdersService — remove()', () => {
       providers: [
         OrdersService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: InvoicesService, useValue: mockInvoices },
       ],
     }).compile();
 
@@ -48,9 +55,119 @@ describe('OrdersService — remove()', () => {
   });
 
   // =========================================================================
+  // markDelivered() — owner override delivery path
+  // =========================================================================
+
+  describe('markDelivered()', () => {
+    const orderId = 'order-uuid-md';
+    const deliveredOrder = {
+      id: orderId,
+      status: 'delivered',
+      shipments: [],
+      client: {},
+      orderBagLines: [],
+      bagType: null,
+    };
+    const confirmedOrder = {
+      id: orderId,
+      status: 'confirmed',
+      shipments: [],
+      client: {},
+      orderBagLines: [],
+      bagType: null,
+    };
+
+    it('marks order and shipments as delivered then calls createFromOrder() with autoIssue=true', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(confirmedOrder);
+      mockPrisma.shipment.updateMany.mockResolvedValue({ count: 0 });
+      mockPrisma.clientOrder.update.mockResolvedValue(deliveredOrder);
+      mockInvoices.createFromOrder.mockResolvedValue({ id: 'inv-1', status: 'issued' });
+
+      await service.markDelivered(orderId);
+
+      expect(mockPrisma.shipment.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ orderId }) }),
+      );
+      expect(mockPrisma.clientOrder.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: 'delivered' } }),
+      );
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, undefined, true);
+    });
+
+    it('calls createFromOrder() exactly once per markDelivered() call', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(confirmedOrder);
+      mockPrisma.shipment.updateMany.mockResolvedValue({ count: 0 });
+      mockPrisma.clientOrder.update.mockResolvedValue(deliveredOrder);
+      mockInvoices.createFromOrder.mockResolvedValue({ id: 'inv-1', status: 'issued' });
+
+      await service.markDelivered(orderId);
+
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledTimes(1);
+    });
+
+    it('still returns the updated order even if createFromOrder() rejects (best-effort invoice)', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(confirmedOrder);
+      mockPrisma.shipment.updateMany.mockResolvedValue({ count: 0 });
+      mockPrisma.clientOrder.update.mockResolvedValue(deliveredOrder);
+      // Simulate transient invoice creation failure
+      mockInvoices.createFromOrder.mockRejectedValue(new Error('DB timeout'));
+
+      // markDelivered propagates the error from createFromOrder — callers
+      // should handle it and the owner can use POST /orders/:id/invoice
+      await expect(service.markDelivered(orderId)).rejects.toThrow('DB timeout');
+      // But the order WAS marked delivered in the DB before the failure
+      expect(mockPrisma.clientOrder.update).toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when order does not exist', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(null);
+
+      await expect(service.markDelivered('no-such-order')).rejects.toThrow(NotFoundException);
+      expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // createInvoiceForOrder() — manual invoice generation endpoint
+  // =========================================================================
+
+  describe('createInvoiceForOrder()', () => {
+    it('delegates to invoices.createFromOrder(id)', async () => {
+      const orderId = 'order-manual-inv';
+      const invoice = { id: 'inv-manual', status: 'draft', orderId };
+      mockInvoices.createFromOrder.mockResolvedValue(invoice);
+
+      const result = await service.createInvoiceForOrder(orderId);
+
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId);
+      expect(result).toBe(invoice);
+    });
+
+    it('propagates NotFoundException from createFromOrder when order missing', async () => {
+      mockInvoices.createFromOrder.mockRejectedValue(
+        new NotFoundException({ error: 'Order not found', code: 'NOT_FOUND' }),
+      );
+
+      await expect(service.createInvoiceForOrder('bad-id')).rejects.toThrow(NotFoundException);
+    });
+
+    it('propagates BadRequestException from createFromOrder when order not delivered', async () => {
+      mockInvoices.createFromOrder.mockRejectedValue(
+        new BadRequestException({ error: 'Invoice can only be generated for delivered orders', code: 'CONSTRAINT_VIOLATION' }),
+      );
+
+      await expect(service.createInvoiceForOrder('confirmed-order')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // =========================================================================
+  // remove() — existing suite
+  // =========================================================================
+
+  describe('remove()', () => {
+
   // Test 1: order has shipments → throws ConflictException with code 'CONFLICT'
   // Note: OrdersService.remove checks status first, then shipments.
-  // =========================================================================
 
   it('throws ConflictException with code CONFLICT when order has linked shipments (draft status)', async () => {
     const orderId = 'order-uuid-has-shipments';
@@ -150,4 +267,6 @@ describe('OrdersService — remove()', () => {
       where: { id: orderId },
     });
   });
-});
+
+  }); // end describe('remove()')
+}); // end describe('OrdersService')

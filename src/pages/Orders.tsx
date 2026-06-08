@@ -4,6 +4,7 @@ import Topbar from '../components/layout/Topbar'
 import { useOrders, useCreateOrder, useMarkOrderDelivered, useDeleteOrder } from '../hooks/useOrders'
 import { useClients } from '../hooks/useClients'
 import { useCreateShipment, useConfirmDelivery, useLogReturn, useLogActualWeight, useShipments } from '../hooks/useShipments'
+import { useBagTypes } from '../hooks/useBagTypes'
 import type { OrderStatus, ClientOrder } from '../types/api'
 
 // Map an order status enum to a badge colour + display label.
@@ -83,6 +84,8 @@ export default function Orders() {
   const orders = ordersQ.data?.data ?? []
   const orderTotal = ordersQ.data?.total ?? orders.length
   const selectedOrder = orders.find(o => o.id === selectedOrderId) ?? null
+  const bagTypesQ = useBagTypes()
+  const bagTypeNameById = new Map((bagTypesQ.data ?? []).map(b => [b.id, b.name]))
   const clientList = clientsQ.data?.data ?? []
   const clientNameById = new Map(clientList.map(c => [c.id, c.name]))
 
@@ -200,14 +203,14 @@ export default function Orders() {
             {!ordersQ.isLoading && !ordersQ.isError && filteredOrders.map((o: ClientOrder) => {
               const meta = orderStatusMeta(o.status)
               return (
-                <div className="order-card" key={o.id} onClick={() => { setSelectedOrderId(o.id); setPanelOpen(true) }}>
+                <div className="order-card" key={o.id} onClick={() => navigate(`/orders/${o.id}`)}>
                   <div className="order-card-inner">
                     <div className="order-stripe" style={{ background: meta.stripe }} />
                     <div className="order-body">
                       <div className="order-head">
                         <div>
                           <div className="order-client">{clientNameById.get(o.clientId) ?? 'Unknown client'}</div>
-                          <div className="order-id">{o.id} · {new Date(o.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</div>
+                          <div className="order-id" title={o.id}>{o.displayId ?? o.id} · {new Date(o.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</div>
                         </div>
                         <span className={`badge ${meta.badge}`}>{meta.label}</span>
                       </div>
@@ -272,25 +275,40 @@ export default function Orders() {
         <div className="panel-head">
           <button className="panel-close-btn" onClick={() => setPanelOpen(false)}>✕ Close</button>
           <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', marginBottom: 3 }}>ORD-0284 · 21 May 2026</div>
-            <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: -0.3 }}>Al Rawda Restaurant</div>
+            <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', marginBottom: 3 }}>
+              {selectedOrder?.displayId ?? selectedOrder?.id?.slice(0, 8) ?? '—'} · {selectedOrder ? new Date(selectedOrder.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+            </div>
+            <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: -0.3 }}>
+              {clientNameById.get(selectedOrder?.clientId ?? '') ?? '—'}
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-              <span className="badge badge-blue">In delivery</span>
-              <span style={{ fontSize: 12, color: 'var(--text2)' }}>BBQ Hardwood · Grade A · 300kg</span>
+              {selectedOrder && <span className={`badge ${orderStatusMeta(selectedOrder.status).badge}`}>{orderStatusMeta(selectedOrder.status).label}</span>}
+              <span style={{ fontSize: 12, color: 'var(--text2)' }}>
+                {selectedOrder ? `${selectedOrder.charcoalType} · ${selectedOrder.grade} · ${parseFloat(selectedOrder.totalKgRequested).toLocaleString()} kg` : ''}
+              </span>
             </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginTop: 14 }}>
-            {[
-              { label: 'ORDER TOTAL', val: '$840', sub: '$2.80/bag · USD' },
-              { label: 'KG DELIVERED', val: '100 / 300', sub: '1 of 3 shipments' },
-              { label: 'PAID', val: '$840', valColor: 'var(--accent)', sub: 'on delivery' },
-            ].map((s, i) => (
-              <div key={i} style={{ background: 'var(--surface2)', borderRadius: 'var(--radius)', padding: '9px 11px' }}>
-                <div style={{ fontSize: 10, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace", marginBottom: 3 }}>{s.label}</div>
-                <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: -0.5, color: s.valColor }}>{s.val}</div>
-                <div style={{ fontSize: 10, color: 'var(--text3)' }}>{s.sub}</div>
-              </div>
-            ))}
+            {(() => {
+              const ships = panelShipmentsQ.data?.data ?? []
+              const pricePerBag = parseFloat(selectedOrder?.pricePerBag ?? '0')
+              const totalKgReq = parseFloat(selectedOrder?.totalKgRequested ?? '0')
+              const orderTotal = pricePerBag * totalKgReq
+              const deliveredKg = ships.filter(s => s.status === 'delivered').reduce((acc, s) => acc + (s.actualKg != null ? parseFloat(s.actualKg) : parseFloat(s.nominalKg)), 0)
+              const deliveredCount = ships.filter(s => s.status === 'delivered').length
+              const tiles = [
+                { label: 'ORDER TOTAL', val: `$${orderTotal.toFixed(2)}`, sub: `$${pricePerBag.toFixed(2)}/bag · ${selectedOrder?.currency ?? 'USD'}` },
+                { label: 'KG DELIVERED', val: `${deliveredKg.toFixed(0)} / ${totalKgReq.toFixed(0)}`, sub: `${deliveredCount} of ${ships.length} shipment${ships.length !== 1 ? 's' : ''}` },
+                { label: 'SHIPMENTS', val: `${ships.length}`, sub: ships.length === 0 ? 'none yet' : `${deliveredCount} delivered` },
+              ]
+              return tiles.map((s, i) => (
+                <div key={i} style={{ background: 'var(--surface2)', borderRadius: 'var(--radius)', padding: '9px 11px' }}>
+                  <div style={{ fontSize: 10, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace", marginBottom: 3 }}>{s.label}</div>
+                  <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: -0.5 }}>{s.val}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text3)' }}>{s.sub}</div>
+                </div>
+              ))
+            })()}
           </div>
         </div>
         <div className="panel-body">
@@ -300,13 +318,13 @@ export default function Orders() {
             {!panelShipmentsQ.isLoading && (panelShipmentsQ.data?.data ?? []).map(s => (
               <div className="shipment-card" key={s.id}>
                 <div className="ship-head">
-                  <span className="ship-num">{s.id.slice(0, 8)}</span>
+                  <span className="ship-num" title={s.id}>{s.displayId ?? s.id.slice(0, 8)}</span>
                   <span className={`badge ${s.status === 'delivered' ? 'badge-green' : s.status === 'loaded' ? 'badge-blue' : 'badge-gray'}`}>{s.status}</span>
                 </div>
                 <div className="ship-body">
                   <div className="ship-addr">{s.address}</div>
                   <div className="ship-bags">
-                    {s.bags.map(b => <span className="ship-bag-pill" key={b.id}>{b.quantity} × {b.bagTypeId.slice(0, 8)}</span>)}
+                    {s.bags.map(b => <span className="ship-bag-pill" key={b.id}>{b.quantity} × {bagTypeNameById.get(b.bagTypeId) ?? b.bagTypeId}</span>)}
                   </div>
                   <div className="ship-weights">
                     <div className="ship-weight-item"><div className="ship-weight-label">Nominal</div><div className="ship-weight-val">{parseFloat(s.nominalKg).toFixed(0)} kg</div></div>
@@ -326,12 +344,12 @@ export default function Orders() {
             <div className="panel-section-label">Order details</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
               {[
-                { label: 'Client', val: 'Al Rawda Restaurant', bold: true },
-                { label: 'Charcoal type', val: 'BBQ Hardwood · Grade A' },
-                { label: 'Bag type', val: '2kg bag + 5kg bag' },
-                { label: 'Price per bag', val: '$2.80', mono: true },
-                { label: 'Currency', val: 'USD' },
-                { label: 'Created by', val: 'Sales rep · 08:30', muted: true },
+                { label: 'Client', val: clientNameById.get(selectedOrder?.clientId ?? '') ?? '—', bold: true },
+                { label: 'Charcoal type', val: selectedOrder ? `${selectedOrder.charcoalType} · ${selectedOrder.grade}` : '—' },
+                { label: 'Bag type', val: selectedOrder?.bagType?.name ?? (selectedOrder?.bagTypeId ? selectedOrder.bagTypeId : 'KG order') },
+                { label: 'Price per bag', val: selectedOrder ? `$${parseFloat(selectedOrder.pricePerBag).toFixed(2)}` : '—', mono: true },
+                { label: 'Currency', val: selectedOrder?.currency ?? '—' },
+                { label: 'Notes', val: selectedOrder?.notes ?? '—', muted: true },
               ].map((r, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: i < 5 ? '1px solid var(--border)' : 'none' }}>
                   <span style={{ color: 'var(--text2)' }}>{r.label}</span>

@@ -9,7 +9,7 @@ import { useInvoice } from '../hooks/useInvoices'
  */
 export default function InvoicePrint() {
   const { id } = useParams<{ id: string }>()
-  const { data: invoice, isLoading, isError } = useInvoice(id ?? '')
+  const { data: invoice, isLoading, isError, error } = useInvoice(id ?? '')
 
   if (isLoading) {
     return (
@@ -30,9 +30,15 @@ export default function InvoicePrint() {
   }
 
   if (isError || !invoice) {
+    const status = (error as any)?.status as number | undefined
+    const msg =
+      status === 401 ? 'Authentication required' :
+      status === 404 ? 'Invoice not found' :
+      isError ? 'Failed to load invoice' :
+      'Invoice not found'
     return (
       <div style={{ minHeight: '100vh', background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, color: '#666' }}>
-        Invoice not found
+        {msg}
       </div>
     )
   }
@@ -45,7 +51,7 @@ export default function InvoicePrint() {
       {/* Print action bar — hidden when printing */}
       <div className="no-print" style={{ width: '100%', maxWidth: 480, display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div style={{ fontSize: 13, color: '#666' }}>
-          Invoice&nbsp;<strong style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{invoice.id}</strong>
+          Invoice&nbsp;<strong style={{ fontFamily: "'IBM Plex Mono', monospace" }} title={invoice.id}>{invoice.displayId ?? invoice.id}</strong>
         </div>
         <button
           onClick={() => window.print()}
@@ -62,14 +68,18 @@ export default function InvoicePrint() {
         <hr className="receipt-divider" />
         <div className="receipt-row">
           <span>Invoice #</span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{invoice.id}</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace" }} title={invoice.id}>{invoice.displayId ?? invoice.id}</span>
         </div>
         <div className="receipt-row"><span>Date</span><span>{formattedDate}</span></div>
         <div className="receipt-row"><span>Client</span><span>{invoice.client.name}</span></div>
         <hr className="receipt-divider" />
         {invoice.lines.map((line, i) => (
-          <div className="receipt-row" key={`${line.bagTypeId}-${i}`}>
-            <span>{line.qty}× {line.bagTypeName}</span>
+          <div className="receipt-row" key={i}>
+            <span>
+              {line.saleUnit === 'KG'
+                ? `${line.kgQuantity} kg — ${line.description}`
+                : `${line.qty}× ${line.bagTypeName}`}
+            </span>
             <span>{Number(line.lineTotal).toFixed(2)}</span>
           </div>
         ))}

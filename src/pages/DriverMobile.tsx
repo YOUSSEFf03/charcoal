@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useDriverTrips, useStartTrip, useCompleteTrip } from '../hooks/useDriverTrips'
 import { useShipments, useConfirmDelivery, useLogActualWeight } from '../hooks/useShipments'
+import { useBagTypes } from '../hooks/useBagTypes'
 import { useRate } from '../context/RateContext'
 import type { ShipmentStatus } from '../types/api'
 
@@ -26,6 +27,8 @@ export default function DriverMobile() {
   // Live trips + shipments + mutations.
   const tripsQ = useDriverTrips({ limit: 100 })
   const shipmentsQ = useShipments({ limit: 100 })
+  const bagTypesQ = useBagTypes()
+  const bagTypeNameById = new Map((bagTypesQ.data ?? []).map(b => [b.id, b.name]))
   const startTripM = useStartTrip()
   const completeTripM = useCompleteTrip()
   const confirmDeliveryM = useConfirmDelivery()
@@ -53,9 +56,9 @@ export default function DriverMobile() {
       id: s.id,
       client: s.address,
       addr: s.address,
-      bags: s.bags.map(b => `${b.quantity}×${b.bagTypeId.slice(0, 4)}`),
+      bags: s.bags.map(b => `${b.quantity}×${bagTypeNameById.get(b.bagTypeId) ?? b.bagTypeId.slice(0, 4)}`),
       kgNom: `${parseFloat(s.nominalKg).toFixed(0)} kg nom.`,
-      inv: s.id.slice(0, 8),
+      inv: s.displayId ?? s.id.slice(0, 8),
       state: s.status === 'delivered' ? 'done' : s.status === 'loaded' ? 'active' : 'pending',
       badge: shipBadge(s.status),
       invId: s.id,

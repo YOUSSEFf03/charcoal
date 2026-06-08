@@ -4,7 +4,9 @@ import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoiceLineDto } from './dto/invoice-line.dto';
 
-export interface EnrichedLine {
+/** Enriched BAG line stored in invoice.lines JSONB. */
+export interface EnrichedBagLine {
+  saleUnit: 'BAG';
   bagTypeId: string;
   bagTypeName: string;
   qty: number;
@@ -12,25 +14,60 @@ export interface EnrichedLine {
   lineTotal: string;
 }
 
+/** Enriched KG line stored in invoice.lines JSONB. */
+export interface EnrichedKgLine {
+  saleUnit: 'KG';
+  kgQuantity: string;
+  description: string;
+  pricePerKg: string;
+  lineTotal: string;
+}
+
+/** Discriminated union of all enriched line types. */
+export type EnrichedLine = EnrichedBagLine | EnrichedKgLine;
+
 @Injectable()
 export class InvoiceCalculatorService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
    * Enrich invoice lines with computed lineTotal and return aggregate subtotal.
-   * @constraint 10 — pricePerBag is accepted as-is; no price-list validation.
+   *
+   * BAG line: lineTotal = qty × pricePerBag
+   * KG  line: lineTotal = kgQuantity × pricePerKg
+   *
+   * The saleUnit discriminator is always written to the output so stored JSONB
+   * lines are self-describing. Callers that omit saleUnit are treated as BAG
+   * (backward-compat: all historical callers, including walk-in-sales service).
+   *
+   * @constraint 10 — prices are accepted as-is; no price-list validation.
    */
   computeLines(lines: InvoiceLineDto[]): { lines: EnrichedLine[]; subtotal: string } {
     let subtotal = new Decimal(0);
 
     const enrichedLines: EnrichedLine[] = lines.map((line) => {
-      const lineTotal = new Decimal(line.pricePerBag).mul(line.qty);
+      if (line.saleUnit === 'KG') {
+        // KG line — kgQuantity × pricePerKg
+        const lineTotal = new Decimal(line.kgQuantity!).mul(line.pricePerKg!);
+        subtotal = subtotal.plus(lineTotal);
+        return {
+          saleUnit: 'KG' as const,
+          kgQuantity: new Decimal(line.kgQuantity!).toFixed(3),
+          description: line.description!,
+          pricePerKg: new Decimal(line.pricePerKg!).toFixed(2),
+          lineTotal: lineTotal.toFixed(2),
+        };
+      }
+
+      // BAG line — qty × pricePerBag (saleUnit = 'BAG' or absent)
+      const lineTotal = new Decimal(line.pricePerBag!).mul(line.qty!);
       subtotal = subtotal.plus(lineTotal);
       return {
-        bagTypeId: line.bagTypeId,
-        bagTypeName: line.bagTypeName,
-        qty: line.qty,
-        pricePerBag: new Decimal(line.pricePerBag).toFixed(2),
+        saleUnit: 'BAG' as const,
+        bagTypeId: line.bagTypeId!,
+        bagTypeName: line.bagTypeName!,
+        qty: line.qty!,
+        pricePerBag: new Decimal(line.pricePerBag!).toFixed(2),
         lineTotal: lineTotal.toFixed(2),
       };
     });

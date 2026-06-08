@@ -492,7 +492,10 @@ export default function CashHandover() {
             <div className="modal-body">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
                 {[
-                  ['Total collected', fmt2(totalCollected)],
+                  [
+                    selectedReceiver && receiverBalance ? `Balance held by ${selectedReceiverName}` : 'Total collected today',
+                    fmt2(receiverTotal),
+                  ],
                   ['Expenses deducted', `−${fmt2(manualExpTotal)}`],
                   ['Expected handover', fmt2(expected)],
                   ['Actual handed over', fmt2(handed)],

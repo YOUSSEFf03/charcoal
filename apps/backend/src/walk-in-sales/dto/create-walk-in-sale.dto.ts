@@ -1,6 +1,5 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMinSize,
   IsArray,
   IsDateString,
   IsEnum,
@@ -40,6 +39,28 @@ export class WalkInBagLineDto {
   @IsEnum(Currency) currency: Currency;
 }
 
+/**
+ * One by-kg line in a walk-in sale. Draws from a raw stock lot (kgRemaining).
+ * The buyer's price is captured in its own currency; the service converts to the
+ * client's currency for the invoice.
+ */
+export class WalkInKgLineDto {
+  @ApiProperty({ description: 'Stock lot UUID to draw kg from' })
+  @IsUUID('all') lotId: string;
+
+  @ApiProperty({ description: 'Quantity in kg (decimal string, ≥ 0.001)', example: '500.000' })
+  @IsNumberString() @IsNotEmpty() kgQuantity: string;
+
+  @ApiProperty({ description: 'Product description snapshot for the invoice line, e.g. charcoal type + grade', example: 'BBQ Hardwood Grade A' })
+  @IsString() @IsNotEmpty() description: string;
+
+  @ApiProperty({ description: 'Price per kg in the line currency (decimal string)', example: '2.50' })
+  @IsNumberString() @IsNotEmpty() pricePerKg: string;
+
+  @ApiProperty({ description: 'Currency the pricePerKg is quoted in', enum: Currency })
+  @IsEnum(Currency) currency: Currency;
+}
+
 export class CreateWalkInSaleDto {
   @ApiProperty({ description: 'Registered client UUID. Anonymous walk-ins use POST /stock-exits instead.' })
   @IsUUID('all') clientId: string;
@@ -47,9 +68,23 @@ export class CreateWalkInSaleDto {
   @ApiProperty({ description: 'Sale date (ISO 8601)', example: '2026-06-03' })
   @IsDateString() @IsNotEmpty() date: string;
 
-  @ApiProperty({ description: 'Packed-bag lines sold (at least one required)', type: [WalkInBagLineDto] })
-  @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => WalkInBagLineDto)
-  bags: WalkInBagLineDto[];
+  /**
+   * Packed-bag lines sold. Optional when kgLines is provided; required when kgLines is absent.
+   * At least one of `bags` or `kgLines` must be a non-empty array — enforced in the service.
+   */
+  @ApiProperty({ description: 'Packed-bag lines sold (optional when kgLines is present)', type: [WalkInBagLineDto], required: false })
+  @IsOptional()
+  @IsArray() @ValidateNested({ each: true }) @Type(() => WalkInBagLineDto)
+  bags?: WalkInBagLineDto[];
+
+  /**
+   * By-kg lines sold. Optional when bags is provided; required when bags is absent.
+   * Each line draws from a raw stock lot and produces a KG invoice line.
+   */
+  @ApiProperty({ description: 'By-kg lines sold (optional when bags is present)', type: [WalkInKgLineDto], required: false })
+  @IsOptional()
+  @IsArray() @ValidateNested({ each: true }) @Type(() => WalkInKgLineDto)
+  kgLines?: WalkInKgLineDto[];
 
   @ApiProperty({ description: 'Amount received in USD (decimal string)', required: false, example: '50.00' })
   @IsOptional() @IsNumberString() receivedUsd?: string;

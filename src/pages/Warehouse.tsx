@@ -8,6 +8,8 @@ type WTab = 'raw' | 'packed' | 'adj'
 
 interface LotVM {
   id: string
+  displayId?: string
+  createdAt: string
   supplier: string
   arrival: string
   rawKg: number
@@ -66,6 +68,8 @@ export default function Warehouse() {
     const remaining = parseFloat(l.kgRemaining)
     return {
       id: l.id,
+      displayId: l.displayId,
+      createdAt: l.createdAt ?? l.dateReceived,
       supplier: supplierNameById.get(l.supplierId) ?? l.supplierId,
       arrival: fmtDate(l.dateReceived),
       rawKg: received,
@@ -269,8 +273,8 @@ export default function Warehouse() {
                     return (
                       <tr key={lot.id} style={{ cursor: 'pointer' }} onClick={() => openLot(lot)}>
                         <td>
-                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text3)' }}>
-                            {lot.id.slice(0, 8).toUpperCase()}
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text3)' }} title={lot.id}>
+                            {lot.displayId ?? lot.id.slice(0, 8).toUpperCase()}
                           </span>
                         </td>
                         <td>
@@ -383,7 +387,7 @@ export default function Warehouse() {
                         </td>
                         <td>
                           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text3)' }}>
-                            {(s.sessionLots?.[0]?.lotId ?? s.workerId).slice(0, 8).toUpperCase()}
+                            {(s.sessionLots?.[0]?.lot?.displayId ?? s.sessionLots?.[0]?.lotId?.slice(0, 8) ?? s.workerId.slice(0, 8))?.toUpperCase()}
                           </span>
                         </td>
                         <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>{bagCount}</td>
@@ -491,8 +495,8 @@ export default function Warehouse() {
               </button>
               <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
               <div>
-                <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', marginRight: 8 }}>
-                  {selectedLot.id.slice(0, 8).toUpperCase()}
+                <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', marginRight: 8 }} title={selectedLot.id}>
+                  {selectedLot.displayId ?? selectedLot.id.slice(0, 8).toUpperCase()}
                 </span>
                 <span style={{ fontSize: 15, fontWeight: 600 }}>{selectedLot.charcoalType} · Grade {selectedLot.grade}</span>
                 <span style={{ fontSize: 12, color: 'var(--text2)', marginLeft: 8 }}>{selectedLot.supplier} · {selectedLot.arrival}</span>
@@ -870,7 +874,7 @@ export default function Warehouse() {
                   <div key={lot.id} className="count-row">
                     <div className="count-name">
                       {lot.charcoalType} · Grade {lot.grade}
-                      <div style={{ fontSize: 11, color: 'var(--text3)' }}>{lot.id.slice(0, 8).toUpperCase()} · {lot.supplier}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)' }} title={lot.id}>{lot.displayId ?? lot.id.slice(0, 8).toUpperCase()} · {lot.supplier}</div>
                     </div>
                     <div className="count-system">System: {lot.remainKg.toLocaleString()} kg</div>
                     <input

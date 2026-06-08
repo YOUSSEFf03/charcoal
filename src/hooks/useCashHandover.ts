@@ -14,7 +14,7 @@ export function useDailyPayments(date?: string) {
   return useQuery({
     queryKey: ['payments', 'daily', date ?? null],
     queryFn: async () => {
-      const params = date ? { dateFrom: date, dateTo: date } : undefined
+      const params = date ? { dateFrom: date, dateTo: date, limit: 100 } : { limit: 100 }
       const res = await api.get<PaginatedResponse<Payment>>('/payments', { params })
       return res.data
     },
@@ -32,8 +32,8 @@ export interface UserBalance {
   userId: string
   name: string
   role: string
-  totalCollected: string
-  totalHandedOver: string
+  totalCollected: string | null
+  totalHandedOver: string | null
   balance: string
 }
 

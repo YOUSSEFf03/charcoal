@@ -111,6 +111,27 @@ export function useMarkOrderDelivered() {
 }
 
 /**
+ * Generate (or return existing) invoice for a delivered order.
+ * Idempotent: safe to call multiple times — returns the existing invoice if one
+ * already exists for the order.
+ * @returns mutation accepting the order id (string)
+ * POST /orders/:id/invoice
+ */
+export function useGenerateOrderInvoice() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await api.post(`/orders/${id}/invoice`, {})
+      return res.data
+    },
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ['orders', id] })
+      qc.invalidateQueries({ queryKey: ['invoices'] })
+    },
+  })
+}
+
+/**
  * Delete a draft order.
  * @returns mutation accepting the order id (string)
  * DELETE /orders/:id

@@ -4,13 +4,13 @@ export const DEV = import.meta.env.DEV
 
 export function getDevRole(): string | null {
   if (!DEV) return null
-  return sessionStorage.getItem(KEY)
+  return localStorage.getItem(KEY)
 }
 
 export function setDevRole(role: string | null) {
   if (!DEV) return
-  if (role) sessionStorage.setItem(KEY, role)
-  else sessionStorage.removeItem(KEY)
+  if (role) localStorage.setItem(KEY, role)
+  else localStorage.removeItem(KEY)
 }
 
 // Guard is checked twice:

@@ -263,27 +263,40 @@ export default function WarehouseSales() {
         }
       }
 
-      // Each line is drawn from the oldest packed-stock record for its bag type.
+      // FIFO across multiple packed-stock records per bag type.
       // BUG-E (P2): only FREE bags (quantity − reservedQuantity) are sellable.
       const bagsPayload: { packedStockId: string; bagTypeId: string; bagTypeName: string; quantity: number; pricePerBag: string; currency: 'USD' | 'LBP' }[] = []
       for (const ln of activeLines) {
-        const rec = packedRecords
-          .filter(r => r.bagTypeId === ln.bagTypeId && (r.quantity - (r.reservedQuantity ?? 0)) > 0)
-          .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())[0]
-        if (!rec) { showToast('No packed stock record found for a selected bag type'); return }
         const bt = bagTypes.find(b => b.id === ln.bagTypeId)
-        bagsPayload.push({
-          packedStockId: rec.id,
-          bagTypeId: ln.bagTypeId,
-          bagTypeName: bt?.name ?? 'Bag',
-          quantity: parseInt(ln.qty),
-          pricePerBag: (parseFloat(ln.price) || 0).toFixed(2),
-          currency: ln.curr,
-        })
+        const recs = packedRecords
+          .filter(r => r.bagTypeId === ln.bagTypeId && (r.quantity - (r.reservedQuantity ?? 0)) > 0)
+          .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+        if (recs.length === 0) { showToast(`No packed stock found for ${bt?.name ?? 'bag'}`); return }
+        let remaining = parseInt(ln.qty)
+        for (const rec of recs) {
+          if (remaining <= 0) break
+          const take = Math.min(rec.quantity - (rec.reservedQuantity ?? 0), remaining)
+          bagsPayload.push({
+            packedStockId: rec.id,
+            bagTypeId: ln.bagTypeId,
+            bagTypeName: bt?.name ?? 'Bag',
+            quantity: take,
+            pricePerBag: (parseFloat(ln.price) || 0).toFixed(2),
+            currency: ln.curr,
+          })
+          remaining -= take
+        }
+        if (remaining > 0) {
+          showToast(`Only ${parseInt(ln.qty) - remaining} of ${parseInt(ln.qty)} bags available for ${bt?.name ?? 'bag'}`)
+          return
+        }
       }
 
       const mappedMethod = PAY_METHOD_MAP[payMethod]
-      const receiverId = allReceivers.find(r => r.name === receiver && r.role === 'worker')?.id
+      // receiverId must be a User ID (payments_receiverId_fkey → users table).
+      // Workers come from the workers table — their IDs are invalid here.
+      // Only receivers (role='receiver') are real users and safe to pass.
+      const receiverId = allReceivers.find(r => r.name === receiver && r.role === 'receiver')?.id
 
       try {
         await createWalkInSale.mutateAsync({
@@ -363,7 +376,7 @@ export default function WarehouseSales() {
         }
       }
     } else {
-      // By-kg: create a raw lot stock exit (deducts from lot.kgRemaining)
+      // By-kg: validate inputs and lot availability first (common to all paths).
       if (!kgWeight || !kgPrice) { showToast('Enter weight and price/kg'); return }
       const lot = activeLots.find(l => l.id === kgLotId)
       if (!lot) { showToast('Select a lot'); return }
@@ -372,17 +385,55 @@ export default function WarehouseSales() {
         showToast(`Only ${parseFloat(lot.kgRemaining).toLocaleString()} kg available`)
         return
       }
+
+      if (isRegisteredClient) {
+        // Phase 4: registered-client KG sale → atomic StockExit + Invoice + Payment.
+        // Uses the same endpoint as bag sales so the client gets a proper invoice.
+        const description = `${lot.charcoalType} Grade ${lot.grade}`
+        const mappedMethod = PAY_METHOD_MAP[payMethod]
+        const receiverId = allReceivers.find(r => r.name === receiver && r.role === 'receiver')?.id
+        try {
+          await createWalkInSale.mutateAsync({
+            clientId: selectedBuyerId!,
+            date: saleDate,
+            kgLines: [{
+              lotId:       lot.id,
+              kgQuantity:  kgNum.toFixed(3),
+              description,
+              pricePerKg:  (parseFloat(kgPrice) || 0).toFixed(2),
+              currency:    kgCurr,
+            }],
+            ...(usdNum > 0 ? { receivedUsd: usdNum.toFixed(2) } : {}),
+            ...(lbpNum > 0 ? { receivedLbp: lbpNum.toFixed(2) } : {}),
+            method:    mappedMethod ?? 'cash',
+            ...(receiverId ? { receiverId } : {}),
+            recipient: buyerName,
+            notes:     notes || undefined,
+          })
+        } catch (err: any) {
+          showToast(err?.error ?? err?.response?.data?.error ?? 'Failed to record sale')
+          return
+        }
+        showToast(`Sale recorded · invoiced ${buyerName}`)
+        setBuyerInput(''); setSelectedBuyerId(null)
+        setRcvUsd(''); setRcvLbp('')
+        setKgWeight(''); setKgPrice('')
+        setNotes('')
+        setPackedLines([{ id: Date.now(), bagTypeId: bagTypes[0]?.id ?? '', qty: '', price: '', curr: 'USD' }])
+        return
+      }
+
+      // Anonymous KG sale — no invoice; amount recorded directly on the exit.
       try {
         const kgAmt = roundDp(kgNum * (parseFloat(kgPrice) || 0) * (kgCurr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1), 2)
         await createExit.mutateAsync({
-          lotId: lot.id,
+          lotId:     lot.id,
           kgQuantity: kgNum,
-          exitType: 'walk_in',
-          date: saleDate,
+          exitType:  'walk_in',
+          date:      saleDate,
           recipient: buyerName,
-          reason: notes || undefined,
-          ...(selectedBuyerId && selectedBuyerId !== 'walk-in' ? { clientId: selectedBuyerId } : {}),
-          ...(kgAmt > 0 && selectedBuyerId && selectedBuyerId !== 'walk-in' ? { amount: kgAmt } : {}),
+          reason:    notes || undefined,
+          ...(kgAmt > 0 ? { amount: kgAmt, currency: kgCurr } : {}),
           ...(receiver ? { collectedBy: receiver } : {}),
         })
       } catch (err: any) {
@@ -1075,8 +1126,8 @@ export default function WarehouseSales() {
                   </div>
                   <div className="panel-row">
                     <span className="panel-row-label">Lot ID</span>
-                    <span className="panel-row-value" style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>
-                      {selectedExit.packedStock.lot.id.slice(0, 8).toUpperCase()}
+                    <span className="panel-row-value" style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }} title={selectedExit.packedStock.lot.id}>
+                      {selectedExit.packedStock.lot.displayId ?? selectedExit.packedStock.lot.id}
                     </span>
                   </div>
                 </>

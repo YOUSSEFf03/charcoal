@@ -84,6 +84,16 @@ export class OrdersController {
     return this.ordersService.markDelivered(id);
   }
 
+  @ApiOperation({ summary: 'Generate (or return existing) invoice for a delivered order' })
+  @ApiResponse({ status: 201, description: 'Invoice created or existing invoice returned' })
+  @ApiResponse({ status: 400, description: 'Order is not in delivered status' })
+  @ApiResponse({ status: 404, description: 'Order not found' })
+  @Post(':id/invoice')
+  @Roles('owner', 'accountant')
+  generateInvoice(@Param('id', ParseUUIDPipe) id: string) {
+    return this.ordersService.createInvoiceForOrder(id);
+  }
+
   @ApiOperation({ summary: 'Delete a draft order (no shipments)' })
   @ApiResponse({ status: 204, description: 'No content' })
   @ApiResponse({ status: 400, description: 'Bad request / constraint violation' })

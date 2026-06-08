@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useUsers, useUpdateUserRole } from '../hooks/useUsers'
+import { useUsers, useUpdateUserRole, useCreateLocalUser } from '../hooks/useUsers'
 import { useBagTypes, useCreateBagType, useUpdateBagType, useDeleteBagType } from '../hooks/useBagTypes'
 import { useReceivers } from '../hooks/useReceivers'
 import { useRate } from '../context/RateContext'
@@ -53,6 +53,7 @@ const NAV: NavItem[] = [
 export default function Settings() {
   const usersQuery = useUsers()
   const updateUserRole = useUpdateUserRole()
+  const createLocalUser = useCreateLocalUser()
   const rateCtx = useRate()
   const bagTypesQ = useBagTypes()
   const createBagType = useCreateBagType()
@@ -73,6 +74,9 @@ export default function Settings() {
   const [newBag, setNewBag] = useState({ name: '', nominalKg: '', costPerBag: '', workerRate: '', note: '' })
   const [showAddBag, setShowAddBag] = useState(false)
   const [showAddUser, setShowAddUser] = useState(false)
+  const [newUserName, setNewUserName] = useState('')
+  const [newUserRole, setNewUserRole] = useState<Role>('driver')
+  const [newUserPhone, setNewUserPhone] = useState('')
   const [editUserOpen, setEditUserOpen] = useState(false)
   const [deleteUserOpen, setDeleteUserOpen] = useState(false)
   const [dangerModalOpen, setDangerModalOpen] = useState<'reset' | 'clear' | 'export' | null>(null)
@@ -509,14 +513,49 @@ export default function Settings() {
               <button onClick={() => setShowAddUser(false)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }}>✕</button>
             </div>
             <div style={{ padding: 20 }}>
-              <div style={{ marginBottom: 16 }}><label style={lbl}>Full name</label><input style={inp} type="text" placeholder="e.g. Samer Rahim" /></div>
-              <div style={{ marginBottom: 16 }}><label style={lbl}>Username</label><input style={{ ...inp, fontFamily: "'IBM Plex Mono',monospace" }} type="text" placeholder="e.g. samer" /></div>
-              <div style={{ marginBottom: 16 }}><label style={lbl}>Password</label><input style={inp} type="password" placeholder="Set initial password" /></div>
-              <div><label style={lbl}>Role</label><select style={inp}><option>Accountant — financial access, no profit visibility</option><option>Sales rep — orders, clients, invoices, no costs</option><option>Worker — packing sessions only</option><option>Driver — delivery and trips only</option></select></div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={lbl}>Full name</label>
+                <input style={inp} type="text" placeholder="e.g. Samer Rahim" value={newUserName} onChange={e => setNewUserName(e.target.value)} />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={lbl}>Phone (optional)</label>
+                <input style={{ ...inp, fontFamily: "'IBM Plex Mono',monospace" }} type="tel" placeholder="+961 3 000 000" value={newUserPhone} onChange={e => setNewUserPhone(e.target.value)} />
+              </div>
+              <div>
+                <label style={lbl}>Role</label>
+                <select style={inp} value={newUserRole} onChange={e => setNewUserRole(e.target.value as Role)}>
+                  <option value="driver">Driver — delivery and trips only</option>
+                  <option value="sales_rep">Sales rep — orders, clients, invoices, no costs</option>
+                  <option value="accountant">Accountant — financial access, no profit visibility</option>
+                  <option value="worker">Worker — packing sessions only</option>
+                  <option value="receiver">Receiver — collect payments</option>
+                </select>
+              </div>
             </div>
             <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="btn" onClick={() => setShowAddUser(false)}>Cancel</button>
-              <button className="btn" style={{ background: 'var(--text)', color: '#fff', borderColor: 'var(--text)' }} onClick={() => { setShowAddUser(false); showToast('User added') }}><i className="ti ti-user-plus" style={{ fontSize: 14 }} /> Add user</button>
+              <button
+                className="btn"
+                style={{ background: 'var(--text)', color: '#fff', borderColor: 'var(--text)', opacity: createLocalUser.isPending || !newUserName.trim() ? 0.6 : 1 }}
+                disabled={createLocalUser.isPending || !newUserName.trim()}
+                onClick={() => {
+                  if (!newUserName.trim()) return
+                  createLocalUser.mutate(
+                    { name: newUserName.trim(), role: newUserRole, phone: newUserPhone.trim() || undefined },
+                    {
+                      onSuccess: () => {
+                        setShowAddUser(false)
+                        setNewUserName('')
+                        setNewUserPhone('')
+                        setNewUserRole('driver')
+                        showToast(`${newUserName.trim()} added as ${newUserRole}`)
+                      },
+                    }
+                  )
+                }}
+              >
+                <i className="ti ti-user-plus" style={{ fontSize: 14 }} /> {createLocalUser.isPending ? 'Adding…' : 'Add user'}
+              </button>
             </div>
           </div>
         </div>

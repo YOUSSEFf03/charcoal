@@ -101,6 +101,15 @@ export default function Invoices() {
   const outstandingRows = outstandingQ.data?.data ?? []
   const clientList = clientsQ.data?.data ?? []
   const clientNameById = new Map(clientList.map(c => [c.id, c.name]))
+  // Real backend display IDs (INV-001 …) keyed by invoice id, for resolving the
+  // related invoice of a payment row (payments carry only invoiceId).
+  const invoiceDisplayById = new Map(
+    [...invoiceRows, ...outstandingRows].map(inv => [inv.id, inv.displayId]),
+  )
+  // Display code for the active (clicked) invoice.
+  const activeInvoiceDisplay = activeInvoice
+    ? activeInvoice.displayId ?? activeInvoice.id
+    : '—'
 
   // KPI values — full-table SQL aggregates from the backend (never a reduce over a page).
   const ar = arQ.data
@@ -145,7 +154,7 @@ export default function Invoices() {
           setPayModalOpen(false)
           setUsdAmt('')
           setLbpAmt('')
-          showToast(`Payment logged for ${activeInvoice.id}`)
+          showToast(`Payment logged for ${activeInvoiceDisplay}`)
         },
       },
     )
@@ -315,7 +324,7 @@ export default function Invoices() {
                   const p = total > 0 ? Math.round((paid / total) * 100) : 0
                   return (
                     <tr key={inv.id} onClick={() => openPanel(inv)} style={{ cursor: 'pointer' }}>
-                      <td><span className="mono">{inv.id}</span></td>
+                      <td><span className="mono" title={inv.id}>{inv.displayId ?? inv.id}</span></td>
                       <td>{clientNameById.get(inv.clientId) ?? '—'}</td>
                       <td>{fmtDate(inv.issuedAt ?? inv.createdAt)}</td>
                       <td>{fmtDate(inv.dueDate)}</td>
@@ -330,7 +339,7 @@ export default function Invoices() {
                       <td>{statusBadge(inv.status)}</td>
                       <td>
                         {inv.status === 'draft' && (
-                          <button className="btn btn-sm btn-ghost" onClick={e => { e.stopPropagation(); issueInvoice.mutate({ id: inv.id }, { onSuccess: () => showToast(`${inv.id} issued`) }) }}>
+                          <button className="btn btn-sm btn-ghost" onClick={e => { e.stopPropagation(); issueInvoice.mutate({ id: inv.id }, { onSuccess: () => showToast(`${inv.displayId ?? inv.id} issued`) }) }}>
                             <i className="ti ti-send" /> Issue
                           </button>
                         )}
@@ -357,6 +366,7 @@ export default function Invoices() {
             <table className="data-table">
               <thead>
                 <tr>
+                  <th>Receipt #</th>
                   <th>Date</th>
                   <th>Client</th>
                   <th>Invoice</th>
@@ -369,28 +379,29 @@ export default function Invoices() {
               </thead>
               <tbody>
                 {paymentsQ.isLoading && [0, 1, 2].map(i => (
-                  <tr key={i}><td colSpan={8}><div className="skeleton" style={{ width: '100%', height: 18 }} /></td></tr>
+                  <tr key={i}><td colSpan={9}><div className="skeleton" style={{ width: '100%', height: 18 }} /></td></tr>
                 ))}
                 {paymentsQ.isError && (
-                  <tr><td colSpan={8} className="empty">Failed to load payments.<div><button className="btn" style={{ marginTop: 10 }} onClick={() => paymentsQ.refetch()}>Retry</button></div></td></tr>
+                  <tr><td colSpan={9} className="empty">Failed to load payments.<div><button className="btn" style={{ marginTop: 10 }} onClick={() => paymentsQ.refetch()}>Retry</button></div></td></tr>
                 )}
                 {!paymentsQ.isLoading && !paymentsQ.isError && paymentRows.map(p => {
                   const amt = parseFloat(p.amount)
                   return (
                     <tr key={p.id}>
+                      <td><span className="mono" title={p.id}>{p.displayId ?? p.id.slice(0, 8)}</span></td>
                       <td style={{ color: 'var(--text2)', fontSize: '0.83rem' }}>{fmtDate(p.date)}</td>
                       <td>{clientNameById.get(p.clientId) ?? '—'}</td>
-                      <td><span className="mono">{p.invoiceId ?? '—'}</span></td>
+                      <td><span className="mono" title={p.invoiceId ?? undefined}>{p.invoiceId ? (invoiceDisplayById.get(p.invoiceId) ?? p.invoiceId) : '—'}</span></td>
                       <td><span className="mono">{p.currency === 'USD' ? `$${fmtMoney(p.amount)}` : '—'}</span></td>
                       <td><span className="mono" style={{ color: 'var(--text2)' }}>{p.currency === 'LBP' ? `LL ${amt.toLocaleString()}` : '—'}</span></td>
                       <td><strong>${p.currency === 'USD' ? fmtMoney(p.amount) : (rawRate > 0 ? amt / rawRate : 0).toFixed(2)}</strong></td>
                       <td>{methodBadge(p.method)}</td>
-                      <td style={{ color: 'var(--text2)', fontSize: '0.83rem' }}>{p.loggedById}</td>
+                      <td style={{ color: 'var(--text2)', fontSize: '0.83rem' }}>{p.loggedBy?.name ?? p.loggedById}</td>
                     </tr>
                   )
                 })}
                 {!paymentsQ.isLoading && !paymentsQ.isError && paymentRows.length === 0 && (
-                  <tr><td colSpan={8} className="empty">No payments recorded.</td></tr>
+                  <tr><td colSpan={9} className="empty">No payments recorded.</td></tr>
                 )}
               </tbody>
             </table>
@@ -441,7 +452,7 @@ export default function Invoices() {
                     const daysOver = inv.dueDate ? Math.max(0, Math.round((Date.now() - new Date(inv.dueDate).getTime()) / 86400000)) : 0
                     return (
                       <tr key={inv.id}>
-                        <td><span className="mono">{inv.id}</span></td>
+                        <td><span className="mono" title={inv.id}>{inv.displayId ?? inv.id}</span></td>
                         <td>{clientNameById.get(inv.clientId) ?? '—'}</td>
                         <td>
                           <span style={{ color: daysOver > 0 ? 'var(--red)' : 'inherit' }}>
@@ -477,7 +488,7 @@ export default function Invoices() {
             <div className="panel-head">
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span className="mono" style={{ fontWeight: 700, fontSize: '1.05rem' }}>{activeInvoice?.id ?? '—'}</span>
+                  <span className="mono" style={{ fontWeight: 700, fontSize: '1.05rem' }} title={activeInvoice?.id}>{activeInvoiceDisplay}</span>
                   {activeInvoice && statusBadge(activeInvoice.status)}
                 </div>
                 <div style={{ color: 'var(--text2)', fontSize: '0.83rem', marginTop: 3 }}>{activeInvoice ? clientNameById.get(activeInvoice.clientId) ?? '—' : ''} · {fmtDate(activeInvoice?.issuedAt ?? activeInvoice?.createdAt)}</div>
@@ -513,37 +524,47 @@ export default function Invoices() {
                   {/* Invoice Preview */}
                   <div className="inv-preview">
                     <div className="inv-lines-head">
-                      <span>Item</span>
-                      <span>Qty</span>
-                      <span>Unit</span>
-                      <span>Total</span>
+                      <span>Item</span><span>Qty</span><span>Unit</span><span>Total</span>
                     </div>
-                    <div className="inv-line">
-                      <span>Restaurant Grade A</span>
-                      <span>140 bags</span>
-                      <span>$27.00</span>
-                      <span>$3,780</span>
-                    </div>
+                    {(activeInvoice?.lines ?? []).map((line, i) => (
+                      <div className="inv-line" key={i}>
+                        {line.saleUnit === 'KG' ? (
+                          <>
+                            <span>{line.description}</span>
+                            <span>{line.kgQuantity} kg</span>
+                            <span>${Number(line.pricePerKg).toFixed(2)}/kg</span>
+                            <span>${Number(line.lineTotal).toFixed(2)}</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>{line.bagTypeName ?? line.bagTypeId}</span>
+                            <span>{line.qty} bags</span>
+                            <span>${Number(line.pricePerBag).toFixed(2)}</span>
+                            <span>${Number(line.lineTotal).toFixed(2)}</span>
+                          </>
+                        )}
+                      </div>
+                    ))}
                     <div className="inv-totals">
                       <div className="inv-line">
                         <span style={{ color: 'var(--text2)' }}>Subtotal</span>
                         <span /><span />
-                        <span>$3,780.00</span>
+                        <span>${Number(activeInvoice?.subtotal ?? 0).toFixed(2)}</span>
                       </div>
                       <div className="inv-line" style={{ fontWeight: 600 }}>
                         <span>Total</span>
                         <span /><span />
-                        <span>$3,780.00</span>
+                        <span>${Number(activeInvoice?.total ?? 0).toFixed(2)}</span>
                       </div>
                       <div className="inv-line" style={{ color: 'var(--accent)' }}>
                         <span>Paid</span>
                         <span /><span />
-                        <span>$1,000.00</span>
+                        <span>${Number(activeInvoice?.paidAmount ?? 0).toFixed(2)}</span>
                       </div>
                       <div className="inv-line" style={{ color: 'var(--red)', fontWeight: 700 }}>
                         <span>Remaining</span>
                         <span /><span />
-                        <span>$2,780.00</span>
+                        <span>${invoiceRemaining.toFixed(2)}</span>
                       </div>
                     </div>
                   </div>
@@ -551,15 +572,19 @@ export default function Invoices() {
                   <div className="panel-section" style={{ marginTop: 16 }}>
                     <div className="panel-row">
                       <span className="panel-section-label">Due Date</span>
-                      <span style={{ color: 'var(--red)' }}>May 26, 2026 <span className="badge badge-red">Overdue</span></span>
+                      <span>
+                        {activeInvoice?.dueDate
+                          ? fmtDate(activeInvoice.dueDate)
+                          : '—'}
+                      </span>
                     </div>
                     <div className="panel-row">
-                      <span className="panel-section-label">Terms</span>
-                      <span>Net 14 days</span>
+                      <span className="panel-section-label">Issued</span>
+                      <span>{fmtDate(activeInvoice?.issuedAt ?? activeInvoice?.createdAt)}</span>
                     </div>
                     <div className="panel-row">
-                      <span className="panel-section-label">Issued by</span>
-                      <span>Khalil Abi Nader</span>
+                      <span className="panel-section-label">Currency</span>
+                      <span>{activeInvoice?.currency ?? '—'}</span>
                     </div>
                   </div>
                 </>
@@ -567,17 +592,39 @@ export default function Invoices() {
 
               {panelTab === 'payments' && (
                 <div className="panel-section">
-                  <div style={{ color: 'var(--text3)', textAlign: 'center', padding: '32px 0', fontSize: '0.87rem' }}>
-                    <i className="ti ti-cash" style={{ fontSize: '2rem', display: 'block', marginBottom: 8 }} />
-                    1 payment logged
-                  </div>
-                  <div className="pay-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
-                    <div>
-                      <div style={{ fontWeight: 500 }}>$1,000.00</div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text2)' }}>May 15, 2026 · Cash · Rami S</div>
-                    </div>
-                    {methodBadge('Cash')}
-                  </div>
+                  {(() => {
+                    const invPayments = paymentRows.filter(p => p.invoiceId === activeInvoice?.id)
+                    if (invPayments.length === 0) {
+                      return (
+                        <div style={{ color: 'var(--text3)', textAlign: 'center', padding: '32px 0', fontSize: '0.87rem' }}>
+                          <i className="ti ti-cash" style={{ fontSize: '2rem', display: 'block', marginBottom: 8 }} />
+                          No payments yet
+                        </div>
+                      )
+                    }
+                    return (
+                      <>
+                        <div style={{ color: 'var(--text3)', textAlign: 'center', padding: '12px 0', fontSize: '0.87rem', marginBottom: 8 }}>
+                          <i className="ti ti-cash" style={{ fontSize: '1.5rem', display: 'block', marginBottom: 4 }} />
+                          {invPayments.length} payment{invPayments.length !== 1 ? 's' : ''} logged
+                        </div>
+                        {invPayments.map(p => (
+                          <div key={p.id} className="pay-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span className="mono" style={{ fontWeight: 500, fontSize: '0.9rem' }}>${Number(p.amount).toFixed(2)}</span>
+                                {p.displayId && <span className="mono" style={{ fontSize: '0.78rem', color: 'var(--text3)' }}>{p.displayId}</span>}
+                              </div>
+                              <div style={{ fontSize: '0.78rem', color: 'var(--text2)', marginTop: 2 }}>
+                                {fmtDate(p.date)} · {p.method}{p.receiverName ? ` · ${p.receiverName}` : ''}
+                              </div>
+                            </div>
+                            {methodBadge(p.method)}
+                          </div>
+                        ))}
+                      </>
+                    )
+                  })()}
                 </div>
               )}
             </div>
@@ -585,7 +632,7 @@ export default function Invoices() {
             <div className="panel-footer">
               <button className="panel-btn pbtn-ghost" onClick={() => setPrintOpen(true)}><i className="ti ti-printer" /> Print</button>
               {activeInvoice && activeInvoice.status !== 'cancelled' && activeInvoice.status !== 'paid' && (
-                <button className="panel-btn pbtn-ghost" onClick={() => { if (activeInvoice) cancelInvoice.mutate(activeInvoice.id, { onSuccess: () => { setPanelOpen(false); showToast(`${activeInvoice.id} cancelled`) } }) }} disabled={cancelInvoice.isPending}>
+                <button className="panel-btn pbtn-ghost" onClick={() => { if (activeInvoice) cancelInvoice.mutate(activeInvoice.id, { onSuccess: () => { setPanelOpen(false); showToast(`${activeInvoiceDisplay} cancelled`) } }) }} disabled={cancelInvoice.isPending}>
                   <i className="ti ti-ban" /> Cancel invoice
                 </button>
               )}
@@ -604,7 +651,7 @@ export default function Invoices() {
             <div className="modal-head">
               <div>
                 <div className="modal-title">Log Payment</div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text2)' }}>{activeInvoice?.id ?? '—'} · {activeInvoice ? clientNameById.get(activeInvoice.clientId) ?? '' : ''}</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text2)' }}>{activeInvoiceDisplay} · {activeInvoice ? clientNameById.get(activeInvoice.clientId) ?? '' : ''}</div>
               </div>
               <button className="btn btn-ghost" onClick={() => setPayModalOpen(false)}><i className="ti ti-x" /></button>
             </div>

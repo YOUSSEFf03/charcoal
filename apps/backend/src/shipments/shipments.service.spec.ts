@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { ShipmentsService } from './shipments.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { InvoicesService } from '../invoices/invoices.service';
 
 // ---------------------------------------------------------------------------
 // Shared mock factory helpers
@@ -145,13 +146,22 @@ describe('ShipmentsService', () => {
     $transaction: fn(),
   };
 
+  // ShipmentsService injects InvoicesService to auto-create invoices on full delivery.
+  const mockInvoices = {
+    createFromOrder: jest.fn() as any,
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
+    // Default: createFromOrder succeeds and returns an issued invoice (autoIssue=true path).
+    // Tests that assert it was NOT called rely on jest.clearAllMocks() resetting call counts.
+    mockInvoices.createFromOrder.mockResolvedValue({ id: 'auto-inv', status: 'issued' });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ShipmentsService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: InvoicesService, useValue: mockInvoices },
       ],
     }).compile();
 
@@ -387,6 +397,139 @@ describe('ShipmentsService', () => {
       exitCalls.forEach((call: any[]) => expect(call[0].data.loggedById).toBe(internalUserId));
 
       expect(tx.shipment.update.mock.calls[0][0].data.status).toBe('delivered');
+    });
+
+    // ── Order→Invoice automation ────────────────────────────────────────────
+
+    it('driver delivery: calls createFromOrder with orderId and tx when all shipments delivered', async () => {
+      const bagTypeId = 'bag-type-driver-inv';
+      const orderId = 'order-driver-inv';
+      const userId = 'clerk-driver-inv';
+
+      const tx = makeStore([
+        { id: 'ps-di', bagTypeId, quantity: 20, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+      ]);
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-di', clerkId: userId });
+
+      const s = await service.createShipment(
+        { orderId, address: 'a', nominalKg: '20', bags: [{ bagTypeId, quantity: 20 }] } as any,
+        userId,
+      );
+
+      tx.shipment.findUnique
+        .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId))
+        .mockResolvedValueOnce({ id: s.id, bags: [] });
+      // Single shipment → allDelivered = true (makeStore default)
+      tx.shipment.findMany.mockResolvedValueOnce([{ status: 'delivered' }]);
+
+      await service.confirmDelivery(s.id, {} as any, userId);
+
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledTimes(1);
+      // Must pass the transaction client (atomic) and autoIssue=true (immediate issue).
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, tx, true);
+    });
+
+    it('partial delivery: does NOT call createFromOrder when a sibling shipment is still pending', async () => {
+      const bagTypeId = 'bag-type-partial';
+      const orderId = 'order-partial';
+      const userId = 'clerk-partial';
+
+      const tx = makeStore([
+        { id: 'ps-pt', bagTypeId, quantity: 20, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+      ]);
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-pt', clerkId: userId });
+
+      const s = await service.createShipment(
+        { orderId, address: 'a', nominalKg: '20', bags: [{ bagTypeId, quantity: 20 }] } as any,
+        userId,
+      );
+
+      tx.shipment.findUnique
+        .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId))
+        .mockResolvedValueOnce({ id: s.id, bags: [] });
+      // Simulate a second sibling shipment still pending — allDelivered = false.
+      tx.shipment.findMany.mockResolvedValueOnce([{ status: 'delivered' }, { status: 'pending' }]);
+
+      await service.confirmDelivery(s.id, {} as any, userId);
+
+      expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
+    });
+
+    it('multi-shipment delivery: invoice created only after final shipment delivered', async () => {
+      const bagTypeId = 'bag-type-multi';
+      const orderId = 'order-multi-inv';
+      const userId = 'clerk-multi';
+
+      // One stock row with enough bags for both shipments.
+      const tx = makeStore([
+        { id: 'ps-ms', bagTypeId, quantity: 60, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+      ]);
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-ms', clerkId: userId });
+
+      const s1 = await service.createShipment(
+        { orderId, address: 'a', nominalKg: '20', bags: [{ bagTypeId, quantity: 20 }] } as any,
+        userId,
+      );
+      const s2 = await service.createShipment(
+        { orderId, address: 'b', nominalKg: '40', bags: [{ bagTypeId, quantity: 40 }] } as any,
+        userId,
+      );
+
+      // --- First delivery (s1): s2 still pending → no invoice ---
+      tx.shipment.findUnique
+        .mockResolvedValueOnce(tx._shipmentView(s1.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId))
+        .mockResolvedValueOnce({ id: s1.id, bags: [] });
+      tx.shipment.findMany.mockResolvedValueOnce([{ status: 'delivered' }, { status: 'pending' }]);
+
+      await service.confirmDelivery(s1.id, {} as any, userId);
+      expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
+
+      // --- Second delivery (s2): all delivered → invoice created ---
+      tx.shipment.findUnique
+        .mockResolvedValueOnce(tx._shipmentView(s2.id, 'loaded', [{ bagTypeId, quantity: 40 }], orderId))
+        .mockResolvedValueOnce({ id: s2.id, bags: [] });
+      tx.shipment.findMany.mockResolvedValueOnce([{ status: 'delivered' }, { status: 'delivered' }]);
+
+      await service.confirmDelivery(s2.id, {} as any, userId);
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledTimes(1);
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, tx, true);
+    });
+
+    it('concurrent delivery: createFromOrder receives the tx client (DB index is the race backstop)', async () => {
+      // Application-level idempotency guard in createFromOrder() plus the
+      // invoices_orderId_unique_active partial index prevent duplicate invoices under
+      // concurrent confirmDelivery calls. Unit-testing the race itself requires
+      // integration infrastructure, but we can verify that the tx is forwarded so the
+      // invoice write participates in the same atomic transaction as the stock drain.
+      const bagTypeId = 'bag-type-cc';
+      const orderId = 'order-cc';
+      const userId = 'clerk-cc';
+
+      const tx = makeStore([
+        { id: 'ps-cc', bagTypeId, quantity: 30, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+      ]);
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-cc', clerkId: userId });
+
+      const s = await service.createShipment(
+        { orderId, address: 'a', nominalKg: '30', bags: [{ bagTypeId, quantity: 30 }] } as any,
+        userId,
+      );
+
+      tx.shipment.findUnique
+        .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 30 }], orderId))
+        .mockResolvedValueOnce({ id: s.id, bags: [] });
+      tx.shipment.findMany.mockResolvedValueOnce([{ status: 'delivered' }]);
+
+      await service.confirmDelivery(s.id, {} as any, userId);
+
+      // The tx object is forwarded verbatim so the invoice row is written inside the
+      // same $transaction as the stock drain — this is the guarantee that keeps the
+      // DB unique index effective as a backstop against concurrent calls.
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, tx, true);
     });
   });
 
