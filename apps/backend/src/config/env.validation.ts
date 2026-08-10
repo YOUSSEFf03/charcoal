@@ -29,6 +29,14 @@ export const envValidationSchema = Joi.object({
   // Svix shared secret used to verify Clerk webhook signatures.
   CLERK_WEBHOOK_SECRET: Joi.string().required(),
 
+  // Second, independent gate for the local-dev auth bypass in auth.guard.ts
+  // (Authorization: Bearer dev:<role>). The bypass requires BOTH
+  // NODE_ENV !== 'production' AND this set to the literal string 'true' —
+  // defaults to 'false' so a forgotten or misconfigured NODE_ENV can never
+  // expose the bypass on its own. Set to 'true' in your own local .env to
+  // use dev tokens; never set this in any deployed environment.
+  DEV_AUTH_BYPASS_ENABLED: Joi.string().valid('true', 'false').default('false'),
+
   // Clerk JWKS endpoint used to verify session JWTs. Optional: the code
   // falls back to the Clerk default, but prod instances usually set this.
   CLERK_JWKS_URL: Joi.string()

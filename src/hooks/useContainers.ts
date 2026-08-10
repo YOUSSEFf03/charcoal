@@ -6,10 +6,12 @@ import type {
   CreateContainerDto,
   UpdateContainerDto,
   CreateContainerExpenseDto,
+  UpdateContainerExpenseDto,
   ContainerExpense,
   SetContainerDiscountDto,
   ContainerDiscount,
   CreateContainerProductLineDto,
+  UpdateContainerProductLineDto,
   ContainerProductLine,
   PaginatedResponse,
 } from '../types/api'
@@ -147,6 +149,54 @@ export function useAddExpense() {
 }
 
 /**
+ * Update an expense's description/amount (recalculates costPerKg on linked lots).
+ * @returns mutation accepting { containerId, expenseId, body: UpdateContainerExpenseDto }
+ * PATCH /containers/:containerId/expenses/:expenseId
+ */
+export function useUpdateExpense() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      containerId,
+      expenseId,
+      body,
+    }: {
+      containerId: string
+      expenseId: string
+      body: UpdateContainerExpenseDto
+    }) => {
+      const res = await api.patch<ContainerExpense>(
+        `/containers/${containerId}/expenses/${expenseId}`,
+        body,
+      )
+      return res.data
+    },
+    onSuccess: (_data, { containerId }) => {
+      qc.invalidateQueries({ queryKey: ['containers', containerId] })
+      qc.invalidateQueries({ queryKey: ['stock-lots'] })
+    },
+  })
+}
+
+/**
+ * Delete an expense (recalculates costPerKg on linked lots).
+ * @returns mutation accepting { containerId, expenseId }
+ * DELETE /containers/:containerId/expenses/:expenseId
+ */
+export function useDeleteExpense() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ containerId, expenseId }: { containerId: string; expenseId: string }) => {
+      await api.delete(`/containers/${containerId}/expenses/${expenseId}`)
+    },
+    onSuccess: (_data, { containerId }) => {
+      qc.invalidateQueries({ queryKey: ['containers', containerId] })
+      qc.invalidateQueries({ queryKey: ['stock-lots'] })
+    },
+  })
+}
+
+/**
  * Create or update a container's discount (recalculates linked lot costs).
  * @returns mutation accepting { id, body: SetContainerDiscountDto }
  * PUT /containers/:id/discount
@@ -194,6 +244,53 @@ export function useAddProductLine() {
     },
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['containers', id] })
+    },
+  })
+}
+
+/**
+ * Update a product line's fields (recalculates costPerKg).
+ * @returns mutation accepting { containerId, lineId, body: UpdateContainerProductLineDto }
+ * PATCH /containers/:containerId/product-lines/:lineId
+ */
+export function useUpdateProductLine() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      containerId,
+      lineId,
+      body,
+    }: {
+      containerId: string
+      lineId: string
+      body: UpdateContainerProductLineDto
+    }) => {
+      const res = await api.patch<ContainerProductLine>(
+        `/containers/${containerId}/product-lines/${lineId}`,
+        body,
+      )
+      return res.data
+    },
+    onSuccess: (_data, { containerId }) => {
+      qc.invalidateQueries({ queryKey: ['containers', containerId] })
+      qc.invalidateQueries({ queryKey: ['stock-lots'] })
+    },
+  })
+}
+
+/**
+ * Delete a product line — blocked by the API if the container has already arrived.
+ * @returns mutation accepting { containerId, lineId }
+ * DELETE /containers/:containerId/product-lines/:lineId
+ */
+export function useDeleteProductLine() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ containerId, lineId }: { containerId: string; lineId: string }) => {
+      await api.delete(`/containers/${containerId}/product-lines/${lineId}`)
+    },
+    onSuccess: (_data, { containerId }) => {
+      qc.invalidateQueries({ queryKey: ['containers', containerId] })
     },
   })
 }

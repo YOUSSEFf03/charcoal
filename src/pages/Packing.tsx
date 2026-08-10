@@ -1,9 +1,10 @@
 import { useState, useRef } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { usePackingSessions, useCreatePackingSession, useUpdatePackingSession } from '../hooks/usePacking'
+import { usePackingSessions, usePackingSession, useCreatePackingSession, useUpdatePackingSession } from '../hooks/usePacking'
 import { useStockLots } from '../hooks/useWarehouse'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { useWorkers } from '../hooks/useWorkers'
+import type { PackingSession } from '../lib/types'
 
 // ── constants ──────────────────────────────────────────────────────────────
 
@@ -32,7 +33,6 @@ interface HistDay {
   date: string; dnum: string; dow: string; note: string
   counts: number[]
   empty?: boolean
-  entries?: { time: string; counts: number[] }[]
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -63,19 +63,26 @@ export default function Packing() {
     id: l.id,
     displayId: l.displayId,
     label: `${l.charcoalType} · ${l.grade}`,
-    supplier: l.supplierId,
+    supplier: l.supplier?.name ?? l.supplierId,
     available: parseFloat(l.kgRemaining),
   }))
 
   function sumKg(counts: number[]): number { return counts.reduce((s, n, i) => s + n * (TYPES[i]?.kg ?? 0), 0) }
   function sumBags(counts: number[]): number { return counts.reduce((s, n) => s + n, 0) }
 
+  // Shared day-key derivation — used to both bucket sessions into `historyDays`
+  // AND to later filter "which sessions belong to the day the user selected"
+  // (dayEntries, below). Keeping this in one place is what guarantees a
+  // session is never classified into the wrong day between the two views.
+  function dayKeyOf(dateStr: string): string {
+    return new Date(dateStr).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+  }
+
   // Group sessions by calendar date for the history view.
   const historyDays: HistDay[] = (() => {
     const byDate = new Map<string, number[]>()
     for (const s of sessionsQ.data?.data ?? []) {
-      const d = new Date(s.date)
-      const key = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+      const key = dayKeyOf(s.date)
       const counts = byDate.get(key) ?? TYPES.map(() => 0)
       for (const b of s.bagsOutput) {
         const idx = TYPES.findIndex(t => t.id === b.bagTypeId)
@@ -95,8 +102,9 @@ export default function Packing() {
     workerRate: parseFloat(b.workerRate ?? '0'),
   }]))
 
-  const todayIso = new Date().toISOString().slice(0, 10)
-  const entries: Entry[] = (sessionsQ.data?.data ?? []).filter(s => (s.date ?? '').slice(0, 10) === todayIso).map(s => {
+  // Shared PackingSession -> Entry mapping — used for both "today" and the
+  // selected history day's entries, so the two views can never drift apart.
+  function toEntry(s: PackingSession): Entry {
     const bagQty = s.bagsOutput.reduce((acc, b) => acc + b.qty, 0)
     const firstBagTypeId = s.bagsOutput[0]?.bagTypeId
     const bagTypeIdx = TYPES.findIndex(t => t.id === firstBagTypeId)
@@ -136,7 +144,10 @@ export default function Packing() {
       bagCost,
       workerCost,
     }
-  })
+  }
+
+  const todayIso = new Date().toISOString().slice(0, 10)
+  const entries: Entry[] = (sessionsQ.data?.data ?? []).filter(s => (s.date ?? '').slice(0, 10) === todayIso).map(toEntry)
 
   const updateSession = useUpdatePackingSession()
 
@@ -149,6 +160,14 @@ export default function Packing() {
   const [toast, setToast]         = useState('')
   const toastRef = useRef<ReturnType<typeof setTimeout>>()
 
+  // Sessions belonging to the selected history day — same dayKeyOf() bucketing
+  // as historyDays, so a session can never land under the wrong day between
+  // the two views. Reuses toEntry() so the row shape (and every computed
+  // field: cogs, waste, worker name, …) is identical to "today"'s entries.
+  const dayEntries: Entry[] = selDay
+    ? (sessionsQ.data?.data ?? []).filter(s => dayKeyOf(s.date) === selDay.date).map(toEntry)
+    : []
+
   // ── detail / edit panel state ────────────────────────────────────────────
   const [detailId, setDetailId]     = useState<string | null>(null)
   const [isEditMode, setIsEditMode] = useState(false)
@@ -159,7 +178,12 @@ export default function Packing() {
   const [editNotes, setEditNotes]   = useState('')
   const [editVarianceNote, setEditVarianceNote] = useState('')
 
-  const detailSession = detailId ? (sessionsQ.data?.data ?? []).find(s => s.id === detailId) ?? null : null
+  // Fetched by ID (GET /packing-sessions/:id) rather than looked up in the
+  // capped `sessionsQ` list (limit: 100) — a history entry can be outside
+  // that window even though the day it belongs to is still reachable. Also
+  // gives real loading/error state instead of an indefinite "Loading…".
+  const detailSessionQ = usePackingSession(detailId ?? '')
+  const detailSession = detailSessionQ.data ?? null
 
   // ── derived ──────────────────────────────────────────────────────────────
 
@@ -169,7 +193,14 @@ export default function Packing() {
   const wastePct  = charInKg > 0 ? (waste / charInKg) * 100 : 0
   const wasteNeutral = charInKg === 0 && bagOutKg === 0
   const wasteBad  = !wasteNeutral && (waste < 0 || wastePct > 5)
-  const canAdd    = bagTypeIdx >= 0 && Number(bagQty) > 0 && charRows.some(r => r.lotIdx >= 0 && Number(r.kg) > 0)
+  // Worker attribution is mandatory for every NEW session (backend now rejects a
+  // missing/invalid workerEntityId outright — this mirrors that requirement on the
+  // client so the user is stopped before the request, not after a raw API error).
+  // Scoped to the CREATE form only — the separate edit-panel state (editWorkerId,
+  // editCanSave, saveEdit()) is untouched, so legacy sessions with no worker
+  // attributed remain fully editable without this constraint applying to them.
+  const workerMissing = !selectedWorkerId
+  const canAdd    = bagTypeIdx >= 0 && Number(bagQty) > 0 && charRows.some(r => r.lotIdx >= 0 && Number(r.kg) > 0) && !workerMissing
 
   // edit form derived values
   const editBagOutKg = editBagTypeIdx >= 0 && Number(editBagQty) > 0 ? Number(editBagQty) * TYPES[editBagTypeIdx].kg : 0
@@ -261,6 +292,11 @@ export default function Packing() {
   }
 
   function addEntry() {
+    // Belt-and-suspenders: the Add button is already disabled whenever canAdd is
+    // false, so this normally can't fire via a real click — but keep an explicit,
+    // user-visible reason here too rather than a silent no-op, in case it's ever
+    // reached another way. The backend remains the final, authoritative check.
+    if (workerMissing) { showToast('Please select a worker'); return }
     if (!canAdd) return
     // Resolve each row to its REAL lotId (LOTS[idx].id), not the transient array index.
     // Guard against a stale index (LOTS may have refetched/reordered since selection).
@@ -275,7 +311,9 @@ export default function Packing() {
         lotInputs,
         bagsOutput: [{ bagTypeId: selectedBagType.id, qty: Number(bagQty) }],
         date: new Date().toISOString().slice(0, 10),
-        ...(selectedWorkerId ? { workerEntityId: selectedWorkerId } : {}),
+        // Always sent, never omitted/blank — canAdd (and the guard above) already
+        // guarantee selectedWorkerId is non-empty by this point.
+        workerEntityId: selectedWorkerId,
       },
       {
         onSuccess: () => {
@@ -481,7 +519,7 @@ export default function Packing() {
                   <div className="row-field">
                     <select className="row-select" value={row.lotIdx} onChange={e => updateEditCharRow(row.id, { lotIdx: parseInt(e.target.value) })}>
                       <option value={-1} disabled>Select charcoal lot…</option>
-                      {LOTS.map((l, i) => <option key={l.id} value={i}>{l.label} · {l.displayId ?? l.id.slice(0, 8)}</option>)}
+                      {LOTS.map((l, i) => <option key={l.id} value={i}>{l.label} · {l.supplier}</option>)}
                     </select>
                   </div>
                   <div className="row-field">
@@ -610,6 +648,11 @@ export default function Packing() {
                     <option key={w.id} value={w.id}>{w.name}</option>
                   ))}
                 </select>
+                {workerMissing && (
+                  <span style={{ display: 'block', marginTop: 4, fontSize: 12, color: 'var(--red)' }}>
+                    Please select a worker.
+                  </span>
+                )}
               </div>
               <div />
             </div>
@@ -668,7 +711,7 @@ export default function Packing() {
                       {idx === 0 && <span className="row-lbl">Charcoal lot · grade</span>}
                       <select className="row-select" value={row.lotIdx} onChange={e => updateCharRow(row.id, { lotIdx: parseInt(e.target.value) })}>
                         <option value={-1} disabled>Select charcoal lot…</option>
-                        {LOTS.map((l, i) => <option key={l.id} value={i}>{l.label} · {l.displayId ?? l.id}</option>)}
+                        {LOTS.map((l, i) => <option key={l.id} value={i}>{l.label} · {l.supplier}</option>)}
                       </select>
                     </div>
                     <div className="row-field">
@@ -1010,37 +1053,45 @@ export default function Packing() {
         <div className="card">
           <div className="today-head">
             <h3><i className="ti ti-clock" style={{ fontSize: 16, color: 'var(--text2)' }} /> Entries that day</h3>
-            <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>in order</span>
+            <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>click any entry for full details</span>
           </div>
           <div className="entries-list">
-            {!selDay.entries || selDay.entries.length === 0 ? (
+            {dayEntries.length === 0 ? (
               <div className="pack-empty">
                 <i className="ti ti-archive" />
-                <div className="t">Detailed timeline not available</div>
-                <div className="s">only daily totals were recorded for this day</div>
+                <div className="t">No entries recorded</div>
+                <div className="s">this day has no packing sessions</div>
               </div>
             ) : (
               <>
                 <div className="entry-row ehead">
-                  <span>Time</span><span>Bag types</span><span style={{ textAlign: 'right' }}>Bags</span><span style={{ textAlign: 'right' }}>Weight</span>
+                  <span>Time</span><span>Bag &amp; charcoal</span><span>Worker</span><span style={{ textAlign: 'right' }}>Waste</span>
                 </div>
-                {selDay.entries.map((e, idx) => (
-                  <div key={idx} className="entry-row">
-                    <span className="etime">{e.time}</span>
-                    <span>
-                      <div className="echips">
-                        {e.counts.map((n, i) => n > 0 ? (
-                          <span key={i} className="qty-chip">
-                            <span className="q">{n}</span>
-                            <span className="t">× {TYPES[i].label}</span>
+                {dayEntries.map((e) => {
+                  const wpct = e.charIn > 0 ? (e.waste / e.charIn) * 100 : 0
+                  const wcolor = e.waste < 0 || wpct > 5 ? 'var(--red)' : 'var(--accent2)'
+                  return (
+                    <div key={e.id} className="entry-row clickable" onClick={() => setDetailId(e.id)} title="Click to view details">
+                      <span className="etime">{e.time}</span>
+                      <span>
+                        <div className="echips">
+                          <span className="qty-chip">
+                            <span className="q">{e.bagQty}</span>
+                            <span className="t">× {TYPES[e.bagTypeIdx]?.label ?? '?'}</span>
                           </span>
-                        ) : null)}
-                      </div>
-                    </span>
-                    <span className="etot">{sumBags(e.counts)} <small>bags</small></span>
-                    <span className="ekg">{fmt(sumKg(e.counts), 1)} kg</span>
-                  </div>
-                ))}
+                          {e.charcoal.map((c, i) => (
+                            <span key={i} className="qty-chip">
+                              <span className="q">{fmt(c.kg, 0)}</span>
+                              <span className="t">kg · {c.label}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </span>
+                      <span className="eworker">{e.workerName}</span>
+                      <span className="ewaste" style={{ color: wcolor }}>{fmt(e.waste, 1)} kg</span>
+                    </div>
+                  )
+                })}
               </>
             )}
           </div>
@@ -1067,11 +1118,23 @@ export default function Packing() {
       <div className={`panel-overlay ${detailId ? 'open' : ''}`}>
         <div className="panel-backdrop" onClick={closeDetail} />
         <div className="slide-panel pack-detail-panel">
-          {detailSession
-            ? (isEditMode ? renderEditForm() : renderDetailContent())
-            : detailId
-              ? <div style={{ padding: 24, color: 'var(--text3)' }}>Loading…</div>
-              : null}
+          {!detailId ? null : detailSessionQ.isLoading ? (
+            <div style={{ padding: 24, color: 'var(--text3)' }}>Loading…</div>
+          ) : detailSessionQ.isError ? (
+            <div style={{ padding: 24 }}>
+              <div style={{ color: 'var(--red)', marginBottom: 12 }}>
+                {(detailSessionQ.error as any)?.response?.status === 404
+                  ? 'Packing entry not found.'
+                  : 'Failed to load packing entry.'}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn" onClick={() => detailSessionQ.refetch()}>Retry</button>
+                <button className="btn-clear" onClick={closeDetail}>Close</button>
+              </div>
+            </div>
+          ) : detailSession ? (
+            isEditMode ? renderEditForm() : renderDetailContent()
+          ) : null}
         </div>
       </div>
 

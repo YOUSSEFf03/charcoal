@@ -1,0 +1,213 @@
+- generic [ref=f47e3]:
+  - complementary [ref=f47e4]:
+    - generic [ref=f47e5]:
+      - generic [ref=f47e6]: 
+      - generic [ref=f47e8]:
+        - generic [ref=f47e9]: Farah Charcoal
+        - generic [ref=f47e10]: management system
+    - generic [ref=f47e11]:
+      - generic [ref=f47e12]: Overview
+      - link " Dashboard" [ref=f47e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f47e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f47e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f47e16]: 
+        - text: Reports
+    - generic [ref=f47e17]:
+      - generic [ref=f47e18]: Stock
+      - link " Containers" [ref=f47e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f47e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f47e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f47e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f47e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f47e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f47e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f47e26]: 
+        - text: Bag purchases
+    - generic [ref=f47e27]:
+      - generic [ref=f47e28]: Sales
+      - link " Clients" [ref=f47e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f47e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f47e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f47e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f47e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f47e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f47e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f47e36]:
+      - generic [ref=f47e37]: Finance
+      - link " Balances" [ref=f47e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f47e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f47e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f47e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f47e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f47e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f47e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f47e45]: 
+        - text: Expenses
+    - generic [ref=f47e46]:
+      - generic [ref=f47e47]: Setup
+      - link " Employees" [ref=f47e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f47e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f47e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f47e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f47e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f47e53]: 
+        - text: Settings
+    - generic [ref=f47e56] [cursor=pointer]:
+      - generic [ref=f47e57]: KA
+      - generic [ref=f47e58]:
+        - generic [ref=f47e59]: Khalil Abi Nader
+        - generic [ref=f47e60]: owner
+      - generic [ref=f47e61]: 
+  - generic [ref=f47e62]:
+    - banner [ref=f47e63]:
+      - generic [ref=f47e64]: Reports
+      - generic [ref=f47e66]:
+        - generic [ref=f47e67]: "Rate: 89,550 LL/$"
+        - button " Export PDF" [ref=f47e68] [cursor=pointer]:
+          - generic [ref=f47e69]: 
+          - text: Export PDF
+    - generic [ref=f47e70]:
+      - generic [ref=f47e71] [cursor=pointer]:
+        - generic [ref=f47e72]: 
+        - text: P&L
+      - generic [ref=f47e73] [cursor=pointer]:
+        - generic [ref=f47e74]: 
+        - text: Variance
+      - generic [ref=f47e75] [cursor=pointer]:
+        - generic [ref=f47e76]: 
+        - text: Worker earnings
+      - generic [ref=f47e77] [cursor=pointer]:
+        - generic [ref=f47e78]: 
+        - text: Client ledger
+      - generic [ref=f47e79] [cursor=pointer]:
+        - generic [ref=f47e80]: 
+        - text: Stock & costs
+    - generic [ref=f47e81]:
+      - generic [ref=f47e82]:
+        - generic [ref=f47e83]: Period
+        - textbox [ref=f47e84]: 2026-05-01
+        - generic [ref=f47e85]: →
+        - textbox [ref=f47e86]: 2026-05-31
+        - combobox [ref=f47e87] [cursor=pointer]:
+          - option "All charcoal types" [selected]
+          - option "BBQ Hardwood"
+          - option "Shisha"
+          - option "Restaurant Grade"
+        - combobox [ref=f47e88] [cursor=pointer]:
+          - option "All clients" [selected]
+          - option "Restaurants only"
+          - option "Wholesale only"
+          - option "Export only"
+        - button " Refresh" [ref=f47e89] [cursor=pointer]:
+          - generic [ref=f47e90]: 
+          - text: Refresh
+      - generic [ref=f47e91]:
+        - generic [ref=f47e93]:
+          - generic [ref=f47e94]:
+            - generic [ref=f47e95]: Revenue
+            - generic [ref=f47e96]: …
+            - generic [ref=f47e97]: selected period
+          - generic [ref=f47e99]:
+            - generic [ref=f47e100]: Total costs
+            - generic [ref=f47e101]: …
+            - generic [ref=f47e102]: COGS + bags + variance + delivery
+          - generic [ref=f47e104]:
+            - generic [ref=f47e105]: Gross profit owner only
+            - generic [ref=f47e106]: …
+            - generic [ref=f47e107]: 0.0% margin
+          - generic [ref=f47e109]:
+            - generic [ref=f47e110]: Currency
+            - generic [ref=f47e111]: USD
+            - generic [ref=f47e112]: reporting currency
+        - generic [ref=f47e113]:
+          - generic [ref=f47e114]:
+            - generic [ref=f47e116]:
+              - generic [ref=f47e117]: 
+              - text: Daily revenue — May 2026
+            - generic [ref=f47e118]:
+              - text: Daily revenue chart ·
+              - emphasis [ref=f47e119]: coming soon — requires per-day revenue endpoint
+          - generic [ref=f47e120]:
+            - generic [ref=f47e122]:
+              - generic [ref=f47e123]: 
+              - text: Revenue by type
+            - generic [ref=f47e124]:
+              - text: Revenue by charcoal type ·
+              - emphasis [ref=f47e125]: coming soon — requires type-indexed invoices endpoint
+        - generic [ref=f47e126]:
+          - generic [ref=f47e127]:
+            - generic [ref=f47e128]:
+              - generic [ref=f47e129]: 
+              - text: Revenue breakdown
+            - generic [ref=f47e130]:
+              - generic [ref=f47e131]: Total revenue
+              - generic [ref=f47e132]: —
+            - generic [ref=f47e133]:
+              - generic [ref=f47e134]: Total revenue
+              - generic [ref=f47e135]: —
+          - generic [ref=f47e136]:
+            - generic [ref=f47e137]:
+              - generic [ref=f47e138]: 
+              - text: Cost breakdown
+              - generic [ref=f47e139]: owner only
+            - generic [ref=f47e140]:
+              - generic [ref=f47e141]: COGS (charcoal cost)
+              - generic [ref=f47e142]: —
+            - generic [ref=f47e143]:
+              - generic [ref=f47e144]: Bag costs
+              - generic [ref=f47e145]: —
+            - generic [ref=f47e146]:
+              - generic [ref=f47e147]: Packing variances
+              - generic [ref=f47e148]: —
+            - generic [ref=f47e149]:
+              - generic [ref=f47e150]: Delivery expenses
+              - generic [ref=f47e151]: —
+            - generic [ref=f47e152]:
+              - generic [ref=f47e153]: Total costs
+              - generic [ref=f47e154]: —
+        - generic [ref=f47e155]:
+          - generic [ref=f47e157]:
+            - generic [ref=f47e158]: 
+            - text: P&L by charcoal type
+            - generic [ref=f47e159]: owner only
+          - table [ref=f47e160]:
+            - rowgroup [ref=f47e161]:
+              - row [ref=f47e162]:
+                - columnheader "Type / grade" [ref=f47e163]
+                - columnheader "Revenue" [ref=f47e164]
+                - columnheader "COGS" [ref=f47e165]
+                - columnheader "Bag cost" [ref=f47e166]
+                - columnheader "Variance cost" [ref=f47e167]
+                - columnheader "Gross profit" [ref=f47e168]
+                - columnheader "Margin" [ref=f47e169]
+            - rowgroup
+          - generic [ref=f47e170]: Breakdown by charcoal type requires type-indexed invoice lines (backend sub-task).

@@ -46,6 +46,7 @@ export class CashHandoversController {
       expectedAmt: string;
       handedAmt: string;
       notes?: string | null;
+      expenses?: { description: string; amount: string }[];
     },
     @CurrentUser() user: ClerkUser,
   ) {

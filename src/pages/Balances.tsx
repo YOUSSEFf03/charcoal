@@ -3,27 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useClientBalances, useClientAging } from '../hooks/useBalances'
 import type { Client } from '../types/api'
+import { formatUsd } from '../lib/money'
+import { formatDate } from '../lib/date'
 
-// Format a Decimal-string money figure as USD (no decimals, comma grouped).
-function fmtUsd0(value?: string | null) {
-  const n = value != null ? parseFloat(value) : NaN
-  return Number.isFinite(n) ? `$${Math.round(n).toLocaleString('en-US')}` : '$0'
-}
-
-function fmtUsd2(value?: string | null) {
-  const n = value != null ? parseFloat(value) : NaN
-  return Number.isFinite(n)
-    ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    : '$0.00'
-}
-
-function fmtDate(iso?: string | null) {
-  if (!iso) return 'no order yet'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime())
-    ? '—'
-    : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-}
+function fmtUsd0(value?: string | null) { return formatUsd(value, { decimals: 0, fallback: '$0' }) }
+function fmtUsd2(value?: string | null) { return formatUsd(value, { decimals: 2, fallback: '$0.00' }) }
+function fmtDate(iso?: string | null) { return formatDate(iso, { fallback: 'no order yet' }) }
 
 // First two word-initials of a (possibly Arabic) client name.
 function initialsOf(name: string) {

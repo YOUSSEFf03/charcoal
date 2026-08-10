@@ -299,6 +299,31 @@ export interface CreateSupplierPaymentDto {
   notes?: string;
 }
 
+/** GET /reports/supplier-ledger/:supplierId — one row of the Supplier Statement of Account. */
+export interface SupplierLedgerEntry {
+  date: string;
+  type: 'purchase' | 'payment';
+  sourceType?: 'container' | 'direct'; // present only when type === 'purchase'
+  reference: string; // UUID — containerId for container purchases, stockLot.id for direct, payment.id for payments
+  displayId: string | null;
+  description: string;
+  debit: string;
+  credit: string;
+  runningBalance: string;
+}
+
+/** GET /reports/supplier-ledger/:supplierId — the Supplier Statement of Account. */
+export interface SupplierLedger {
+  supplierId: string;
+  summary: {
+    totalPurchased: string;
+    totalPaid: string;
+    outstanding: string;
+    openingBalance: string;
+  };
+  entries: SupplierLedgerEntry[];
+}
+
 // ----------------------------------------------------------------------------
 // CONTAINERS
 // ----------------------------------------------------------------------------
@@ -421,6 +446,8 @@ export interface StockLot {
   charcoalType: string;
   grade: string;
   supplierId: string;
+  supplier?: Pick<Supplier, 'id' | 'name'>; // included by GET /stock-lots
+
   kgReceived: string; // Decimal
   kgRemaining: string; // Decimal
   costPerKg: string | null; // Decimal — null/omitted for roles without cost access
@@ -701,7 +728,13 @@ export interface OrderBagLine {
   quantity: number;
 }
 
-export interface ClientOrder {
+/**
+ * Scalar columns common to every /orders response, regardless of which
+ * relations that particular endpoint chooses to include.
+ * Matches exactly what PATCH /orders/:id and PATCH /orders/:id/mark-delivered
+ * return (neither includes any relation).
+ */
+export interface ClientOrderBase {
   id: string;
   displayId?: string; // human-readable reference code, e.g. "SO-0001"
   clientId: string;
@@ -709,7 +742,6 @@ export interface ClientOrder {
   grade: string;
   totalKgRequested: string; // Decimal
   bagTypeId: string | null;
-  bagType: { id: string; name: string; nominalKg: string } | null;
   pricePerBag: string; // Decimal
   currency: Currency;
   status: OrderStatus;
@@ -721,7 +753,20 @@ export interface ClientOrder {
   driverId: string | null;
 }
 
-export interface ClientOrderDetail extends ClientOrder {
+/** GET /orders (list) — orders.service.ts findAll() include: { client: {id,name}, bagType: {id,name,nominalKg} } */
+export interface ClientOrderListItem extends ClientOrderBase {
+  client: Pick<Client, 'id' | 'name'>;
+  bagType: { id: string; name: string; nominalKg: string } | null;
+}
+
+/** POST /orders — orders.service.ts create() include: { client: {id,name}, orderBagLines: true } (no bagType relation) */
+export interface ClientOrderCreated extends ClientOrderBase {
+  client: Pick<Client, 'id' | 'name'>;
+  orderBagLines: OrderBagLine[];
+}
+
+/** GET /orders/:id — orders.service.ts findOne() include: { client, driver, bagType, shipments, orderBagLines, invoices } */
+export interface ClientOrderDetail extends ClientOrderBase {
   client: Pick<Client, 'id' | 'name' | 'type' | 'currency'>;
   bagType: { id: string; name: string; nominalKg: string } | null;
   driver: { id: string; name: string } | null;
@@ -936,7 +981,12 @@ export interface Invoice {
 
 export interface InvoiceDetail extends Invoice {
   client: Pick<Client, 'id' | 'name' | 'type' | 'currency'>;
+  /** Only payments directly linked to this invoice at creation time (Payment.invoiceId). */
   payments: Payment[];
+  /** Complete picture of what's actually been applied to this invoice, including
+   * amounts FIFO-allocated here from a client-level payment (Payment.invoiceId
+   * null) — see PaymentAllocationService. Sums to paidAmount. */
+  allocations: { id: string; amount: string; createdAt: string; payment: Pick<Payment, 'id' | 'displayId' | 'clientId' | 'date' | 'method' | 'invoiceId'> }[];
   balanceDue: string; // total - paidAmount
 }
 
@@ -1024,10 +1074,8 @@ export interface Worker {
   totalEarned: string; // Decimal
   totalPaid: string; // Decimal
   totalOwed: string; // Decimal (computed: totalEarned - totalPaid)
-  dailyRate: string;      // Decimal — daily wage rate
-  attendanceDays: number; // computed from WorkerAttendance count
   pieceEarned: string;    // Decimal — Σ sessionEarnings (bag-rate earnings)
-  dailyEarned: string;    // Decimal — attendanceDays × dailyRate
+  costEarned: string;     // Decimal — Σ WorkerCost.amount (earnings entries)
   notes: string | null;
   createdAt: string;
   updatedAt: string;
@@ -1038,7 +1086,6 @@ export interface CreateWorkerDto {
   phone?: string | null;
   ratesPerBagType?: WorkerRate[];
   notes?: string | null;
-  dailyRate?: string;
 }
 
 export interface UpdateWorkerDto {
@@ -1052,28 +1099,91 @@ export interface WorkerPayment {
   id: string;
   workerId: string;
   amount: string; // Decimal
+  method: PaymentMethod;
+  referenceNumber: string | null; // receipt #, transfer ID, cheque number
   date: string; // ISO date
   notes: string | null;
   createdAt: string;
 }
 
+/** Itemized cash deducted before a handover (e.g. gas, parking). No own date —
+ *  derives it from the parent CashHandover.date. */
+export interface CashHandoverExpense {
+  id: string;
+  cashHandoverId: string;
+  description: string;
+  amount: string; // Decimal
+  createdAt: string;
+}
+
+export interface CashHandover {
+  id: string;
+  date: string; // YYYY-MM-DD
+  receiverName: string;
+  receiverId: string | null;
+  expectedAmt: string; // Decimal — collected minus itemized expenses
+  handedAmt: string; // Decimal
+  difference: string; // Decimal — handedAmt - expectedAmt
+  notes: string | null;
+  loggedById: string;
+  createdAt: string;
+  expenses: CashHandoverExpense[];
+}
+
 export interface CreateWorkerPaymentDto {
   amount: string;
+  method?: PaymentMethod;
+  referenceNumber?: string | null;
   date: string;
   notes?: string | null;
 }
 
 // ----------------------------------------------------------------------------
-// WORKER ATTENDANCE
+// WORKER EARNINGS (WorkerCost) — the earnings ledger, in business language.
+// "Cost" internally (matches the backend model + route path); "Earnings" in
+// every user-facing string, since this records what a worker earned, not a
+// business expense (see the employee module redesign decision).
 // ----------------------------------------------------------------------------
 
-export interface WorkerAttendanceRecord {
+export type WorkerCostCategory =
+  | 'daily_wage'
+  | 'weekly_wage'
+  | 'monthly_salary'
+  | 'bonus'
+  | 'deduction'
+  | 'fuel'
+  | 'food'
+  | 'transport'
+  | 'advance'
+  | 'correction'
+  | 'other';
+
+export interface WorkerEarning {
   id: string;
-  date: string; // YYYY-MM-DD
+  workerId: string;
+  date: string; // ISO date
+  amount: string; // Decimal
+  category: WorkerCostCategory;
+  notes: string | null;
+  fileId: string | null; // storage-agnostic reference to an attached receipt/photo, if any
+  createdById: string;
+  createdAt: string;
 }
 
-export interface CreateWorkerAttendanceDto {
-  date: string; // YYYY-MM-DD
+export interface CreateWorkerEarningDto {
+  amount: string;
+  category: WorkerCostCategory;
+  date?: string;
+  notes?: string | null;
+  fileId?: string | null;
+}
+
+export interface UpdateWorkerEarningDto {
+  amount?: string;
+  category?: WorkerCostCategory;
+  date?: string;
+  notes?: string | null;
+  fileId?: string | null;
 }
 
 // ----------------------------------------------------------------------------
@@ -1089,12 +1199,62 @@ export interface ReportDateRange {
 export interface ProfitLossReport {
   from: string | null;
   to: string | null;
-  revenue: string;
+  revenue: string; // accrual basis — SUM(invoice.total) for issued/partially_paid/paid + walk-in exits
   cogs: string;
   bagCost: string;
   varianceCost: string;
   deliveryCost: string;
-  grossProfit: string; // owner only
+  grossProfit: string; // owner only — revenue - cogs - bagCost - varianceCost - deliveryCost (UNCHANGED, never redefined)
+  cashCollected: string; // cash basis — SUM(payment.amount) actually received in range; not part of grossProfit or netProfit
+  // ── Net Profit — additive second tier ────────────────────────────────────
+  laborCost: string; // accrual — Σ PackingSession.sessionEarnings + Σ WorkerCost.amount; WorkerPayment (a cash settlement) is deliberately excluded
+  generalExpense: string; // Σ GeneralExpense.amount — "Option B" recurrence (same rule as the Expenses page)
+  handoverExpense: string; // Σ CashHandoverExpense.amount, dated by its parent CashHandover.date
+  netProfit: string; // grossProfit - laborCost - generalExpense - handoverExpense
+}
+
+export interface DailyRevenuePoint {
+  date: string; // YYYY-MM-DD
+  revenue: string; // accrual basis — same definition as ProfitLossReport.revenue
+}
+
+export interface DailyRevenueReport {
+  from: string | null;
+  to: string | null;
+  data: DailyRevenuePoint[]; // one entry per day in range, zero-filled
+  totalRevenue: string;
+}
+
+export interface RevenueByTypePoint {
+  charcoalType: string; // 'Uncategorized' for pre-existing lines with no stamped type
+  revenue: string; // accrual basis — same definition as ProfitLossReport.revenue
+}
+
+export interface RevenueByTypeReport {
+  from: string | null;
+  to: string | null;
+  data: RevenueByTypePoint[]; // sorted descending by revenue
+  totalRevenue: string;
+}
+
+export interface PnlByTypeRow {
+  charcoalType: string; // 'Uncategorized' for pre-existing lines with no stamped type
+  revenue: string; // accrual basis — same definition as ProfitLossReport.revenue
+  cogs: string; // same definition as ProfitLossReport.cogs
+  grossProfit: string; // revenue - cogs (NOT the same figure as ProfitLossReport.grossProfit,
+  // which also nets bagCost/varianceCost/deliveryCost — those aren't attributable to a
+  // single charcoal type, so this is textbook gross profit, not full P&L net profit)
+  marginPct: string; // grossProfit / revenue * 100, one decimal; '0.0' when revenue is 0
+}
+
+export interface PnlByTypeReport {
+  from: string | null;
+  to: string | null;
+  data: PnlByTypeRow[]; // sorted descending by revenue
+  totalRevenue: string;
+  totalCogs: string;
+  totalGrossProfit: string;
+  totalMarginPct: string;
 }
 
 export interface StockValueReport {
@@ -1126,6 +1286,15 @@ export interface VarianceReportRow {
   varianceCost: string; // was varianceCostUsd
 }
 
+export interface VarianceByTypeRow {
+  charcoalType: string;
+  sessions: number; // sessions that touched this type — a session spanning
+  // multiple types is counted once under each, so this need not sum to `total`
+  totalVarianceKg: string; // signed — same varianceKg definition as VarianceReportRow, apportioned by kg share
+  avgVariancePct: string; // Σ(this type's varianceKg) / Σ(this type's kgUsed) * 100, one decimal
+  shareOfTotalPct: string; // share of Σ|varianceKg| across all types, one decimal — always sums to 100%
+}
+
 export interface VarianceReport {
   from: string | null;
   to: string | null;
@@ -1135,6 +1304,7 @@ export interface VarianceReport {
   limit: number;
   totalVarianceKg: string;
   totalVarianceCost: string; // was totalVarianceCostUsd
+  byCharcoalType: VarianceByTypeRow[]; // full-table breakdown, independent of data's pagination
 }
 
 export interface ContainerCostReportRow {
@@ -1239,7 +1409,7 @@ export interface CreateGeneralExpenseDto {
 export interface ArSummary {
   totalInvoiced: string;    // Decimal — SUM(total) for all non-draft/non-cancelled invoices
   totalCollected: string;   // Decimal — SUM(amount) across all payments
-  totalOutstanding: string; // Decimal — SUM(total - paidAmount) for open invoices
+  totalOutstanding: string; // Decimal — SUM per-client (invoiced − all payments), floored at 0
   totalOverdue: string;     // Decimal — SUM(total - paidAmount) for overdue invoices
   openInvoiceCount: number;
   overdueCount: number;

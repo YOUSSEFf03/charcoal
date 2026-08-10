@@ -3,6 +3,7 @@ import Topbar from '../components/layout/Topbar'
 import { useOrder, useMarkOrderDelivered, useGenerateOrderInvoice } from '../hooks/useOrders'
 import { useBagTypes } from '../hooks/useBagTypes'
 import type { OrderStatus, ShipmentStatus } from '../types/api'
+import { formatUsd } from '../lib/money'
 
 function orderStatusMeta(s: OrderStatus): { cls: string; label: string } {
   switch (s) {
@@ -24,11 +25,6 @@ function shipmentBadge(s: ShipmentStatus): { cls: string; label: string } {
     default: return { cls: 'badge-gray', label: s }
   }
 }
-function money(value?: string | null) {
-  const n = value != null ? parseFloat(value) : NaN
-  return Number.isFinite(n) ? n.toFixed(2) : '0.00'
-}
-
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -324,8 +320,8 @@ export default function OrderDetail() {
                   {[
                     { label: 'Status', value: <span className="badge badge-amber">{invoice.status.replace('_', ' ')}</span> },
                     { label: 'Invoice #', value: <span style={{ fontFamily: "'IBM Plex Mono',monospace" }} title={invoice.id}>{invoice.displayId ?? invoice.id}</span> },
-                    { label: 'Total', value: <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>${money(invoice.total)}</span> },
-                    { label: 'Paid', value: <span style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--accent)', fontWeight: 600 }}>+${money(invoice.paidAmount)}</span> },
+                    { label: 'Total', value: <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>{formatUsd(invoice.total)}</span> },
+                    { label: 'Paid', value: <span style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--accent)', fontWeight: 600 }}>+{formatUsd(invoice.paidAmount)}</span> },
                   ].map((row, i) => (
                     <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
                       <span style={{ color: 'var(--text2)' }}>{row.label}</span>

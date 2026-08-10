@@ -136,7 +136,7 @@ export default function Suppliers() {
                   border: `1px solid ${outstanding > 0 ? 'var(--accent2)' : 'var(--border)'}`,
                 }}>
                   <div style={{ fontSize: 11, color: outstanding > 0 ? 'var(--accent2)' : 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3 }}>
-                    We still owe
+                    Inventory cost outstanding
                   </div>
                   <div style={{ fontSize: '1.6rem', fontWeight: 700, letterSpacing: -0.5, color: outstanding > 0 ? 'var(--accent2)' : 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>
                     {outstanding > 0 ? `$${outstanding.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}

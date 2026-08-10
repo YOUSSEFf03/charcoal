@@ -1,0 +1,160 @@
+- generic [ref=f41e3]:
+  - complementary [ref=f41e4]:
+    - generic [ref=f41e5]:
+      - generic [ref=f41e6]: 
+      - generic [ref=f41e8]:
+        - generic [ref=f41e9]: Farah Charcoal
+        - generic [ref=f41e10]: management system
+    - generic [ref=f41e11]:
+      - generic [ref=f41e12]: Overview
+      - link " Dashboard" [ref=f41e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f41e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f41e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f41e16]: 
+        - text: Reports
+    - generic [ref=f41e17]:
+      - generic [ref=f41e18]: Stock
+      - link " Containers" [ref=f41e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f41e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f41e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f41e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f41e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f41e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f41e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f41e26]: 
+        - text: Bag purchases
+    - generic [ref=f41e27]:
+      - generic [ref=f41e28]: Sales
+      - link " Clients" [ref=f41e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f41e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f41e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f41e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f41e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f41e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f41e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f41e36]:
+      - generic [ref=f41e37]: Finance
+      - link " Balances" [ref=f41e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f41e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f41e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f41e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f41e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f41e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f41e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f41e45]: 
+        - text: Expenses
+    - generic [ref=f41e46]:
+      - generic [ref=f41e47]: Setup
+      - link " Employees" [ref=f41e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f41e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f41e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f41e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f41e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f41e53]: 
+        - text: Settings
+    - generic [ref=f41e56] [cursor=pointer]:
+      - generic [ref=f41e57]: KA
+      - generic [ref=f41e58]:
+        - generic [ref=f41e59]: Khalil Abi Nader
+        - generic [ref=f41e60]: owner
+      - generic [ref=f41e61]: 
+  - generic [ref=f41e62]:
+    - banner [ref=f41e63]:
+      - generic [ref=f41e64]: Balances
+      - generic [ref=f41e66]:
+        - generic [ref=f41e67]: money clients owe us
+        - button " Send reminders" [ref=f41e68] [cursor=pointer]:
+          - generic [ref=f41e69]: 
+          - text: Send reminders
+        - button " Log payment" [ref=f41e70] [cursor=pointer]:
+          - generic [ref=f41e71]: 
+          - text: Log payment
+        - button " Export CSV" [ref=f41e72] [cursor=pointer]:
+          - generic [ref=f41e73]: 
+          - text: Export CSV
+    - generic [ref=f41e74]:
+      - generic [ref=f41e75]:
+        - generic [ref=f41e76]:
+          - generic [ref=f41e77]: total owed to us
+          - generic [ref=f41e80]: across 0 clients with a balance
+        - generic [ref=f41e81]:
+          - generic [ref=f41e82]: "0"
+          - generic [ref=f41e83]: clients with balance
+        - generic [ref=f41e84]:
+          - generic [ref=f41e85]: —
+          - generic [ref=f41e86]: overdue · 0 clients
+      - generic [ref=f41e87]:
+        - generic [ref=f41e88]:
+          - generic [ref=f41e89]:
+            - generic [ref=f41e90]: 
+            - text: Aging buckets · click to filter
+          - generic [ref=f41e91]: days past invoice date
+        - generic [ref=f41e92]:
+          - generic [ref=f41e93] [cursor=pointer]:
+            - generic [ref=f41e94]: All open
+            - generic [ref=f41e95]: $0
+            - generic [ref=f41e96]: 0 clients
+          - generic [ref=f41e97] [cursor=pointer]:
+            - generic [ref=f41e98]: On account
+            - generic [ref=f41e99]: $0
+            - generic [ref=f41e100]: 0 not overdue
+          - generic [ref=f41e101] [cursor=pointer]:
+            - generic [ref=f41e102]: Overdue
+            - generic [ref=f41e103]: $0
+            - generic [ref=f41e104]: 0 clients
+      - generic [ref=f41e105]:
+        - generic [ref=f41e106]:
+          - generic [ref=f41e108]:
+            - generic [ref=f41e109]: 
+            - text: Owed by client type
+          - generic [ref=f41e110]: Loading…
+        - generic [ref=f41e111]:
+          - generic [ref=f41e112]:
+            - generic [ref=f41e113]:
+              - generic [ref=f41e114]: 
+              - text: Oldest unpaid
+            - generic [ref=f41e115]: 60+ days
+          - generic [ref=f41e140]: Send overdue reminder to all 0 →
+      - generic [ref=f41e142]:
+        - generic [ref=f41e143]:
+          - generic [ref=f41e144]: 
+          - textbox "Search clients…" [ref=f41e145]
+        - generic [ref=f41e146]: All 0
+        - generic [ref=f41e148]: "sort: oldest first"
+      - generic [ref=f41e150]:
+        - generic [ref=f41e151]: Client
+        - generic [ref=f41e152]: Type
+        - generic [ref=f41e153]: Currency
+        - generic [ref=f41e154]: Last payment
+        - generic [ref=f41e155]: Oldest invoice
+        - generic [ref=f41e156]: Balance
+        - generic [ref=f41e157]: Actions

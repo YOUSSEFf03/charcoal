@@ -1,0 +1,165 @@
+- generic [ref=f37e3]:
+  - complementary [ref=f37e4]:
+    - generic [ref=f37e5]:
+      - generic [ref=f37e6]: 
+      - generic [ref=f37e8]:
+        - generic [ref=f37e9]: Farah Charcoal
+        - generic [ref=f37e10]: management system
+    - generic [ref=f37e11]:
+      - generic [ref=f37e12]: Overview
+      - link " Dashboard" [ref=f37e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f37e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f37e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f37e16]: 
+        - text: Reports
+    - generic [ref=f37e17]:
+      - generic [ref=f37e18]: Stock
+      - link " Containers" [ref=f37e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f37e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f37e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f37e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f37e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f37e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f37e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f37e26]: 
+        - text: Bag purchases
+    - generic [ref=f37e27]:
+      - generic [ref=f37e28]: Sales
+      - link " Clients" [ref=f37e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f37e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f37e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f37e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f37e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f37e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f37e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f37e36]:
+      - generic [ref=f37e37]: Finance
+      - link " Balances" [ref=f37e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f37e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f37e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f37e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f37e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f37e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f37e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f37e45]: 
+        - text: Expenses
+    - generic [ref=f37e46]:
+      - generic [ref=f37e47]: Setup
+      - link " Employees" [ref=f37e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f37e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f37e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f37e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f37e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f37e53]: 
+        - text: Settings
+    - generic [ref=f37e56] [cursor=pointer]:
+      - generic [ref=f37e57]: KA
+      - generic [ref=f37e58]:
+        - generic [ref=f37e59]: Khalil Abi Nader
+        - generic [ref=f37e60]: owner
+      - generic [ref=f37e61]: 
+  - generic [ref=f37e62]:
+    - banner [ref=f37e63]:
+      - generic [ref=f37e64]: Reports
+      - generic [ref=f37e66]:
+        - generic [ref=f37e67]: "Rate: 89,550 LL/$"
+        - button " Export PDF" [ref=f37e68] [cursor=pointer]:
+          - generic [ref=f37e69]: 
+          - text: Export PDF
+    - generic [ref=f37e70]:
+      - generic [ref=f37e71] [cursor=pointer]:
+        - generic [ref=f37e72]: 
+        - text: P&L
+      - generic [ref=f37e73] [cursor=pointer]:
+        - generic [ref=f37e74]: 
+        - text: Variance
+      - generic [ref=f37e75] [cursor=pointer]:
+        - generic [ref=f37e76]: 
+        - text: Worker earnings
+      - generic [ref=f37e77] [cursor=pointer]:
+        - generic [ref=f37e78]: 
+        - text: Client ledger
+    - generic [ref=f37e79]:
+      - generic [ref=f37e80]:
+        - generic [ref=f37e81]: Period
+        - textbox [ref=f37e82]: 2026-05-01
+        - generic [ref=f37e83]: →
+        - textbox [ref=f37e84]: 2026-05-31
+        - combobox [ref=f37e85] [cursor=pointer]:
+          - option "All charcoal types" [selected]
+          - option "BBQ Hardwood"
+          - option "Shisha"
+          - option "Restaurant Grade"
+        - combobox [ref=f37e86] [cursor=pointer]:
+          - option "All clients" [selected]
+          - option "Restaurants only"
+          - option "Wholesale only"
+          - option "Export only"
+        - button " Refresh" [ref=f37e87] [cursor=pointer]:
+          - generic [ref=f37e88]: 
+          - text: Refresh
+      - generic [ref=f37e222]:
+        - generic [ref=f37e223]:
+          - generic [ref=f37e224]:
+            - generic [ref=f37e225]: Total earned (all workers)
+            - generic [ref=f37e226]: $0
+            - generic [ref=f37e227]: 2 workers
+          - generic [ref=f37e228]:
+            - generic [ref=f37e229]: Total paid out
+            - generic [ref=f37e230]: $0
+            - generic [ref=f37e231]: cumulative payments
+          - generic [ref=f37e232]:
+            - generic [ref=f37e233]: Total owed
+            - generic [ref=f37e234]: $0
+            - generic [ref=f37e235]: still to be paid
+        - generic [ref=f37e236]:
+          - generic [ref=f37e238]:
+            - generic [ref=f37e239]: Omar Khalil
+            - generic [ref=f37e240]:
+              - text: "Earned:"
+              - strong [ref=f37e241]: $0
+              - text: "· Paid:"
+              - strong [ref=f37e242]: $0
+              - text: "· Owed:"
+              - strong [ref=f37e243]: $0
+          - generic [ref=f37e244]: No packing sessions recorded yet.
+        - generic [ref=f37e245]:
+          - generic [ref=f37e247]:
+            - generic [ref=f37e248]: Hassan Mahmoud
+            - generic [ref=f37e249]:
+              - text: "Earned:"
+              - strong [ref=f37e250]: $0
+              - text: "· Paid:"
+              - strong [ref=f37e251]: $0
+              - text: "· Owed:"
+              - strong [ref=f37e252]: $0
+          - generic [ref=f37e253]: No packing sessions recorded yet.

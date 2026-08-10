@@ -1,0 +1,172 @@
+- generic [ref=f40e3]:
+  - complementary [ref=f40e4]:
+    - generic [ref=f40e5]:
+      - generic [ref=f40e6]: 
+      - generic [ref=f40e8]:
+        - generic [ref=f40e9]: Farah Charcoal
+        - generic [ref=f40e10]: management system
+    - generic [ref=f40e11]:
+      - generic [ref=f40e12]: Overview
+      - link " Dashboard" [ref=f40e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f40e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f40e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f40e16]: 
+        - text: Reports
+    - generic [ref=f40e17]:
+      - generic [ref=f40e18]: Stock
+      - link " Containers" [ref=f40e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f40e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f40e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f40e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f40e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f40e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f40e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f40e26]: 
+        - text: Bag purchases
+    - generic [ref=f40e27]:
+      - generic [ref=f40e28]: Sales
+      - link " Clients" [ref=f40e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f40e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f40e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f40e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f40e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f40e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f40e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f40e36]:
+      - generic [ref=f40e37]: Finance
+      - link " Balances" [ref=f40e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f40e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f40e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f40e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f40e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f40e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f40e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f40e45]: 
+        - text: Expenses
+    - generic [ref=f40e46]:
+      - generic [ref=f40e47]: Setup
+      - link " Employees" [ref=f40e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f40e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f40e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f40e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f40e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f40e53]: 
+        - text: Settings
+    - generic [ref=f40e56] [cursor=pointer]:
+      - generic [ref=f40e57]: KA
+      - generic [ref=f40e58]:
+        - generic [ref=f40e59]: Khalil Abi Nader
+        - generic [ref=f40e60]: owner
+      - generic [ref=f40e61]: 
+  - generic [ref=f40e62]:
+    - banner [ref=f40e63]:
+      - generic [ref=f40e64]: Invoices & Payments
+      - generic [ref=f40e66]:
+        - generic [ref=f40e67]: 89,550 LL/$
+        - button " Export" [ref=f40e68] [cursor=pointer]:
+          - generic [ref=f40e69]: 
+          - text: Export
+    - generic [ref=f40e70]:
+      - generic [ref=f40e71]:
+        - generic [ref=f40e72]:
+          - generic [ref=f40e73]:
+            - generic [ref=f40e74]: Total Invoiced
+            - generic [ref=f40e75]: 
+          - generic [ref=f40e77]: …
+          - generic [ref=f40e78]: — open invoices
+        - generic [ref=f40e79]:
+          - generic [ref=f40e80]:
+            - generic [ref=f40e81]: Collected
+            - generic [ref=f40e82]: 
+          - generic [ref=f40e84]: …
+          - generic [ref=f40e85]: No invoices
+        - generic [ref=f40e86]:
+          - generic [ref=f40e87]:
+            - generic [ref=f40e88]: Outstanding
+            - generic [ref=f40e89]: 
+          - generic [ref=f40e91]: …
+          - generic [ref=f40e92]: — not yet paid
+        - generic [ref=f40e93]:
+          - generic [ref=f40e94]:
+            - generic [ref=f40e95]: Overdue
+            - generic [ref=f40e96]: 
+          - generic [ref=f40e98]: …
+          - generic [ref=f40e99]:
+            - generic [ref=f40e100]: 
+            - text: — invoices overdue
+      - generic [ref=f40e101]:
+        - button "Invoices 0" [ref=f40e102] [cursor=pointer]:
+          - text: Invoices
+          - generic [ref=f40e103]: "0"
+        - button "Payments 0" [ref=f40e104] [cursor=pointer]:
+          - text: Payments
+          - generic [ref=f40e105]: "0"
+        - button "Outstanding 0" [ref=f40e106] [cursor=pointer]:
+          - text: Outstanding
+          - generic [ref=f40e107]: "0"
+      - generic [ref=f40e108]:
+        - generic [ref=f40e109]:
+          - generic [ref=f40e110]:
+            - generic [ref=f40e111]: 
+            - textbox "Search client name…" [ref=f40e112]
+          - combobox [ref=f40e113] [cursor=pointer]:
+            - option "All status" [selected]
+            - option "Paid"
+            - option "Partial"
+            - option "Unpaid"
+            - option "Overdue"
+          - combobox [ref=f40e114] [cursor=pointer]:
+            - option "All clients" [selected]
+          - combobox [ref=f40e115] [cursor=pointer]:
+            - option "All time" [selected]
+            - option "This month"
+            - option "Last month"
+            - option "Custom"
+        - table [ref=f40e116]:
+          - rowgroup [ref=f40e117]:
+            - row [ref=f40e118]:
+              - columnheader "Invoice" [ref=f40e119]
+              - columnheader "Client" [ref=f40e120]
+              - columnheader "Date" [ref=f40e121]
+              - columnheader "Due" [ref=f40e122]
+              - columnheader "Items" [ref=f40e123]
+              - columnheader "Progress" [ref=f40e124]
+              - columnheader "Total" [ref=f40e125]
+              - columnheader "Status" [ref=f40e126]
+              - columnheader [ref=f40e127]
+          - rowgroup [ref=f40e128]:
+            - row [ref=f40e129]:
+              - cell [ref=f40e130]
+            - row [ref=f40e132]:
+              - cell [ref=f40e133]
+            - row [ref=f40e135]:
+              - cell [ref=f40e136]

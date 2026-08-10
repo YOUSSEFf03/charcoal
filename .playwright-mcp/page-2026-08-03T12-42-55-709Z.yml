@@ -1,0 +1,249 @@
+- generic [ref=f8e3]:
+  - complementary [ref=f8e4]:
+    - generic [ref=f8e5]:
+      - generic [ref=f8e6]: 
+      - generic [ref=f8e8]:
+        - generic [ref=f8e9]: Farah Charcoal
+        - generic [ref=f8e10]: management system
+    - generic [ref=f8e11]:
+      - generic [ref=f8e12]: Overview
+      - link " Dashboard" [ref=f8e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f8e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f8e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f8e16]: 
+        - text: Reports
+    - generic [ref=f8e17]:
+      - generic [ref=f8e18]: Stock
+      - link " Containers" [ref=f8e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f8e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f8e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f8e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f8e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f8e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f8e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f8e26]: 
+        - text: Bag purchases
+    - generic [ref=f8e27]:
+      - generic [ref=f8e28]: Sales
+      - link " Clients" [ref=f8e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f8e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f8e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f8e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f8e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f8e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f8e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f8e36]:
+      - generic [ref=f8e37]: Finance
+      - link " Balances" [ref=f8e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f8e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f8e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f8e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f8e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f8e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f8e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f8e45]: 
+        - text: Expenses
+    - generic [ref=f8e46]:
+      - generic [ref=f8e47]: Setup
+      - link " Employees" [ref=f8e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f8e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f8e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f8e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f8e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f8e53]: 
+        - text: Settings
+    - generic [ref=f8e56] [cursor=pointer]:
+      - generic [ref=f8e57]: KA
+      - generic [ref=f8e58]:
+        - generic [ref=f8e59]: Khalil Abi Nader
+        - generic [ref=f8e60]: owner
+      - generic [ref=f8e61]: 
+  - generic [ref=f8e62]:
+    - banner [ref=f8e63]:
+      - generic [ref=f8e64]: sakher-Ayin-BBQ-Quality-A-1
+      - generic [ref=f8e70]:
+        - button " Edit" [ref=f8e71] [cursor=pointer]:
+          - generic [ref=f8e72]: 
+          - text: Edit
+        - button " Duplicate" [ref=f8e73] [cursor=pointer]:
+          - generic [ref=f8e74]: 
+          - text: Duplicate
+    - generic [ref=f8e66]:
+      - generic [ref=f8e67]:
+        - generic [ref=f8e75]:
+          - button " All containers" [ref=f8e77] [cursor=pointer]:
+            - generic [ref=f8e78]: 
+            - text: All containers
+          - heading "sakher-Ayin-BBQ-Quality-A-1" [level=1] [ref=f8e79]
+          - generic [ref=f8e80]:
+            - generic [ref=f8e81]:
+              - generic [ref=f8e82]: 
+              - text: Gulf Charcoal Co. · Saudi Arabia
+            - generic [ref=f8e83]:
+              - generic [ref=f8e84]: 
+              - text: created 3 Aug 2026
+            - generic [ref=f8e85]:
+              - generic [ref=f8e86]: 
+              - text: ETA 3 Aug 2026
+            - generic [ref=f8e87]: Arrived
+          - generic [ref=f8e88]:
+            - generic [ref=f8e89]: Created
+            - generic [ref=f8e92]: At port
+            - generic [ref=f8e96]: In transit
+            - generic [ref=f8e100]: Arrived
+        - generic [ref=f8e104]:
+          - generic [ref=f8e105]:
+            - generic [ref=f8e106]: Total weight
+            - generic [ref=f8e107]: 50.00 tons
+            - generic [ref=f8e108]: 5,000 paid bags
+          - generic [ref=f8e109]:
+            - generic [ref=f8e110]: Avg cost / kg
+            - generic [ref=f8e111]: $0.79
+            - generic [ref=f8e112]: all-in, with expenses
+      - generic [ref=f8e68]:
+        - generic [ref=f8e113]:
+          - generic [ref=f8e114]:
+            - generic [ref=f8e115]:
+              - generic [ref=f8e116]:
+                - generic [ref=f8e117]: 
+                - text: Product lines
+              - button " Add line" [disabled] [ref=f8e118] [cursor=pointer]:
+                - generic [ref=f8e119]: 
+                - text: Add line
+            - table [ref=f8e120]:
+              - rowgroup [ref=f8e121]:
+                - row [ref=f8e122]:
+                  - columnheader "Charcoal" [ref=f8e123]
+                  - columnheader "Paid bags" [ref=f8e124]
+                  - columnheader "Kg/bag" [ref=f8e125]
+                  - columnheader "$/ton" [ref=f8e126]
+                  - columnheader "Tonnage" [ref=f8e127]
+                  - columnheader "All-in $/kg" [ref=f8e128]
+              - rowgroup [ref=f8e129]:
+                - row [ref=f8e130]:
+                  - cell "BBQ Hardwood ayin Grade A · +0 gift bags" [ref=f8e131]:
+                    - generic [ref=f8e132]:
+                      - generic [ref=f8e133]: BBQ Hardwood ayin
+                      - generic [ref=f8e134]: Grade A · +0 gift bags
+                  - cell "5,000" [ref=f8e135]
+                  - cell "10.0" [ref=f8e136]
+                  - cell "$680" [ref=f8e137]
+                  - cell "50.00" [ref=f8e138]
+                  - cell "$0.79" [ref=f8e139]
+            - generic [ref=f8e140]:
+              - generic [ref=f8e141]: 1 product lines · 5,000 bags · 50.00 t paid weight
+              - generic [ref=f8e142]: kg/bag is reference only, not used in cost
+          - generic [ref=f8e143]:
+            - generic [ref=f8e144]:
+              - generic [ref=f8e145]:
+                - generic [ref=f8e146]: 
+                - text: Expenses
+              - generic [ref=f8e147]: split by tonnage
+            - generic [ref=f8e148]:
+              - generic [ref=f8e149]: Description
+              - generic [ref=f8e150]: Amount (USD)
+            - generic [ref=f8e151]:
+              - generic [ref=f8e152]: freight
+              - generic [ref=f8e153]: $1,200.00
+              - generic [ref=f8e154]:
+                - button "" [ref=f8e155] [cursor=pointer]
+                - button "" [ref=f8e157] [cursor=pointer]
+            - generic [ref=f8e159]:
+              - generic [ref=f8e233]: port handling
+              - generic [ref=f8e234]: $4,300.00
+              - generic [ref=f8e162]:
+                - button "" [ref=f8e235] [cursor=pointer]
+                - button "" [ref=f8e236] [cursor=pointer]
+            - generic [ref=f8e237]:
+              - generic [ref=f8e238]: test expense
+              - generic [ref=f8e239]: $10.00
+              - generic [ref=f8e240]:
+                - button "" [ref=f8e241] [cursor=pointer]
+                - button "" [ref=f8e243] [cursor=pointer]
+            - generic [ref=f8e167]:
+              - textbox "Expense description…" [ref=f8e168]
+              - spinbutton "0.00" [ref=f8e169]
+              - button "" [ref=f8e170] [cursor=pointer]
+            - generic [ref=f8e172]:
+              - generic [ref=f8e173]: Fill in description and amount, then press + or Enter
+              - generic [ref=f8e174]: "Total: $5,510.00"
+        - generic [ref=f8e175]:
+          - generic [ref=f8e176]:
+            - generic [ref=f8e178]:
+              - generic [ref=f8e179]: 
+              - text: Supplier discount
+            - generic [ref=f8e180]:
+              - generic [ref=f8e181]:
+                - generic: $
+                - spinbutton [ref=f8e182]: "0"
+              - button " Save discount" [ref=f8e183] [cursor=pointer]:
+                - generic [ref=f8e184]: 
+                - text: Save discount
+              - paragraph [ref=f8e185]: applied to whole container, split across product lines proportionally by tonnage
+          - generic [ref=f8e186]:
+            - generic [ref=f8e187]:
+              - generic [ref=f8e188]:
+                - generic [ref=f8e189]: 
+                - text: Cost summary
+              - generic [ref=f8e190]: live
+            - generic [ref=f8e191]:
+              - generic [ref=f8e192]: Total weight
+              - generic [ref=f8e193]: 50.00 t
+            - generic [ref=f8e194]:
+              - generic [ref=f8e195]: Product cost
+              - generic [ref=f8e196]: $34,000.00
+            - generic [ref=f8e197]:
+              - generic [ref=f8e198]: + Expenses (3 items)
+              - generic [ref=f8e199]: + $5,510.00
+            - generic [ref=f8e200]:
+              - generic [ref=f8e201]: − Discount
+              - generic [ref=f8e202]: − $0.00
+            - generic [ref=f8e203]:
+              - generic [ref=f8e204]: All-in cost
+              - generic [ref=f8e205]: $39,510.00
+            - generic [ref=f8e206]:
+              - generic [ref=f8e207]: Avg cost / ton
+              - generic [ref=f8e208]: $790.20
+            - generic [ref=f8e209]:
+              - generic [ref=f8e210]: Avg cost / kg
+              - generic [ref=f8e211]: $0.79
+          - generic [ref=f8e212]:
+            - generic [ref=f8e214]:
+              - generic [ref=f8e215]: 
+              - text: On arrival — preview
+            - generic [ref=f8e216]:
+              - text: Marking this container as arrived will create
+              - strong [ref=f8e217]: 1 stock lots
+              - text: in the warehouse with the cost/kg shown below.
+            - generic [ref=f8e218]:
+              - generic [ref=f8e219]: BBQ Hardwood ayin · A
+              - generic [ref=f8e220]: 50000 kg @ $0.79

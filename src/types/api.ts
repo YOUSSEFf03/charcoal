@@ -114,3 +114,28 @@ export interface CompleteDriverTripDto {
 export interface SubmitPhysicalCountDto {
   items: { packedStockId: string; actualQuantity: number }[]
 }
+
+/**
+ * PATCH /containers/:containerId/product-lines/:lineId — partial update of a
+ * container product line. All fields optional (PartialType of the create DTO).
+ * TODO: verify against Swagger.
+ */
+export interface UpdateContainerProductLineDto {
+  charcoalType?: string
+  grade?: string
+  supplierId?: string
+  paidBags?: number
+  giftBags?: number
+  kgPerBag?: string
+  pricePerTon?: string
+}
+
+/**
+ * PATCH /containers/:containerId/expenses/:expenseId — partial update of a
+ * container expense. All fields optional (PartialType of the create DTO).
+ * TODO: verify against Swagger.
+ */
+export interface UpdateContainerExpenseDto {
+  description?: string
+  amount?: string
+}

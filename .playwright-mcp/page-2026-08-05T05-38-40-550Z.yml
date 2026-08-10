@@ -1,0 +1,192 @@
+- generic [ref=f37e3]:
+  - complementary [ref=f37e4]:
+    - generic [ref=f37e5]:
+      - generic [ref=f37e6]: 
+      - generic [ref=f37e8]:
+        - generic [ref=f37e9]: Farah Charcoal
+        - generic [ref=f37e10]: management system
+    - generic [ref=f37e11]:
+      - generic [ref=f37e12]: Overview
+      - link " Dashboard" [ref=f37e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f37e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f37e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f37e16]: 
+        - text: Reports
+    - generic [ref=f37e17]:
+      - generic [ref=f37e18]: Stock
+      - link " Containers" [ref=f37e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f37e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f37e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f37e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f37e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f37e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f37e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f37e26]: 
+        - text: Bag purchases
+    - generic [ref=f37e27]:
+      - generic [ref=f37e28]: Sales
+      - link " Clients" [ref=f37e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f37e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f37e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f37e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f37e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f37e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f37e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f37e36]:
+      - generic [ref=f37e37]: Finance
+      - link " Balances" [ref=f37e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f37e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f37e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f37e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f37e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f37e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f37e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f37e45]: 
+        - text: Expenses
+    - generic [ref=f37e46]:
+      - generic [ref=f37e47]: Setup
+      - link " Employees" [ref=f37e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f37e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f37e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f37e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f37e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f37e53]: 
+        - text: Settings
+    - generic [ref=f37e56] [cursor=pointer]:
+      - generic [ref=f37e57]: KA
+      - generic [ref=f37e58]:
+        - generic [ref=f37e59]: Khalil Abi Nader
+        - generic [ref=f37e60]: owner
+      - generic [ref=f37e61]: 
+  - generic [ref=f37e62]:
+    - banner [ref=f37e63]:
+      - generic [ref=f37e64]: Reports
+      - generic [ref=f37e66]:
+        - generic [ref=f37e67]: "Rate: 89,550 LL/$"
+        - button " Export PDF" [ref=f37e68] [cursor=pointer]:
+          - generic [ref=f37e69]: 
+          - text: Export PDF
+    - generic [ref=f37e70]:
+      - generic [ref=f37e71] [cursor=pointer]:
+        - generic [ref=f37e72]: 
+        - text: P&L
+      - generic [ref=f37e73] [cursor=pointer]:
+        - generic [ref=f37e74]: 
+        - text: Variance
+      - generic [ref=f37e75] [cursor=pointer]:
+        - generic [ref=f37e76]: 
+        - text: Worker earnings
+      - generic [ref=f37e77] [cursor=pointer]:
+        - generic [ref=f37e78]: 
+        - text: Client ledger
+    - generic [ref=f37e79]:
+      - generic [ref=f37e80]:
+        - generic [ref=f37e81]: Period
+        - textbox [ref=f37e82]: 2026-05-01
+        - generic [ref=f37e83]: →
+        - textbox [ref=f37e84]: 2026-05-31
+        - combobox [ref=f37e85] [cursor=pointer]:
+          - option "All charcoal types" [selected]
+          - option "BBQ Hardwood"
+          - option "Shisha"
+          - option "Restaurant Grade"
+        - combobox [ref=f37e86] [cursor=pointer]:
+          - option "All clients" [selected]
+          - option "Restaurants only"
+          - option "Wholesale only"
+          - option "Export only"
+        - button " Refresh" [ref=f37e87] [cursor=pointer]:
+          - generic [ref=f37e88]: 
+          - text: Refresh
+      - generic [ref=f37e160]:
+        - generic [ref=f37e161]:
+          - generic [ref=f37e162]:
+            - generic [ref=f37e163]: Total variance
+            - generic [ref=f37e164]: 0 kg
+            - generic [ref=f37e165]: across 0 sessions
+          - generic [ref=f37e166]:
+            - generic [ref=f37e167]: Variance cost owner only
+            - generic [ref=f37e168]: $0
+            - generic [ref=f37e169]: at weighted avg cost/kg
+          - generic [ref=f37e170]:
+            - generic [ref=f37e171]: Avg variance per session
+            - generic [ref=f37e172]: —
+            - generic [ref=f37e173]: per packing session
+        - generic [ref=f37e174]:
+          - generic [ref=f37e175]:
+            - generic [ref=f37e177]:
+              - generic [ref=f37e178]: 
+              - text: Variance by charcoal type
+            - table [ref=f37e179]:
+              - rowgroup [ref=f37e180]:
+                - row [ref=f37e181]:
+                  - columnheader "Type" [ref=f37e182]
+                  - columnheader "Sessions" [ref=f37e183]
+                  - columnheader "Total var. kg" [ref=f37e184]
+                  - columnheader "Var. cost" [ref=f37e185]
+                  - columnheader "Avg %" [ref=f37e186]
+              - rowgroup
+            - generic [ref=f37e187]: Breakdown by charcoal type requires type-indexed invoice lines (backend sub-task).
+          - generic [ref=f37e188]:
+            - generic [ref=f37e190]:
+              - generic [ref=f37e191]: 
+              - text: Variance by worker
+            - table [ref=f37e192]:
+              - rowgroup [ref=f37e193]:
+                - row [ref=f37e194]:
+                  - columnheader "Worker" [ref=f37e195]
+                  - columnheader "Sessions" [ref=f37e196]
+                  - columnheader "Total var." [ref=f37e197]
+                  - columnheader "Avg %" [ref=f37e198]
+              - rowgroup [ref=f37e199]:
+                - row [ref=f37e200]:
+                  - cell "Hasan Moussa" [ref=f37e201]
+                  - cell "42" [ref=f37e202]
+                  - cell "−1,420 kg" [ref=f37e203]
+                  - cell "2.8%" [ref=f37e204]
+            - generic [ref=f37e206]: Only one worker. Variance of 2–4% is normal (dust, breakage, moisture loss).
+        - generic [ref=f37e207]:
+          - generic [ref=f37e209]:
+            - generic [ref=f37e210]: 
+            - text: Session variance log
+          - table [ref=f37e211]:
+            - rowgroup [ref=f37e212]:
+              - row [ref=f37e213]:
+                - columnheader "Session" [ref=f37e214]
+                - columnheader "Date" [ref=f37e215]
+                - columnheader "Lot" [ref=f37e216]
+                - columnheader "kg consumed" [ref=f37e217]
+                - columnheader "kg output" [ref=f37e218]
+                - columnheader "Variance" [ref=f37e219]
+                - columnheader "Var. cost" [ref=f37e220]
+            - rowgroup
+          - generic [ref=f37e221]: No variance records for this period.

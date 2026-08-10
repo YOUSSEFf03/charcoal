@@ -97,6 +97,11 @@ CLERK_WEBHOOK_SECRET="whsec_your_webhook_secret_here"
 
 # Environment
 NODE_ENV="development"
+
+# Required (in addition to NODE_ENV) to enable the dev auth bypass below —
+# defense-in-depth so a forgotten/misconfigured NODE_ENV alone can't expose
+# it. Set to "true" for local dev; NEVER set this in a deployed environment.
+DEV_AUTH_BYPASS_ENABLED="true"
 ```
 
 **Get these values from:**
@@ -326,15 +331,17 @@ npx prisma migrate reset
 
 ### Development Auth Bypass
 
-In **development mode** (`NODE_ENV !== production`), you can use dev tokens:
+With `NODE_ENV !== production` **and** `DEV_AUTH_BYPASS_ENABLED=true` both set, you can use dev tokens:
 
 ```bash
 Authorization: Bearer dev:owner
 ```
 
-This is useful for testing without signing in every time. Valid dev roles: `owner`, `accountant`, `sales_rep`, `worker`, `driver`, `receiver`.
+This is useful for testing without signing in every time. Valid dev roles: `owner`, `accountant`, `sales_rep`, `worker`, `driver`.
 
-**NEVER use dev tokens in production.**
+Both conditions are required — neither `NODE_ENV` nor `DEV_AUTH_BYPASS_ENABLED` alone can enable the bypass. `DEV_AUTH_BYPASS_ENABLED` defaults to `false`, so it must be explicitly set in your local `.env`.
+
+**NEVER set `DEV_AUTH_BYPASS_ENABLED=true` in production.**
 
 ---
 
@@ -387,7 +394,7 @@ npx prisma migrate resolve  # Resolve migration conflict if needed
 Before considering setup complete, verify these files exist:
 
 - [ ] `.env` (repo root) — `VITE_API_URL`, `VITE_CLERK_PUBLISHABLE_KEY`
-- [ ] `apps/backend/.env` — `DATABASE_URL`, `CLERK_JWKS_URL`, `CLERK_WEBHOOK_SECRET`, `NODE_ENV`
+- [ ] `apps/backend/.env` — `DATABASE_URL`, `CLERK_JWKS_URL`, `CLERK_WEBHOOK_SECRET`, `NODE_ENV`, `DEV_AUTH_BYPASS_ENABLED`
 - [ ] `docker-compose.yml` (repo root) — defines PostgreSQL service
 - [ ] `apps/backend/prisma/schema.prisma` — all 30 models defined
 - [ ] `apps/backend/package.json` — NestJS dependencies installed

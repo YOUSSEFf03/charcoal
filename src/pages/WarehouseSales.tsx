@@ -6,6 +6,7 @@ import { useClients } from '../hooks/useClients'
 import { useWorkers } from '../hooks/useWorkers'
 import { useReceivers } from '../hooks/useReceivers'
 import { useCreateWalkInSale } from '../hooks/useWalkInSales'
+import { usePayments } from '../hooks/usePayments'
 import { useRate } from '../context/RateContext'
 import { roundDp } from '../lib/money'
 
@@ -69,6 +70,11 @@ export default function WarehouseSales() {
 
   // Paginated exits list — kept for the today's log table and cash-box totals only.
   const todayExitsQ = useStockExits({ exitType: 'walk_in', dateFrom: today, dateTo: today, limit: 100 })
+  // Registered-client sales record their collected cash as a Payment tied to the
+  // issued invoice, not on the StockExit itself (StockExit.amount stays null there
+  // so it isn't double-counted in the walk-in P&L aggregate). Pull today's payments
+  // too so the cash box reflects money actually collected at the counter.
+  const todayPaymentsQ = usePayments({ dateFrom: today, dateTo: today, limit: 100 })
   const createExit = useCreateStockExit()
   const createWalkInSale = useCreateWalkInSale()
 
@@ -167,6 +173,29 @@ export default function WarehouseSales() {
     setSelectedBuyerId(c.id)
     setBuyerInput(c.name)
     setBuyerOpen(false)
+  }
+
+  // Display-only USD amount for a stock exit row. Registered-client sales keep
+  // StockExit.amount = null (see schema.prisma StockExit.invoiceId doc) so their
+  // real price has to be read off the linked invoice's line instead.
+  function exitDisplayAmountUsd(exit: any): number | null {
+    if (exit.amount != null) {
+      const amt = parseFloat(exit.amount)
+      return exit.currency === 'LBP' ? (rawRate > 0 ? amt / rawRate : 0) : amt
+    }
+    if (exit.invoice) {
+      const lines: any[] = exit.invoice.lines ?? []
+      const line = exit.lotId
+        ? (lines.find(l => l.saleUnit === 'KG' && exit.lot && l.description === `${exit.lot.charcoalType} Grade ${exit.lot.grade}`)
+          ?? lines.find(l => l.saleUnit === 'KG'))
+        : lines.find(l => l.bagTypeId === exit.bagTypeId)
+      if (!line) return null
+      const qty = exit.lotId ? (parseFloat(exit.kgQuantity ?? '0') || 0) : (exit.quantity ?? 0)
+      const unitPrice = parseFloat((exit.lotId ? line.pricePerKg : line.pricePerBag) ?? '0') || 0
+      const amt = qty * unitPrice
+      return exit.invoice.currency === 'LBP' ? (rawRate > 0 ? amt / rawRate : 0) : amt
+    }
+    return null
   }
 
   // Totals
@@ -306,7 +335,7 @@ export default function WarehouseSales() {
           ...(usdNum > 0 ? { receivedUsd: usdNum.toFixed(2) } : {}),
           ...(lbpNum > 0 ? { receivedLbp: lbpNum.toFixed(2) } : {}),
           method: mappedMethod ?? 'cash',
-          ...(receiverId ? { receiverId } : {}),
+          ...(receiverId ? { receiverId } : receiver ? { receiverName: receiver } : {}),
           recipient: buyerName,
           notes: notes || undefined,
         })
@@ -337,6 +366,10 @@ export default function WarehouseSales() {
         }
       }
 
+      // collectedById must be a User ID (stock_exits_collectedById_fkey → users table).
+      // Workers come from the workers table — their IDs are invalid here.
+      const collectedById = allReceivers.find(r => r.name === receiver && r.role === 'receiver')?.id
+
       // For each bag line find a packed stock record and create an exit
       for (const ln of activeLines) {
         const qty = parseInt(ln.qty)
@@ -363,7 +396,7 @@ export default function WarehouseSales() {
               reason: notes || undefined,
               ...(selectedBuyerId && selectedBuyerId !== 'walk-in' ? { clientId: selectedBuyerId } : {}),
               ...(lineAmt > 0 && selectedBuyerId && selectedBuyerId !== 'walk-in' ? { amount: lineAmt } : {}),
-              ...(receiver ? { collectedBy: receiver } : {}),
+              ...(collectedById ? { collectedById } : receiver ? { collectedBy: receiver } : {}),
             })
             remaining -= take
           } catch (err: any) {
@@ -406,7 +439,7 @@ export default function WarehouseSales() {
             ...(usdNum > 0 ? { receivedUsd: usdNum.toFixed(2) } : {}),
             ...(lbpNum > 0 ? { receivedLbp: lbpNum.toFixed(2) } : {}),
             method:    mappedMethod ?? 'cash',
-            ...(receiverId ? { receiverId } : {}),
+            ...(receiverId ? { receiverId } : receiver ? { receiverName: receiver } : {}),
             recipient: buyerName,
             notes:     notes || undefined,
           })
@@ -426,6 +459,9 @@ export default function WarehouseSales() {
       // Anonymous KG sale — no invoice; amount recorded directly on the exit.
       try {
         const kgAmt = roundDp(kgNum * (parseFloat(kgPrice) || 0) * (kgCurr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1), 2)
+        // collectedById must be a User ID (stock_exits_collectedById_fkey → users table).
+        // Workers come from the workers table — their IDs are invalid here.
+        const collectedById = allReceivers.find(r => r.name === receiver && r.role === 'receiver')?.id
         await createExit.mutateAsync({
           lotId:     lot.id,
           kgQuantity: kgNum,
@@ -434,7 +470,7 @@ export default function WarehouseSales() {
           recipient: buyerName,
           reason:    notes || undefined,
           ...(kgAmt > 0 ? { amount: kgAmt, currency: kgCurr } : {}),
-          ...(receiver ? { collectedBy: receiver } : {}),
+          ...(collectedById ? { collectedById } : receiver ? { collectedBy: receiver } : {}),
         })
       } catch (err: any) {
         showToast(err?.error ?? 'Failed to record sale')
@@ -458,8 +494,20 @@ export default function WarehouseSales() {
 
   // Cash box — derived from today's real exit data
   const todayExits = todayExitsQ.data?.data ?? []
-  const cashBoxCollected = roundDp(todayExits.reduce((s, e) => s + (e.amount ? parseFloat(e.amount) : 0), 0), 2)
-  const cashBoxOnAccountCount = todayExits.filter((e: any) => e.clientId && !e.amount).length
+  const todayPayments = todayPaymentsQ.data?.data ?? []
+  // Clients who paid something today — an exit tied to one of these was collected,
+  // even though its own StockExit.amount is null (the cash lives on the Payment row).
+  const paidClientIds = new Set(todayPayments.map(p => p.clientId))
+  const paymentsUsd = roundDp(
+    todayPayments.reduce((s, p) => {
+      const amt = parseFloat(p.amount) || 0
+      return s + (p.currency === 'LBP' ? (rawRate > 0 ? amt / rawRate : 0) : amt)
+    }, 0),
+    2,
+  )
+  const exitsAmountUsd = roundDp(todayExits.reduce((s, e) => s + (e.amount ? parseFloat(e.amount) : 0), 0), 2)
+  const cashBoxCollected = roundDp(exitsAmountUsd + paymentsUsd, 2)
+  const cashBoxOnAccountCount = todayExits.filter((e: any) => e.clientId && !e.amount && !paidClientIds.has(e.clientId)).length
   const cashBoxTotal2 = cashBoxCollected
 
   return (
@@ -923,6 +971,7 @@ export default function WarehouseSales() {
                   const desc = isRaw
                     ? `${parseFloat(exit.kgQuantity ?? 0).toFixed(1)} kg raw`
                     : `${exit.quantity} × ${bagName}`
+                  const displayAmt = exitDisplayAmountUsd(exit)
                   return (
                     <div
                       key={exit.id}
@@ -941,7 +990,7 @@ export default function WarehouseSales() {
                       </div>
                       <div style={{ textAlign: 'right' }}>
                         <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>
-                          {exit.amount ? `$${parseFloat(exit.amount).toFixed(2)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
+                          {displayAmt != null ? `$${displayAmt.toFixed(2)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
                         </div>
                         <div style={{ fontSize: 11, color: 'var(--text3)' }}>
                           {exit.collectedBy ?? ''}{exit.collectedBy && ' · '}
@@ -1185,26 +1234,39 @@ export default function WarehouseSales() {
             </div>
 
           </div>
-          {/* Edit sale amount */}
+          {/* Edit sale amount — invoiced sales price from the invoice line, read-only here */}
           <div className="panel-footer" style={{ flexDirection: 'column', gap: 8 }}>
-            <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: selectedExit.amount ? 'var(--text3)' : 'var(--accent2)', textTransform: 'uppercase', letterSpacing: 1 }}>
-              {selectedExit.amount ? `Sale amount: $${parseFloat(selectedExit.amount).toFixed(2)} — update` : '⚠ Sale amount not set — enter to track revenue'}
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                className="form-input"
-                type="number" min="0" step="0.01"
-                placeholder={selectedExit.amount ? parseFloat(selectedExit.amount).toFixed(2) : 'Enter total sale price $'}
-                value={editAmount}
-                onChange={e => setEditAmount(e.target.value)}
-                style={{ fontFamily: "'IBM Plex Mono',monospace", flex: 1 }}
-                onKeyDown={e => { if (e.key === 'Enter' && editAmount) { updateExit.mutate({ id: selectedExit.id, amount: parseFloat(editAmount) }, { onSuccess: (u) => { setSelectedExit(u); setEditAmount(''); showToast('Amount updated') } }) } }}
-              />
-              <button className="btn primary" disabled={updateExit.isPending || !editAmount}
-                onClick={() => { if (!editAmount) return; updateExit.mutate({ id: selectedExit.id, amount: parseFloat(editAmount) }, { onSuccess: (u) => { setSelectedExit(u); setEditAmount(''); showToast('Amount updated — balance & P&L recalculated') } }) }}>
-                <i className="ti ti-check" style={{ fontSize: 13 }} /> {updateExit.isPending ? '…' : 'Save'}
-              </button>
-            </div>
+            {selectedExit.invoiceId ? (
+              <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>
+                {(() => {
+                  const amt = exitDisplayAmountUsd(selectedExit)
+                  return amt != null
+                    ? `Invoiced ${selectedExit.invoice?.displayId ?? ''} — $${amt.toFixed(2)}`
+                    : `Invoiced ${selectedExit.invoice?.displayId ?? ''} — see invoice for price`
+                })()}
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: selectedExit.amount ? 'var(--text3)' : 'var(--accent2)', textTransform: 'uppercase', letterSpacing: 1 }}>
+                  {selectedExit.amount ? `Sale amount: $${parseFloat(selectedExit.amount).toFixed(2)} — update` : '⚠ Sale amount not set — enter to track revenue'}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    className="form-input"
+                    type="number" min="0" step="0.01"
+                    placeholder={selectedExit.amount ? parseFloat(selectedExit.amount).toFixed(2) : 'Enter total sale price $'}
+                    value={editAmount}
+                    onChange={e => setEditAmount(e.target.value)}
+                    style={{ fontFamily: "'IBM Plex Mono',monospace", flex: 1 }}
+                    onKeyDown={e => { if (e.key === 'Enter' && editAmount) { updateExit.mutate({ id: selectedExit.id, amount: parseFloat(editAmount) }, { onSuccess: (u) => { setSelectedExit(u); setEditAmount(''); showToast('Amount updated') } }) } }}
+                  />
+                  <button className="btn primary" disabled={updateExit.isPending || !editAmount}
+                    onClick={() => { if (!editAmount) return; updateExit.mutate({ id: selectedExit.id, amount: parseFloat(editAmount) }, { onSuccess: (u) => { setSelectedExit(u); setEditAmount(''); showToast('Amount updated — balance & P&L recalculated') } }) }}>
+                    <i className="ti ti-check" style={{ fontSize: 13 }} /> {updateExit.isPending ? '…' : 'Save'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

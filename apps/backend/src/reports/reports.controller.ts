@@ -46,6 +46,59 @@ export class ReportsController {
   }
 
   /**
+   * Daily revenue report — owner only, same access level as profit-loss since
+   * it's the same revenue figure (CONSTRAINT 11), just bucketed by day.
+   * Backs both the Reports P&L tab and the Dashboard "Daily revenue" card.
+   */
+  @ApiOperation({ summary: 'Daily revenue, accrual basis (owner only)' })
+  @ApiResponse({ status: 200, description: 'Revenue bucketed by day, zero-filled across the range' })
+  @ApiResponse({ status: 403, description: 'Forbidden — non-owner roles' })
+  @Roles('owner')
+  @Get('daily-revenue')
+  getDailyRevenue(
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.reportsService.getDailyRevenue({ dateFrom, dateTo });
+  }
+
+  /**
+   * Revenue by charcoal type — owner only, same access level as profit-loss
+   * and daily-revenue since it's the same revenue figure (CONSTRAINT 11),
+   * grouped by charcoal type. Also the foundation for the future
+   * P&L-by-charcoal-type report — see ReportsService.getRevenueByCharcoalType.
+   */
+  @ApiOperation({ summary: 'Revenue by charcoal type, accrual basis (owner only)' })
+  @ApiResponse({ status: 200, description: 'Revenue grouped by charcoal type, sorted descending' })
+  @ApiResponse({ status: 403, description: 'Forbidden — non-owner roles' })
+  @Roles('owner')
+  @Get('revenue-by-type')
+  getRevenueByCharcoalType(
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.reportsService.getRevenueByCharcoalType({ dateFrom, dateTo });
+  }
+
+  /**
+   * P&L by charcoal type — owner only, same access level as profit-loss and
+   * revenue-by-type (CONSTRAINT 11). Merges getRevenueByCharcoalType() and
+   * getCogsByCharcoalType() by type — see ReportsService.getPnlByCharcoalType
+   * for exactly how "gross profit" here relates to profit-loss's grossProfit.
+   */
+  @ApiOperation({ summary: 'P&L (revenue, COGS, gross profit, margin) by charcoal type (owner only)' })
+  @ApiResponse({ status: 200, description: 'Per-type revenue/COGS/grossProfit/marginPct, sorted descending by revenue' })
+  @ApiResponse({ status: 403, description: 'Forbidden — non-owner roles' })
+  @Roles('owner')
+  @Get('pnl-by-type')
+  getPnlByCharcoalType(
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.reportsService.getPnlByCharcoalType({ dateFrom, dateTo });
+  }
+
+  /**
    * Stock value report — owner and accountant (CONSTRAINT 12: no costPerKg for other roles).
    */
   @ApiOperation({ summary: 'Current stock value per lot (owner/accountant)' })
@@ -115,22 +168,24 @@ export class ReportsController {
   }
 
   /**
-   * Worker earnings report — owner only (CONSTRAINT 11).
+   * Supplier ledger (Supplier Statement of Account) — owner, accountant only.
+   * Narrower than client-ledger's role set (no sales_rep) because this exposes
+   * supplier cost data (pricePerTon), which CONSTRAINT 12 already treats as
+   * sensitive and strips from sales_rep everywhere else in this codebase.
+   * Returns chronological purchase/payment entries with running balance.
    */
-  @ApiOperation({ summary: 'Worker earnings breakdown (owner only)' })
-  @ApiResponse({ status: 200, description: 'Sessions, payments, and computed totals' })
-  @ApiResponse({ status: 403, description: 'Forbidden — non-owner roles' })
-  @ApiResponse({ status: 404, description: 'Worker not found' })
-  @Roles('owner')
-  @Get('worker-earnings/:workerId')
-  getWorkerEarnings(
-    @Param('workerId', ParseUUIDPipe) workerId: string,
-    @Query('page', new ParsePagePipe()) page: number,
-    @Query('limit', new ParseLimitPipe(50)) limit: number,
+  @ApiOperation({ summary: 'Supplier ledger with running balance' })
+  @ApiResponse({ status: 200, description: 'Ledger entries and computed summary' })
+  @ApiResponse({ status: 403, description: 'Forbidden — non-owner/accountant roles' })
+  @ApiResponse({ status: 404, description: 'Supplier not found' })
+  @Roles('owner', 'accountant')
+  @Get('supplier-ledger/:supplierId')
+  getSupplierLedger(
+    @Param('supplierId', ParseUUIDPipe) supplierId: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
   ) {
-    return this.reportsService.getWorkerEarnings(workerId, { dateFrom, dateTo, page, limit });
+    return this.reportsService.getSupplierLedger(supplierId, { dateFrom, dateTo });
   }
 
   /**

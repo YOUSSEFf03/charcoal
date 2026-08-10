@@ -6,6 +6,8 @@ import type { Payment, CreatePaymentDto, PaginatedResponse } from '../types/api'
 export interface PaymentsQuery {
   clientId?: string
   invoiceId?: string
+  dateFrom?: string
+  dateTo?: string
   page?: number
   limit?: number
 }

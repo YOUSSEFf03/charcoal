@@ -1,0 +1,241 @@
+- generic [ref=f3e3]:
+  - complementary [ref=f3e4]:
+    - generic [ref=f3e5]:
+      - generic [ref=f3e6]: 
+      - generic [ref=f3e8]:
+        - generic [ref=f3e9]: Farah Charcoal
+        - generic [ref=f3e10]: management system
+    - generic [ref=f3e11]:
+      - generic [ref=f3e12]: Overview
+      - link " Dashboard" [ref=f3e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f3e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f3e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f3e16]: 
+        - text: Reports
+    - generic [ref=f3e17]:
+      - generic [ref=f3e18]: Stock
+      - link " Containers" [ref=f3e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f3e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f3e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f3e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f3e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f3e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f3e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f3e26]: 
+        - text: Bag purchases
+    - generic [ref=f3e27]:
+      - generic [ref=f3e28]: Sales
+      - link " Clients" [ref=f3e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f3e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f3e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f3e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f3e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f3e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f3e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f3e36]:
+      - generic [ref=f3e37]: Finance
+      - link " Balances" [ref=f3e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f3e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f3e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f3e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f3e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f3e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f3e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f3e45]: 
+        - text: Expenses
+    - generic [ref=f3e46]:
+      - generic [ref=f3e47]: Setup
+      - link " Employees" [ref=f3e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f3e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f3e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f3e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f3e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f3e53]: 
+        - text: Settings
+    - generic [ref=f3e56] [cursor=pointer]:
+      - generic [ref=f3e57]: KA
+      - generic [ref=f3e58]:
+        - generic [ref=f3e59]: Khalil Abi Nader
+        - generic [ref=f3e60]: owner
+      - generic [ref=f3e61]: 
+  - generic [ref=f3e62]:
+    - banner [ref=f3e63]:
+      - generic [ref=f3e64]: Dashboard
+      - generic [ref=f3e66]:
+        - generic [ref=f3e67]: Wednesday, August 5, 2026
+        - button "" [ref=f3e68] [cursor=pointer]
+        - button " New order" [ref=f3e70] [cursor=pointer]:
+          - generic [ref=f3e71]: 
+          - text: New order
+        - button " Add container" [ref=f3e72] [cursor=pointer]:
+          - generic [ref=f3e73]: 
+          - text: Add container
+    - generic [ref=f3e74]:
+      - generic [ref=f3e75]:
+        - generic [ref=f3e76]:
+          - generic [ref=f3e77]:
+            - generic [ref=f3e78]: Total stock
+            - generic [ref=f3e79]: 
+          - generic [ref=f3e82]: 0 open lots
+        - generic [ref=f3e84]:
+          - generic [ref=f3e85]:
+            - generic [ref=f3e86]: Overdue clients
+            - generic [ref=f3e87]: 
+          - generic [ref=f3e90]: CRM alertpast payment terms
+        - generic [ref=f3e91]:
+          - generic [ref=f3e92]:
+            - generic [ref=f3e93]: Active orders
+            - generic [ref=f3e94]: 
+          - generic [ref=f3e97]: confirmed, awaiting delivery
+        - generic [ref=f3e98]:
+          - generic [ref=f3e99]:
+            - generic [ref=f3e100]: Containers at port
+            - generic [ref=f3e101]: 
+          - generic [ref=f3e104]: awaiting clearance
+      - generic [ref=f3e105]:
+        - generic [ref=f3e106]:
+          - generic [ref=f3e107]:
+            - generic [ref=f3e108]:
+              - generic [ref=f3e109]: 
+              - text: Raw stock — open lots
+            - button "View all" [ref=f3e110] [cursor=pointer]
+          - table [ref=f3e111]:
+            - rowgroup [ref=f3e112]:
+              - row [ref=f3e113]:
+                - columnheader "Type / grade" [ref=f3e114]
+                - columnheader "Remaining" [ref=f3e115]
+                - columnheader "Cost/kg" [ref=f3e116]
+            - rowgroup [ref=f3e117]:
+              - row [ref=f3e118]:
+                - cell [ref=f3e119]
+                - cell [ref=f3e121]
+                - cell [ref=f3e123]
+              - row [ref=f3e125]:
+                - cell [ref=f3e126]
+                - cell [ref=f3e128]
+                - cell [ref=f3e130]
+              - row [ref=f3e132]:
+                - cell [ref=f3e133]
+                - cell [ref=f3e135]
+                - cell [ref=f3e137]
+              - row [ref=f3e139]:
+                - cell [ref=f3e140]
+                - cell [ref=f3e142]
+                - cell [ref=f3e144]
+              - row [ref=f3e146]:
+                - cell [ref=f3e147]
+                - cell [ref=f3e149]
+                - cell [ref=f3e151]
+        - generic [ref=f3e153]:
+          - generic [ref=f3e154]:
+            - generic [ref=f3e155]:
+              - generic [ref=f3e156]: 
+              - text: In delivery
+            - button "Manage" [ref=f3e157] [cursor=pointer]
+          - generic [ref=f3e158]: Loading…
+      - generic [ref=f3e159]:
+        - generic [ref=f3e160]:
+          - generic [ref=f3e161]:
+            - generic [ref=f3e162]:
+              - generic [ref=f3e163]: 
+              - text: Packed stock
+            - button "View all" [ref=f3e164] [cursor=pointer]
+          - generic [ref=f3e176]:
+            - generic [ref=f3e177]: Bag types
+            - generic [ref=f3e178]: "0"
+        - generic [ref=f3e179]:
+          - generic [ref=f3e180]:
+            - generic [ref=f3e181]:
+              - generic [ref=f3e182]: 
+              - text: CRM alerts
+            - generic [ref=f3e183]: 0 overdue
+          - button "View all clients →" [ref=f3e200] [cursor=pointer]
+        - generic [ref=f3e201]:
+          - generic [ref=f3e202]:
+            - generic [ref=f3e203]:
+              - generic [ref=f3e204]: 
+              - text: Profit — August 2026
+            - button "Full report" [ref=f3e205] [cursor=pointer]
+          - generic [ref=f3e206]:
+            - generic [ref=f3e207]: Profitability
+            - generic [ref=f3e208]:
+              - generic [ref=f3e209]:
+                - generic [ref=f3e210]:
+                  - text: Gross Profit
+                  - generic "Accrual basis. Revenue is recognized when invoices are issued. Cash collection is displayed separately." [ref=f3e211]: 
+                - generic [ref=f3e212]: —
+              - generic [ref=f3e213]:
+                - generic [ref=f3e214]: Gross Margin
+                - generic [ref=f3e215]: —
+            - generic [ref=f3e216]:
+              - generic [ref=f3e217]:
+                - generic [ref=f3e218]: Revenue
+                - generic [ref=f3e219]: —
+              - generic [ref=f3e220]:
+                - generic [ref=f3e221]:
+                  - text: COGS
+                  - generic "Direct charcoal material cost of goods sold." [ref=f3e222]: 
+                - generic [ref=f3e223]: —
+              - generic [ref=f3e224]:
+                - generic [ref=f3e225]: Packaging
+                - generic [ref=f3e226]: —
+              - generic [ref=f3e227]:
+                - generic [ref=f3e228]: Variance
+                - generic [ref=f3e229]: —
+              - generic [ref=f3e230]:
+                - generic [ref=f3e231]: Delivery
+                - generic [ref=f3e232]: —
+            - generic [ref=f3e234]:
+              - generic [ref=f3e235]: Cash Flow
+              - generic [ref=f3e236]:
+                - generic [ref=f3e237]:
+                  - generic [ref=f3e238]:
+                    - text: Cash Collected
+                    - generic "Money actually received during the selected period." [ref=f3e239]: 
+                  - generic [ref=f3e240]: —
+                - generic [ref=f3e241]:
+                  - generic [ref=f3e242]:
+                    - text: Outstanding Receivables
+                    - generic "Total unpaid invoice balances still owed by customers." [ref=f3e243]: 
+                  - generic [ref=f3e244]: —
+            - generic [ref=f3e245]:
+              - generic [ref=f3e246]: daily revenue — august
+              - generic [ref=f3e247]: Loading daily revenue…
+      - generic [ref=f3e248]:
+        - generic [ref=f3e250]:
+          - generic [ref=f3e251]:
+            - generic [ref=f3e252]: 
+            - text: Recent activity
+          - button "All logs" [ref=f3e253] [cursor=pointer]
+        - generic [ref=f3e281]:
+          - generic [ref=f3e282]: 
+          - text: Worker — No worker

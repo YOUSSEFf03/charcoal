@@ -104,7 +104,7 @@ describe('CONSTRAINT 1: lot.kgRemaining >= 0 at all times', () => {
     tx.packedStock.create.mockResolvedValue({});
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
-    await service.createPackingSession({ lotInputs: [{ lotId, kg: '50.000' }], bagsOutput: [{ bagTypeId, qty: 5 }] }, 'c1');
+    await service.createPackingSession({ lotInputs: [{ lotId, kg: '50.000' }], bagsOutput: [{ bagTypeId, qty: 5 }], workerEntityId: '550e8400-e29b-41d4-a716-446655449999' }, 'c1');
 
     const updateCall = tx.stockLot.update.mock.calls[0][0];
     const kgRemainingAfter = parseFloat(updateCall.data.kgRemaining);
@@ -122,7 +122,7 @@ describe('CONSTRAINT 1: lot.kgRemaining >= 0 at all times', () => {
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
     await expect(
-      service.createPackingSession({ lotInputs: [{ lotId, kg: '100.000' }], bagsOutput: [{ bagTypeId, qty: 5 }] }, 'c1'),
+      service.createPackingSession({ lotInputs: [{ lotId, kg: '100.000' }], bagsOutput: [{ bagTypeId, qty: 5 }], workerEntityId: '550e8400-e29b-41d4-a716-446655449999' }, 'c1'),
     ).rejects.toThrow(BadRequestException);
 
     // No DB write must occur
@@ -266,7 +266,7 @@ describe('CONSTRAINT 3: session.kgConsumed <= lot.kgRemaining before session sta
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
     await expect(
-      service.createPackingSession({ lotInputs: [{ lotId, kg: '200.000' }], bagsOutput: [{ bagTypeId, qty: 5 }] }, 'c1'),
+      service.createPackingSession({ lotInputs: [{ lotId, kg: '200.000' }], bagsOutput: [{ bagTypeId, qty: 5 }], workerEntityId: '550e8400-e29b-41d4-a716-446655449999' }, 'c1'),
     ).resolves.toBeDefined();
   });
 
@@ -280,7 +280,7 @@ describe('CONSTRAINT 3: session.kgConsumed <= lot.kgRemaining before session sta
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
     await expect(
-      service.createPackingSession({ lotInputs: [{ lotId, kg: '100.001' }], bagsOutput: [{ bagTypeId, qty: 5 }] }, 'c1'),
+      service.createPackingSession({ lotInputs: [{ lotId, kg: '100.001' }], bagsOutput: [{ bagTypeId, qty: 5 }], workerEntityId: '550e8400-e29b-41d4-a716-446655449999' }, 'c1'),
     ).rejects.toThrow(BadRequestException);
   });
 });
@@ -533,6 +533,7 @@ describe('CONSTRAINT 7: negative varianceKg requires varianceNote', () => {
         lotInputs: [{ lotId, kg: '10.000' }],
         bagsOutput: [{ bagTypeId, qty: 100 }],
         varianceNote: 'Extra bags packed',
+        workerEntityId: '550e8400-e29b-41d4-a716-446655449999',
       }, 'c1'),
     ).resolves.toBeDefined();
   });
@@ -553,6 +554,7 @@ describe('CONSTRAINT 7: negative varianceKg requires varianceNote', () => {
       service.createPackingSession({
         lotInputs: [{ lotId, kg: '10.000' }],
         bagsOutput: [{ bagTypeId, qty: 100 }],
+        workerEntityId: '550e8400-e29b-41d4-a716-446655449999',
         // varianceNote intentionally omitted
       }, 'c1'),
     ).rejects.toMatchObject({

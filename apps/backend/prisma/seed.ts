@@ -63,10 +63,10 @@ async function main() {
 
   // 3 BagTypes
   const bag2kg = await prisma.bagType.upsert({
-    where: { id: '00000000-0000-0000-0000-000000002001' },
+    where: { id: '00000000-0000-4000-8000-000000002001' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-000000002001',
+      id: '00000000-0000-4000-8000-000000002001',
       name: '2kg Bag',
       nominalKg: '2.000',
       costPerBag: '0.1500',
@@ -75,10 +75,10 @@ async function main() {
   });
 
   const bag5kg = await prisma.bagType.upsert({
-    where: { id: '00000000-0000-0000-0000-000000005001' },
+    where: { id: '00000000-0000-4000-8000-000000005001' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-000000005001',
+      id: '00000000-0000-4000-8000-000000005001',
       name: '5kg Bag',
       nominalKg: '5.000',
       costPerBag: '0.2500',
@@ -87,10 +87,10 @@ async function main() {
   });
 
   const bag10kg = await prisma.bagType.upsert({
-    where: { id: '00000000-0000-0000-0000-000000010001' },
+    where: { id: '00000000-0000-4000-8000-000000010001' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-000000010001',
+      id: '00000000-0000-4000-8000-000000010001',
       name: '10kg Bag',
       nominalKg: '10.000',
       costPerBag: '0.4000',
@@ -102,10 +102,10 @@ async function main() {
 
   // 2 Suppliers
   const supplier1 = await prisma.supplier.upsert({
-    where: { id: '00000000-0000-0000-0000-100000000001' },
+    where: { id: '00000000-0000-4000-8000-100000000001' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-100000000001',
+      id: '00000000-0000-4000-8000-100000000001',
       name: 'Gulf Charcoal Co.',
       country: 'Saudi Arabia',
       contactPersons: [
@@ -127,10 +127,10 @@ async function main() {
   });
 
   const supplier2 = await prisma.supplier.upsert({
-    where: { id: '00000000-0000-0000-0000-100000000002' },
+    where: { id: '00000000-0000-4000-8000-100000000002' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-100000000002',
+      id: '00000000-0000-4000-8000-100000000002',
       name: 'Shisha Wood Exports Ltd.',
       country: 'Indonesia',
       contactPersons: [
@@ -149,10 +149,10 @@ async function main() {
 
   // 1 Container linked to supplier1
   const container = await prisma.container.upsert({
-    where: { id: '00000000-0000-0000-0000-200000000001' },
+    where: { id: '00000000-0000-4000-8000-200000000001' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-200000000001',
+      id: '00000000-0000-4000-8000-200000000001',
       number: 'GCLX-2024-001',
       supplierId: supplier1.id,
       status: 'port',
@@ -165,10 +165,10 @@ async function main() {
 
   // 2 ProductLines on that container
   const line1 = await prisma.containerProductLine.upsert({
-    where: { id: '00000000-0000-0000-0000-300000000001' },
+    where: { id: '00000000-0000-4000-8000-300000000001' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-300000000001',
+      id: '00000000-0000-4000-8000-300000000001',
       containerId: container.id,
       charcoalType: 'BBQ hardwood',
       grade: 'A',
@@ -181,10 +181,10 @@ async function main() {
   });
 
   const line2 = await prisma.containerProductLine.upsert({
-    where: { id: '00000000-0000-0000-0000-300000000002' },
+    where: { id: '00000000-0000-4000-8000-300000000002' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-300000000002',
+      id: '00000000-0000-4000-8000-300000000002',
       containerId: container.id,
       charcoalType: 'BBQ hardwood',
       grade: 'B',
@@ -200,10 +200,10 @@ async function main() {
 
   // 1 StockLot linked to supplier1
   const stockLot = await prisma.stockLot.upsert({
-    where: { id: '00000000-0000-0000-0000-400000000001' },
+    where: { id: '00000000-0000-4000-8000-400000000001' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-400000000001',
+      id: '00000000-0000-4000-8000-400000000001',
       charcoalType: 'BBQ hardwood',
       grade: 'A',
       supplierId: supplier1.id,
@@ -220,10 +220,10 @@ async function main() {
 
   // 3 Clients
   const client1 = await prisma.client.upsert({
-    where: { id: '00000000-0000-0000-0000-500000000001' },
+    where: { id: '00000000-0000-4000-8000-500000000001' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-500000000001',
+      id: '00000000-0000-4000-8000-500000000001',
       name: 'Al Nakheel Restaurant',
       type: 'restaurant',
       currency: 'USD',
@@ -235,10 +235,10 @@ async function main() {
   });
 
   const client2 = await prisma.client.upsert({
-    where: { id: '00000000-0000-0000-0000-500000000002' },
+    where: { id: '00000000-0000-4000-8000-500000000002' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-500000000002',
+      id: '00000000-0000-4000-8000-500000000002',
       name: 'Beirut Shisha Lounge',
       type: 'wholesale',
       currency: 'USD',
@@ -249,10 +249,10 @@ async function main() {
   });
 
   const client3 = await prisma.client.upsert({
-    where: { id: '00000000-0000-0000-0000-500000000003' },
+    where: { id: '00000000-0000-4000-8000-500000000003' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-500000000003',
+      id: '00000000-0000-4000-8000-500000000003',
       name: 'Marina Walk Café',
       type: 'restaurant',
       currency: 'USD',
@@ -265,10 +265,10 @@ async function main() {
 
   // 2 Workers
   const worker1 = await prisma.worker.upsert({
-    where: { id: '00000000-0000-0000-0000-600000000001' },
+    where: { id: '00000000-0000-4000-8000-600000000001' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-600000000001',
+      id: '00000000-0000-4000-8000-600000000001',
       name: 'Hassan Mahmoud',
       phone: '+961 71 100001',
       ratesPerBagType: [
@@ -283,10 +283,10 @@ async function main() {
   });
 
   const worker2 = await prisma.worker.upsert({
-    where: { id: '00000000-0000-0000-0000-600000000002' },
+    where: { id: '00000000-0000-4000-8000-600000000002' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-600000000002',
+      id: '00000000-0000-4000-8000-600000000002',
       name: 'Omar Khalil',
       phone: '+961 71 100002',
       ratesPerBagType: [
@@ -304,10 +304,10 @@ async function main() {
 
   // 1 Order
   const order1 = await prisma.clientOrder.upsert({
-    where: { id: '00000000-0000-0000-0000-700000000001' },
+    where: { id: '00000000-0000-4000-8000-700000000001' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-700000000001',
+      id: '00000000-0000-4000-8000-700000000001',
       clientId: client1.id,
       charcoalType: 'BBQ hardwood',
       grade: 'A',
@@ -325,10 +325,10 @@ async function main() {
 
   // 1 Invoice (draft)
   const invoice1 = await prisma.invoice.upsert({
-    where: { id: '00000000-0000-0000-0000-800000000001' },
+    where: { id: '00000000-0000-4000-8000-800000000001' },
     update: {},
     create: {
-      id: '00000000-0000-0000-0000-800000000001',
+      id: '00000000-0000-4000-8000-800000000001',
       clientId: client1.id,
       orderId: order1.id,
       lines: [{ bagTypeId: bag10kg.id, bagTypeName: '10kg Bag', qty: 20, pricePerBag: 12, lineTotal: 240 }],

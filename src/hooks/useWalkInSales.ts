@@ -36,6 +36,7 @@ export interface CreateWalkInSaleDto {
   receivedLbp?: string
   method: 'cash' | 'whish' | 'omt' | 'bank_transfer' | 'cheque'
   receiverId?: string
+  receiverName?: string
   recipient?: string
   notes?: string
 }

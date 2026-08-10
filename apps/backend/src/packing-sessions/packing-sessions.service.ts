@@ -137,6 +137,8 @@ export class PackingSessionsService {
    *
    * Steps:
    *   1. Resolve caller User from Clerk JWT
+   *   1b. CONSTRAINT: workerEntityId is required and must reference an existing Worker
+   *      (every NEW session must be attributable — see the orphaned-session integrity audit)
    *   2. Fetch all referenced StockLots (404 if any missing)
    *   3. CONSTRAINT: kgUsed ≤ lot.kgRemaining for every lot input
    *   4. Fetch and validate all BagTypes
@@ -144,9 +146,10 @@ export class PackingSessionsService {
    *   6. Compute totalKgConsumed = Σ(lotInput.kg)
    *   7. Compute varianceKg = totalKgConsumed − kgOutputTotal
    *   8. CONSTRAINT: varianceKg < 0 requires varianceNote
-   *   9. Compute sessionEarnings = Σ(workerRate × qty)
+   *   9. Compute sessionEarnings = Σ(workerRate × qty); snapshot each line's rate into
+   *      bagsOutput (ratePerBag) so later rate changes can never reprice this session
    *  10. Decrement kgRemaining for every lot used
-   *  11. Create PackingSession record
+   *  11. Create PackingSession record (workerEntityId always set — guaranteed by step 1b)
    *  12. Create PackingSessionLot records (the junction rows)
    *  13. Create PackedStock records (one per bag line)
    *  14. Update Worker entity earnings if workerEntityId provided
@@ -156,6 +159,26 @@ export class PackingSessionsService {
     // Step 1: Resolve caller — must already be synced via Clerk webhook; never auto-create.
     const user = await this.prisma.user.findUnique({ where: { clerkId: userId } });
     if (!user) throw new ForbiddenException({ error: 'User not synced', code: 'NO_USER' });
+
+    // Step 1b (pre-tx): workerEntityId is mandatory for every NEW session — re-checked here
+    // even though the DTO already requires it, because a service-level guard is what this
+    // codebase's Jest suite actually exercises (unit tests call the service directly,
+    // bypassing NestJS's HTTP ValidationPipe), and because "the frontend/DTO might be
+    // bypassed" is exactly the scenario being defended against. Without a worker attributed,
+    // sessionEarnings enters P&L Labor Cost but can never be reconciled against any
+    // worker-facing total (Employee wages owed, Worker Earnings tab, etc.) — see the
+    // orphaned-session audit this fix implements.
+    if (!dto.workerEntityId) {
+      throw new BadRequestException({
+        message: 'workerEntityId is required — every packing session must be attributed to a worker',
+        error: 'WORKER_REQUIRED',
+        code: 'WORKER_REQUIRED',
+      });
+    }
+    const worker = await this.prisma.worker.findUnique({ where: { id: dto.workerEntityId } });
+    if (!worker) {
+      throw new NotFoundException({ error: `Worker not found: ${dto.workerEntityId}`, code: 'WORKER_NOT_FOUND' });
+    }
 
     // Step 4 (pre-tx): Fetch and validate BagTypes
     const bagTypeIds = dto.bagsOutput.map(b => b.bagTypeId);
@@ -192,12 +215,16 @@ export class PackingSessionsService {
       });
     }
 
-    // Step 9 (pre-tx): sessionEarnings = Σ(workerRate × qty)
+    // Step 9 (pre-tx): sessionEarnings = Σ(workerRate × qty). Each line's rate is snapshotted
+    // into bagsOutput (ratePerBag) so a later BagType.workerRate change can never silently
+    // reprice this session — see updatePackingSession() for how the snapshot is preserved.
     let sessionEarnings = new Decimal(0);
-    for (const line of dto.bagsOutput) {
+    const bagsOutputWithRates: Array<{ bagTypeId: string; qty: number; ratePerBag: string }> = dto.bagsOutput.map(line => {
       const bt = bagTypeMap.get(line.bagTypeId)!;
-      sessionEarnings = sessionEarnings.plus(new Decimal(bt.workerRate.toString()).mul(line.qty));
-    }
+      const ratePerBag = bt.workerRate.toString();
+      sessionEarnings = sessionEarnings.plus(new Decimal(ratePerBag).mul(line.qty));
+      return { bagTypeId: line.bagTypeId, qty: line.qty, ratePerBag };
+    });
 
     const sessionId = await this.prisma.$transaction(async (tx) => {
       // Steps 2, 3, 10: aggregate by lotId, validate kgUsed ≤ kgRemaining, and deduct
@@ -225,7 +252,7 @@ export class PackingSessionsService {
           workerId: user.id,
           mode: 'stock',
           kgConsumed: totalKgConsumed.toFixed(3),
-          bagsOutput: dto.bagsOutput as unknown as Prisma.InputJsonValue,
+          bagsOutput: bagsOutputWithRates as unknown as Prisma.InputJsonValue,
           kgOutputTotal: kgOutputTotal.toFixed(3),
           varianceKg: varianceKg.toFixed(3),
           varianceNote: dto.varianceNote,
@@ -233,7 +260,7 @@ export class PackingSessionsService {
           date: dto.date ? new Date(dto.date) : new Date(),
           completedAt: new Date(),
           notes: dto.notes,
-          ...(dto.workerEntityId ? { workerEntityId: dto.workerEntityId } : {}),
+          workerEntityId: dto.workerEntityId,
         },
       });
 
@@ -264,7 +291,16 @@ export class PackingSessionsService {
 
   /**
    * Update an existing packing session atomically.
-   * Reverses old lot deductions and worker earnings, applies the new values.
+   * Reverses old lot deductions and applies the new values.
+   *
+   * sessionEarnings is historical: it is only recomputed when bagsOutput is explicitly
+   * edited, and even then each line keeps its originally-snapshotted rate — a later
+   * BagType.workerRate change never silently reprices an old session.
+   *
+   * workerEntityId is NOT required here (unlike createPackingSession) — a legacy session
+   * with workerEntityId=NULL must stay fully editable without being forced to acquire a
+   * worker retroactively, and "clear worker entity" (empty string) remains a supported
+   * correction. Whenever a non-empty value IS being set, it must reference a real Worker.
    *
    * Blocked if packed stock from this session has been used in stock exits or adjustments.
    */
@@ -306,11 +342,14 @@ export class PackingSessionsService {
           ? dto.lotInputs
           : existing.sessionLots.map(sl => ({ lotId: sl.lotId, kg: sl.kgUsed.toString() }));
 
-      // Resolve new bags output
+      // Existing bagsOutput, with whatever rate snapshot each line already carries. Legacy
+      // sessions created before rate-snapshotting existed may have lines with no ratePerBag.
+      const existingBagsOutput = existing.bagsOutput as Array<{ bagTypeId: string; qty: number; ratePerBag?: string }>;
+      const bagsOutputChanged = Boolean(dto.bagsOutput && dto.bagsOutput.length > 0);
+
+      // Resolve new bags output (fall back to old if not explicitly provided)
       const newBagsOutput: Array<{ bagTypeId: string; qty: number }> =
-        dto.bagsOutput && dto.bagsOutput.length > 0
-          ? dto.bagsOutput
-          : (existing.bagsOutput as Array<{ bagTypeId: string; qty: number }>);
+        bagsOutputChanged ? dto.bagsOutput! : existingBagsOutput;
 
       const bagTypeIds = newBagsOutput.map(b => b.bagTypeId);
       const bagTypes = await tx.bagType.findMany({ where: { id: { in: bagTypeIds } } });
@@ -333,10 +372,33 @@ export class PackingSessionsService {
         throw new BadRequestException({ message: 'Negative variance requires varianceNote', code: 'CONSTRAINT_VIOLATION' });
       }
 
-      let sessionEarnings = new Decimal(0);
-      for (const line of newBagsOutput) {
-        const bt = bagTypeMap.get(line.bagTypeId)!;
-        sessionEarnings = sessionEarnings.plus(new Decimal(bt.workerRate.toString()).mul(line.qty));
+      // Historical earnings integrity: a BagType.workerRate change must never silently
+      // reprice a session that already recorded its own rate.
+      //   - bagsOutput NOT explicitly edited → sessionEarnings and its rate snapshots are
+      //     left completely untouched, no matter how BagType.workerRate has moved since
+      //     creation. This is the fix for the reported bug (editing e.g. varianceNote alone
+      //     used to silently recompute earnings from the CURRENT rate).
+      //   - bagsOutput explicitly edited → each line keeps its ORIGINAL snapshotted rate for
+      //     its FULL new quantity if this session already recorded one for that bagTypeId
+      //     (an edit is a correction to the same day's work, not new work, even if the qty
+      //     changes). A bagTypeId with no prior snapshot on this session — a brand-new line,
+      //     or a legacy line from before rate-snapshotting existed — has no history to
+      //     preserve, so it is priced at the CURRENT BagType rate (same as a new session).
+      let sessionEarnings: Decimal;
+      let newBagsOutputWithRates: Array<{ bagTypeId: string; qty: number; ratePerBag?: string }>;
+
+      if (!bagsOutputChanged) {
+        sessionEarnings = new Decimal(existing.sessionEarnings.toString());
+        newBagsOutputWithRates = existingBagsOutput;
+      } else {
+        const priorByBagType = new Map(existingBagsOutput.map(l => [l.bagTypeId, l]));
+        sessionEarnings = new Decimal(0);
+        newBagsOutputWithRates = newBagsOutput.map(line => {
+          const prior = priorByBagType.get(line.bagTypeId);
+          const ratePerBag = prior?.ratePerBag ?? bagTypeMap.get(line.bagTypeId)!.workerRate.toString();
+          sessionEarnings = sessionEarnings.plus(new Decimal(ratePerBag).mul(line.qty));
+          return { bagTypeId: line.bagTypeId, qty: line.qty, ratePerBag };
+        });
       }
 
       // Aggregate by lotId, validate (reads post-restore kgRemaining within the tx), and
@@ -357,12 +419,25 @@ export class PackingSessionsService {
       const newWorkerEntityId =
         dto.workerEntityId !== undefined ? (dto.workerEntityId || null) : existing.workerEntityId;
 
+      // workerEntityId is NOT required on update (unlike create) — a pre-existing session
+      // with workerEntityId=NULL (created before this constraint existed, or explicitly
+      // cleared for correction) must remain fully editable without being forced to acquire
+      // a worker retroactively. But whenever a value IS being set (whether newly assigned or
+      // reassigned), it must reference a real Worker — same integrity check as create, just
+      // not mandatory here.
+      if (newWorkerEntityId) {
+        const worker = await tx.worker.findUnique({ where: { id: newWorkerEntityId } });
+        if (!worker) {
+          throw new NotFoundException({ error: `Worker not found: ${newWorkerEntityId}`, code: 'WORKER_NOT_FOUND' });
+        }
+      }
+
       // Update session record
       await tx.packingSession.update({
         where: { id },
         data: {
           kgConsumed: totalKgConsumed.toFixed(3),
-          bagsOutput: newBagsOutput as unknown as Prisma.InputJsonValue,
+          bagsOutput: newBagsOutputWithRates as unknown as Prisma.InputJsonValue,
           kgOutputTotal: kgOutputTotal.toFixed(3),
           varianceKg: varianceKg.toFixed(3),
           varianceNote: newVarianceNote,

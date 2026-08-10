@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import * as XLSX from 'xlsx'
 import Topbar from '../components/layout/Topbar'
 import { useClient } from '../hooks/useClients'
 import { useInvoices } from '../hooks/useInvoices'
@@ -11,7 +10,9 @@ import { useStockExits } from '../hooks/useWarehouse'
 import { usePayments, useCreatePayment } from '../hooks/usePayments'
 import { useReceivers } from '../hooks/useReceivers'
 import { useWorkers } from '../hooks/useWorkers'
-import { roundDp } from '../lib/money'
+import { roundDp, formatUsd } from '../lib/money'
+import { formatDate, formatDateTime } from '../lib/date'
+import { exportSheet } from '../lib/exportXlsx'
 
 /* ── local edit-form view-model types ── */
 interface Phone { number: string; label: string; meta: string; active: boolean; primary: boolean }
@@ -33,25 +34,9 @@ function parseDate(s: string) {
   const iso = new Date(s)
   return Number.isNaN(iso.getTime()) ? null : iso
 }
-function fmt(n: number) {
-  const neg = n < 0
-  const a = Math.abs(n)
-  return (neg ? '-$' : '$') + a.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-}
-function fmtDate(iso?: string | null) {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-}
-function fmtDateTime(iso?: string | null) {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return fmtDate(iso)
-  const datePart = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-  const h = d.getHours().toString().padStart(2, '0')
-  const m = d.getMinutes().toString().padStart(2, '0')
-  return `${datePart} ${h}:${m}`
-}
+function fmt(n: number) { return formatUsd(n) }
+function fmtDate(iso?: string | null) { return formatDate(iso, { day: '2-digit' }) }
+function fmtDateTime(iso?: string | null) { return formatDateTime(iso, { day: '2-digit' }) }
 function shortDate(s: string) { return String(s).split(' ').slice(0, 2).join(' ') }
 
 function statusBadge(s: string) {
@@ -138,10 +123,16 @@ export default function ClientDetail() {
   const warehousePurchases = warehouseExitsQ.data?.data ?? []
   const { receivers: customReceivers } = useReceivers()
   const workersQ = useWorkers()
+  // Same shape/resolution pattern WarehouseSales.tsx already uses correctly:
+  // receiverId must be a real User ID (payments_receiverId_fkey → users table).
+  // Workers come from the workers table — their IDs are invalid here, so they
+  // stay name-only. Only customReceivers (role='receiver') are real users and
+  // safe to resolve to an ID. 'Owner' has no backing user row here either, so
+  // it also stays a name-only legacy fallback (unchanged from before).
   const allReceivers = [
-    ...(workersQ.data ?? []).map(w => w.name),
-    ...customReceivers.map(r => r.name),
-    'Owner',
+    ...(workersQ.data ?? []).map(w => ({ id: w.id, name: w.name, role: 'worker' })),
+    ...customReceivers,
+    { id: '', name: 'Owner', role: 'owner' },
   ]
 
   const c = clientQ.data
@@ -322,13 +313,6 @@ export default function ClientDetail() {
   /* ── Excel export (per section) ── */
   function isoToMs(iso: string) { return iso ? new Date(iso + 'T00:00:00').getTime() : null }
 
-  function exportSheet(aoa: unknown[][], sheet: string, filename: string) {
-    const ws = XLSX.utils.aoa_to_sheet(aoa)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, sheet)
-    XLSX.writeFile(wb, `${filename}-${new Date().toISOString().slice(0, 10)}.xlsx`)
-  }
-
   function exportOrders() {
     const aoa: unknown[][] = [['Date', 'Order #', 'Type', 'Charcoal', 'Weight', 'Price/bag', 'Status']]
     filteredOrders.forEach(o => aoa.push([o.date, o.displayId, o.isBag ? 'Bag' : 'KG', o.char, o.items, `$${o.total.toFixed(2)}`, o.status]))
@@ -452,6 +436,11 @@ export default function ClientDetail() {
   function savePayment() {
     const amt = parseFloat(payAmt)
     if (!amt || amt <= 0) { showToast('Enter an amount'); return }
+    // Resolve the picked name back to a real User ID (same pattern as
+    // WarehouseSales.tsx) so the ledger actually gets credited — previously
+    // this page only ever sent receiverName, which the backend stores for
+    // display but never resolves to a ledger-crediting receiver.
+    const receiverId = allReceivers.find(r => r.name === payReceiverName && r.role === 'receiver')?.id
     createPaymentM.mutate(
       {
         clientId: cid,
@@ -460,7 +449,7 @@ export default function ClientDetail() {
         method: (payMethod as any),
         date: payDate,
         notes: payNote || null,
-        receiverName: payReceiverName || undefined,
+        ...(receiverId ? { receiverId } : { receiverName: payReceiverName || undefined }),
       },
       {
         onSuccess: () => {
@@ -1300,7 +1289,7 @@ export default function ClientDetail() {
                   <span className="field-label">Received by</span>
                   <select className="select" value={payReceiverName} onChange={e => setPayReceiverName(e.target.value)}>
                     <option value="">— select receiver —</option>
-                    {allReceivers.map(r => <option key={r}>{r}</option>)}
+                    {allReceivers.map(r => <option key={r.id || r.name} value={r.name}>{r.name}</option>)}
                   </select>
                 </div>
                 <div style={{ gridColumn: '1 / -1' }}>

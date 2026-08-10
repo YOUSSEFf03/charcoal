@@ -6,15 +6,18 @@ import {
 import { Prisma } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
-import { InvoiceCalculatorService } from '../invoices/invoice-calculator.service';
+import { PaymentAllocationService } from '../invoices/payment-allocation.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
-import { creditAccount } from '../cash-handovers/cash-handovers.service';
+import { LedgerWriteService } from '../ledger/ledger-write.service';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class PaymentsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly calculator: InvoiceCalculatorService,
+    private readonly paymentAllocationService: PaymentAllocationService,
+    private readonly ledgerWriteService: LedgerWriteService,
+    private readonly usersService: UsersService,
   ) {}
 
   /**
@@ -91,14 +94,19 @@ export class PaymentsService {
   }
 
   /**
-   * Create a payment and, if invoiceId is given, atomically update invoice paidAmount + status.
+   * Create a payment and apply it to invoice(s) via PaymentAllocationService —
+   * the Payment row itself is never rewritten; PaymentAllocation records how
+   * its amount was actually applied (see that service's doc comment).
    *
    * Step 1: Resolve internal User from Clerk userId (loggedById source — CONSTRAINT 5 pattern)
    * Step 2: Validate client exists
    * Step 3: Validate amount > 0
-   * Step 4: If invoiceId — validate invoice status is issued or partially_paid; validate client match
+   * Step 4: If invoiceId — lock it (FOR UPDATE), validate status is issued or
+   *         partially_paid, validate client match
    * Step 5: Create payment record with loggedById = user.id (NEVER from dto)
-   * Step 6: If invoiceId — call recomputeStatus (aggregate-based) and update invoice
+   * Step 6: If invoiceId — allocateDirect (full amount, that one invoice);
+   *         else — allocateFifo (split across the client's open invoices,
+   *         oldest first)
    * CONSTRAINT 15: Client.balance is NEVER written — always computed by ClientBalanceService
    *
    * @param dto - Payment creation payload (no loggedById)
@@ -129,8 +137,12 @@ export class PaymentsService {
         });
       }
 
-      // Validate invoice if provided
+      // Validate invoice if provided. Lock it first (SELECT ... FOR UPDATE) —
+      // PaymentAllocationService.allocateDirect() takes the same lock later
+      // in this same transaction, so this just makes sure the guard checks
+      // below are read against a row no concurrent allocator can be mid-write on.
       if (dto.invoiceId) {
+        await tx.$queryRaw(Prisma.sql`SELECT id FROM "invoices" WHERE id = ${dto.invoiceId} FOR UPDATE`);
         const invoice = await tx.invoice.findUnique({ where: { id: dto.invoiceId } });
         if (!invoice) {
           throw new NotFoundException({ error: 'Invoice not found', code: 'NOT_FOUND' });
@@ -158,6 +170,11 @@ export class PaymentsService {
       // Resolve receiver: if a receiverId is provided, look up the name for the string field too
       let receiverFields: { receiverId?: string; receiverName?: string } = {};
       if (dto.receiverId) {
+        // PR 6b: validate before any FK-constrained write (Payment.receiverId) is attempted,
+        // so an invalid holder fails with a clean NotFoundException instead of a raw DB
+        // foreign-key-violation error. LedgerWriteService.creditAccount()'s own validation
+        // (PR 6) is unchanged and still runs later — this is additional, not a replacement.
+        await this.usersService.validateCashCapable(dto.receiverId);
         const receiver = await tx.user.findUnique({ where: { id: dto.receiverId }, select: { name: true } });
         receiverFields = { receiverId: dto.receiverId, receiverName: receiver?.name };
       } else if (dto.receiverName) {
@@ -182,7 +199,7 @@ export class PaymentsService {
       // Credit the receiver's account ledger when a receiver is assigned
       if (receiverFields.receiverId) {
         const client = await tx.client.findUnique({ where: { id: dto.clientId }, select: { name: true } });
-        await creditAccount(
+        await this.ledgerWriteService.creditAccount(
           tx, receiverFields.receiverId,
           new Decimal(dto.amount),
           'payment_received',
@@ -192,16 +209,19 @@ export class PaymentsService {
         );
       }
 
-      // Recompute invoice status if this payment is linked to an invoice
+      // Apply the payment to invoice(s). Rule 1 (invoiceId given): the full
+      // amount goes to that one invoice. Rule 2 (no invoiceId — client-level
+      // payment): FIFO-allocate across the client's open invoices, oldest
+      // first; any amount past what's owed stays unapplied (client credit,
+      // visible only via ClientBalanceService's live calculation).
       if (dto.invoiceId) {
-        const { paidAmount, status } = await this.calculator.recomputeStatus(
-          dto.invoiceId,
-          tx,
+        await this.paymentAllocationService.allocateDirect(
+          tx, payment.id, dto.invoiceId, new Decimal(dto.amount),
         );
-        await tx.invoice.update({
-          where: { id: dto.invoiceId },
-          data: { paidAmount, status },
-        });
+      } else {
+        await this.paymentAllocationService.allocateFifo(
+          tx, dto.clientId, payment.id, new Decimal(dto.amount),
+        );
       }
 
       // CONSTRAINT 15: do NOT touch any Client field

@@ -6,7 +6,8 @@ import { useClients } from '../hooks/useClients'
 import { useArSummary } from '../hooks/useReports'
 import type { Invoice, InvoiceStatus, PaymentMethod } from '../types/api'
 import { useRate } from '../context/RateContext'
-import { roundDp } from '../lib/money'
+import { roundDp, formatUsd } from '../lib/money'
+import { formatDate } from '../lib/date'
 
 function statusBadge(status: string) {
   if (status === 'paid') return <span className="badge badge-green">Paid</span>
@@ -25,15 +26,8 @@ function methodBadge(method: string) {
   return <span className="badge badge-gray">{method}</span>
 }
 
-function fmtMoney(value?: string | null) {
-  const n = value != null ? parseFloat(value) : NaN
-  return Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '0'
-}
-function fmtDate(iso?: string | null) {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-}
+function fmtMoney(value?: string | null) { return formatUsd(value, { decimals: 2, symbol: false, fallback: '0' }) }
+function fmtDate(iso?: string | null) { return formatDate(iso) }
 
 export default function Invoices() {
   const [tab, setTab] = useState<'invoices' | 'payments' | 'outstanding'>('invoices')

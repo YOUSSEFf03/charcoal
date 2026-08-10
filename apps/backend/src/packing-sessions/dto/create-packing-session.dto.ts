@@ -71,8 +71,13 @@ export class CreatePackingSessionDto {
   @IsString()
   notes?: string;
 
-  @ApiProperty({ description: 'Worker (payroll entity) UUID who performed the packing', required: false })
-  @IsOptional()
+  @ApiProperty({
+    description: 'Worker (payroll entity) UUID who performed the packing — REQUIRED. Every ' +
+      'new packing session must be attributable to a payroll Worker; without it, the labor cost ' +
+      'it produces enters P&L but can never be reconciled against any worker-facing total.',
+    required: true,
+  })
+  @IsNotEmpty({ message: 'workerEntityId is required — select the worker who performed the packing' })
   @Matches(UUID_PATTERN, { message: 'workerEntityId must be a UUID' })
-  workerEntityId?: string;
+  workerEntityId: string;
 }

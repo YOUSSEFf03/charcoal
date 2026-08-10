@@ -5,7 +5,8 @@ import { useOrders, useCreateOrder, useMarkOrderDelivered, useDeleteOrder } from
 import { useClients } from '../hooks/useClients'
 import { useCreateShipment, useConfirmDelivery, useLogReturn, useLogActualWeight, useShipments } from '../hooks/useShipments'
 import { useBagTypes } from '../hooks/useBagTypes'
-import type { OrderStatus, ClientOrder } from '../types/api'
+import type { OrderStatus, ClientOrderListItem } from '../types/api'
+import { formatUsd } from '../lib/money'
 
 // Map an order status enum to a badge colour + display label.
 function orderStatusMeta(s: OrderStatus): { badge: string; label: string; stripe: string } {
@@ -29,11 +30,6 @@ function statusParam(label: string): OrderStatus | undefined {
     case 'Paid': return 'paid'
     default: return undefined
   }
-}
-
-function fmtUsd(value?: string | null) {
-  const n = value != null ? parseFloat(value) : NaN
-  return Number.isFinite(n) ? `$${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'
 }
 
 interface Shipment { id: number; addr: string; b2: number; b5: number; b10: number }
@@ -69,8 +65,21 @@ export default function Orders() {
     return () => clearTimeout(t)
   }, [search])
 
-  // Live orders — search and status both filtered server-side.
-  const ordersQ = useOrders({ status: statusParam(fStatus), search: debouncedSearch || undefined, limit: 100 })
+  // Pagination — the backend already scopes findAll() with skip/take + a
+  // matching count() (see OrdersService.findAll()); this page previously
+  // requested a single fixed page (limit: 100) with no way to reach anything
+  // beyond it. ORDERS_PAGE_SIZE keeps each page a reasonable scroll length;
+  // MAX_PAGE_LIMIT (100, server-enforced) is the hard ceiling either way.
+  const ORDERS_PAGE_SIZE = 20
+  const [page, setPage] = useState(1)
+
+  // Changing status or search must land back on page 1 — otherwise a user
+  // sitting on page 8 of "All statuses" could apply a filter with only 1
+  // matching page and see an empty page 8 instead of their results.
+  useEffect(() => { setPage(1) }, [fStatus, debouncedSearch])
+
+  // Live orders — search, status, AND pagination all server-side.
+  const ordersQ = useOrders({ status: statusParam(fStatus), search: debouncedSearch || undefined, page, limit: ORDERS_PAGE_SIZE })
   const clientsQ = useClients({ limit: 100 })
   const createOrder = useCreateOrder()
   const createShipment = useCreateShipment()
@@ -83,6 +92,7 @@ export default function Orders() {
 
   const orders = ordersQ.data?.data ?? []
   const orderTotal = ordersQ.data?.total ?? orders.length
+  const totalPages = Math.max(1, Math.ceil(orderTotal / ORDERS_PAGE_SIZE))
   const selectedOrder = orders.find(o => o.id === selectedOrderId) ?? null
   const bagTypesQ = useBagTypes()
   const bagTypeNameById = new Map((bagTypesQ.data ?? []).map(b => [b.id, b.name]))
@@ -179,7 +189,9 @@ export default function Orders() {
                 <option>Paid</option>
               </select>
               <div className="filter-sep" />
-              <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>{filteredOrders.length} orders</span>
+              <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                {orderTotal} order{orderTotal !== 1 ? 's' : ''}{totalPages > 1 ? ` · page ${page} of ${totalPages}` : ''}
+              </span>
             </div>
 
             {ordersQ.isLoading && [0, 1, 2].map(i => (
@@ -200,7 +212,7 @@ export default function Orders() {
                 <div><button className="btn" style={{ marginTop: 10 }} onClick={() => ordersQ.refetch()}>Retry</button></div>
               </div>
             )}
-            {!ordersQ.isLoading && !ordersQ.isError && filteredOrders.map((o: ClientOrder) => {
+            {!ordersQ.isLoading && !ordersQ.isError && filteredOrders.map((o: ClientOrderListItem) => {
               const meta = orderStatusMeta(o.status)
               return (
                 <div className="order-card" key={o.id} onClick={() => navigate(`/orders/${o.id}`)}>
@@ -227,7 +239,7 @@ export default function Orders() {
                     </div>
                     <div className="order-right">
                       <div className="order-total">
-                        <div className="order-total-val">{fmtUsd(o.pricePerBag)}</div>
+                        <div className="order-total-val">{formatUsd(o.pricePerBag)}</div>
                         <div className="order-total-lbl">{o.currency} · {o.bagTypeId ? '/bag' : '/kg'}</div>
                       </div>
                       <div style={{ display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
@@ -265,6 +277,19 @@ export default function Orders() {
                 <i className="ti ti-search" style={{ fontSize: 32, display: 'block', marginBottom: 8 }} />
                 <div style={{ fontSize: 14 }}>No orders match your search</div>
                 <button className="btn" style={{ marginTop: 12 }} onClick={() => { setSearch(''); setFStatus('All statuses') }}>Clear filters</button>
+              </div>
+            )}
+            {!ordersQ.isLoading && !ordersQ.isError && filteredOrders.length > 0 && totalPages > 1 && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '18px 0 6px' }}>
+                <button className="btn" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>
+                  <i className="ti ti-chevron-left" style={{ fontSize: 14 }} /> Previous
+                </button>
+                <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                  Page {page} of {totalPages}
+                </span>
+                <button className="btn" disabled={page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>
+                  Next <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                </button>
               </div>
             )}
         </div>

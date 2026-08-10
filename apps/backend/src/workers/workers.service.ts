@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,13 +10,25 @@ import { CreateWorkerDto } from './dto/create-worker.dto';
 import { UpdateWorkerDto } from './dto/update-worker.dto';
 import { SetRatesDto } from './dto/set-rates.dto';
 import { CreateWorkerPaymentDto } from './dto/create-worker-payment.dto';
-import { CreateWorkerAttendanceDto } from './dto/create-worker-attendance.dto';
+import { CreateWorkerEarningDto } from './dto/create-worker-earning.dto';
+import { UpdateWorkerEarningDto } from './dto/update-worker-earning.dto';
 
 // Worker.totalEarned / totalBagsPacked / totalPaid are DEPRECATED CACHE columns.
 // They are never written by packing-session create/update and never read as source of truth.
 // Source of truth: PackingSession.sessionEarnings (where workerEntityId = worker.id),
-//                  WorkerAttendance rows × worker.dailyRate,
+//                  WorkerCost.amount (where workerId = worker.id),
 //                  and WorkerPayment.amount (where workerId = worker.id).
+//
+// WorkerAttendance/dailyRate (the old calendar-based daily-wage mechanism) have
+// been fully replaced by WorkerCost — all historical attendance was backfilled
+// into WorkerCost rows (category `daily_wage`) and verified to match before the
+// WorkerAttendance table and Worker.dailyRate column were dropped. See the
+// employee module redesign migrations around 2026-07-29.
+
+// A WorkerCost row can be edited only within this window of its creation.
+// Past it, corrections must be a new entry (category `correction`), never a
+// rewrite of history — see the WorkerCost model comment in schema.prisma.
+const EARNING_EDIT_WINDOW_HOURS = 24;
 
 @Injectable()
 export class WorkersService {
@@ -23,11 +36,10 @@ export class WorkersService {
 
   /**
    * Compute live earned/paid/owed totals for a single worker.
-   * totalEarned = pieceEarned (Σ sessionEarnings) + dailyEarned (attendanceDays × dailyRate).
-   * Caller supplies dailyRate so this method needs no extra DB round-trip.
+   * totalEarned = pieceEarned (Σ sessionEarnings) + costEarned (Σ WorkerCost.amount).
    */
-  private async computeTotals(workerId: string, dailyRate: Decimal) {
-    const [earnedResult, paidResult, attendanceCount] = await Promise.all([
+  private async computeTotals(workerId: string) {
+    const [earnedResult, paidResult, costResult] = await Promise.all([
       this.prisma.packingSession.aggregate({
         where: { workerEntityId: workerId },
         _sum: { sessionEarnings: true },
@@ -36,21 +48,23 @@ export class WorkersService {
         where: { workerId },
         _sum: { amount: true },
       }),
-      this.prisma.workerAttendance.count({ where: { workerId } }),
+      this.prisma.workerCost.aggregate({
+        where: { workerId },
+        _sum: { amount: true },
+      }),
     ]);
 
     const pieceEarned  = new Decimal(earnedResult._sum.sessionEarnings?.toString() ?? '0');
-    const dailyEarned  = dailyRate.times(attendanceCount);
-    const totalEarned  = pieceEarned.plus(dailyEarned);
+    const costEarned   = new Decimal(costResult._sum.amount?.toString() ?? '0');
+    const totalEarned  = pieceEarned.plus(costEarned);
     const totalPaid    = new Decimal(paidResult._sum.amount?.toString() ?? '0');
 
     return {
-      pieceEarned:    pieceEarned.toFixed(2),
-      dailyEarned:    dailyEarned.toFixed(2),
-      totalEarned:    totalEarned.toFixed(2),
-      totalPaid:      totalPaid.toFixed(2),
-      totalOwed:      totalEarned.minus(totalPaid).toFixed(2),
-      attendanceDays: attendanceCount,
+      pieceEarned: pieceEarned.toFixed(2),
+      costEarned:  costEarned.toFixed(2),
+      totalEarned: totalEarned.toFixed(2),
+      totalPaid:   totalPaid.toFixed(2),
+      totalOwed:   totalEarned.minus(totalPaid).toFixed(2),
     };
   }
 
@@ -69,7 +83,7 @@ export class WorkersService {
 
     const workerIds = workers.map(w => w.id);
 
-    const [earnedAgg, paidAgg, attendanceAgg] = await Promise.all([
+    const [earnedAgg, paidAgg, costAgg] = await Promise.all([
       this.prisma.packingSession.groupBy({
         by: ['workerEntityId'],
         where: { workerEntityId: { in: workerIds } },
@@ -80,32 +94,29 @@ export class WorkersService {
         where: { workerId: { in: workerIds } },
         _sum: { amount: true },
       }),
-      this.prisma.workerAttendance.groupBy({
+      this.prisma.workerCost.groupBy({
         by: ['workerId'],
         where: { workerId: { in: workerIds } },
-        _count: { id: true },
+        _sum: { amount: true },
       }),
     ]);
 
-    const earnedMap     = new Map(earnedAgg.map(r => [r.workerEntityId, r._sum.sessionEarnings]));
-    const paidMap       = new Map(paidAgg.map(r => [r.workerId, r._sum.amount]));
-    const attendanceMap = new Map(attendanceAgg.map(r => [r.workerId, r._count.id]));
+    const earnedMap = new Map(earnedAgg.map(r => [r.workerEntityId, r._sum.sessionEarnings]));
+    const paidMap   = new Map(paidAgg.map(r => [r.workerId, r._sum.amount]));
+    const costMap   = new Map(costAgg.map(r => [r.workerId, r._sum.amount]));
 
     const data = workers.map(w => {
-      const dailyRate    = new Decimal(w.dailyRate?.toString() ?? '0');
-      const attendCount  = attendanceMap.get(w.id) ?? 0;
-      const pieceEarned  = new Decimal(earnedMap.get(w.id)?.toString() ?? '0');
-      const dailyEarned  = dailyRate.times(attendCount);
-      const totalEarned  = pieceEarned.plus(dailyEarned);
-      const totalPaid    = new Decimal(paidMap.get(w.id)?.toString() ?? '0');
+      const pieceEarned = new Decimal(earnedMap.get(w.id)?.toString() ?? '0');
+      const costEarned  = new Decimal(costMap.get(w.id)?.toString() ?? '0');
+      const totalEarned = pieceEarned.plus(costEarned);
+      const totalPaid   = new Decimal(paidMap.get(w.id)?.toString() ?? '0');
       return {
         ...w,
-        pieceEarned:    pieceEarned.toFixed(2),
-        dailyEarned:    dailyEarned.toFixed(2),
-        totalEarned:    totalEarned.toFixed(2),
-        totalPaid:      totalPaid.toFixed(2),
-        totalOwed:      totalEarned.minus(totalPaid).toFixed(2),
-        attendanceDays: attendCount,
+        pieceEarned: pieceEarned.toFixed(2),
+        costEarned:  costEarned.toFixed(2),
+        totalEarned: totalEarned.toFixed(2),
+        totalPaid:   totalPaid.toFixed(2),
+        totalOwed:   totalEarned.minus(totalPaid).toFixed(2),
       };
     });
 
@@ -115,8 +126,7 @@ export class WorkersService {
   async findOne(id: string) {
     const worker = await this.prisma.worker.findUnique({ where: { id } });
     if (!worker) throw new NotFoundException({ error: 'Worker not found', code: 'NOT_FOUND' });
-    const dailyRate = new Decimal(worker.dailyRate?.toString() ?? '0');
-    const totals = await this.computeTotals(id, dailyRate);
+    const totals = await this.computeTotals(id);
     return { ...worker, ...totals };
   }
 
@@ -139,7 +149,6 @@ export class WorkersService {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
         ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
-        ...(dto.dailyRate !== undefined ? { dailyRate: dto.dailyRate } : {}),
       },
     });
   }
@@ -175,6 +184,8 @@ export class WorkersService {
         workerId: id,
         amount: dto.amount,
         date: dto.date ? new Date(dto.date) : new Date(),
+        ...(dto.method ? { method: dto.method } : {}),
+        ...(dto.referenceNumber ? { referenceNumber: dto.referenceNumber } : {}),
         ...(dto.notes ? { notes: dto.notes } : {}),
       },
     });
@@ -189,59 +200,83 @@ export class WorkersService {
   }
 
   /**
-   * List attendance dates for a worker, optionally filtered to a month.
-   * @param month - "YYYY-MM" string (optional); returns all dates if omitted
+   * List earnings (WorkerCost rows) for a worker, paginated, newest first.
    */
-  async listAttendance(id: string, month?: string) {
+  async listEarnings(id: string, page: number, limit: number) {
     await this.findOne(id);
+    const skip = (page - 1) * limit;
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.workerCost.findMany({
+        where: { workerId: id },
+        skip,
+        take: limit,
+        orderBy: { date: 'desc' },
+      }),
+      this.prisma.workerCost.count({ where: { workerId: id } }),
+    ]);
+    return { data, total, page, limit };
+  }
 
-    let dateFilter: Prisma.WorkerAttendanceWhereInput = { workerId: id };
-    if (month) {
-      const [year, mon] = month.split('-').map(Number);
-      const from = new Date(year, mon - 1, 1);
-      const to   = new Date(year, mon, 1); // exclusive
-      dateFilter = { workerId: id, date: { gte: from, lt: to } };
+  /**
+   * Log an earning (WorkerCost row) for a worker.
+   * createdById is always resolved server-side from the authenticated Clerk
+   * user — never accepted from the request body — matching the convention
+   * every other money-touching write in this codebase follows.
+   */
+  async createEarning(id: string, dto: CreateWorkerEarningDto, clerkUserId: string) {
+    const worker = await this.prisma.worker.findUnique({ where: { id } });
+    if (!worker) throw new NotFoundException({ error: 'Worker not found', code: 'NOT_FOUND' });
+
+    const user = await this.prisma.user.findUnique({ where: { clerkId: clerkUserId } });
+    if (!user) throw new ForbiddenException({ error: 'User not synced', code: 'NO_USER' });
+
+    return this.prisma.workerCost.create({
+      data: {
+        workerId: id,
+        amount: dto.amount,
+        category: dto.category,
+        date: dto.date ? new Date(dto.date) : new Date(),
+        createdById: user.id,
+        ...(dto.notes ? { notes: dto.notes } : {}),
+        ...(dto.fileId ? { fileId: dto.fileId } : {}),
+      },
+    });
+  }
+
+  async getEarning(workerId: string, earningId: string) {
+    const earning = await this.prisma.workerCost.findUnique({ where: { id: earningId } });
+    if (!earning || earning.workerId !== workerId) {
+      throw new NotFoundException({ error: 'Worker earning not found', code: 'NOT_FOUND' });
+    }
+    return earning;
+  }
+
+  /**
+   * Edit an earning — only within EARNING_EDIT_WINDOW_HOURS of its creation.
+   * Past that window, callers must log a new entry with category `correction`
+   * rather than rewrite history (see the WorkerCost model comment in
+   * schema.prisma and the redesign's append-only design decision).
+   */
+  async updateEarning(workerId: string, earningId: string, dto: UpdateWorkerEarningDto) {
+    const earning = await this.getEarning(workerId, earningId);
+
+    const ageHours = (Date.now() - earning.createdAt.getTime()) / (1000 * 60 * 60);
+    if (ageHours > EARNING_EDIT_WINDOW_HOURS) {
+      throw new ForbiddenException({
+        error: `Earning can only be edited within ${EARNING_EDIT_WINDOW_HOURS}h of creation — log a correction entry instead`,
+        code: 'EDIT_WINDOW_EXPIRED',
+      });
     }
 
-    const rows = await this.prisma.workerAttendance.findMany({
-      where: dateFilter,
-      orderBy: { date: 'asc' },
-    });
-
-    return rows.map(r => ({
-      id:   r.id,
-      date: r.date.toISOString().slice(0, 10),
-    }));
-  }
-
-  /**
-   * Mark a day attended (idempotent — returns existing record if already present).
-   */
-  async markAttendance(id: string, dto: CreateWorkerAttendanceDto) {
-    const worker = await this.prisma.worker.findUnique({ where: { id } });
-    if (!worker) throw new NotFoundException({ error: 'Worker not found', code: 'NOT_FOUND' });
-
-    const date = new Date(dto.date);
-    const existing = await this.prisma.workerAttendance.findUnique({
-      where: { workerId_date: { workerId: id, date } },
-    });
-    if (existing) return { id: existing.id, date: existing.date.toISOString().slice(0, 10) };
-
-    const record = await this.prisma.workerAttendance.create({
-      data: { workerId: id, date },
-    });
-    return { id: record.id, date: record.date.toISOString().slice(0, 10) };
-  }
-
-  /**
-   * Unmark a day (delete the attendance record). No-op if not present.
-   */
-  async unmarkAttendance(id: string, date: string) {
-    const worker = await this.prisma.worker.findUnique({ where: { id } });
-    if (!worker) throw new NotFoundException({ error: 'Worker not found', code: 'NOT_FOUND' });
-
-    await this.prisma.workerAttendance.deleteMany({
-      where: { workerId: id, date: new Date(date) },
+    return this.prisma.workerCost.update({
+      where: { id: earningId },
+      data: {
+        ...(dto.amount !== undefined ? { amount: dto.amount } : {}),
+        ...(dto.category !== undefined ? { category: dto.category } : {}),
+        ...(dto.date !== undefined ? { date: new Date(dto.date) } : {}),
+        ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+        ...(dto.fileId !== undefined ? { fileId: dto.fileId } : {}),
+      },
     });
   }
 
@@ -249,6 +284,10 @@ export class WorkersService {
     const worker = await this.prisma.worker.findUnique({ where: { id } });
     if (!worker) throw new NotFoundException({ error: 'Worker not found', code: 'NOT_FOUND' });
     await this.prisma.workerPayment.deleteMany({ where: { workerId: id } });
+    // WorkerCost.workerId is ON DELETE RESTRICT (unlike WorkerAttendance, which
+    // cascades) — must clear these explicitly or worker.delete() below violates
+    // the FK constraint.
+    await this.prisma.workerCost.deleteMany({ where: { workerId: id } });
     await this.prisma.worker.delete({ where: { id } });
   }
 }

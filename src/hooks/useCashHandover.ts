@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { Payment, PaginatedResponse } from '../types/api'
+import type { Payment, PaginatedResponse, CashHandover, CashHandoverExpense } from '../types/api'
 
 /**
  * Payments recorded on a single day (cash-handover reconciliation).
@@ -80,7 +80,7 @@ export function useCashHandovers(params?: { dateFrom?: string; dateTo?: string; 
   return useQuery({
     queryKey: ['cash-handovers', params ?? {}],
     queryFn: async () => {
-      const res = await api.get<{ data: any[]; total: number }>('/cash-handovers', { params })
+      const res = await api.get<{ data: CashHandover[]; total: number }>('/cash-handovers', { params })
       return res.data
     },
   })
@@ -95,6 +95,9 @@ export function useCreateCashHandover() {
       expectedAmt: string
       handedAmt: string
       notes?: string | null
+      /** Itemized amounts already deducted from collected cash before handover
+       *  (e.g. gas, parking) — the SAME values used to compute expectedAmt. */
+      expenses?: { description: string; amount: string }[]
     }) => {
       const res = await api.post('/cash-handovers', body)
       return res.data
@@ -103,6 +106,37 @@ export function useCreateCashHandover() {
       qc.invalidateQueries({ queryKey: ['cash-handovers'] })
       qc.invalidateQueries({ queryKey: ['cash-handovers', 'balances'] })
       qc.invalidateQueries({ queryKey: ['cash-handovers', 'balance', vars.receiverId] })
+    },
+  })
+}
+
+/** A cash-handover expense annotated with its parent handover's date and receiver,
+ *  for display in the Expenses aggregation. */
+export interface AggregatedCashHandoverExpense extends CashHandoverExpense {
+  handoverDate: string
+  receiverName: string
+}
+
+/**
+ * Aggregate itemized cash-handover expenses across all handovers in a date range.
+ * CashHandoverExpense has no date of its own — it's derived from the parent
+ * CashHandover.date (see schema comment).
+ * @param params - optional dateFrom / dateTo (inclusive) on the parent handover's date
+ * @returns React Query result of AggregatedCashHandoverExpense[]
+ * GET /cash-handovers?dateFrom=&dateTo= (expenses already included server-side)
+ */
+export function useAllCashHandoverExpenses(params?: { dateFrom?: string; dateTo?: string }) {
+  return useQuery({
+    queryKey: ['cash-handovers', 'expenses', params ?? {}],
+    queryFn: async () => {
+      const res = await api.get<{ data: CashHandover[]; total: number }>('/cash-handovers', {
+        params: { limit: 200, ...params },
+      })
+      const handovers = res.data.data
+      const all: AggregatedCashHandoverExpense[] = handovers.flatMap((h) =>
+        (h.expenses ?? []).map((e) => ({ ...e, handoverDate: h.date, receiverName: h.receiverName })),
+      )
+      return all
     },
   })
 }

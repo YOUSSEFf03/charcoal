@@ -1392,13 +1392,14 @@ export default function FillClientDetail() {
                   if (!id || payAmt <= 0) return
                   setPaySaving(true)
                   try {
+                    const receiverId = usersList.find(u => u.name === payBy)?.id ?? receivers.find(r => r.name === payBy)?.id
                     await createPayment.mutateAsync({
                       clientId: id,
                       amount: payAmt.toFixed(2),
                       currency: (client?.currency ?? 'USD') as any,
                       method: payMethod as any,
                       date: payDate,
-                      receiverName: payBy || undefined,
+                      ...(receiverId ? { receiverId } : { receiverName: payBy || undefined }),
                       notes: payRef || undefined,
                     })
                     setShowPay(false)

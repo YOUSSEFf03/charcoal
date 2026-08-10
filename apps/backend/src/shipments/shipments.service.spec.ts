@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ShipmentsService } from './shipments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoicesService } from '../invoices/invoices.service';
+import { PaymentAllocationService } from '../invoices/payment-allocation.service';
+import { LedgerWriteService } from '../ledger/ledger-write.service';
+import { UsersService } from '../users/users.service';
 
 // ---------------------------------------------------------------------------
 // Shared mock factory helpers
@@ -107,11 +110,22 @@ function makeStore(rows: PsRow[]) {
     },
     stockExit: { create: fn().mockResolvedValue({}) },
     clientOrder: { update: fn().mockResolvedValue({}) },
-    payment: { create: fn().mockResolvedValue({}) },
+    payment: { create: fn().mockImplementation(async (args: any) => ({ id: 'pay-1', ...args.data })) },
+    // PR 10.1: receiver resolution for a COD payment collected at delivery.
+    user: { findUnique: fn().mockResolvedValue({ name: 'Test Driver' }) },
+    client: { findUnique: fn().mockResolvedValue({ name: 'Test Client' }) },
   };
 
   // Helper to fetch a shipment view with its reservations + bags for confirm/cancel.
-  tx._shipmentView = (id: string, status: string, bags: Array<{ bagTypeId: string; quantity: number }>, orderId = 'order-x') => {
+  // driverId defaults to undefined — existing tests never assign one, matching
+  // "order has no assigned driver" behavior (payment recorded, nothing credited).
+  tx._shipmentView = (
+    id: string,
+    status: string,
+    bags: Array<{ bagTypeId: string; quantity: number }>,
+    orderId = 'order-x',
+    driverId?: string,
+  ) => {
     const myRes = reservations
       .filter((r) => r.shipmentId === id)
       .map((r) => ({ ...r, packedStock: packed.find((p) => p.id === r.packedStockId)! }));
@@ -121,7 +135,7 @@ function makeStore(rows: PsRow[]) {
       status,
       bags,
       reservations: myRes,
-      order: { clientId: 'client-x', currency: 'USD' },
+      order: { clientId: 'client-x', currency: 'USD', driverId },
     };
   };
 
@@ -151,17 +165,34 @@ describe('ShipmentsService', () => {
     createFromOrder: jest.fn() as any,
   };
 
+  // PR 10.1: ShipmentsService now injects LedgerWriteService/UsersService to attribute
+  // a COD payment collected at delivery to the order's assigned driver.
+  const mockLedgerWriteService = { creditAccount: fn(), debitAccount: fn() };
+  const mockUsersService = { validateCashCapable: fn() };
+
+  // A COD payment collected at delivery is never linked to one invoiceId, so it's
+  // FIFO-allocated the same way as any other unlinked payment — see
+  // payment-allocation.service.spec.ts for allocateFifo's own logic; these tests
+  // only assert ShipmentsService delegates to it correctly.
+  const mockPaymentAllocationService = { allocateDirect: fn(), allocateFifo: fn() };
+
   beforeEach(async () => {
     jest.clearAllMocks();
     // Default: createFromOrder succeeds and returns an issued invoice (autoIssue=true path).
     // Tests that assert it was NOT called rely on jest.clearAllMocks() resetting call counts.
     mockInvoices.createFromOrder.mockResolvedValue({ id: 'auto-inv', status: 'issued' });
+    mockUsersService.validateCashCapable.mockResolvedValue(undefined);
+    mockLedgerWriteService.creditAccount.mockResolvedValue(undefined);
+    mockPaymentAllocationService.allocateFifo.mockResolvedValue({ allocations: [], unapplied: '0.00' });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ShipmentsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: InvoicesService, useValue: mockInvoices },
+        { provide: PaymentAllocationService, useValue: mockPaymentAllocationService },
+        { provide: LedgerWriteService, useValue: mockLedgerWriteService },
+        { provide: UsersService, useValue: mockUsersService },
       ],
     }).compile();
 
@@ -530,6 +561,169 @@ describe('ShipmentsService', () => {
       // same $transaction as the stock drain — this is the guarantee that keeps the
       // DB unique index effective as a backstop against concurrent calls.
       expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, tx, true);
+    });
+
+    // =========================================================================
+    // PR 10.1 — COD payment at delivery attributed to the order's assigned driver
+    // =========================================================================
+
+    describe('confirmDelivery() — COD payment attributed to the order driver (PR 10.1)', () => {
+      const driverId = 'driver-uuid-1';
+
+      function setUpDelivery(orderDriverId?: string) {
+        const bagTypeId = 'bag-type-cod';
+        const orderId = 'order-cod';
+        const userId = 'clerk-cod';
+
+        const tx = makeStore([
+          { id: 'ps-cod', bagTypeId, quantity: 20, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+        ]);
+        mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+        mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-cod', clerkId: userId });
+
+        return { tx, bagTypeId, orderId, userId };
+      }
+
+      it('attributes the COD payment to the driver and credits the ledger when the order has an assigned driver', async () => {
+        const { tx, bagTypeId, orderId, userId } = setUpDelivery();
+        const s = await service.createShipment(
+          { orderId, address: 'a', nominalKg: '20', bags: [{ bagTypeId, quantity: 20 }] } as any,
+          userId,
+        );
+        tx.shipment.findUnique
+          .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId, driverId))
+          .mockResolvedValueOnce({ id: s.id, bags: [] });
+        tx.user.findUnique.mockResolvedValue({ name: 'Driver Dan' });
+        tx.client.findUnique.mockResolvedValue({ name: 'Acme Client' });
+
+        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, userId);
+
+        expect(mockUsersService.validateCashCapable).toHaveBeenCalledWith(driverId);
+        const payArg = tx.payment.create.mock.calls[0][0].data;
+        expect(payArg.receiverId).toBe(driverId);
+        expect(payArg.receiverName).toBe('Driver Dan');
+        expect(payArg.amount).toBe('150.00');
+
+        expect(mockLedgerWriteService.creditAccount).toHaveBeenCalledTimes(1);
+        const [calledTx, calledUserId, calledAmount, calledType, calledRefId, calledDesc] =
+          mockLedgerWriteService.creditAccount.mock.calls[0];
+        expect(calledTx).toBe(tx);
+        expect(calledUserId).toBe(driverId);
+        expect(calledAmount.toString()).toBe('150');
+        expect(calledType).toBe('payment_received');
+        expect(calledRefId).toBe('pay-1');
+        expect(calledDesc).toBe('Delivery — Acme Client');
+      });
+
+      it('FIFO-allocates the COD payment via PaymentAllocationService (it is never linked to one invoiceId)', async () => {
+        const { tx, bagTypeId, orderId, userId } = setUpDelivery();
+        const s = await service.createShipment(
+          { orderId, address: 'a', nominalKg: '20', bags: [{ bagTypeId, quantity: 20 }] } as any,
+          userId,
+        );
+        tx.shipment.findUnique
+          .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId, driverId))
+          .mockResolvedValueOnce({ id: s.id, bags: [] });
+        tx.user.findUnique.mockResolvedValue({ name: 'Driver Dan' });
+        tx.client.findUnique.mockResolvedValue({ name: 'Acme Client' });
+
+        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, userId);
+
+        expect(mockPaymentAllocationService.allocateFifo).toHaveBeenCalledTimes(1);
+        const [calledTx, calledClientId, calledPaymentId, calledAmount] =
+          mockPaymentAllocationService.allocateFifo.mock.calls[0];
+        expect(calledTx).toBe(tx);
+        expect(calledClientId).toBe('client-x'); // tx._shipmentView's fixed order.clientId
+        expect(calledPaymentId).toBe('pay-1');
+        expect(calledAmount.toString()).toBe('150');
+      });
+
+      it('records the payment but credits no one when the order has no assigned driver (regression: unchanged behavior)', async () => {
+        const { tx, bagTypeId, orderId, userId } = setUpDelivery();
+        const s = await service.createShipment(
+          { orderId, address: 'a', nominalKg: '20', bags: [{ bagTypeId, quantity: 20 }] } as any,
+          userId,
+        );
+        tx.shipment.findUnique
+          .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId)) // no driverId
+          .mockResolvedValueOnce({ id: s.id, bags: [] });
+
+        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, userId);
+
+        expect(tx.payment.create).toHaveBeenCalledTimes(1);
+        const payArg = tx.payment.create.mock.calls[0][0].data;
+        expect(payArg.receiverId).toBeUndefined();
+        expect(payArg.receiverName).toBeUndefined();
+        expect(mockUsersService.validateCashCapable).not.toHaveBeenCalled();
+        expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
+      });
+
+      it('does not create a payment at all when no paymentAmount is provided, even with a driver assigned', async () => {
+        const { tx, bagTypeId, orderId, userId } = setUpDelivery();
+        const s = await service.createShipment(
+          { orderId, address: 'a', nominalKg: '20', bags: [{ bagTypeId, quantity: 20 }] } as any,
+          userId,
+        );
+        tx.shipment.findUnique
+          .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId, driverId))
+          .mockResolvedValueOnce({ id: s.id, bags: [] });
+
+        await service.confirmDelivery(s.id, {} as any, userId); // no paymentAmount/paymentMethod
+
+        expect(tx.payment.create).not.toHaveBeenCalled();
+        expect(mockPaymentAllocationService.allocateFifo).not.toHaveBeenCalled();
+        expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
+      });
+
+      it('rejects a nonexistent/soft-deleted driver with NotFoundException BEFORE tx.payment.create(), with no side effects', async () => {
+        const { tx, bagTypeId, orderId, userId } = setUpDelivery();
+        const s = await service.createShipment(
+          { orderId, address: 'a', nominalKg: '20', bags: [{ bagTypeId, quantity: 20 }] } as any,
+          userId,
+        );
+        tx.shipment.findUnique
+          .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId, driverId));
+        mockUsersService.validateCashCapable.mockRejectedValue(
+          new NotFoundException({ error: 'Receiver not found', code: 'NOT_FOUND' }),
+        );
+
+        await expect(
+          service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, userId),
+        ).rejects.toBeInstanceOf(NotFoundException);
+
+        expect(mockUsersService.validateCashCapable).toHaveBeenCalledWith(driverId);
+        expect(tx.payment.create).not.toHaveBeenCalled();
+        expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
+        // The stock drain and shipment status update already ran this transaction —
+        // since this is a single $transaction, a thrown error rolls all of it back
+        // together with the rejected payment (Prisma's own guarantee, not asserted
+        // here directly, but the rejection propagating past confirmDelivery() is
+        // what makes that rollback happen).
+      });
+
+      it('happy path: validates the driver, then writes the payment, then credits the ledger, in that order', async () => {
+        const { tx, bagTypeId, orderId, userId } = setUpDelivery();
+        const s = await service.createShipment(
+          { orderId, address: 'a', nominalKg: '20', bags: [{ bagTypeId, quantity: 20 }] } as any,
+          userId,
+        );
+        tx.shipment.findUnique
+          .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId, driverId))
+          .mockResolvedValueOnce({ id: s.id, bags: [] });
+
+        const callOrder: string[] = [];
+        mockUsersService.validateCashCapable.mockImplementation(async () => { callOrder.push('validate'); });
+        const originalPaymentCreate = tx.payment.create;
+        tx.payment.create = fn().mockImplementation(async (args: any) => {
+          callOrder.push('payment.create');
+          return originalPaymentCreate(args);
+        });
+        mockLedgerWriteService.creditAccount.mockImplementation(async () => { callOrder.push('creditAccount'); });
+
+        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, userId);
+
+        expect(callOrder).toEqual(['validate', 'payment.create', 'creditAccount']);
+      });
     });
   });
 

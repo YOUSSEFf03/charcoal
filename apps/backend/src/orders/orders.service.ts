@@ -164,11 +164,32 @@ export class OrdersService {
   /**
    * Update an existing order (all fields optional).
    *
+   * Financially/relationally significant fields (clientId, pricePerBag,
+   * currency, totalKgRequested, bagTypeId) may only be changed while the
+   * order is still 'draft' — once shipments/stock exits/invoices may exist
+   * against the original values, changing them would silently desync those
+   * records from the order. notes/driverId/supplierName/charcoalType/grade
+   * remain editable in any status.
+   *
    * @param id - Order UUID
    * @param dto - Partial update data
+   * @throws ConflictException if a protected field is included on a non-draft order
    */
   async update(id: string, dto: UpdateOrderDto) {
-    await this.findOne(id);
+    const order = await this.findOne(id);
+
+    if (order.status !== 'draft') {
+      const lockedFields = (
+        ['clientId', 'pricePerBag', 'currency', 'totalKgRequested', 'bagTypeId'] as const
+      ).filter((field) => dto[field] !== undefined);
+
+      if (lockedFields.length > 0) {
+        throw new ConflictException({
+          error: `Cannot modify ${lockedFields.join(', ')} once an order is no longer in draft status`,
+          code: 'CONFLICT',
+        });
+      }
+    }
 
     return this.prisma.clientOrder.update({
       where: { id },
@@ -197,6 +218,10 @@ export class OrdersService {
    * Force-mark an order and all its pending shipments as delivered.
    * Intended for owner use when the driver forgets to update status.
    *
+   * The shipment and order status writes are wrapped in a single transaction
+   * so a failure partway through can never leave shipments marked delivered
+   * while the order itself is stuck in an earlier status (or vice versa).
+   *
    * After marking the order delivered, a draft invoice is automatically created
    * via createFromOrder(). createFromOrder() is idempotent — safe to call even
    * if the order was already delivered or already has an invoice.
@@ -205,15 +230,16 @@ export class OrdersService {
     await this.findOne(id);
 
     const now = new Date();
-    await this.prisma.shipment.updateMany({
-      where: { orderId: id, status: { not: 'delivered' } },
-      data: { status: 'delivered', deliveredAt: now },
-    });
-
-    const order = await this.prisma.clientOrder.update({
-      where: { id },
-      data: { status: 'delivered' },
-    });
+    const [, order] = await this.prisma.$transaction([
+      this.prisma.shipment.updateMany({
+        where: { orderId: id, status: { not: 'delivered' } },
+        data: { status: 'delivered', deliveredAt: now },
+      }),
+      this.prisma.clientOrder.update({
+        where: { id },
+        data: { status: 'delivered' },
+      }),
+    ]);
 
     // Auto-create and immediately issue the invoice. Not wrapped in a transaction
     // with the status update — if this fails the order is still marked delivered
@@ -240,7 +266,10 @@ export class OrdersService {
    *
    * @param id - Order UUID
    * @throws NotFoundException if order does not exist
-   * @throws ConflictException if order has shipments or is not in draft status
+   * @throws ConflictException if order has shipments, is not in draft status, or
+   *   (defense in depth) the delete itself hits a foreign-key constraint the
+   *   checks above didn't catch — e.g. a shipment/stock-exit/invoice created in
+   *   the narrow window between the checks and the delete — see the try/catch below.
    */
   async remove(id: string): Promise<void> {
     const order = await this.findOne(id);
@@ -259,6 +288,19 @@ export class OrdersService {
       });
     }
 
-    await this.prisma.clientOrder.delete({ where: { id } });
+    try {
+      await this.prisma.clientOrder.delete({ where: { id } });
+    } catch (e) {
+      // Defense in depth: if a shipment/stock-exit/invoice/etc. was created
+      // between the checks above and this delete, fail as a clean 409 instead
+      // of leaking a raw Prisma error as a 500.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2003') {
+        throw new ConflictException({
+          error: 'Order has linked shipments and cannot be deleted',
+          code: 'CONFLICT',
+        });
+      }
+      throw e;
+    }
   }
 }

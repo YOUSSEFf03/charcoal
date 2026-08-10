@@ -4,8 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { OrderStatus, Prisma, ShipmentStatus } from '@prisma/client';
+import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoicesService } from '../invoices/invoices.service';
+import { PaymentAllocationService } from '../invoices/payment-allocation.service';
+import { LedgerWriteService } from '../ledger/ledger-write.service';
+import { UsersService } from '../users/users.service';
 import { CreateShipmentDto } from './dto/create-shipment.dto';
 import { ConfirmDeliveryDto } from './dto/confirm-delivery.dto';
 import { LogReturnDto } from './dto/log-return.dto';
@@ -16,6 +20,9 @@ export class ShipmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly invoices: InvoicesService,
+    private readonly paymentAllocationService: PaymentAllocationService,
+    private readonly ledgerWriteService: LedgerWriteService,
+    private readonly usersService: UsersService,
   ) {}
 
   /**
@@ -197,6 +204,10 @@ export class ShipmentsService {
    * Step 5: Update shipment status to 'delivered', set deliveredAt
    * Step 6: Recompute order status from all sibling shipments
    * Step 7: Optional payment creation if dto.paymentAmount && dto.paymentMethod
+   *         — FIFO-allocated across the client's open invoices via
+   *         PaymentAllocationService (this payment is never linked to one
+   *         specific invoiceId; see that service for why unlinked payments
+   *         must go through FIFO allocation rather than sitting unapplied)
    *
    * Must be fully atomic — wrapped in a single Prisma transaction.
    *
@@ -321,9 +332,21 @@ export class ShipmentsService {
         await this.invoices.createFromOrder(shipment.orderId, tx, true);
       }
 
-      // Step 7: Optional payment at delivery
+      // Step 7: Optional payment at delivery.
+      // PR 10.1: cash collected on delivery is attributed to the order's assigned
+      // driver (ClientOrder.driverId) — a real User, known before the transaction
+      // opens, so no receiver picker is needed. Orders with no assigned driver
+      // keep today's behavior: the payment is recorded, nothing is credited.
       if (dto.paymentAmount && dto.paymentMethod) {
-        await tx.payment.create({
+        const paymentAmount = new Decimal(dto.paymentAmount);
+        let receiverFields: { receiverId?: string; receiverName?: string } = {};
+        if (shipment.order.driverId) {
+          await this.usersService.validateCashCapable(shipment.order.driverId);
+          const driver = await tx.user.findUnique({ where: { id: shipment.order.driverId }, select: { name: true } });
+          receiverFields = { receiverId: shipment.order.driverId, receiverName: driver?.name };
+        }
+
+        const payment = await tx.payment.create({
           data: {
             clientId: shipment.order.clientId,
             amount: dto.paymentAmount,
@@ -331,8 +354,27 @@ export class ShipmentsService {
             method: dto.paymentMethod,
             date: dto.paymentDate ? new Date(dto.paymentDate) : new Date(),
             loggedById: user.id,
+            ...receiverFields,
           },
         });
+
+        // Client-level payment (no specific invoiceId — this is COD collected at
+        // delivery, not tied to one invoice) — FIFO-allocate it across the
+        // client's open invoices, same as any other unlinked payment. If Step 6
+        // just auto-issued an invoice for this order, it's already visible here
+        // (same transaction) and is the oldest/only open invoice in the common case.
+        await this.paymentAllocationService.allocateFifo(
+          tx, shipment.order.clientId, payment.id, paymentAmount,
+        );
+
+        if (receiverFields.receiverId && paymentAmount.gt(0)) {
+          const client = await tx.client.findUnique({ where: { id: shipment.order.clientId }, select: { name: true } });
+          await this.ledgerWriteService.creditAccount(
+            tx, receiverFields.receiverId, paymentAmount, 'payment_received', payment.id,
+            `Delivery — ${client?.name ?? shipment.order.clientId}`,
+            dto.paymentDate ? new Date(dto.paymentDate) : new Date(),
+          );
+        }
       }
 
       return tx.shipment.findUnique({

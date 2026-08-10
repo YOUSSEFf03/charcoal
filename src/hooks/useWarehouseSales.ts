@@ -1,7 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type {
-  ClientOrder,
+  ClientOrderListItem,
+  ClientOrderCreated,
   Shipment,
   CreateOrderDto,
   CreateShipmentDto,
@@ -22,14 +23,14 @@ const salesKey = (params?: WarehouseSalesQuery) =>
 /**
  * List warehouse sales (orders, each carrying its shipment details on detail).
  * @param params - clientId / status / pagination filters
- * @returns React Query result of PaginatedResponse<ClientOrder>
+ * @returns React Query result of PaginatedResponse<ClientOrderListItem>
  * GET /orders
  */
 export function useWarehouseSales(params?: WarehouseSalesQuery) {
   return useQuery({
     queryKey: salesKey(params),
     queryFn: async () => {
-      const res = await api.get<PaginatedResponse<ClientOrder>>('/orders', { params })
+      const res = await api.get<PaginatedResponse<ClientOrderListItem>>('/orders', { params })
       return res.data
     },
   })
@@ -39,7 +40,7 @@ export function useWarehouseSales(params?: WarehouseSalesQuery) {
  * Result of a warehouse sale: the created order plus its shipment.
  */
 export interface CreateSaleResult {
-  order: ClientOrder
+  order: ClientOrderCreated
   shipment: Shipment
 }
 
@@ -60,7 +61,7 @@ export function useCreateSale() {
       order: CreateOrderDto
       shipment: Omit<CreateShipmentDto, 'orderId'>
     }): Promise<CreateSaleResult> => {
-      const orderRes = await api.post<ClientOrder>('/orders', order)
+      const orderRes = await api.post<ClientOrderCreated>('/orders', order)
       const createdOrder = orderRes.data
       const shipmentRes = await api.post<Shipment>('/shipments', {
         ...shipment,

@@ -7,6 +7,8 @@ import type {
   PaginatedResponse,
   GeneralExpense,
   CreateGeneralExpenseDto,
+  Worker,
+  WorkerPayment,
 } from '../types/api'
 
 /** Date-range params for the aggregated expense views. */
@@ -50,13 +52,54 @@ export function useAllExpenses(params?: { dateFrom?: string; dateTo?: string }) 
 
       let all: AggregatedContainerExpense[] = perContainer.flat()
 
+      // addedAt is a full timestamp (DateTime, not date-only) — compare just the
+      // date portion so a same-day expense with a non-midnight time isn't dropped
+      // (a raw string compare against "YYYY-MM-DD" would exclude anything added
+      // later than 00:00:00 UTC on the last day of the range).
       if (params?.dateFrom) {
-        all = all.filter((e) => e.addedAt >= params.dateFrom!)
+        all = all.filter((e) => e.addedAt.slice(0, 10) >= params.dateFrom!)
       }
       if (params?.dateTo) {
-        all = all.filter((e) => e.addedAt <= params.dateTo!)
+        all = all.filter((e) => e.addedAt.slice(0, 10) <= params.dateTo!)
       }
       return all
+    },
+  })
+}
+
+/** A worker payment annotated with its worker's name, for display in the Expenses aggregation. */
+export interface AggregatedWorkerPayment extends WorkerPayment {
+  workerName: string
+}
+
+/**
+ * Aggregate WorkerPayment records across ALL workers.
+ *
+ * The backend exposes payments only per-worker (GET /workers/:id/payments), so this
+ * fans out: list workers, then fetch each worker's payments and flatten them — same
+ * pattern as {@link useAllExpenses}'s container fan-out. WorkerPayment remains the
+ * single source of truth; this creates no new records, it only aggregates for display.
+ *
+ * @returns React Query result of AggregatedWorkerPayment[]
+ * GET /workers + GET /workers/:id/payments (per worker)
+ */
+export function useAllWorkerPayments() {
+  return useQuery({
+    queryKey: ['expenses', 'worker-payments'],
+    queryFn: async () => {
+      const workersRes = await api.get<{ data: Worker[] }>('/workers')
+      const workers = workersRes.data.data
+
+      const perWorker = await Promise.all(
+        workers.map(async (w) => {
+          const res = await api.get<{ data: WorkerPayment[] }>(`/workers/${w.id}/payments`, {
+            params: { limit: 100 },
+          })
+          return res.data.data.map((p) => ({ ...p, workerName: w.name }))
+        }),
+      )
+
+      return perWorker.flat() as AggregatedWorkerPayment[]
     },
   })
 }
@@ -81,15 +124,18 @@ export function useDriverExpenses(params?: ExpensesQuery) {
 
 /**
  * List all general (non-container, non-driver) expenses.
+ * @param params - optional dateFrom / dateTo (inclusive); recurring rows are
+ * included server-side from their recorded date forward — never for a period
+ * before that date ("Option B" recurrence; see backend GeneralExpensesService).
  * @returns React Query result of PaginatedResponse<GeneralExpense>
  * GET /general-expenses
  */
-export function useGeneralExpenses() {
+export function useGeneralExpenses(params?: ExpensesQuery) {
   return useQuery({
-    queryKey: ['general-expenses'],
+    queryKey: ['general-expenses', params ?? {}],
     queryFn: async () => {
       const res = await api.get<PaginatedResponse<GeneralExpense>>('/general-expenses', {
-        params: { limit: 100 },
+        params: { limit: 100, ...params },
       })
       return res.data.data
     },

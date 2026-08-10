@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { WorkersService } from './workers.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -14,16 +14,17 @@ describe('WorkersService', () => {
   const mockPrisma = {
     worker:            { findUnique: fn(), findMany: fn(), count: fn(), create: fn(), update: fn(), delete: fn() },
     workerPayment:     { findUnique: fn(), findMany: fn(), count: fn(), create: fn(), deleteMany: fn(), aggregate: fn(), groupBy: fn() },
-    workerAttendance:  { count: fn(), groupBy: fn(), findMany: fn(), findUnique: fn(), create: fn(), deleteMany: fn() },
+    workerCost:        { aggregate: fn(), groupBy: fn(), findMany: fn(), count: fn(), create: fn(), update: fn(), findUnique: fn(), deleteMany: fn() },
     packingSession:    { aggregate: fn(), groupBy: fn() },
+    user:              { findUnique: fn() },
     $transaction:      fn(),
   };
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    // Default attendance to 0 so tests that don't care about it still pass.
-    mockPrisma.workerAttendance.count.mockResolvedValue(0);
-    mockPrisma.workerAttendance.groupBy.mockResolvedValue([]);
+    // Default cost to 0 so tests that don't care about it still pass.
+    mockPrisma.workerCost.aggregate.mockResolvedValue({ _sum: { amount: null } });
+    mockPrisma.workerCost.groupBy.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -40,7 +41,6 @@ describe('WorkersService', () => {
       name:            overrides.name            ?? 'Ahmed',
       phone:           overrides.phone           ?? null,
       notes:           overrides.notes           ?? null,
-      dailyRate:       dec((overrides.dailyRate  as string | undefined) ?? '0.00'),
       ratesPerBagType: overrides.ratesPerBagType ?? [],
       totalEarned:     dec((overrides.totalEarned as string | undefined) ?? '0.00'), // deprecated cache — ignored
       totalPaid:       dec((overrides.totalPaid   as string | undefined) ?? '0.00'), // deprecated cache — ignored
@@ -51,22 +51,22 @@ describe('WorkersService', () => {
   }
 
   /** Mock the three aggregates used by computeTotals (called from findOne). */
-  function mockAggregates(bagEarned: string, paid: string, attendCount = 0) {
+  function mockAggregates(bagEarned: string, paid: string, costEarned = '0.00') {
     mockPrisma.packingSession.aggregate.mockResolvedValue({ _sum: { sessionEarnings: dec(bagEarned) } });
     mockPrisma.workerPayment.aggregate.mockResolvedValue({ _sum: { amount: dec(paid) } });
-    mockPrisma.workerAttendance.count.mockResolvedValue(attendCount);
+    mockPrisma.workerCost.aggregate.mockResolvedValue({ _sum: { amount: dec(costEarned) } });
   }
 
   /** Mock the three groupBy queries used by findAll. */
-  function mockGroupBy(workerId: string, bagEarned: string, paid: string, attendCount = 0) {
+  function mockGroupBy(workerId: string, bagEarned: string, paid: string, costEarned = '0.00') {
     mockPrisma.packingSession.groupBy.mockResolvedValue([
       { workerEntityId: workerId, _sum: { sessionEarnings: dec(bagEarned) } },
     ]);
     mockPrisma.workerPayment.groupBy.mockResolvedValue([
       { workerId, _sum: { amount: dec(paid) } },
     ]);
-    mockPrisma.workerAttendance.groupBy.mockResolvedValue(
-      attendCount > 0 ? [{ workerId, _count: { id: attendCount } }] : [],
+    mockPrisma.workerCost.groupBy.mockResolvedValue(
+      costEarned !== '0.00' ? [{ workerId, _sum: { amount: dec(costEarned) } }] : [],
     );
   }
 
@@ -75,7 +75,7 @@ describe('WorkersService', () => {
   // =========================================================================
 
   describe('findAll()', () => {
-    it('computes totalOwed = earned - paid (200.00 - 75.50 = 124.50, no daily wage)', async () => {
+    it('computes totalOwed = earned - paid (200.00 - 75.50 = 124.50)', async () => {
       const worker = makeWorker({ id: 'w1' });
       mockPrisma.$transaction.mockResolvedValue([[worker], 1]);
       mockGroupBy('w1', '200.00', '75.50');
@@ -83,7 +83,6 @@ describe('WorkersService', () => {
       const result = await service.findAll(1, 20);
 
       expect(result.data[0].pieceEarned).toBe('200.00');
-      expect(result.data[0].dailyEarned).toBe('0.00');
       expect(result.data[0].totalEarned).toBe('200.00');
       expect(result.data[0].totalPaid).toBe('75.50');
       expect(result.data[0].totalOwed).toBe('124.50');
@@ -107,16 +106,16 @@ describe('WorkersService', () => {
       expect(result.data[0].totalOwed).toBe('0.00');
     });
 
-    it('worker with no sessions, no payments, no attendance shows all-zero totals', async () => {
+    it('worker with no sessions, no payments, no earnings shows all-zero totals', async () => {
       const worker = makeWorker({ id: 'w1' });
       mockPrisma.$transaction.mockResolvedValue([[worker], 1]);
       mockPrisma.packingSession.groupBy.mockResolvedValue([]);
       mockPrisma.workerPayment.groupBy.mockResolvedValue([]);
-      mockPrisma.workerAttendance.groupBy.mockResolvedValue([]);
+      mockPrisma.workerCost.groupBy.mockResolvedValue([]);
 
       const result = await service.findAll(1, 20);
       expect(result.data[0].pieceEarned).toBe('0.00');
-      expect(result.data[0].dailyEarned).toBe('0.00');
+      expect(result.data[0].costEarned).toBe('0.00');
       expect(result.data[0].totalEarned).toBe('0.00');
       expect(result.data[0].totalPaid).toBe('0.00');
       expect(result.data[0].totalOwed).toBe('0.00');
@@ -131,16 +130,15 @@ describe('WorkersService', () => {
       expect(result.total).toBe(0);
     });
 
-    it('daily wage: 5 attendance days × $20.00/day = $100.00 dailyEarned', async () => {
-      const worker = makeWorker({ id: 'w1', dailyRate: '20.00' });
+    it('costEarned included in the batched list totals', async () => {
+      const worker = makeWorker({ id: 'w1' });
       mockPrisma.$transaction.mockResolvedValue([[worker], 1]);
-      mockGroupBy('w1', '0.00', '0.00', 5);
+      mockGroupBy('w1', '0.00', '0.00', '100.00');
 
       const result = await service.findAll(1, 20);
       expect(result.data[0].pieceEarned).toBe('0.00');
-      expect(result.data[0].dailyEarned).toBe('100.00');
+      expect(result.data[0].costEarned).toBe('100.00');
       expect(result.data[0].totalEarned).toBe('100.00');
-      expect(result.data[0].attendanceDays).toBe(5);
     });
   });
 
@@ -149,13 +147,12 @@ describe('WorkersService', () => {
   // =========================================================================
 
   describe('findOne()', () => {
-    it('returns worker with totalOwed computed from source records (no daily wage)', async () => {
+    it('returns worker with totalOwed computed from source records', async () => {
       mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
       mockAggregates('300.00', '100.00');
 
       const result = await service.findOne('w1');
       expect(result.pieceEarned).toBe('300.00');
-      expect(result.dailyEarned).toBe('0.00');
       expect(result.totalEarned).toBe('300.00');
       expect(result.totalPaid).toBe('100.00');
       expect(result.totalOwed).toBe('200.00');
@@ -181,78 +178,6 @@ describe('WorkersService', () => {
       });
     });
 
-    it('daily wage: 10 days × $15.00/day adds $150.00 to totalEarned', async () => {
-      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1', dailyRate: '15.00' }));
-      mockAggregates('0.00', '0.00', 10);
-
-      const result = await service.findOne('w1');
-      expect(result.pieceEarned).toBe('0.00');
-      expect(result.dailyEarned).toBe('150.00');
-      expect(result.totalEarned).toBe('150.00');
-      expect(result.totalOwed).toBe('150.00');
-    });
-  });
-
-  // =========================================================================
-  // QA: piece-rate + daily-wage combined accuracy
-  // Worker: N attendance days at rate R + M bags packed → totalEarned by hand.
-  // totalOwed = totalEarned − Σ payments.
-  // =========================================================================
-
-  describe('QA: combined piece + daily earnings', () => {
-    it('18 days × $15/day + $108.96 bags - $126.76 paid = correct totalOwed', async () => {
-      // Hand calc:
-      //   daily:  18 × 15.00 = 270.00
-      //   piece:  108.96
-      //   total:  270.00 + 108.96 = 378.96
-      //   paid:   126.76
-      //   owed:   378.96 - 126.76 = 252.20
-      mockPrisma.worker.findUnique.mockResolvedValue(
-        makeWorker({ id: 'w-qa', dailyRate: '15.00' }),
-      );
-      mockAggregates('108.96', '126.76', 18);
-
-      const result = await service.findOne('w-qa');
-
-      expect(result.pieceEarned).toBe('108.96');
-      expect(result.dailyEarned).toBe('270.00');
-      expect(result.totalEarned).toBe('378.96');
-      expect(result.totalPaid).toBe('126.76');
-      expect(result.totalOwed).toBe('252.20');
-    });
-
-    it('zero attendance means dailyEarned=0 regardless of dailyRate', async () => {
-      mockPrisma.worker.findUnique.mockResolvedValue(
-        makeWorker({ id: 'w1', dailyRate: '25.00' }),
-      );
-      mockAggregates('50.00', '0.00', 0);
-
-      const result = await service.findOne('w1');
-      expect(result.dailyEarned).toBe('0.00');
-      expect(result.totalEarned).toBe('50.00');
-    });
-
-    it('zero dailyRate means dailyEarned=0 regardless of attendance days', async () => {
-      mockPrisma.worker.findUnique.mockResolvedValue(
-        makeWorker({ id: 'w1', dailyRate: '0.00' }),
-      );
-      mockAggregates('75.00', '0.00', 30);
-
-      const result = await service.findOne('w1');
-      expect(result.dailyEarned).toBe('0.00');
-      expect(result.totalEarned).toBe('75.00');
-    });
-
-    it('no float drift: 3 days × $33.33/day = $99.99, not $99.990000001', async () => {
-      mockPrisma.worker.findUnique.mockResolvedValue(
-        makeWorker({ id: 'w1', dailyRate: '33.33' }),
-      );
-      mockAggregates('0.00', '0.00', 3);
-
-      const result = await service.findOne('w1');
-      expect(result.dailyEarned).toBe('99.99');
-    });
-
     it('computeTotals calls worker.findUnique exactly once per findOne call', async () => {
       // Regression: old code called findUnique twice (once in findOne, once inside computeTotals).
       mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
@@ -260,6 +185,50 @@ describe('WorkersService', () => {
 
       await service.findOne('w1');
       expect(mockPrisma.worker.findUnique).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // =========================================================================
+  // QA: piece-rate + earnings-entry combined accuracy
+  // Worker: M bags packed + N earnings entries → totalEarned by hand.
+  // totalOwed = totalEarned − Σ payments.
+  // =========================================================================
+
+  describe('QA: combined piece + cost earnings', () => {
+    it('$270.00 earnings entries + $108.96 bags - $126.76 paid = correct totalOwed', async () => {
+      // Hand calc:
+      //   cost:   270.00 (e.g. logged daily-wage entries)
+      //   piece:  108.96
+      //   total:  270.00 + 108.96 = 378.96
+      //   paid:   126.76
+      //   owed:   378.96 - 126.76 = 252.20
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w-qa' }));
+      mockAggregates('108.96', '126.76', '270.00');
+
+      const result = await service.findOne('w-qa');
+
+      expect(result.pieceEarned).toBe('108.96');
+      expect(result.costEarned).toBe('270.00');
+      expect(result.totalEarned).toBe('378.96');
+      expect(result.totalPaid).toBe('126.76');
+      expect(result.totalOwed).toBe('252.20');
+    });
+
+    it('zero earnings entries means costEarned=0, totalEarned is piece-only', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      mockAggregates('50.00', '0.00', '0.00');
+
+      const result = await service.findOne('w1');
+      expect(result.costEarned).toBe('0.00');
+      expect(result.totalEarned).toBe('50.00');
+    });
+
+    it('no float drift: 3 × $33.33 entries = $99.99, not $99.990000001', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      mockAggregates('0.00', '0.00', '99.99');
+
+      const result = await service.findOne('w1');
+      expect(result.costEarned).toBe('99.99');
     });
   });
 
@@ -318,6 +287,116 @@ describe('WorkersService', () => {
       await expect(service.addPayment('ghost', { amount: '10.00' })).rejects.toMatchObject({
         response: expect.objectContaining({ code: 'NOT_FOUND' }),
       });
+    });
+  });
+
+  // =========================================================================
+  // Worker earnings (WorkerCost) CRUD
+  // =========================================================================
+
+  describe('listEarnings()', () => {
+    it('throws NotFoundException NOT_FOUND when worker does not exist', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(null);
+      await expect(service.listEarnings('ghost', 1, 20)).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns paginated earnings for an existing worker', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      mockAggregates('0.00', '0.00');
+      mockPrisma.$transaction.mockResolvedValue([
+        [{ id: 'wc-1', workerId: 'w1', amount: '30.00', category: 'daily_wage' }],
+        1,
+      ]);
+
+      const result = await service.listEarnings('w1', 1, 20);
+      expect(result.data).toHaveLength(1);
+      expect(result.total).toBe(1);
+    });
+  });
+
+  describe('createEarning()', () => {
+    it('creates a WorkerCost row with createdById resolved from the Clerk user, never from the body', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'internal-user-1', clerkId: 'clerk-abc' });
+      mockPrisma.workerCost.create.mockResolvedValue({ id: 'wc-1' });
+
+      await service.createEarning(
+        'w1',
+        { amount: '30.00', category: 'daily_wage' as any },
+        'clerk-abc',
+      );
+
+      expect(mockPrisma.workerCost.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ workerId: 'w1', amount: '30.00', category: 'daily_wage', createdById: 'internal-user-1' }),
+        }),
+      );
+    });
+
+    it('throws NotFoundException NOT_FOUND when worker does not exist', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(null);
+      await expect(
+        service.createEarning('ghost', { amount: '10.00', category: 'bonus' as any }, 'clerk-abc'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ForbiddenException NO_USER when the Clerk user has not been synced', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      await expect(
+        service.createEarning('w1', { amount: '10.00', category: 'bonus' as any }, 'clerk-unsynced'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('updateEarning()', () => {
+    it('applies the update when within the edit window', async () => {
+      const recent = new Date(Date.now() - 60 * 1000); // 1 minute ago
+      mockPrisma.workerCost.findUnique.mockResolvedValue({
+        id: 'wc-1', workerId: 'w1', amount: '30.00', category: 'daily_wage', createdAt: recent,
+      });
+      mockPrisma.workerCost.update.mockResolvedValue({ id: 'wc-1', amount: '35.00' });
+
+      await service.updateEarning('w1', 'wc-1', { amount: '35.00' });
+      expect(mockPrisma.workerCost.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'wc-1' }, data: expect.objectContaining({ amount: '35.00' }) }),
+      );
+    });
+
+    it('rejects the edit with EDIT_WINDOW_EXPIRED once past the window', async () => {
+      const old = new Date(Date.now() - 25 * 60 * 60 * 1000); // 25 hours ago
+      mockPrisma.workerCost.findUnique.mockResolvedValue({
+        id: 'wc-1', workerId: 'w1', amount: '30.00', category: 'daily_wage', createdAt: old,
+      });
+
+      await expect(service.updateEarning('w1', 'wc-1', { amount: '35.00' })).rejects.toThrow(ForbiddenException);
+      await expect(service.updateEarning('w1', 'wc-1', { amount: '35.00' })).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'EDIT_WINDOW_EXPIRED' }),
+      });
+      expect(mockPrisma.workerCost.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException NOT_FOUND when the earning does not belong to this worker', async () => {
+      mockPrisma.workerCost.findUnique.mockResolvedValue({
+        id: 'wc-1', workerId: 'someone-else', amount: '30.00', createdAt: new Date(),
+      });
+      await expect(service.updateEarning('w1', 'wc-1', { amount: '35.00' })).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // =========================================================================
+  // remove() — must clear WorkerCost rows too (ON DELETE RESTRICT)
+  // =========================================================================
+
+  describe('remove()', () => {
+    it('deletes payments and cost entries before deleting the worker', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+
+      await service.remove('w1');
+
+      expect(mockPrisma.workerPayment.deleteMany).toHaveBeenCalledWith({ where: { workerId: 'w1' } });
+      expect(mockPrisma.workerCost.deleteMany).toHaveBeenCalledWith({ where: { workerId: 'w1' } });
+      expect(mockPrisma.worker.delete).toHaveBeenCalledWith({ where: { id: 'w1' } });
     });
   });
 

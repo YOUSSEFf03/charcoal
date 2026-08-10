@@ -1,7 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type {
-  ClientOrder,
+  ClientOrderBase,
+  ClientOrderListItem,
+  ClientOrderCreated,
   ClientOrderDetail,
   CreateOrderDto,
   UpdateOrderDto,
@@ -22,14 +24,14 @@ const ordersKey = (params?: OrdersQuery) => ['orders', params ?? {}] as const
 /**
  * List orders (paginated).
  * @param params - clientId / status / pagination filters
- * @returns React Query result of PaginatedResponse<ClientOrder>
+ * @returns React Query result of PaginatedResponse<ClientOrderListItem>
  * GET /orders
  */
 export function useOrders(params?: OrdersQuery) {
   return useQuery({
     queryKey: ordersKey(params),
     queryFn: async () => {
-      const res = await api.get<PaginatedResponse<ClientOrder>>('/orders', { params })
+      const res = await api.get<PaginatedResponse<ClientOrderListItem>>('/orders', { params })
       return res.data
     },
   })
@@ -61,7 +63,7 @@ export function useCreateOrder() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (body: CreateOrderDto) => {
-      const res = await api.post<ClientOrder>('/orders', body)
+      const res = await api.post<ClientOrderCreated>('/orders', body)
       return res.data
     },
     onSuccess: (data) => {
@@ -75,13 +77,13 @@ export function useCreateOrder() {
 /**
  * Update an order.
  * @returns mutation accepting { id, body: UpdateOrderDto }
- * PATCH /orders/:id
+ * PATCH /orders/:id — no relations included, scalar columns only
  */
 export function useUpdateOrder() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, body }: { id: string; body: UpdateOrderDto }) => {
-      const res = await api.patch<ClientOrder>(`/orders/${id}`, body)
+      const res = await api.patch<ClientOrderBase>(`/orders/${id}`, body)
       return res.data
     },
     onSuccess: (_data, { id }) => {
@@ -94,13 +96,13 @@ export function useUpdateOrder() {
 /**
  * Force-mark an order as delivered (owner override when driver forgets).
  * @returns mutation accepting the order id (string)
- * PATCH /orders/:id/mark-delivered
+ * PATCH /orders/:id/mark-delivered — no relations included, scalar columns only
  */
 export function useMarkOrderDelivered() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (id: string) => {
-      const res = await api.patch<ClientOrder>(`/orders/${id}/mark-delivered`, {})
+      const res = await api.patch<ClientOrderBase>(`/orders/${id}/mark-delivered`, {})
       return res.data
     },
     onSuccess: (_data, id) => {

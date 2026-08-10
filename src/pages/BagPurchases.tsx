@@ -2,11 +2,9 @@ import { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { useBagPurchases, useCreateBagPurchase } from '../hooks/useBagPurchases'
+import { formatDate } from '../lib/date'
 
-function fmtDate(iso: string) {
-  const d = new Date(iso)
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-}
+function fmtDate(iso: string) { return formatDate(iso) }
 
 export default function BagPurchases() {
   const bagTypesQ = useBagTypes()

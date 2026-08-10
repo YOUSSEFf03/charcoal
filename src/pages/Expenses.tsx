@@ -1,15 +1,11 @@
 import { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useAllExpenses, useDriverExpenses, useGeneralExpenses, useCreateGeneralExpense } from '../hooks/useExpenses'
-import { useWorkers, useWorkerPayments, useWorkerAttendance } from '../hooks/useWorkers'
+import { useAllExpenses, useDriverExpenses, useGeneralExpenses, useCreateGeneralExpense, useAllWorkerPayments } from '../hooks/useExpenses'
+import { useAllCashHandoverExpenses } from '../hooks/useCashHandover'
+import { useWorkers } from '../hooks/useWorkers'
 import type { DriverTrip } from '../types/api'
 
 type ETab = 'expenses' | 'employees'
-
-const _expNow = new Date()
-const MAY_DAYS = new Date(_expNow.getFullYear(), _expNow.getMonth() + 1, 0).getDate()
-const TODAY_DAY = _expNow.getDate()
-const ATTENDANCE_MONTH = `${_expNow.getFullYear()}-${String(_expNow.getMonth() + 1).padStart(2, '0')}`
 
 const DRIVER_AVATAR_PALETTE = [
   { avatarBg: 'var(--blue-bg,#EFF6FF)', avatarColor: 'var(--blue)' },
@@ -61,16 +57,43 @@ const CATEGORY_COLORS: Record<string, string> = {
   Transport:  '#0891b2',
 }
 
+/** Formats a local calendar date as YYYY-MM-DD without going through UTC (avoids the
+ * toISOString() off-by-one when the local timezone is ahead of UTC). */
+function ymd(y: number, m: number, d: number): string {
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+
 export default function Expenses() {
   const [tab, setTab] = useState<ETab>('expenses')
 
-  // Live general expenses (recurring + one-time)
+  // Selected month for the expenses filter — the 1st of the month, local time.
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const d = new Date()
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
+  const monthYear = selectedMonth.getFullYear()
+  const monthIdx  = selectedMonth.getMonth()
+  const monthDateFrom = ymd(monthYear, monthIdx, 1)
+  const monthDateTo   = ymd(monthYear, monthIdx, new Date(monthYear, monthIdx + 1, 0).getDate())
+  const monthLabel = selectedMonth.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+  const monthShort = selectedMonth.toLocaleDateString('en-GB', { month: 'short' })
+
+  function goToPrevMonth() {
+    setSelectedMonth(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))
+  }
+  function goToNextMonth() {
+    setSelectedMonth(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))
+  }
+
+  // Live general expenses (recurring + one-time) — recurring rows are included
+  // by the backend from their recorded date forward (never before); one-time
+  // rows are filtered to the exact selected month. ("Option B" recurrence.)
   const {
     data: generalExpenses,
     isLoading: genLoading,
     isError: genError,
     refetch: refetchGeneral,
-  } = useGeneralExpenses()
+  } = useGeneralExpenses({ dateFrom: monthDateFrom, dateTo: monthDateTo })
 
   const createExpense = useCreateGeneralExpense()
 
@@ -80,7 +103,7 @@ export default function Expenses() {
     isLoading: contLoading,
     isError: contError,
     refetch: refetchContainers,
-  } = useAllExpenses()
+  } = useAllExpenses({ dateFrom: monthDateFrom, dateTo: monthDateTo })
 
   // Live driver trips
   const {
@@ -88,22 +111,17 @@ export default function Expenses() {
     isLoading: drvLoading,
     isError: drvError,
     refetch: refetchDrivers,
-  } = useDriverExpenses()
+  } = useDriverExpenses({ dateFrom: monthDateFrom, dateTo: monthDateTo })
 
-  // Worker data
+  // Worker data — ALL workers, not just the first (previously only workersData?.[0] was shown)
   const { data: workersData, isLoading: workersLoading } = useWorkers()
-  const primaryWorker = workersData?.[0]
-  const { data: workerPayments } = useWorkerPayments(primaryWorker?.id)
-  const { data: workerAttendance } = useWorkerAttendance(primaryWorker?.id, ATTENDANCE_MONTH)
 
-  const workerWorkedDays = new Set<number>(
-    (workerAttendance ?? [])
-      .filter(r => {
-        const d = new Date(r.date)
-        return d.getMonth() === _expNow.getMonth() && d.getFullYear() === _expNow.getFullYear()
-      })
-      .map(r => new Date(r.date).getDate())
-  )
+  // Aggregated employee payments (all workers, flattened) and cash-handover expenses
+  // (all handovers, flattened) — same WorkerPayment / CashHandoverExpense source-of-truth
+  // records, just fanned out for display; no new records are created for this view.
+  const { data: allWorkerPayments } = useAllWorkerPayments()
+  const { data: allHandoverExpenses } = useAllCashHandoverExpenses({ dateFrom: monthDateFrom, dateTo: monthDateTo })
+  const monthWorkerPayments = (allWorkerPayments ?? []).filter(p => (p.date ?? '').slice(0, 10) >= monthDateFrom && (p.date ?? '').slice(0, 10) <= monthDateTo)
 
   const driverGroups = groupDriverTrips(driverTripsResp?.data ?? [])
 
@@ -127,17 +145,33 @@ export default function Expenses() {
   const [payMethod, setPayMethod] = useState<'Cash' | 'Whish' | 'OMT'>('Cash')
 
   // Derived totals
+  // "General expenses" — GeneralExpense table only (recurring + one-time).
   const totalRecurring = recurring.reduce((s, e) => s + parseFloat(e.amount), 0)
   const totalOnetime   = onetime.reduce((s, e) => s + parseFloat(e.amount), 0)
   const totalExpenses  = totalRecurring + totalOnetime
 
-  const workerOwed    = parseFloat(primaryWorker?.totalOwed    ?? '0')
-  const workerEarned  = parseFloat(primaryWorker?.totalEarned  ?? '0')
-  const workerPaidAmt = parseFloat(primaryWorker?.totalPaid    ?? '0')
-
+  // "Employee wages owed" — a live outstanding-balance figure (earned minus paid,
+  // all-time; WorkerPayment already netted out here, never re-added as a second
+  // expense), NOT a period figure. Driver figures here are that month's trip
+  // expenses, not earnings — drivers have no accrual/earnings model like workers.
+  const totalWorkersOwed = (workersData ?? []).reduce((s, w) => s + parseFloat(w.totalOwed ?? '0'), 0)
   const totalDriverExpenses = driverGroups.reduce((s, g) => s + g.expensesTotal, 0)
-  const totalWagesOwed = workerOwed + totalDriverExpenses
-  const totalOutgoing  = totalExpenses + totalWagesOwed
+  const totalWagesOwed = totalWorkersOwed + totalDriverExpenses
+
+  // Cash actually paid out THIS MONTH, per category (each a settlement/spend record,
+  // not an accrual) — feeds "Total outgoing" below.
+  const totalContainerExpensesThisMonth = (containerExpenses ?? []).reduce((s, e) => s + parseFloat(e.amount), 0)
+  const totalWorkerPaymentsThisMonth = monthWorkerPayments.reduce((s, p) => s + parseFloat(p.amount), 0)
+  const totalHandoverExpensesThisMonth = (allHandoverExpenses ?? []).reduce((s, e) => s + parseFloat(e.amount), 0)
+
+  // "Total outgoing" = actual cash outflow this month (cash-basis): general expenses +
+  // employee payments + container expenses + cash-handover expenses. Deliberately
+  // excludes "Employee wages owed" (an accrued, all-time balance, not a period cash
+  // figure) — approved definition, see the Expenses-KPI audit.
+  const totalOutgoing = totalExpenses
+    + totalContainerExpensesThisMonth
+    + totalWorkerPaymentsThisMonth
+    + totalHandoverExpensesThisMonth
 
   // By-category summary (recurring + one-time general expenses only)
   const allGenExp = [...recurring, ...onetime]
@@ -191,26 +225,14 @@ export default function Expenses() {
     }
   }
 
-  function DaysGrid({ worked }: { worked: Set<number> }) {
-    const cells = []
-    for (let d = 1; d <= MAY_DAYS; d++) {
-      let cls = 'day-cell'
-      if (d > TODAY_DAY)    cls += ' future'
-      else if (worked.has(d)) cls += ' worked'
-      if (d === TODAY_DAY)  cls += ' today'
-      cells.push(<div key={d} className={cls}>{d}</div>)
-    }
-    return <div className="days-grid">{cells}</div>
-  }
-
   return (
     <>
       <Topbar title="Expenses & Employees">
         <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
-          May 2026
+          {monthLabel}
         </span>
-        <button className="btn"><i className="ti ti-chevron-left" style={{ fontSize: 14 }} /></button>
-        <button className="btn"><i className="ti ti-chevron-right" style={{ fontSize: 14 }} /></button>
+        <button className="btn" onClick={goToPrevMonth} title="Previous month"><i className="ti ti-chevron-left" style={{ fontSize: 14 }} /></button>
+        <button className="btn" onClick={goToNextMonth} title="Next month"><i className="ti ti-chevron-right" style={{ fontSize: 14 }} /></button>
       </Topbar>
 
       {/* Tabs */}
@@ -221,7 +243,7 @@ export default function Expenses() {
         </div>
         <div className={`tab${tab === 'employees' ? ' active' : ''}`} onClick={() => setTab('employees')}>
           <i className="ti ti-users" style={{ fontSize: 14 }} /> Employees
-          <span className="tab-count">{1 + driverGroups.length}</span>
+          <span className="tab-count">{(workersData?.length ?? 0) + driverGroups.length}</span>
         </div>
       </div>
 
@@ -230,7 +252,7 @@ export default function Expenses() {
         {/* KPI row */}
         <div className="kpi-row">
           <div className="kpi">
-            <div className="kpi-label">Total expenses (May)</div>
+            <div className="kpi-label">General expenses ({monthShort})</div>
             <div className="kpi-value" style={{ color: 'var(--red)' }}>${totalExpenses.toLocaleString()}</div>
             <div className="kpi-sub">{recurring.length + onetime.length} expense entries</div>
           </div>
@@ -242,12 +264,12 @@ export default function Expenses() {
           <div className="kpi">
             <div className="kpi-label">Employee wages owed</div>
             <div className="kpi-value" style={{ color: 'var(--accent2)' }}>${totalWagesOwed.toFixed(0)}</div>
-            <div className="kpi-sub">worker + {driverGroups.length} drivers</div>
+            <div className="kpi-sub">current outstanding · worker + {driverGroups.length} drivers</div>
           </div>
           <div className="kpi">
-            <div className="kpi-label">Total outgoing (May)</div>
+            <div className="kpi-label">Total outgoing ({monthShort})</div>
             <div className="kpi-value" style={{ color: 'var(--red)' }}>${totalOutgoing.toFixed(0)}</div>
-            <div className="kpi-sub">expenses + wages</div>
+            <div className="kpi-sub">cash paid out this month</div>
           </div>
         </div>
 
@@ -309,7 +331,7 @@ export default function Expenses() {
               {/* One-time */}
               <div className="card">
                 <div className="card-head">
-                  <div className="card-title"><i className="ti ti-plus-circle" /> One-time — May 2026</div>
+                  <div className="card-title"><i className="ti ti-plus-circle" /> One-time — {monthLabel}</div>
                   <button className="btn" style={{ fontSize: 12 }} onClick={() => openAdd('onetime')}>
                     <i className="ti ti-plus" style={{ fontSize: 13 }} /> Add expense
                   </button>
@@ -380,8 +402,71 @@ export default function Expenses() {
                   <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                     <span style={{ color: 'var(--text3)' }}>Total container expenses</span>
                     <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>
-                      ${(containerExpenses ?? []).reduce((s, e) => s + parseFloat(e.amount), 0).toLocaleString()}
+                      ${totalContainerExpensesThisMonth.toLocaleString()}
                     </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Employee payments (live, all workers) — WorkerPayment remains the source
+                  of truth; this is a read-only aggregated view, no new records created. */}
+              <div className="card">
+                <div className="card-head">
+                  <div className="card-title"><i className="ti ti-users" /> Employee payments</div>
+                </div>
+                {monthWorkerPayments.length === 0 && (
+                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>No employee payments this month.</div>
+                )}
+                {monthWorkerPayments.map(p => (
+                  <div key={p.id} className="exp-item">
+                    <div className="exp-icon" style={{ background: '#EAF5EF' }}>
+                      <i className="ti ti-cash" style={{ color: 'var(--accent)' }} />
+                    </div>
+                    <div className="exp-info">
+                      <div className="exp-name">Employee payment — {p.workerName}</div>
+                      <div className="exp-meta">{p.date?.slice(0, 10)} · {p.method}{p.referenceNumber ? ` · ${p.referenceNumber}` : ''}</div>
+                    </div>
+                    <div className="exp-amount">
+                      <div className="exp-amount-val">${parseFloat(p.amount).toLocaleString()}</div>
+                    </div>
+                  </div>
+                ))}
+                {monthWorkerPayments.length > 0 && (
+                  <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                    <span style={{ color: 'var(--text3)' }}>Total employee payments</span>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${totalWorkerPaymentsThisMonth.toLocaleString()}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Cash handover expenses (live) — CashHandoverExpense remains the source of
+                  truth (created atomically with its CashHandover); this is a read-only
+                  aggregated view, no new records created. */}
+              <div className="card">
+                <div className="card-head">
+                  <div className="card-title"><i className="ti ti-wallet" /> Cash handover expenses</div>
+                </div>
+                {(allHandoverExpenses ?? []).length === 0 && (
+                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>No cash-handover expenses this month.</div>
+                )}
+                {(allHandoverExpenses ?? []).map(e => (
+                  <div key={e.id} className="exp-item">
+                    <div className="exp-icon" style={{ background: 'var(--surface2)' }}>
+                      <i className="ti ti-wallet" style={{ color: 'var(--text2)' }} />
+                    </div>
+                    <div className="exp-info">
+                      <div className="exp-name">Cash handover expense — {e.description}</div>
+                      <div className="exp-meta">{e.handoverDate?.slice(0, 10)} · {e.receiverName}</div>
+                    </div>
+                    <div className="exp-amount">
+                      <div className="exp-amount-val">${parseFloat(e.amount).toLocaleString()}</div>
+                    </div>
+                  </div>
+                ))}
+                {(allHandoverExpenses ?? []).length > 0 && (
+                  <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                    <span style={{ color: 'var(--text3)' }}>Total cash handover expenses</span>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${totalHandoverExpensesThisMonth.toLocaleString()}</span>
                   </div>
                 )}
               </div>
@@ -392,7 +477,7 @@ export default function Expenses() {
 
               <div className="card" style={{ marginBottom: 14 }}>
                 <div className="card-head">
-                  <div className="card-title"><i className="ti ti-chart-bar" /> May 2026 summary</div>
+                  <div className="card-title"><i className="ti ti-chart-bar" /> {monthLabel} summary</div>
                 </div>
                 <div style={{ padding: '4px 0 0' }}>
                   {allGenExp.map(e => (
@@ -404,10 +489,10 @@ export default function Expenses() {
                 </div>
                 <div style={{ padding: '14px 18px', background: 'var(--surface2)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 14, fontWeight: 600 }}>Total expenses</span>
+                    <span style={{ fontSize: 14, fontWeight: 600 }}>General expenses</span>
                     <span style={{ fontSize: 20, fontWeight: 600, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--red)' }}>${totalExpenses.toLocaleString()}</span>
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Excluding employee wages</div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>General expenses only — see Employee wages owed, payments, container and handover cards for the rest</div>
                 </div>
               </div>
 
@@ -446,7 +531,7 @@ export default function Expenses() {
           <div>
 
             <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
-              Packing worker
+              Packing workers
             </div>
 
             {workersLoading && (
@@ -455,74 +540,70 @@ export default function Expenses() {
               </div>
             )}
 
-            {!workersLoading && primaryWorker && (
-              <div className="emp-card">
-                <div className="emp-head">
-                  <div className="emp-avatar" style={{ background: '#EAF5EF', color: 'var(--accent)' }}>
-                    {primaryWorker.name.slice(0, 2).toUpperCase()}
-                  </div>
-                  <div>
-                    <div className="emp-name">{primaryWorker.name}</div>
-                    <div className="emp-role-lbl">packing worker · daily rate + per bag</div>
-                  </div>
-                  <div className="emp-owed">
-                    <div className="emp-owed-val" style={{ color: 'var(--accent2)' }}>${parseFloat(primaryWorker.totalOwed).toFixed(2)}</div>
-                    <div className="emp-owed-lbl">total owed</div>
-                  </div>
-                </div>
-
-                <div className="emp-body">
-                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text2)', marginBottom: 8 }}>
-                    Days worked — May 2026
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--accent)', marginLeft: 8 }}>
-                      {workerWorkedDays.size} days
-                    </span>
-                  </div>
-                  <DaysGrid worked={workerWorkedDays} />
-
-                  <div style={{ background: 'var(--surface2)', borderRadius: 'var(--radius)', padding: '12px 14px', marginBottom: 14 }}>
-                    <div className="earn-row">
-                      <span className="earn-label">Total earned this month</span>
-                      <span className="earn-val" style={{ color: 'var(--text)', fontSize: 14 }}>${parseFloat(primaryWorker.totalEarned).toFixed(2)}</span>
+            {!workersLoading && (workersData ?? []).map(worker => {
+              const payments = (allWorkerPayments ?? []).filter(p => p.workerId === worker.id)
+              const owed = parseFloat(worker.totalOwed ?? '0')
+              return (
+                <div className="emp-card" key={worker.id} style={{ marginBottom: 14 }}>
+                  <div className="emp-head">
+                    <div className="emp-avatar" style={{ background: '#EAF5EF', color: 'var(--accent)' }}>
+                      {worker.name.slice(0, 2).toUpperCase()}
                     </div>
-                    <div className="earn-row">
-                      <span className="earn-label">Paid this month</span>
-                      <span className="earn-val green">−${parseFloat(primaryWorker.totalPaid).toFixed(2)}</span>
+                    <div>
+                      <div className="emp-name">{worker.name}</div>
+                      <div className="emp-role-lbl">packing worker · daily rate + per bag</div>
                     </div>
-                    <div className="earn-total">
-                      <span>Owed now</span>
-                      <span className="earn-total-mono">${parseFloat(primaryWorker.totalOwed).toFixed(2)}</span>
+                    <div className="emp-owed">
+                      <div className="emp-owed-val" style={{ color: 'var(--accent2)' }}>${owed.toFixed(2)}</div>
+                      <div className="emp-owed-lbl">total owed</div>
                     </div>
                   </div>
 
-                  <button className="pay-btn green" onClick={() => openPay(primaryWorker.name, workerOwed)}>
-                    <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay {primaryWorker.name} — ${workerOwed.toFixed(2)} owed
-                  </button>
-                </div>
-
-                <div style={{ borderTop: '1px solid var(--border)', padding: '12px 18px 4px' }}>
-                  <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                    Payment history
-                  </div>
-                  <div className="pay-hist">
-                    {(workerPayments ?? []).length === 0 && (
-                      <div style={{ fontSize: 12, color: 'var(--text3)', padding: '4px 0' }}>No payments recorded.</div>
-                    )}
-                    {(workerPayments ?? []).map(p => (
-                      <div key={p.id} className="pay-hist-row">
-                        <div className="pay-hist-info">
-                          <strong style={{ fontWeight: 500, display: 'block' }}>{p.notes || 'Payment'}</strong>
-                          <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>{p.date?.slice(0, 10)}</span>
-                        </div>
-                        <div className="pay-hist-amount">${parseFloat(p.amount).toFixed(2)}</div>
+                  <div className="emp-body">
+                    <div style={{ background: 'var(--surface2)', borderRadius: 'var(--radius)', padding: '12px 14px', marginBottom: 14 }}>
+                      <div className="earn-row">
+                        <span className="earn-label">Total earned this month</span>
+                        <span className="earn-val" style={{ color: 'var(--text)', fontSize: 14 }}>${parseFloat(worker.totalEarned ?? '0').toFixed(2)}</span>
                       </div>
-                    ))}
+                      <div className="earn-row">
+                        <span className="earn-label">Paid this month</span>
+                        <span className="earn-val green">−${parseFloat(worker.totalPaid ?? '0').toFixed(2)}</span>
+                      </div>
+                      <div className="earn-total">
+                        <span>Owed now</span>
+                        <span className="earn-total-mono">${owed.toFixed(2)}</span>
+                      </div>
+                    </div>
+
+                    <button className="pay-btn green" onClick={() => openPay(worker.name, owed)}>
+                      <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay {worker.name} — ${owed.toFixed(2)} owed
+                    </button>
+                  </div>
+
+                  <div style={{ borderTop: '1px solid var(--border)', padding: '12px 18px 4px' }}>
+                    <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                      Payment history
+                    </div>
+                    <div className="pay-hist">
+                      {payments.length === 0 && (
+                        <div style={{ fontSize: 12, color: 'var(--text3)', padding: '4px 0' }}>No payments recorded.</div>
+                      )}
+                      {payments.map(p => (
+                        <div key={p.id} className="pay-hist-row">
+                          <div className="pay-hist-info">
+                            <strong style={{ fontWeight: 500, display: 'block' }}>{p.notes || 'Payment'}</strong>
+                            <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>{p.date?.slice(0, 10)}</span>
+                          </div>
+                          <div className="pay-hist-amount">${parseFloat(p.amount).toFixed(2)}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )
+            })}
 
-            {!workersLoading && !primaryWorker && (
+            {!workersLoading && (workersData ?? []).length === 0 && (
               <div className="emp-card" style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
                 No workers found.
               </div>
@@ -620,7 +701,7 @@ export default function Expenses() {
                 <div className="modal-title">
                   {addModalType === 'recurring' ? 'Add recurring expense' : 'Add one-time expense'}
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>May 2026</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{monthLabel}</div>
               </div>
               <button className="close-btn" onClick={() => setAddModalType(null)}>✕</button>
             </div>

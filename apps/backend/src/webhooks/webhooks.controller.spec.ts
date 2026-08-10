@@ -1,9 +1,30 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
+import { BadRequestException } from '@nestjs/common';
+import { Webhook } from 'svix';
 import { WebhooksController } from './webhooks.controller';
 import { PrismaService } from '../prisma/prisma.service';
 import { Role } from '@prisma/client';
+
+// Fixed test-only secret in the real Svix "whsec_..." shape — used to both sign
+// (test setup, simulating Clerk) and verify (real code under test) payloads,
+// so these tests exercise the actual svix cryptographic verification path
+// rather than mocking it away.
+const TEST_WEBHOOK_SECRET = 'whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw';
+
+/** Signs a payload with the real svix library, exactly as Clerk would. */
+function signPayload(payload: string, secret = TEST_WEBHOOK_SECRET) {
+  const msgId = 'msg_test_' + Math.random().toString(36).slice(2);
+  const timestamp = new Date();
+  const wh = new Webhook(secret);
+  const signature = wh.sign(msgId, timestamp, payload);
+  return {
+    svixId: msgId,
+    svixTimestamp: Math.floor(timestamp.getTime() / 1000).toString(),
+    svixSignature: signature,
+  };
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function fn(): any {
@@ -20,14 +41,17 @@ describe('WebhooksController', () => {
     },
   };
 
+  const mockConfigService = { get: fn() };
+
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockConfigService.get.mockReturnValue(TEST_WEBHOOK_SECRET);
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [WebhooksController],
       providers: [
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('test-secret') } },
+        { provide: ConfigService, useValue: mockConfigService },
       ],
     }).compile();
 
@@ -192,6 +216,118 @@ describe('WebhooksController', () => {
       for (const call of mockPrisma.user.updateMany.mock.calls) {
         expect(call[0].where).toMatchObject({ clerkId: 'clerk_abc123', deletedAt: null });
       }
+    });
+  });
+
+  // =========================================================================
+  // handleClerk() — real Svix signature verification (not mocked). These
+  // exercise the actual cryptographic boundary the prior audit found had zero
+  // coverage: upsertUser()/deleteUser() tests above call the private methods
+  // directly and never touch signature verification at all.
+  // =========================================================================
+
+  describe('handleClerk()', () => {
+    const eventPayload = JSON.stringify({
+      type: 'user.created',
+      data: { id: 'clerk_sig_test', public_metadata: { role: 'worker' } },
+    });
+
+    function fakeRequest(payload: string) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return { rawBody: Buffer.from(payload, 'utf8'), body: JSON.parse(payload) } as any;
+    }
+
+    it('accepts a validly-signed payload and processes the event', async () => {
+      const { svixId, svixTimestamp, svixSignature } = signPayload(eventPayload);
+      mockPrisma.user.upsert.mockResolvedValue({});
+
+      const result = await controller.handleClerk(
+        fakeRequest(eventPayload),
+        svixId,
+        svixTimestamp,
+        svixSignature,
+      );
+
+      expect(result).toEqual({ received: true });
+      expect(mockPrisma.user.upsert).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a signature produced with the wrong secret', async () => {
+      const { svixId, svixTimestamp, svixSignature } = signPayload(
+        eventPayload,
+        'whsec_wrongSecretUsedByAnAttackerOrMisconfig==',
+      );
+
+      await expect(
+        controller.handleClerk(fakeRequest(eventPayload), svixId, svixTimestamp, svixSignature),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.user.upsert).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the payload was tampered with after signing', async () => {
+      const { svixId, svixTimestamp, svixSignature } = signPayload(eventPayload);
+      const tamperedPayload = JSON.stringify({
+        type: 'user.created',
+        data: { id: 'clerk_sig_test', public_metadata: { role: 'owner' } }, // role escalated post-signature
+      });
+
+      await expect(
+        controller.handleClerk(fakeRequest(tamperedPayload), svixId, svixTimestamp, svixSignature),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.user.upsert).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['svix-id', '', 'ts', 'sig'],
+      ['svix-timestamp', 'id', '', 'sig'],
+      ['svix-signature', 'id', 'ts', ''],
+    ])('rejects when the %s header is missing', async (_name, svixId, svixTimestamp, svixSignature) => {
+      await expect(
+        controller.handleClerk(fakeRequest(eventPayload), svixId, svixTimestamp, svixSignature),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.user.upsert).not.toHaveBeenCalled();
+    });
+
+    it('rejects when CLERK_WEBHOOK_SECRET is not configured', async () => {
+      mockConfigService.get.mockReturnValue(undefined);
+      const { svixId, svixTimestamp, svixSignature } = signPayload(eventPayload);
+
+      await expect(
+        controller.handleClerk(fakeRequest(eventPayload), svixId, svixTimestamp, svixSignature),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.user.upsert).not.toHaveBeenCalled();
+    });
+
+    it('processes a user.deleted event with a valid signature via updateMany (soft delete)', async () => {
+      const deletePayload = JSON.stringify({ type: 'user.deleted', data: { id: 'clerk_sig_test' } });
+      const { svixId, svixTimestamp, svixSignature } = signPayload(deletePayload);
+      mockPrisma.user.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await controller.handleClerk(
+        fakeRequest(deletePayload),
+        svixId,
+        svixTimestamp,
+        svixSignature,
+      );
+
+      expect(result).toEqual({ received: true });
+      expect(mockPrisma.user.updateMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('acknowledges an unknown event type with 200 but does not touch the database', async () => {
+      const unknownPayload = JSON.stringify({ type: 'session.created', data: { id: 'clerk_sig_test' } });
+      const { svixId, svixTimestamp, svixSignature } = signPayload(unknownPayload);
+
+      const result = await controller.handleClerk(
+        fakeRequest(unknownPayload),
+        svixId,
+        svixTimestamp,
+        svixSignature,
+      );
+
+      expect(result).toEqual({ received: true });
+      expect(mockPrisma.user.upsert).not.toHaveBeenCalled();
+      expect(mockPrisma.user.updateMany).not.toHaveBeenCalled();
     });
   });
 });

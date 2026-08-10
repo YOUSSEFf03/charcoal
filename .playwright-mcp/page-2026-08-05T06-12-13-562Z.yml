@@ -1,0 +1,236 @@
+- generic [ref=f43e3]:
+  - complementary [ref=f43e4]:
+    - generic [ref=f43e5]:
+      - generic [ref=f43e6]: 
+      - generic [ref=f43e8]:
+        - generic [ref=f43e9]: Farah Charcoal
+        - generic [ref=f43e10]: management system
+    - generic [ref=f43e11]:
+      - generic [ref=f43e12]: Overview
+      - link " Dashboard" [ref=f43e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f43e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f43e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f43e16]: 
+        - text: Reports
+    - generic [ref=f43e17]:
+      - generic [ref=f43e18]: Stock
+      - link " Containers" [ref=f43e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f43e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f43e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f43e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f43e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f43e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f43e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f43e26]: 
+        - text: Bag purchases
+    - generic [ref=f43e27]:
+      - generic [ref=f43e28]: Sales
+      - link " Clients" [ref=f43e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f43e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f43e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f43e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f43e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f43e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f43e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f43e36]:
+      - generic [ref=f43e37]: Finance
+      - link " Balances" [ref=f43e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f43e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f43e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f43e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f43e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f43e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f43e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f43e45]: 
+        - text: Expenses
+    - generic [ref=f43e46]:
+      - generic [ref=f43e47]: Setup
+      - link " Employees" [ref=f43e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f43e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f43e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f43e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f43e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f43e53]: 
+        - text: Settings
+    - generic [ref=f43e56] [cursor=pointer]:
+      - generic [ref=f43e57]: KA
+      - generic [ref=f43e58]:
+        - generic [ref=f43e59]: Khalil Abi Nader
+        - generic [ref=f43e60]: owner
+      - generic [ref=f43e61]: 
+  - generic [ref=f43e62]:
+    - banner [ref=f43e209]:
+      - generic [ref=f43e210]:
+        - button " All clients" [ref=f43e211] [cursor=pointer]:
+          - generic [ref=f43e212]: 
+          - text: All clients
+        - generic [ref=f43e213]: ·
+        - generic [ref=f43e214]: Al Nakheel Restaurant
+      - generic [ref=f43e215]:
+        - button " Edit" [ref=f43e216] [cursor=pointer]:
+          - generic [ref=f43e217]: 
+          - text: Edit
+        - button " New order" [ref=f43e218] [cursor=pointer]:
+          - generic [ref=f43e219]: 
+          - text: New order
+        - button " Log payment" [ref=f43e220] [cursor=pointer]:
+          - generic [ref=f43e221]: 
+          - text: Log payment
+    - generic [ref=f43e223]:
+      - generic [ref=f43e224]:
+        - generic [ref=f43e225]:
+          - generic [ref=f43e226]: AN
+          - generic [ref=f43e227]:
+            - heading "Al Nakheel Restaurant" [level=1] [ref=f43e228]
+            - generic [ref=f43e229]:
+              - generic [ref=f43e230]: restaurant
+              - generic [ref=f43e231]: USD
+              - generic [ref=f43e232]:
+                - generic [ref=f43e233]: 
+                - text: Seed client
+              - generic [ref=f43e234]:
+                - generic [ref=f43e235]: 
+                - text: client since 03 Aug 2026
+        - generic [ref=f43e236]:
+          - generic [ref=f43e237]:
+            - generic [ref=f43e238]: Outstanding balance
+            - generic [ref=f43e239]: $240.00
+            - generic [ref=f43e240]: 1 open invoices
+          - generic [ref=f43e241]:
+            - generic [ref=f43e242]: Days since last order
+            - generic [ref=f43e243]: "0"
+            - generic [ref=f43e244]: on track
+      - generic [ref=f43e245]: Quick actions
+      - generic [ref=f43e246]:
+        - button " Make invoice issue a new charge" [ref=f43e247] [cursor=pointer]:
+          - generic [ref=f43e248]: 
+          - generic [ref=f43e250]:
+            - generic [ref=f43e251]: Make invoice
+            - generic [ref=f43e252]: issue a new charge
+        - button " Make payment log money received" [ref=f43e253] [cursor=pointer]:
+          - generic [ref=f43e254]: 
+          - generic [ref=f43e256]:
+            - generic [ref=f43e257]: Make payment
+            - generic [ref=f43e258]: log money received
+      - generic [ref=f43e259]: Records
+      - generic [ref=f43e260]:
+        - button " Statement of account debit · credit · balance " [ref=f43e261] [cursor=pointer]:
+          - generic [ref=f43e262]: 
+          - generic [ref=f43e264]:
+            - generic [ref=f43e265]: Statement of account
+            - generic [ref=f43e266]: debit · credit · balance
+          - generic [ref=f43e267]: 
+        - button " Order history 1 orders " [ref=f43e268] [cursor=pointer]:
+          - generic [ref=f43e269]: 
+          - generic [ref=f43e271]:
+            - generic [ref=f43e272]: Order history
+            - generic [ref=f43e273]: 1 orders
+          - generic [ref=f43e274]: 
+        - button " Invoices 1 issued " [ref=f43e275] [cursor=pointer]:
+          - generic [ref=f43e276]: 
+          - generic [ref=f43e278]:
+            - generic [ref=f43e279]: Invoices
+            - generic [ref=f43e280]: 1 issued
+          - generic [ref=f43e281]: 
+        - button " Warehouse sales 0 purchases " [ref=f43e282] [cursor=pointer]:
+          - generic [ref=f43e283]: 
+          - generic [ref=f43e285]:
+            - generic [ref=f43e286]: Warehouse sales
+            - generic [ref=f43e287]: 0 purchases
+          - generic [ref=f43e288]: 
+        - button " All payments 0 on record " [ref=f43e289] [cursor=pointer]:
+          - generic [ref=f43e290]: 
+          - generic [ref=f43e292]:
+            - generic [ref=f43e293]: All payments
+            - generic [ref=f43e294]: 0 on record
+          - generic [ref=f43e295]: 
+      - generic [ref=f43e296]:
+        - generic [ref=f43e298]:
+          - generic [ref=f43e299]:
+            - generic [ref=f43e300]:
+              - generic [ref=f43e301]: 
+              - text: Account activity
+            - generic [ref=f43e302]: USD · cumulative
+          - generic [ref=f43e303]:
+            - generic [ref=f43e306]:
+              - generic [ref=f43e307]: Charged
+              - generic [ref=f43e308]: $240.00
+            - generic [ref=f43e311]:
+              - generic [ref=f43e312]: Paid
+              - generic [ref=f43e313]: $0.00
+            - generic [ref=f43e316]:
+              - generic [ref=f43e317]: Outstanding
+              - generic [ref=f43e318]: $240.00
+          - img [ref=f43e320]:
+            - generic [ref=f43e321]: $0
+            - generic [ref=f43e323]: $100
+            - generic [ref=f43e325]: $200
+            - generic [ref=f43e327]: $300
+            - generic [ref=f43e331]: 01 May
+        - generic [ref=f43e332]:
+          - generic [ref=f43e333]:
+            - generic [ref=f43e334]:
+              - generic [ref=f43e335]:
+                - generic [ref=f43e336]: 
+                - text: Phone numbers
+                - generic [ref=f43e337]: 1 numbers
+              - button " Manage" [ref=f43e338] [cursor=pointer]:
+                - generic [ref=f43e339]: 
+                - text: Manage
+            - generic [ref=f43e340]:
+              - generic [ref=f43e342]:
+                - generic [ref=f43e343]: +961 1 000001
+                - generic [ref=f43e344]: mobile
+              - generic [ref=f43e345]: active
+              - generic [ref=f43e346]:
+                - link "" [ref=f43e347] [cursor=pointer]:
+                  - /url: tel:+9611000001
+                - link "" [ref=f43e349] [cursor=pointer]:
+                  - /url: https://wa.me/9611000001
+          - generic [ref=f43e351]:
+            - generic [ref=f43e353]:
+              - generic [ref=f43e354]: 
+              - text: Preferred charcoal
+            - generic [ref=f43e355]: BBQ hardwoodA
+          - generic [ref=f43e357]:
+            - generic [ref=f43e358]:
+              - generic [ref=f43e359]:
+                - generic [ref=f43e360]: 
+                - text: Terms & notes
+              - button "Edit" [ref=f43e361] [cursor=pointer]
+            - generic [ref=f43e362]:
+              - generic [ref=f43e363]:
+                - generic [ref=f43e364]: Payment terms
+                - generic [ref=f43e365]: Net 30
+              - generic [ref=f43e366]:
+                - generic [ref=f43e367]: Notes
+                - generic [ref=f43e368]: Seed client

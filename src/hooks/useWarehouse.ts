@@ -177,6 +177,7 @@ export function useCreateStockExit() {
       clientId?: string
       amount?: number
       collectedBy?: string
+      collectedById?: string
     }) => {
       const res = await api.post('/stock-exits', body)
       return res.data

@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
-import { InvoiceCalculatorService } from '../invoices/invoice-calculator.service';
+import { PaymentAllocationService } from '../invoices/payment-allocation.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { LedgerWriteService } from '../ledger/ledger-write.service';
+import { UsersService } from '../users/users.service';
 
 // ---------------------------------------------------------------------------
 // Shared mock factory helper
@@ -29,13 +31,30 @@ describe('PaymentsService', () => {
     $transaction: fn(),
   };
 
-  const mockCalculator = {
-    computeLines: jest.fn() as any,
-    computeTotal: jest.fn() as any,
-    validateIssuable: jest.fn() as any,
-    validateCancellable: jest.fn() as any,
-    recomputeStatus: jest.fn() as any,
+  // PaymentAllocationService owns the actual allocation + invoice.paidAmount/status
+  // recompute logic (unit-tested in payment-allocation.service.spec.ts). These
+  // tests only assert PaymentsService delegates to it correctly.
+  const mockPaymentAllocationService = {
+    allocateDirect: fn(),
+    allocateFifo: fn(),
   };
+
+  // PR 2: PaymentsService now delegates ledger writes to LedgerWriteService
+  // instead of importing creditAccount directly. Mocked here (not the real
+  // service) because these tests assert PaymentsService's own delegation
+  // behavior in isolation — LedgerWriteService's own logic is covered by
+  // ledger-write.service.spec.ts.
+  const mockLedgerWriteService = {
+    creditAccount: fn(),
+    debitAccount: fn(),
+  };
+
+  // PR 6b: PaymentsService now calls UsersService.validateCashCapable directly,
+  // before tx.payment.create(), in addition to LedgerWriteService.creditAccount()'s
+  // own (unchanged) internal call to the same method. Defaults to "always valid"
+  // so every pre-existing test below is unaffected; the dedicated PR 6b block
+  // overrides this per-test to exercise the new rejection path.
+  const mockUsersService = { validateCashCapable: fn() };
 
   // Helper to build a tx object for the $transaction callback
   function makeTx(overrides: Record<string, any> = {}) {
@@ -43,17 +62,24 @@ describe('PaymentsService', () => {
       client: { findUnique: fn(), update: fn(), ...overrides.client },
       invoice: { findUnique: fn(), update: fn(), ...overrides.invoice },
       payment: { create: fn(), aggregate: fn(), ...overrides.payment },
+      user: { findUnique: fn(), ...overrides.user },
+      $queryRaw: fn().mockResolvedValue([]),
     };
   }
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockUsersService.validateCashCapable.mockResolvedValue(undefined);
+    mockPaymentAllocationService.allocateDirect.mockResolvedValue(undefined);
+    mockPaymentAllocationService.allocateFifo.mockResolvedValue({ allocations: [], unapplied: '0.00' });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PaymentsService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: InvoiceCalculatorService, useValue: mockCalculator },
+        { provide: PaymentAllocationService, useValue: mockPaymentAllocationService },
+        { provide: LedgerWriteService, useValue: mockLedgerWriteService },
+        { provide: UsersService, useValue: mockUsersService },
       ],
     }).compile();
 
@@ -80,7 +106,7 @@ describe('PaymentsService', () => {
       };
     }
 
-    it('sets invoice.status=paid when paidAmount >= total after payment', async () => {
+    it('delegates to PaymentAllocationService.allocateDirect with the payment id, invoiceId and Decimal amount', async () => {
       const tx = makeTx();
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
@@ -99,58 +125,37 @@ describe('PaymentsService', () => {
         amount: '100.00',
       });
 
-      // recomputeStatus returns paid when total is covered
-      mockCalculator.recomputeStatus.mockResolvedValue({
-        paidAmount: '100.00',
-        status: 'paid',
-      });
-
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
       await service.create(baseDto(), clerkUserId);
 
-      expect(tx.invoice.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: invoiceId },
-          data: { paidAmount: '100.00', status: 'paid' },
-        }),
-      );
+      expect(mockPaymentAllocationService.allocateDirect).toHaveBeenCalledTimes(1);
+      const [calledTx, calledPaymentId, calledInvoiceId, calledAmount] =
+        mockPaymentAllocationService.allocateDirect.mock.calls[0];
+      expect(calledTx).toBe(tx);
+      expect(calledPaymentId).toBe('pay-1');
+      expect(calledInvoiceId).toBe(invoiceId);
+      expect(calledAmount.toString()).toBe('100');
+      expect(mockPaymentAllocationService.allocateFifo).not.toHaveBeenCalled();
     });
 
-    it('sets invoice.status=partially_paid when paidAmount < total after payment', async () => {
+    it('locks the invoice (FOR UPDATE) before reading it for the status/client guard checks', async () => {
       const tx = makeTx();
+      const callOrder: string[] = [];
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
-
       tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A' });
-      tx.invoice.findUnique.mockResolvedValue({
-        id: invoiceId,
-        status: 'issued',
-        total: { toString: () => '100.00' },
-        clientId,
+      tx.$queryRaw.mockImplementation(async () => { callOrder.push('lock'); return []; });
+      tx.invoice.findUnique.mockImplementation(async () => {
+        callOrder.push('read');
+        return { id: invoiceId, status: 'issued', total: { toString: () => '100.00' }, clientId };
       });
-      tx.payment.create.mockResolvedValue({
-        id: 'pay-2',
-        clientId,
-        invoiceId,
-        amount: '50.00',
-      });
-
-      mockCalculator.recomputeStatus.mockResolvedValue({
-        paidAmount: '50.00',
-        status: 'partially_paid',
-      });
-
+      tx.payment.create.mockResolvedValue({ id: 'pay-1', clientId, invoiceId, amount: '100.00' });
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
-      await service.create({ ...baseDto(), amount: '50.00' }, clerkUserId);
+      await service.create(baseDto(), clerkUserId);
 
-      expect(tx.invoice.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: invoiceId },
-          data: { paidAmount: '50.00', status: 'partially_paid' },
-        }),
-      );
+      expect(callOrder).toEqual(['lock', 'read']);
     });
 
     it('CONSTRAINT 15: client.update is NEVER called — no balance field written on Client', async () => {
@@ -170,11 +175,6 @@ describe('PaymentsService', () => {
         clientId,
         invoiceId,
         amount: '100.00',
-      });
-
-      mockCalculator.recomputeStatus.mockResolvedValue({
-        paidAmount: '100.00',
-        status: 'paid',
       });
 
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
@@ -257,11 +257,11 @@ describe('PaymentsService', () => {
   });
 
   // =========================================================================
-  // create() without invoiceId — no invoice update
+  // create() without invoiceId — FIFO allocation across the client's open invoices
   // =========================================================================
 
   describe('create() without invoiceId', () => {
-    it('does not call invoice.update when no invoiceId is provided', async () => {
+    it('delegates to PaymentAllocationService.allocateFifo with the client id, payment id and Decimal amount — never allocateDirect', async () => {
       const clientId = 'client-uuid-2';
       const clerkUserId = 'clerk-user-2';
       const tx = makeTx();
@@ -287,7 +287,216 @@ describe('PaymentsService', () => {
       );
 
       expect(tx.invoice.update).not.toHaveBeenCalled();
-      expect(mockCalculator.recomputeStatus).not.toHaveBeenCalled();
+      expect(mockPaymentAllocationService.allocateDirect).not.toHaveBeenCalled();
+      expect(mockPaymentAllocationService.allocateFifo).toHaveBeenCalledTimes(1);
+      const [calledTx, calledClientId, calledPaymentId, calledAmount] =
+        mockPaymentAllocationService.allocateFifo.mock.calls[0];
+      expect(calledTx).toBe(tx);
+      expect(calledClientId).toBe(clientId);
+      expect(calledPaymentId).toBe('pay-standalone');
+      expect(calledAmount.toString()).toBe('200');
+    });
+
+    it('does not lock any invoice via $queryRaw when no invoiceId is provided (locking happens inside allocateFifo itself)', async () => {
+      const clientId = 'client-uuid-2b';
+      const clerkUserId = 'clerk-user-2b';
+      const tx = makeTx();
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-2b', clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client B' });
+      tx.payment.create.mockResolvedValue({ id: 'pay-standalone-2', clientId, amount: '50.00' });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(
+        { clientId, amount: '50.00', currency: 'USD' as any, method: 'cash' as any },
+        clerkUserId,
+      );
+
+      expect(tx.$queryRaw).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // PR 2 — ledger delegation via LedgerWriteService
+  // =========================================================================
+
+  describe('create() — ledger delegation (PR 2 regression)', () => {
+    const clientId = 'client-uuid-3';
+    const receiverId = 'receiver-uuid-1';
+    const clerkUserId = 'clerk-user-3';
+
+    function baseDto(overrides: Record<string, any> = {}) {
+      return {
+        clientId,
+        amount: '75.00',
+        currency: 'USD' as any,
+        method: 'cash' as any,
+        ...overrides,
+      };
+    }
+
+    it('credits the receiver via LedgerWriteService.creditAccount when receiverId is provided', async () => {
+      const tx = makeTx();
+      const paymentDate = new Date('2026-07-31');
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-3', clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.user.findUnique.mockResolvedValue({ id: receiverId, name: 'Dev owner' });
+      tx.payment.create.mockResolvedValue({
+        id: 'pay-ledger-1',
+        clientId,
+        amount: '75.00',
+        date: paymentDate,
+      });
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(baseDto({ receiverId }), clerkUserId);
+
+      expect(mockLedgerWriteService.creditAccount).toHaveBeenCalledTimes(1);
+      const [calledTx, calledUserId, calledAmount, calledType, calledRefId, calledDesc, calledDate] =
+        mockLedgerWriteService.creditAccount.mock.calls[0];
+      expect(calledTx).toBe(tx); // same transaction as payment.create — not a separate one
+      expect(calledUserId).toBe(receiverId);
+      expect(calledAmount.toString()).toBe('75');
+      expect(calledType).toBe('payment_received');
+      expect(calledRefId).toBe('pay-ledger-1');
+      expect(calledDesc).toBe('Payment — Marina Walk Café');
+      expect(calledDate).toBe(paymentDate);
+    });
+
+    it('does not call LedgerWriteService when no receiver is provided', async () => {
+      const tx = makeTx();
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-4', clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.payment.create.mockResolvedValue({ id: 'pay-no-receiver', clientId, amount: '75.00' });
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(baseDto(), clerkUserId);
+
+      expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
+    });
+
+    it('does not call LedgerWriteService when only a legacy receiverName (no receiverId) is provided — matching original behavior', async () => {
+      const tx = makeTx();
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-5', clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.payment.create.mockResolvedValue({ id: 'pay-name-only', clientId, amount: '75.00' });
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(baseDto({ receiverName: 'Walk-in cashier' }), clerkUserId);
+
+      expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
+      expect(tx.payment.create.mock.calls[0][0].data.receiverName).toBe('Walk-in cashier');
+    });
+
+    it('propagates a LedgerWriteService failure — the payment is not silently created if the ledger credit fails', async () => {
+      const tx = makeTx();
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-6', clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.user.findUnique.mockResolvedValue({ id: receiverId, name: 'Dev owner' });
+      tx.payment.create.mockResolvedValue({ id: 'pay-fail', clientId, amount: '75.00', date: new Date() });
+
+      mockLedgerWriteService.creditAccount.mockRejectedValue(new Error('ledger write failed'));
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.create(baseDto({ receiverId }), clerkUserId)).rejects.toThrow('ledger write failed');
+    });
+  });
+
+  // =========================================================================
+  // PR 6b — validate the holder before the FK-constrained write
+  // =========================================================================
+
+  describe('create() — pre-write holder validation (PR 6b regression)', () => {
+    const clientId = 'client-uuid-6b';
+    const receiverId = 'receiver-uuid-6b';
+    const clerkUserId = 'clerk-user-6b';
+
+    function baseDto(overrides: Record<string, any> = {}) {
+      return {
+        clientId,
+        amount: '30.00',
+        currency: 'USD' as any,
+        method: 'cash' as any,
+        ...overrides,
+      };
+    }
+
+    it('1) rejects a nonexistent receiverId with NotFoundException BEFORE tx.payment.create() is called', async () => {
+      const tx = makeTx();
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-6b', clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      mockUsersService.validateCashCapable.mockRejectedValue(
+        new NotFoundException({ error: 'Receiver not found', code: 'NOT_FOUND' }),
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.create(baseDto({ receiverId }), clerkUserId)).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(mockUsersService.validateCashCapable).toHaveBeenCalledWith(receiverId);
+      expect(tx.payment.create).not.toHaveBeenCalled();
+      expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
+    });
+
+    it('4) leaves no side effects when validation fails — nothing to roll back because nothing was written', async () => {
+      const tx = makeTx();
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-6b-2', clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      mockUsersService.validateCashCapable.mockRejectedValue(
+        new NotFoundException({ error: 'Receiver not found', code: 'NOT_FOUND' }),
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.create(baseDto({ receiverId }), clerkUserId)).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(tx.payment.create).not.toHaveBeenCalled();
+      expect(tx.invoice.update).not.toHaveBeenCalled();
+    });
+
+    it("2) does not bypass LedgerWriteService's own check — if the pre-write check somehow passes, creditAccount's independent rejection still propagates", async () => {
+      // Simulates PR 6's defense-in-depth: even if the new earlier check ever
+      // passed something it shouldn't have, the untouched check inside
+      // LedgerWriteService.creditAccount() (PR 6) is still the final gate.
+      const tx = makeTx();
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-6b-3', clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.user.findUnique.mockResolvedValue({ id: receiverId, name: 'Deactivated User' });
+      tx.payment.create.mockResolvedValue({ id: 'pay-6b-3', clientId, amount: '30.00', date: new Date() });
+      mockUsersService.validateCashCapable.mockResolvedValue(undefined); // pre-write check passes
+      mockLedgerWriteService.creditAccount.mockRejectedValue(
+        new NotFoundException({ error: 'Receiver not found', code: 'NOT_FOUND' }), // PR 6's own check rejects
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.create(baseDto({ receiverId }), clerkUserId)).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockLedgerWriteService.creditAccount).toHaveBeenCalledTimes(1);
+    });
+
+    it('3) happy path: validates, then writes the document, then credits the ledger, in that order', async () => {
+      const tx = makeTx();
+      const paymentDate = new Date('2026-08-01');
+      const callOrder: string[] = [];
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-6b-4', clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.user.findUnique.mockResolvedValue({ id: receiverId, name: 'Dev owner' });
+      mockUsersService.validateCashCapable.mockImplementation(async () => { callOrder.push('validate'); });
+      tx.payment.create.mockImplementation(async () => {
+        callOrder.push('payment.create');
+        return { id: 'pay-6b-4', clientId, amount: '30.00', date: paymentDate };
+      });
+      mockLedgerWriteService.creditAccount.mockImplementation(async () => { callOrder.push('creditAccount'); });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(baseDto({ receiverId }), clerkUserId);
+
+      expect(callOrder).toEqual(['validate', 'payment.create', 'creditAccount']);
     });
   });
 });

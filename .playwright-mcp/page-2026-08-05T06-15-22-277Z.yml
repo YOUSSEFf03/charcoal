@@ -1,0 +1,183 @@
+- generic [ref=f43e3]:
+  - complementary [ref=f43e4]:
+    - generic [ref=f43e5]:
+      - generic [ref=f43e6]: 
+      - generic [ref=f43e8]:
+        - generic [ref=f43e9]: Farah Charcoal
+        - generic [ref=f43e10]: management system
+    - generic [ref=f43e11]:
+      - generic [ref=f43e12]: Overview
+      - link " Dashboard" [ref=f43e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f43e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f43e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f43e16]: 
+        - text: Reports
+    - generic [ref=f43e17]:
+      - generic [ref=f43e18]: Stock
+      - link " Containers" [ref=f43e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f43e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f43e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f43e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f43e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f43e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f43e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f43e26]: 
+        - text: Bag purchases
+    - generic [ref=f43e27]:
+      - generic [ref=f43e28]: Sales
+      - link " Clients" [ref=f43e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f43e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f43e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f43e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f43e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f43e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f43e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f43e36]:
+      - generic [ref=f43e37]: Finance
+      - link " Balances" [ref=f43e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f43e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f43e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f43e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f43e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f43e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f43e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f43e45]: 
+        - text: Expenses
+    - generic [ref=f43e46]:
+      - generic [ref=f43e47]: Setup
+      - link " Employees" [ref=f43e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f43e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f43e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f43e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f43e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f43e53]: 
+        - text: Settings
+    - generic [ref=f43e56] [cursor=pointer]:
+      - generic [ref=f43e57]: KA
+      - generic [ref=f43e58]:
+        - generic [ref=f43e59]: Khalil Abi Nader
+        - generic [ref=f43e60]: owner
+      - generic [ref=f43e61]: 
+  - generic [ref=f43e62]:
+    - banner [ref=f43e209]:
+      - generic [ref=f43e210]:
+        - button " All clients" [ref=f43e211] [cursor=pointer]:
+          - generic [ref=f43e212]: 
+          - text: All clients
+        - generic [ref=f43e213]: ·
+        - generic [ref=f43e214]: Al Nakheel Restaurant
+      - button " Back to client" [ref=f43e369] [cursor=pointer]:
+        - generic [ref=f43e370]: 
+        - text: Back to client
+    - generic [ref=f43e371]:
+      - generic [ref=f43e372]:
+        - generic [ref=f43e373]:
+          - generic [ref=f43e374]: Statement of account
+          - generic [ref=f43e375]:
+            - generic [ref=f43e376]:
+              - generic [ref=f43e377]: 
+              - text: Al Nakheel Restaurant
+            - generic [ref=f43e378]:
+              - generic [ref=f43e379]: 
+              - text: 01 May 2026 — 01 May 2026
+            - generic [ref=f43e380]:
+              - generic [ref=f43e381]: 
+              - text: USD
+        - generic [ref=f43e382]:
+          - button " Print" [ref=f43e383] [cursor=pointer]:
+            - generic [ref=f43e384]: 
+            - text: Print
+          - button " Export Excel" [ref=f43e385] [cursor=pointer]:
+            - generic [ref=f43e386]: 
+            - text: Export Excel
+      - generic [ref=f43e387]:
+        - generic [ref=f43e388]:
+          - generic [ref=f43e389]: 
+          - textbox "Search description or ref…" [ref=f43e390]
+        - generic [ref=f43e391]:
+          - generic [ref=f43e392] [cursor=pointer]: All
+          - generic [ref=f43e393] [cursor=pointer]: Charges
+          - generic [ref=f43e394] [cursor=pointer]: Payments
+        - generic [ref=f43e395]:
+          - generic [ref=f43e396]: From
+          - textbox [ref=f43e397]
+          - generic [ref=f43e398]: To
+          - textbox [ref=f43e399]
+      - generic [ref=f43e400]:
+        - generic [ref=f43e401]:
+          - generic [ref=f43e402]: Opening balance
+          - generic [ref=f43e403]: $0.00
+          - generic [ref=f43e404]: 01 May 2026
+        - generic [ref=f43e405]:
+          - generic [ref=f43e406]: Total debit
+          - generic [ref=f43e407]: $240.00
+          - generic [ref=f43e408]: charges & invoices
+        - generic [ref=f43e409]:
+          - generic [ref=f43e410]: Total credit
+          - generic [ref=f43e411]: $0.00
+          - generic [ref=f43e412]: payments received
+        - generic [ref=f43e413]:
+          - generic [ref=f43e414]: Closing balance
+          - generic [ref=f43e415]: $240.00
+          - generic [ref=f43e416]: owed by client
+      - table [ref=f43e418]:
+        - rowgroup [ref=f43e419]:
+          - row [ref=f43e420]:
+            - columnheader "Date & time" [ref=f43e421]
+            - columnheader "Ref" [ref=f43e422]
+            - columnheader "Description" [ref=f43e423]
+            - columnheader "Debit" [ref=f43e424]
+            - columnheader "Credit" [ref=f43e425]
+            - columnheader "Balance" [ref=f43e426]
+        - rowgroup [ref=f43e427]:
+          - row [ref=f43e428]:
+            - cell "01 May 2026" [ref=f43e429]
+            - cell [ref=f43e430]
+            - cell "Opening balance" [ref=f43e431]
+            - cell [ref=f43e432]
+            - cell [ref=f43e433]
+            - cell "$0.00" [ref=f43e434]
+          - row [ref=f43e435]:
+            - cell "01 May 2026" [ref=f43e436]
+            - cell [ref=f43e437]:
+              - link "SI-0001" [ref=f43e438] [cursor=pointer]:
+                - /url: /invoice/00000000-0000-4000-8000-800000000001
+            - cell "Order Sale · 20 × 10kg Bag" [ref=f43e439]
+            - cell "$240.00" [ref=f43e440]
+            - cell [ref=f43e441]
+            - cell "$240.00" [ref=f43e442]
+        - rowgroup [ref=f43e443]:
+          - row [ref=f43e444]:
+            - cell "Totals" [ref=f43e445]
+            - cell "$240.00" [ref=f43e446]
+            - cell "$0.00" [ref=f43e447]
+            - cell "$240.00" [ref=f43e448]

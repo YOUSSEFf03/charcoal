@@ -95,8 +95,11 @@ export class CreateWalkInSaleDto {
   @ApiProperty({ description: 'Payment method', enum: PaymentMethod, example: PaymentMethod.cash })
   @IsEnum(PaymentMethod) method: PaymentMethod;
 
-  @ApiProperty({ description: 'UUID of the user who received the cash', required: false })
+  @ApiProperty({ description: 'UUID of the user who received the cash (preferred over receiverName)', required: false })
   @IsOptional() @IsUUID('all') receiverId?: string;
+
+  @ApiProperty({ description: 'Name of person who received the cash (legacy fallback, set automatically from receiverId)', required: false })
+  @IsOptional() @IsString() receiverName?: string;
 
   @ApiProperty({ description: 'Recipient/buyer display name', required: false })
   @IsOptional() @IsString() recipient?: string;

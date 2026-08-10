@@ -17,8 +17,11 @@ import { CreateWorkerDto } from './dto/create-worker.dto';
 import { UpdateWorkerDto } from './dto/update-worker.dto';
 import { SetRatesDto } from './dto/set-rates.dto';
 import { CreateWorkerPaymentDto } from './dto/create-worker-payment.dto';
-import { CreateWorkerAttendanceDto } from './dto/create-worker-attendance.dto';
+import { CreateWorkerEarningDto } from './dto/create-worker-earning.dto';
+import { UpdateWorkerEarningDto } from './dto/update-worker-earning.dto';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { ClerkUser } from '../auth/clerk.strategy';
 
 @ApiTags('workers')
 @ApiBearerAuth()
@@ -53,7 +56,7 @@ export class WorkersController {
     return this.workersService.create(dto);
   }
 
-  @ApiOperation({ summary: 'Update a worker (name, phone, notes, dailyRate)' })
+  @ApiOperation({ summary: 'Update a worker (name, phone, notes)' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
   @Patch(':id')
@@ -115,34 +118,49 @@ export class WorkersController {
     return this.workersService.getPayment(id, paymentId);
   }
 
-  @ApiOperation({ summary: 'List attendance for a worker (optionally filter by month=YYYY-MM)' })
-  @ApiResponse({ status: 200, description: 'Array of { id, date } objects' })
-  @Get(':id/attendance')
-  listAttendance(
+  @ApiOperation({ summary: 'List earnings entries for a worker' })
+  @ApiResponse({ status: 200 })
+  @Get(':id/earnings')
+  listEarnings(
     @Param('id', ParseUUIDPipe) id: string,
-    @Query('month') month?: string,
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
   ) {
-    return this.workersService.listAttendance(id, month);
+    return this.workersService.listEarnings(id, page, limit);
   }
 
-  @ApiOperation({ summary: 'Mark a day attended (idempotent)' })
+  @ApiOperation({ summary: 'Log an earnings entry for a worker (daily wage, bonus, deduction, etc.)' })
   @ApiResponse({ status: 201 })
-  @Post(':id/attendance')
-  markAttendance(
+  @Post(':id/earnings')
+  addEarning(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: CreateWorkerAttendanceDto,
+    @Body() dto: CreateWorkerEarningDto,
+    @CurrentUser() user: ClerkUser,
   ) {
-    return this.workersService.markAttendance(id, dto);
+    return this.workersService.createEarning(id, dto, user.userId);
   }
 
-  @ApiOperation({ summary: 'Unmark a day (delete attendance record)' })
-  @ApiResponse({ status: 204 })
-  @Delete(':id/attendance/:date')
-  @HttpCode(204)
-  unmarkAttendance(
+  @ApiOperation({ summary: 'Get a single earnings entry' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404 })
+  @Get(':id/earnings/:earningId')
+  getEarning(
     @Param('id', ParseUUIDPipe) id: string,
-    @Param('date') date: string,
+    @Param('earningId', ParseUUIDPipe) earningId: string,
   ) {
-    return this.workersService.unmarkAttendance(id, date);
+    return this.workersService.getEarning(id, earningId);
+  }
+
+  @ApiOperation({ summary: 'Edit an earnings entry — only within the short edit window after creation' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 403, description: 'Edit window expired — log a correction entry instead' })
+  @ApiResponse({ status: 404 })
+  @Patch(':id/earnings/:earningId')
+  updateEarning(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('earningId', ParseUUIDPipe) earningId: string,
+    @Body() dto: UpdateWorkerEarningDto,
+  ) {
+    return this.workersService.updateEarning(id, earningId, dto);
   }
 }

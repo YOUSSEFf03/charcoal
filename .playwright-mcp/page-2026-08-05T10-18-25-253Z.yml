@@ -1,0 +1,180 @@
+- generic [ref=f47e3]:
+  - complementary [ref=f47e4]:
+    - generic [ref=f47e5]:
+      - generic [ref=f47e6]: 
+      - generic [ref=f47e8]:
+        - generic [ref=f47e9]: Farah Charcoal
+        - generic [ref=f47e10]: management system
+    - generic [ref=f47e11]:
+      - generic [ref=f47e12]: Overview
+      - link " Dashboard" [ref=f47e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f47e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f47e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f47e16]: 
+        - text: Reports
+    - generic [ref=f47e17]:
+      - generic [ref=f47e18]: Stock
+      - link " Containers" [ref=f47e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f47e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f47e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f47e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f47e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f47e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f47e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f47e26]: 
+        - text: Bag purchases
+    - generic [ref=f47e27]:
+      - generic [ref=f47e28]: Sales
+      - link " Clients" [ref=f47e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f47e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f47e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f47e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f47e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f47e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f47e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f47e36]:
+      - generic [ref=f47e37]: Finance
+      - link " Balances" [ref=f47e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f47e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f47e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f47e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f47e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f47e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f47e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f47e45]: 
+        - text: Expenses
+    - generic [ref=f47e46]:
+      - generic [ref=f47e47]: Setup
+      - link " Employees" [ref=f47e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f47e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f47e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f47e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f47e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f47e53]: 
+        - text: Settings
+    - generic [ref=f47e56] [cursor=pointer]:
+      - generic [ref=f47e57]: KA
+      - generic [ref=f47e58]:
+        - generic [ref=f47e59]: Khalil Abi Nader
+        - generic [ref=f47e60]: owner
+      - generic [ref=f47e61]: 
+  - generic [ref=f47e62]:
+    - banner [ref=f47e63]:
+      - generic [ref=f47e64]: Reports
+      - generic [ref=f47e66]:
+        - generic [ref=f47e67]: "Rate: 89,550 LL/$"
+        - button " Export PDF" [ref=f47e68] [cursor=pointer]:
+          - generic [ref=f47e69]: 
+          - text: Export PDF
+    - generic [ref=f47e70]:
+      - generic [ref=f47e71] [cursor=pointer]:
+        - generic [ref=f47e72]: 
+        - text: P&L
+      - generic [ref=f47e73] [cursor=pointer]:
+        - generic [ref=f47e74]: 
+        - text: Variance
+      - generic [ref=f47e75] [cursor=pointer]:
+        - generic [ref=f47e76]: 
+        - text: Worker earnings
+      - generic [ref=f47e77] [cursor=pointer]:
+        - generic [ref=f47e78]: 
+        - text: Client ledger
+      - generic [ref=f47e79] [cursor=pointer]:
+        - generic [ref=f47e80]: 
+        - text: Stock & costs
+    - generic [ref=f47e81]:
+      - generic [ref=f47e82]:
+        - generic [ref=f47e83]: Period
+        - textbox [ref=f47e84]: 2026-05-01
+        - generic [ref=f47e85]: →
+        - textbox [ref=f47e86]: 2026-05-31
+        - combobox [ref=f47e87] [cursor=pointer]:
+          - option "All charcoal types" [selected]
+          - option "BBQ Hardwood"
+          - option "Shisha"
+          - option "Restaurant Grade"
+        - combobox [ref=f47e88] [cursor=pointer]:
+          - option "All clients" [selected]
+          - option "Restaurants only"
+          - option "Wholesale only"
+          - option "Export only"
+        - button " Refresh" [ref=f47e89] [cursor=pointer]:
+          - generic [ref=f47e90]: 
+          - text: Refresh
+      - generic [ref=f47e171]:
+        - generic [ref=f47e172]:
+          - generic [ref=f47e173]:
+            - generic [ref=f47e174]: Total stock value
+            - generic [ref=f47e175]: $6,400
+            - generic [ref=f47e176]: 2 open lots
+          - generic [ref=f47e177]:
+            - generic [ref=f47e178]: Containers reported
+            - generic [ref=f47e179]: "0"
+            - generic [ref=f47e180]: arrived · 2026-05-01 → 2026-05-31
+        - generic [ref=f47e181]:
+          - generic [ref=f47e183]:
+            - generic [ref=f47e184]: 
+            - text: Stock value by lot
+          - table [ref=f47e185]:
+            - rowgroup [ref=f47e186]:
+              - row [ref=f47e187]:
+                - columnheader "Charcoal" [ref=f47e188]
+                - columnheader "Remaining" [ref=f47e189]
+                - columnheader "Cost / kg" [ref=f47e190]
+                - columnheader "Value" [ref=f47e191]
+            - rowgroup [ref=f47e192]:
+              - row [ref=f47e193]:
+                - cell "BBQ hardwood · Grade B" [ref=f47e194]
+                - cell "5,000 kg" [ref=f47e195]
+                - cell "$0.38" [ref=f47e197]
+                - cell "$1,900" [ref=f47e198]
+              - row [ref=f47e199]:
+                - cell "BBQ hardwood · Grade A" [ref=f47e200]
+                - cell "10,000 kg" [ref=f47e201]
+                - cell "$0.45" [ref=f47e203]
+                - cell "$4,500" [ref=f47e204]
+        - generic [ref=f47e205]:
+          - generic [ref=f47e207]:
+            - generic [ref=f47e208]: 
+            - text: Container landed costs
+          - table [ref=f47e209]:
+            - rowgroup [ref=f47e210]:
+              - row [ref=f47e211]:
+                - columnheader "Container" [ref=f47e212]
+                - columnheader "Supplier" [ref=f47e213]
+                - columnheader "Charcoal" [ref=f47e214]
+                - columnheader "Paid bags" [ref=f47e215]
+                - columnheader "Tonnage" [ref=f47e216]
+                - columnheader "All-in $/ton" [ref=f47e217]
+                - columnheader "All-in $/kg" [ref=f47e218]
+            - rowgroup
+          - generic [ref=f47e219]: No arrived containers in this period.

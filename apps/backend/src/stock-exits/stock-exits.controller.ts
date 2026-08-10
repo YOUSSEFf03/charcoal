@@ -78,9 +78,16 @@ export class StockExitsController {
     return this.stockExitsService.updateExit(id, dto);
   }
 
+  /**
+   * SPEC.md §3.4: workers may only "log non-sale exits (samples, internal use)" —
+   * they may never create a priced/client-linked sale (exitType 'walk_in' or
+   * 'client_bags_fill'). Role alone can't express that distinction, so the
+   * service enforces it per-exitType once it has both role and dto.
+   */
   @ApiOperation({ summary: 'Create a stock exit (decrements packed stock)' })
   @ApiResponse({ status: 201, description: 'Created' })
   @ApiResponse({ status: 400, description: 'Bad request / constraint violation' })
+  @ApiResponse({ status: 403, description: 'Worker attempted a sale-type exit' })
   @ApiResponse({ status: 404, description: 'Not found' })
   @Post()
   @Roles('owner', 'sales_rep', 'worker')
@@ -88,6 +95,6 @@ export class StockExitsController {
     @Body() dto: CreateStockExitDto,
     @CurrentUser() user: ClerkUser,
   ) {
-    return this.stockExitsService.create(dto, user.userId);
+    return this.stockExitsService.create(dto, user.userId, user.role);
   }
 }

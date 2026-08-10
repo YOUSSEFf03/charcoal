@@ -1,0 +1,237 @@
+- generic [ref=f52e3]:
+  - complementary [ref=f52e4]:
+    - generic [ref=f52e5]:
+      - generic [ref=f52e6]: 
+      - generic [ref=f52e8]:
+        - generic [ref=f52e9]: Farah Charcoal
+        - generic [ref=f52e10]: management system
+    - generic [ref=f52e11]:
+      - generic [ref=f52e12]: Overview
+      - link " Dashboard" [ref=f52e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f52e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f52e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f52e16]: 
+        - text: Reports
+    - generic [ref=f52e17]:
+      - generic [ref=f52e18]: Stock
+      - link " Containers" [ref=f52e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f52e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f52e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f52e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f52e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f52e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f52e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f52e26]: 
+        - text: Bag purchases
+    - generic [ref=f52e27]:
+      - generic [ref=f52e28]: Sales
+      - link " Clients" [ref=f52e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f52e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f52e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f52e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f52e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f52e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f52e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f52e36]:
+      - generic [ref=f52e37]: Finance
+      - link " Balances" [ref=f52e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f52e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f52e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f52e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f52e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f52e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f52e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f52e45]: 
+        - text: Expenses
+    - generic [ref=f52e46]:
+      - generic [ref=f52e47]: Setup
+      - link " Employees" [ref=f52e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f52e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f52e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f52e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f52e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f52e53]: 
+        - text: Settings
+    - generic [ref=f52e56] [cursor=pointer]:
+      - generic [ref=f52e57]: KA
+      - generic [ref=f52e58]:
+        - generic [ref=f52e59]: Khalil Abi Nader
+        - generic [ref=f52e60]: owner
+      - generic [ref=f52e61]: 
+  - generic [ref=f52e62]:
+    - banner [ref=f52e63]:
+      - generic [ref=f52e64]: Packing
+      - generic [ref=f52e66]:
+        - generic [ref=f52e67]: enter today's bags · by type
+        - button " Export CSV" [ref=f52e68] [cursor=pointer]:
+          - generic [ref=f52e69]: 
+          - text: Export CSV
+    - generic [ref=f52e70]:
+      - generic [ref=f52e71]:
+        - generic [ref=f52e72]:
+          - heading " Add packing entry pick the bag · list the charcoal lots used · we'll compute the waste" [level=2] [ref=f52e73]:
+            - generic [ref=f52e74]: 
+            - text: Add packing entry
+            - generic [ref=f52e75]: pick the bag · list the charcoal lots used · we'll compute the waste
+          - generic [ref=f52e76]: Thu 22 May · 14:42
+        - generic [ref=f52e77]:
+          - generic [ref=f52e78]:
+            - generic [ref=f52e79]:
+              - generic [ref=f52e80]: W
+              - text: Worker
+            - generic [ref=f52e81]: who packed the bags
+          - generic [ref=f52e82]:
+            - generic [ref=f52e83]: W
+            - generic [ref=f52e84]:
+              - generic [ref=f52e85]: Select worker
+              - combobox [ref=f52e86]:
+                - option "— select worker —"
+                - option "Omar Khalil" [selected]
+                - option "Hassan Mahmoud"
+        - generic [ref=f52e87]:
+          - generic [ref=f52e88]:
+            - generic [ref=f52e89]:
+              - generic [ref=f52e90]: "1"
+              - text: Bag produced
+            - generic [ref=f52e91]: what came out of packing
+          - generic [ref=f52e92]:
+            - generic [ref=f52e93]: B
+            - generic [ref=f52e94]:
+              - generic [ref=f52e95]: Bag type
+              - combobox [ref=f52e96]:
+                - option "Select bag type…" [disabled] [selected]
+                - option "10kg Bag bag"
+                - option "5kg Bag bag"
+                - option "2kg Bag bag"
+            - generic [ref=f52e97]:
+              - generic [ref=f52e98]: Quantity
+              - generic [ref=f52e99]:
+                - spinbutton "0" [ref=f52e100]
+                - generic: bags
+            - generic [ref=f52e101]:
+              - generic [ref=f52e102]: Bag output
+              - generic [ref=f52e103]:
+                - generic [ref=f52e104]: waiting
+                - generic [ref=f52e105]: 0 kg
+        - generic [ref=f52e106]:
+          - generic [ref=f52e107]:
+            - generic [ref=f52e108]:
+              - generic [ref=f52e109]: "2"
+              - text: Charcoal used
+              - generic [ref=f52e110]: · deducted from warehouse
+            - generic [ref=f52e111]: one row per lot · enter weight in kg
+          - generic [ref=f52e113]:
+            - generic [ref=f52e114]: "1"
+            - generic [ref=f52e115]:
+              - generic [ref=f52e116]: Charcoal lot · grade
+              - combobox [ref=f52e117]:
+                - option "Select charcoal lot…" [disabled] [selected]
+                - option "BBQ hardwood · B · Gulf Charcoal Co."
+                - option "BBQ hardwood · A · Gulf Charcoal Co."
+            - generic [ref=f52e118]:
+              - generic [ref=f52e119]: Weight used
+              - generic [ref=f52e120]:
+                - spinbutton "0" [ref=f52e121]
+                - generic: kg
+            - generic [ref=f52e122]:
+              - generic [ref=f52e123]: Stock left
+              - generic [ref=f52e124]:
+                - generic [ref=f52e125]: pick a lot
+                - generic [ref=f52e126]: —
+            - button "" [disabled] [ref=f52e127]
+          - button " Add another charcoal type 1 of 4" [ref=f52e130] [cursor=pointer]:
+            - generic [ref=f52e131]: 
+            - text: Add another charcoal type
+            - generic [ref=f52e132]: 1 of 4
+        - generic [ref=f52e133]:
+          - generic [ref=f52e134]:
+            - generic [ref=f52e135]:
+              - generic [ref=f52e136]: 
+              - text: Charcoal in
+            - generic [ref=f52e137]: 0 kg
+            - generic [ref=f52e138]: from warehouse
+          - generic [ref=f52e139]:
+            - generic [ref=f52e140]:
+              - generic [ref=f52e141]: 
+              - text: Bag output
+            - generic [ref=f52e142]: 0 kg
+            - generic [ref=f52e143]: 0 bags packed
+          - generic [ref=f52e144]:
+            - generic [ref=f52e145]:
+              - generic [ref=f52e146]: 
+              - text: Waste / loss
+            - generic [ref=f52e147]: — kg
+        - generic [ref=f52e148]:
+          - generic [ref=f52e149]:
+            - generic [ref=f52e150]:
+              - text: entry total
+              - generic [ref=f52e151]: 0 bags
+            - generic [ref=f52e152]:
+              - text: weight out
+              - generic [ref=f52e153]: 0 kg
+          - generic [ref=f52e154]:
+            - button "Clear" [ref=f52e155] [cursor=pointer]
+            - button " Add entry" [disabled] [ref=f52e156]:
+              - generic [ref=f52e157]: 
+              - text: Add entry
+      - generic [ref=f52e158]:
+        - generic [ref=f52e159]:
+          - heading " Today's entries THURSDAY 22 MAY 2026" [level=3] [ref=f52e160]:
+            - generic [ref=f52e161]: 
+            - text: Today's entries
+            - generic [ref=f52e162]: THURSDAY 22 MAY 2026
+          - generic [ref=f52e163]: newest first
+        - table [ref=f52e164]:
+          - rowgroup [ref=f52e165]:
+            - row [ref=f52e166]:
+              - columnheader "Time" [ref=f52e167]
+              - columnheader "Bag produced" [ref=f52e168]
+              - columnheader "Charcoal used" [ref=f52e169]
+              - columnheader "Worker" [ref=f52e170]
+              - columnheader "In" [ref=f52e171]
+              - columnheader "Out" [ref=f52e172]
+              - columnheader "Waste" [ref=f52e173]
+              - columnheader "COGS" [ref=f52e174]
+              - columnheader "Bags $" [ref=f52e175]
+              - columnheader "Worker $" [ref=f52e176]
+              - columnheader [ref=f52e177]
+          - rowgroup [ref=f52e178]:
+            - row [ref=f52e186]:
+              - cell " No entries yet Add your first batch above" [ref=f52e187]:
+                - generic [ref=f52e181]:
+                  - generic [ref=f52e188]: 
+                  - generic [ref=f52e189]: No entries yet
+                  - generic [ref=f52e190]: Add your first batch above
+      - button " View packing history 0 days" [ref=f52e183] [cursor=pointer]:
+        - generic [ref=f52e184]: 
+        - text: View packing history
+        - generic [ref=f52e185]: 0 days

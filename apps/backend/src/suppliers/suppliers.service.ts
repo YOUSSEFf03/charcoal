@@ -4,13 +4,18 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Currency, PaymentMethod, Prisma } from '@prisma/client';
+import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
 
 @Injectable()
 export class SuppliersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly settingsService: SettingsService,
+  ) {}
 
   /**
    * Retrieve a paginated list of suppliers with optional name filtering.
@@ -33,6 +38,11 @@ export class SuppliersService {
 
     // Batch-fetch financial totals for all suppliers on this page.
     const ids = data.map(s => s.id);
+    // BUG FIX: totalPaidUsd previously filtered currency='USD' only, silently
+    // excluding LBP payments from every supplier's paid/outstanding totals.
+    // Converted here using the same global-rate CASE pattern getProfitLoss()
+    // already uses for LBP amounts elsewhere in this codebase.
+    const rate = new Decimal(await this.settingsService.getExchangeRate());
 
     const [spentRows, paidRows] = await Promise.all([
       ids.length > 0
@@ -43,16 +53,21 @@ export class SuppliersService {
             GROUP BY "supplierId"`
         : [],
       ids.length > 0
-        ? this.prisma.supplierPayment.groupBy({
-            by: ['supplierId'],
-            where: { supplierId: { in: ids }, currency: 'USD' },
-            _sum: { amount: true },
-          })
+        ? this.prisma.$queryRaw<{ supplierId: string; total_paid: string }[]>`
+            SELECT "supplier_id" AS "supplierId", COALESCE(SUM(
+              CASE WHEN "currency" = 'LBP'
+                   THEN "amount"::numeric / NULLIF(${rate}::numeric, 0)
+                   ELSE "amount"::numeric
+              END
+            ), 0)::text AS total_paid
+            FROM supplier_payments
+            WHERE "supplier_id" = ANY(${ids})
+            GROUP BY "supplier_id"`
         : [],
     ]);
 
     const spentMap  = new Map((spentRows as any[]).map(r => [r.supplierId, parseFloat(r.total_spent)]));
-    const paidMap   = new Map((paidRows as any[]).map(r => [r.supplierId, parseFloat(r._sum.amount ?? '0')]));
+    const paidMap   = new Map((paidRows as any[]).map(r => [r.supplierId, parseFloat(r.total_paid)]));
 
     const enriched = data.map(s => {
       const spent       = spentMap.get(s.id) ?? 0;
@@ -124,12 +139,21 @@ export class SuppliersService {
     }
     const purchasedTypes = Array.from(typeMap.values()).sort((a, b) => b.totalKg - a.totalKg);
 
-    // Outstanding balance = total spent - total paid (USD only for now)
-    const totalPaidUsd = await this.prisma.supplierPayment.aggregate({
-      where: { supplierId: id, currency: 'USD' },
-      _sum: { amount: true },
+    // Outstanding balance = total spent - total paid.
+    // BUG FIX: previously filtered currency='USD' only, silently excluding LBP
+    // payments. Now fetches all payments and converts LBP using the same
+    // global-rate pattern used everywhere else currency conversion happens.
+    const rate = new Decimal(await this.settingsService.getExchangeRate());
+    const allPayments = await this.prisma.supplierPayment.findMany({
+      where: { supplierId: id },
+      select: { amount: true, currency: true },
     });
-    const paidUsd = parseFloat(totalPaidUsd._sum.amount?.toString() ?? '0');
+    const paidUsd = allPayments
+      .reduce((sum, p) => {
+        const amt = new Decimal(p.amount.toString());
+        return sum.plus(p.currency === 'LBP' ? (rate.gt(0) ? amt.div(rate) : new Decimal(0)) : amt);
+      }, new Decimal(0))
+      .toNumber();
     const outstandingUsd = totalSpentUsd - paidUsd;
 
     return {

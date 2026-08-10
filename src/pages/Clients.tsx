@@ -6,7 +6,8 @@ import { useCreatePayment } from '../hooks/usePayments'
 import { useOrders } from '../hooks/useOrders'
 import type { Client, ClientType, Currency, PhoneLabel, PaymentMethod } from '../types/api'
 import { useRate } from '../context/RateContext'
-import { roundDp } from '../lib/money'
+import { roundDp, formatUsd } from '../lib/money'
+import { formatDate } from '../lib/date'
 
 type ClientTab = 'all' | 'alerts' | 'debit'
 
@@ -28,18 +29,6 @@ function typeBadgeClass(t: ClientType): string {
     case 'shop': return 'badge-green'
     default: return 'badge-gray'
   }
-}
-
-// Format a Decimal-string money figure as USD with 2 decimals.
-function fmtUsd(value?: string | null) {
-  const n = value != null ? parseFloat(value) : NaN
-  return Number.isFinite(n) ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$0.00'
-}
-
-function fmtDate(iso?: string | null) {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 export default function Clients() {
@@ -309,10 +298,10 @@ export default function Clients() {
                         <div style={{ fontSize: 11, color: 'var(--text3)' }}>{c.phones.find(p => p.isActive)?.number ?? c.phones[0]?.number ?? '—'}</div>
                       </td>
                       <td><span className={`badge ${typeBadgeClass(c.type)}`}>{c.type}</span></td>
-                      <td style={{ color: 'var(--text2)' }}>{fmtDate(c.lastOrderDate)}</td>
+                      <td style={{ color: 'var(--text2)' }}>{formatDate(c.lastOrderDate)}</td>
                       <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>{c.avgOrderDays ? `${Math.round(parseFloat(c.avgOrderDays))} days` : '—'}</td>
                       <td>
-                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: trueBalance(c) > 0 ? (c.isOverdue ? 'var(--red)' : 'var(--accent2)') : 'var(--text)' }}>{fmtUsd(String(trueBalance(c)))}</div>
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: trueBalance(c) > 0 ? (c.isOverdue ? 'var(--red)' : 'var(--accent2)') : 'var(--text)' }}>{formatUsd(String(trueBalance(c)))}</div>
                       </td>
                       <td><span className="badge badge-gray">{c.currency}</span></td>
                       <td><span className={`badge ${c.isOverdue ? 'badge-red' : trueBalance(c) > 0 ? 'badge-gray' : 'badge-green'}`}>{c.isOverdue ? 'Overdue' : trueBalance(c) > 0 ? 'On account' : 'Clear'}</span></td>
@@ -384,7 +373,7 @@ export default function Clients() {
                       <div className="alert-name2">{a.name}</div>
                       <div className="alert-meta2">
                         <span className={`badge ${typeBadgeClass(a.type)}`}>{a.type}</span>
-                        <span>Last order: <strong>{fmtDate(a.lastOrderDate)}</strong></span>
+                        <span>Last order: <strong>{formatDate(a.lastOrderDate)}</strong></span>
                         {a.avgOrderDays && <span>Avg: every <strong>{Math.round(parseFloat(a.avgOrderDays))} days</strong></span>}
                       </div>
                       {pref && (
@@ -398,7 +387,7 @@ export default function Clients() {
                     <div className="alert-right">
                       <div className="alert-days2" style={{ color: 'var(--accent2)' }}>overdue</div>
                       <div className="alert-days-lbl">CRM alert</div>
-                      <div className="alert-bal" style={{ color: 'var(--accent2)' }}>owes {fmtUsd(String(trueBalance(a)))}</div>
+                      <div className="alert-bal" style={{ color: 'var(--accent2)' }}>owes {formatUsd(String(trueBalance(a)))}</div>
                     </div>
                   </div>
                 </div>
@@ -415,8 +404,8 @@ export default function Clients() {
                 const totalOwed = roundDp(balanceClients.reduce((acc, c) => acc + trueBalance(c), 0), 2)
                 const overdueOwed = roundDp(overdueClients.reduce((acc, c) => acc + parseFloat(c.balance), 0), 2)
                 const cards = [
-                  { label: 'TOTAL OWED', val: fmtUsd(String(totalOwed)), vColor: 'var(--accent2)', sub: `${balanceClients.length} clients` },
-                  { label: 'OVERDUE', val: fmtUsd(String(overdueOwed)), vColor: 'var(--red)', sub: `${overdueClients.length} clients` },
+                  { label: 'TOTAL OWED', val: formatUsd(String(totalOwed)), vColor: 'var(--accent2)', sub: `${balanceClients.length} clients` },
+                  { label: 'OVERDUE', val: formatUsd(String(overdueOwed)), vColor: 'var(--red)', sub: `${overdueClients.length} clients` },
                   { label: 'IN LBP EQUIV.', val: Math.round(totalOwed * rawRate).toLocaleString(), vSize: 18, sub: `at ${rawRate.toLocaleString()} rate` },
                   { label: 'RATE', val: parseInt(newRate).toLocaleString(), vSize: 22, sub: 'Click to update →', subColor: 'var(--accent)', click: true },
                 ] as { label: string; val: string; vColor?: string; vSize?: number; sub: string; subColor?: string; click?: boolean }[]
@@ -444,7 +433,7 @@ export default function Clients() {
                       <td><div style={{ fontWeight: 500 }}>{c.name}</div></td>
                       <td style={{ fontSize: 12, color: 'var(--text3)' }}>{c.type}</td>
                       <td><span className="badge badge-gray">{c.currency}</span></td>
-                      <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: c.isOverdue ? 'var(--red)' : 'var(--text)' }}>{fmtUsd(String(trueBalance(c)))}</td>
+                      <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: c.isOverdue ? 'var(--red)' : 'var(--text)' }}>{formatUsd(String(trueBalance(c)))}</td>
                       <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text2)' }}>{Math.round(trueBalance(c) * rawRate).toLocaleString()} LL</td>
                       <td><span className={`badge ${c.isOverdue ? 'badge-red' : 'badge-gray'}`}>{c.isOverdue ? 'Overdue' : 'On account'}</span></td>
                     </tr>
@@ -467,7 +456,7 @@ export default function Clients() {
               <div>
                 <div className="modal-title">Log payment{activeClient ? ` — ${activeClient.name}` : ''}</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>
-                  Outstanding: <strong style={{ color: 'var(--red)' }}>{fmtUsd(String(outstanding))}</strong>
+                  Outstanding: <strong style={{ color: 'var(--red)' }}>{formatUsd(String(outstanding))}</strong>
                   &nbsp;·&nbsp; Rate: <strong>{parseInt(newRate).toLocaleString()} LL/$</strong>
                 </div>
               </div>

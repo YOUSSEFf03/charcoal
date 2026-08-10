@@ -11,6 +11,24 @@ import { IS_PUBLIC_KEY } from '../common/decorators/public.decorator';
 import { ClerkStrategy } from './clerk.strategy';
 import { PrismaService } from '../prisma/prisma.service';
 
+/**
+ * True only when BOTH independent gates for the dev auth bypass hold:
+ *   1. NODE_ENV !== 'production'
+ *   2. DEV_AUTH_BYPASS_ENABLED === 'true' (defaults to 'false' — must be
+ *      explicitly opted into per-environment; see env.validation.ts).
+ *
+ * Neither condition alone can enable the bypass — a forgotten or
+ * misconfigured NODE_ENV is no longer sufficient on its own. Exported so
+ * main.ts can log a loud startup warning using the exact same check; the
+ * guard logic and the visibility check must never drift apart.
+ */
+export function isDevAuthBypassEnabled(): boolean {
+  return (
+    process.env.NODE_ENV !== 'production' &&
+    process.env.DEV_AUTH_BYPASS_ENABLED === 'true'
+  );
+}
+
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(
@@ -38,8 +56,8 @@ export class JwtAuthGuard implements CanActivate {
       });
     }
 
-    // Dev bypass — only honoured in development; never reaches production.
-    if (process.env.NODE_ENV !== 'production' && token.startsWith('dev:')) {
+    // Dev bypass — doubly gated, see isDevAuthBypassEnabled() above.
+    if (isDevAuthBypassEnabled() && token.startsWith('dev:')) {
       const role = token.slice(4);
       const clerkIdMap: Record<string, string> = {
         owner: 'user_test_owner',

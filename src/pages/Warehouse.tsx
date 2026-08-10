@@ -3,6 +3,8 @@ import Topbar from '../components/layout/Topbar'
 import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useStockExits } from '../hooks/useWarehouse'
 import { usePackingSessions } from '../hooks/usePacking'
 import { useSuppliers } from '../hooks/useSuppliers'
+import { usePhysicalCount, useSubmitPhysicalCount } from '../hooks/useReports'
+import { formatDate } from '../lib/date'
 
 type WTab = 'raw' | 'packed' | 'adj'
 
@@ -22,11 +24,7 @@ interface LotVM {
   source: string
 }
 
-function fmtDate(iso?: string | null) {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-}
+function fmtDate(iso?: string | null) { return formatDate(iso) }
 
 export default function Warehouse() {
   const [tab, setTab] = useState<WTab>('raw')
@@ -34,6 +32,7 @@ export default function Warehouse() {
   const [selectedLot, setSelectedLot] = useState<LotVM | null>(null)
   const [countModalOpen, setCountModalOpen] = useState(false)
   const [countValues, setCountValues] = useState<Record<string, string>>({})
+  const [countError, setCountError] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'depleted'>('all')
   const [filterSearch, setFilterSearch] = useState('')
   const [adjModalOpen, setAdjModalOpen] = useState(false)
@@ -52,6 +51,8 @@ export default function Warehouse() {
   const createAdj = useCreateStockAdjustment()
   const updateAdj = useUpdateStockAdjustment()
   const deleteAdj = useDeleteStockAdjustment()
+  const physicalCountQ = usePhysicalCount()
+  const submitCount = useSubmitPhysicalCount()
   const [editAdj, setEditAdj] = useState<any>(null)
   const [editAdjQty, setEditAdjQty] = useState('')
   const [editAdjReason, setEditAdjReason] = useState('')
@@ -115,10 +116,43 @@ export default function Warehouse() {
     setLotPanelOpen(true)
   }
 
-  function getCountDiff(lotId: string, systemQty: number) {
-    const val = parseFloat(countValues[lotId] || '')
+  const lotById = new Map(lots.map(l => [l.id, l]))
+
+  function getCountDiff(id: string, systemQty: number) {
+    const val = parseFloat(countValues[id] || '')
     if (isNaN(val)) return null
     return val - systemQty
+  }
+
+  function closeCountModal() {
+    setCountModalOpen(false)
+    setCountValues({})
+    setCountError('')
+  }
+
+  function submitPhysicalCount() {
+    const items: { packedStockId: string; actualQuantity: number }[] = []
+    for (const [packedStockId, raw] of Object.entries(countValues)) {
+      if (raw.trim() === '') continue
+      const n = Number(raw)
+      if (!Number.isInteger(n) || n < 0) {
+        setCountError('Counted quantities must be whole numbers ≥ 0')
+        return
+      }
+      items.push({ packedStockId, actualQuantity: n })
+    }
+    if (items.length === 0) {
+      setCountError('Enter at least one counted quantity')
+      return
+    }
+    setCountError('')
+    submitCount.mutate({ items }, {
+      onSuccess: (res: any) => {
+        closeCountModal()
+        showToast(`Physical count submitted — ${res?.adjustmentsCreated ?? 0} adjustment(s) created`)
+      },
+      onError: (err: any) => setCountError(err?.error ?? 'Failed to submit count'),
+    })
   }
 
   const packedCards = packedSummary.map(p => ({
@@ -140,7 +174,7 @@ export default function Warehouse() {
   return (
     <>
       <Topbar title="Warehouse">
-        <button className="btn danger" onClick={() => setCountModalOpen(true)}>
+        <button className="btn danger" onClick={() => { setCountValues({}); setCountError(''); setCountModalOpen(true) }}>
           <i className="ti ti-clipboard-check" style={{ fontSize: 15 }} /> Physical count
         </button>
         <button className="btn primary">
@@ -851,7 +885,7 @@ export default function Warehouse() {
 
       {/* Physical count modal */}
       {countModalOpen && (
-        <div className="modal-overlay open" onClick={() => setCountModalOpen(false)}>
+        <div className="modal-overlay open" onClick={closeCountModal}>
           <div
             className="modal"
             style={{ width: 500, maxHeight: '80vh', overflowY: 'auto' }}
@@ -860,58 +894,69 @@ export default function Warehouse() {
             <div className="modal-head">
               <div>
                 <div className="modal-title">Physical stock count</div>
-                <div className="modal-sub">Enter counted quantities — differences will be flagged for approval</div>
+                <div className="modal-sub">Enter counted bag quantities — differences will create stock adjustments</div>
               </div>
-              <button className="panel-close" onClick={() => setCountModalOpen(false)}>✕</button>
+              <button className="panel-close" onClick={closeCountModal}>✕</button>
             </div>
             <div className="modal-body">
-              <div style={{ fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
-                Raw lots
-              </div>
-              {lots.filter(l => l.status === 'active').map(lot => {
-                const diff = getCountDiff(lot.id, lot.remainKg)
-                return (
-                  <div key={lot.id} className="count-row">
-                    <div className="count-name">
-                      {lot.charcoalType} · Grade {lot.grade}
-                      <div style={{ fontSize: 11, color: 'var(--text3)' }} title={lot.id}>{lot.displayId ?? lot.id.slice(0, 8).toUpperCase()} · {lot.supplier}</div>
-                    </div>
-                    <div className="count-system">System: {lot.remainKg.toLocaleString()} kg</div>
-                    <input
-                      type="number"
-                      className="count-input"
-                      placeholder="0"
-                      value={countValues[lot.id] || ''}
-                      onChange={e => setCountValues(prev => ({ ...prev, [lot.id]: e.target.value }))}
-                    />
-                    <div
-                      className="count-diff"
-                      style={{
-                        color: diff === null
-                          ? 'var(--text3)'
-                          : diff === 0
-                          ? 'var(--accent)'
-                          : diff < 0
-                          ? 'var(--red)'
-                          : 'var(--accent2)',
-                      }}
-                    >
-                      {diff === null ? '—' : diff === 0 ? '✓' : diff > 0 ? `+${diff}` : diff}
-                    </div>
-                  </div>
-                )
-              })}
-              {lots.filter(l => l.status === 'active').length === 0 && (
-                <div style={{ fontSize: 13, color: 'var(--text3)', padding: '8px 0' }}>No active lots to count.</div>
+              {physicalCountQ.isLoading && (
+                <div style={{ fontSize: 13, color: 'var(--text3)', padding: '8px 0' }}>Loading packed stock…</div>
               )}
-              <div className="form-group" style={{ marginTop: 18 }}>
-                <label className="form-label">Reason / notes (required if any difference found)</label>
-                <input className="form-input" type="text" placeholder="e.g. dust loss, damaged bags, scale error…" />
-              </div>
+              {!physicalCountQ.isLoading && (physicalCountQ.data?.packedStock.length ?? 0) === 0 && (
+                <div style={{ fontSize: 13, color: 'var(--text3)', padding: '8px 0' }}>No packed stock to count.</div>
+              )}
+              {physicalCountQ.data?.packedStock.map(group => (
+                <div key={group.bagTypeId} style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
+                    {group.bagTypeName}
+                  </div>
+                  {group.items.map(item => {
+                    const diff = getCountDiff(item.packedStockId, item.quantity)
+                    const lot = lotById.get(item.lotId)
+                    return (
+                      <div key={item.packedStockId} className="count-row">
+                        <div className="count-name">
+                          {lot ? `${lot.charcoalType} · Grade ${lot.grade}` : 'Unknown lot'}
+                          <div style={{ fontSize: 11, color: 'var(--text3)' }} title={item.packedStockId}>
+                            {lot ? lot.supplier : '—'} · lot {lot?.displayId ?? item.lotId.slice(0, 8).toUpperCase()}
+                          </div>
+                        </div>
+                        <div className="count-system">System: {item.quantity.toLocaleString()} bags</div>
+                        <input
+                          type="number"
+                          className="count-input"
+                          placeholder="0"
+                          value={countValues[item.packedStockId] || ''}
+                          onChange={e => setCountValues(prev => ({ ...prev, [item.packedStockId]: e.target.value }))}
+                        />
+                        <div
+                          className="count-diff"
+                          style={{
+                            color: diff === null
+                              ? 'var(--text3)'
+                              : diff === 0
+                              ? 'var(--accent)'
+                              : diff < 0
+                              ? 'var(--red)'
+                              : 'var(--accent2)',
+                          }}
+                        >
+                          {diff === null ? '—' : diff === 0 ? '✓' : diff > 0 ? `+${diff}` : diff}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ))}
+              {countError && (
+                <div style={{ fontSize: 12.5, color: 'var(--red)', marginTop: 10 }}>{countError}</div>
+              )}
             </div>
             <div className="modal-footer">
-              <button className="btn" onClick={() => setCountModalOpen(false)}>Cancel</button>
-              <button className="btn primary" onClick={() => setCountModalOpen(false)}>Submit count</button>
+              <button className="btn" onClick={closeCountModal}>Cancel</button>
+              <button className="btn primary" onClick={submitPhysicalCount} disabled={submitCount.isPending}>
+                {submitCount.isPending ? 'Submitting…' : 'Submit count'}
+              </button>
             </div>
           </div>
         </div>

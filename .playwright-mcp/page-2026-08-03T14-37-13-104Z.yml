@@ -1,0 +1,215 @@
+- generic [ref=f23e3]:
+  - complementary [ref=f23e4]:
+    - generic [ref=f23e5]:
+      - generic [ref=f23e6]: 
+      - generic [ref=f23e8]:
+        - generic [ref=f23e9]: Farah Charcoal
+        - generic [ref=f23e10]: management system
+    - generic [ref=f23e11]:
+      - generic [ref=f23e12]: Overview
+      - link " Dashboard" [ref=f23e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f23e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f23e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f23e16]: 
+        - text: Reports
+    - generic [ref=f23e17]:
+      - generic [ref=f23e18]: Stock
+      - link " Containers" [ref=f23e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f23e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f23e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f23e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f23e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f23e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f23e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f23e26]: 
+        - text: Bag purchases
+    - generic [ref=f23e27]:
+      - generic [ref=f23e28]: Sales
+      - link " Clients" [ref=f23e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f23e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f23e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f23e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f23e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f23e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f23e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f23e36]:
+      - generic [ref=f23e37]: Finance
+      - link " Balances" [ref=f23e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f23e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f23e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f23e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f23e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f23e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f23e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f23e45]: 
+        - text: Expenses
+    - generic [ref=f23e46]:
+      - generic [ref=f23e47]: Setup
+      - link " Employees" [ref=f23e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f23e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f23e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f23e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f23e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f23e53]: 
+        - text: Settings
+    - generic [ref=f23e56] [cursor=pointer]:
+      - generic [ref=f23e57]: KA
+      - generic [ref=f23e58]:
+        - generic [ref=f23e59]: Khalil Abi Nader
+        - generic [ref=f23e60]: owner
+      - generic [ref=f23e61]: 
+  - generic [ref=f23e62]:
+    - banner [ref=f23e63]:
+      - generic [ref=f23e64]: Warehouse
+      - generic [ref=f23e66]:
+        - button " Physical count" [active] [ref=f23e67] [cursor=pointer]:
+          - generic [ref=f23e68]: 
+          - text: Physical count
+        - button " New packing session" [ref=f23e69] [cursor=pointer]:
+          - generic [ref=f23e70]: 
+          - text: New packing session
+    - generic [ref=f23e71]:
+      - button " Raw lots 3" [ref=f23e137] [cursor=pointer]:
+        - generic [ref=f23e73]: 
+        - text: Raw lots
+        - generic [ref=f23e74]: "3"
+      - button " Packed goods 1" [ref=f23e138] [cursor=pointer]:
+        - generic [ref=f23e76]: 
+        - text: Packed goods
+        - generic [ref=f23e77]: "1"
+      - button " Adjustments 0" [ref=f23e78] [cursor=pointer]:
+        - generic [ref=f23e79]: 
+        - text: Adjustments
+        - generic [ref=f23e80]: "0"
+    - generic [ref=f23e81]:
+      - generic [ref=f23e82]:
+        - generic [ref=f23e83]:
+          - generic [ref=f23e84]: total raw stock
+          - generic [ref=f23e85]: 19,500 kg
+          - generic [ref=f23e86]: across 3 open lots
+        - generic [ref=f23e87]:
+          - generic [ref=f23e88]: total packed
+          - generic [ref=f23e89]: 500 kg
+          - generic [ref=f23e90]: 50 bags ready
+        - generic [ref=f23e91]:
+          - generic [ref=f23e92]: system total
+          - generic [ref=f23e93]: 20,000 kg
+          - generic [ref=f23e94]: raw + packed combined
+        - generic [ref=f23e95]:
+          - generic [ref=f23e96]: warehouse value
+          - generic [ref=f23e97]: $8,425
+          - generic [ref=f23e98]: at cost price
+        - generic [ref=f23e99]:
+          - generic [ref=f23e100]: open lots
+          - generic [ref=f23e101]: "3"
+          - generic [ref=f23e102]: active stock
+      - generic [ref=f23e103]:
+        - generic [ref=f23e104]:
+          - generic [ref=f23e105]:
+            - generic [ref=f23e106]: 
+            - textbox "Search by type, supplier, lot ID…" [ref=f23e107]
+          - combobox [ref=f23e108] [cursor=pointer]:
+            - option "All status" [selected]
+            - option "Active"
+            - option "Depleted"
+          - generic [ref=f23e109]: 3 lots
+        - generic [ref=f23e110]:
+          - generic [ref=f23e111]:
+            - generic [ref=f23e112]:
+              - generic [ref=f23e113]: 
+              - text: Raw stock lots
+            - button "Export" [ref=f23e114] [cursor=pointer]
+          - table [ref=f23e115]:
+            - rowgroup [ref=f23e116]:
+              - row [ref=f23e117]:
+                - columnheader "Lot" [ref=f23e118]
+                - columnheader "Type / grade" [ref=f23e119]
+                - columnheader "Supplier" [ref=f23e120]
+                - columnheader "Received" [ref=f23e121]
+                - columnheader "Remaining" [ref=f23e122]
+                - columnheader "Fill level" [ref=f23e123]
+                - columnheader "Cost / kg" [ref=f23e124]
+                - columnheader "Value" [ref=f23e125]
+                - columnheader [ref=f23e126]
+            - rowgroup [ref=f23e127]:
+              - row [ref=f23e139] [cursor=pointer]:
+                - cell "4E4D9004" [ref=f23e140]
+                - cell "BBQ hardwood Grade B" [ref=f23e141]:
+                  - generic [ref=f23e142]: BBQ hardwood
+                  - generic [ref=f23e143]: Grade B
+                - cell "Gulf Charcoal Co." [ref=f23e144]
+                - cell "5,000 kg" [ref=f23e145]
+                - cell "5,000 kg" [ref=f23e146]
+                - cell "100%" [ref=f23e147]
+                - cell "$0.380" [ref=f23e152]
+                - cell "$1,900" [ref=f23e153]
+                - cell "" [ref=f23e154]
+              - row [ref=f23e156] [cursor=pointer]:
+                - cell "00F928BE" [ref=f23e157]
+                - cell "BBQ hardwood Grade A" [ref=f23e158]:
+                  - generic [ref=f23e159]: BBQ hardwood
+                  - generic [ref=f23e160]: Grade A
+                - cell "Gulf Charcoal Co." [ref=f23e161]
+                - cell "10,000 kg" [ref=f23e162]
+                - cell "9,500 kg" [ref=f23e163]
+                - cell "95%" [ref=f23e164]
+                - cell "$0.450" [ref=f23e169]
+                - cell "$4,275" [ref=f23e170]
+                - cell "" [ref=f23e171]
+              - row [ref=f23e173] [cursor=pointer]:
+                - cell "00000000" [ref=f23e174]
+                - cell "BBQ hardwood Grade A" [ref=f23e175]:
+                  - generic [ref=f23e176]: BBQ hardwood
+                  - generic [ref=f23e177]: Grade A
+                - cell "Gulf Charcoal Co." [ref=f23e178]
+                - cell "5,000 kg" [ref=f23e179]
+                - cell "5,000 kg" [ref=f23e180]
+                - cell "100%" [ref=f23e181]
+                - cell "$0.450" [ref=f23e186]
+                - cell "$2,250" [ref=f23e187]
+                - cell "" [ref=f23e188]
+    - generic [ref=f23e191]:
+      - generic [ref=f23e192]:
+        - generic [ref=f23e193]:
+          - generic [ref=f23e194]: Physical stock count
+          - generic [ref=f23e195]: Enter counted bag quantities — differences will create stock adjustments
+        - button "✕" [ref=f23e196] [cursor=pointer]
+      - generic [ref=f23e198]:
+        - generic [ref=f23e199]: 10kg Bag
+        - generic [ref=f23e200]:
+          - generic "f06aa856-92d1-4bb9-9239-c7a2480ea614" [ref=f23e202]: F06AA856 · lot 00F928BE
+          - generic [ref=f23e203]: "System: 50 bags"
+          - spinbutton "0" [ref=f23e204]
+          - generic [ref=f23e205]: —
+      - generic [ref=f23e206]:
+        - button "Cancel" [ref=f23e207] [cursor=pointer]
+        - button "Submit count" [ref=f23e208] [cursor=pointer]

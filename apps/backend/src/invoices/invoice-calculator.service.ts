@@ -12,6 +12,13 @@ export interface EnrichedBagLine {
   qty: number;
   pricePerBag: string;
   lineTotal: string;
+  /** Charcoal type/grade of the stock this line drew from — stamped by the
+   * caller (not computeLines itself, which has no stock context) so
+   * revenue/cost-by-charcoal-type reporting can read it straight off the
+   * line instead of reconstructing it from stock_exits after the fact.
+   * Absent on invoices created before this field existed. */
+  charcoalType?: string;
+  grade?: string;
 }
 
 /** Enriched KG line stored in invoice.lines JSONB. */
@@ -21,6 +28,9 @@ export interface EnrichedKgLine {
   description: string;
   pricePerKg: string;
   lineTotal: string;
+  /** See EnrichedBagLine.charcoalType. */
+  charcoalType?: string;
+  grade?: string;
 }
 
 /** Discriminated union of all enriched line types. */
@@ -112,8 +122,15 @@ export class InvoiceCalculatorService {
   }
 
   /**
-   * Recompute invoice paidAmount and status from the payment aggregate.
-   * Uses tx.payment.aggregate as source of truth — safe against future edits/deletes.
+   * Recompute invoice paidAmount and status from PaymentAllocation — the
+   * authoritative record of how much of which payments applied to this
+   * invoice (see PaymentAllocationService). NOT Payment.amount directly:
+   * a client-level payment (Payment.invoiceId null) can be FIFO-split across
+   * several invoices, so "payments linked to this invoice via invoiceId"
+   * undercounts whenever that split happened. Every write path that credits
+   * an invoice (direct link or FIFO) goes through PaymentAllocationService,
+   * which always inserts a PaymentAllocation row — including for a directly
+   * linked payment — so this single source stays correct for both.
    * @constraint 15 — does not touch Client.balance
    * Status logic: paidAmount >= total → paid; paidAmount > 0 → partially_paid; else → issued
    */
@@ -126,7 +143,7 @@ export class InvoiceCalculatorService {
       select: { total: true },
     });
 
-    const aggregate = await tx.payment.aggregate({
+    const aggregate = await tx.paymentAllocation.aggregate({
       where: { invoiceId },
       _sum: { amount: true },
     });

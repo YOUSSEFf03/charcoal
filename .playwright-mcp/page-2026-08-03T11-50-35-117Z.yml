@@ -1,0 +1,91 @@
+- generic [ref=f4e3]:
+  - complementary [ref=f4e4]:
+    - generic [ref=f4e5]:
+      - generic [ref=f4e6]: 
+      - generic [ref=f4e8]:
+        - generic [ref=f4e9]: Farah Charcoal
+        - generic [ref=f4e10]: management system
+    - generic [ref=f4e11]:
+      - generic [ref=f4e12]: Overview
+      - link " Dashboard" [ref=f4e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f4e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f4e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f4e16]: 
+        - text: Reports
+    - generic [ref=f4e17]:
+      - generic [ref=f4e18]: Stock
+      - link " Containers" [ref=f4e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f4e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f4e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f4e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f4e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f4e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f4e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f4e26]: 
+        - text: Bag purchases
+    - generic [ref=f4e27]:
+      - generic [ref=f4e28]: Sales
+      - link " Clients" [ref=f4e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f4e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f4e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f4e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f4e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f4e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f4e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f4e36]:
+      - generic [ref=f4e37]: Finance
+      - link " Balances" [ref=f4e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f4e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f4e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f4e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f4e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f4e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f4e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f4e45]: 
+        - text: Expenses
+    - generic [ref=f4e46]:
+      - generic [ref=f4e47]: Setup
+      - link " Employees" [ref=f4e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f4e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f4e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f4e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f4e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f4e53]: 
+        - text: Settings
+    - generic [ref=f4e56] [cursor=pointer]:
+      - generic [ref=f4e57]: KA
+      - generic [ref=f4e58]:
+        - generic [ref=f4e59]: Khalil Abi Nader
+        - generic [ref=f4e60]: owner
+      - generic [ref=f4e61]: 
+  - banner [ref=f4e63]:
+    - generic [ref=f4e64]: Container

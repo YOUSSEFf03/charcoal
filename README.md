@@ -343,7 +343,7 @@ charcoal-erp/
 1. Set environment variables on Railway (DATABASE_URL, Clerk keys, etc.)
 2. Push to main branch
 3. Railway auto-deploys both backend and frontend
-4. Set `NODE_ENV=production` to disable dev auth bypass
+4. Set `NODE_ENV=production` — required to disable the dev auth bypass. As defense-in-depth, the bypass also requires `DEV_AUTH_BYPASS_ENABLED=true` to be set; **do not set that variable on Railway at all**, so a forgotten/misconfigured `NODE_ENV` alone can never expose it
 
 See `backend-docs/` for deployment configuration details.
 

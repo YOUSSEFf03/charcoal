@@ -17,6 +17,8 @@
     "@tanstack/react-query": "^5.100.14",
     "axios": "^1.16.1",
     "chart.js": "^4.5.1",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "next": "^16.2.7",
     "react": "^18.3.1",
     "react-chartjs-2": "^5.3.1",

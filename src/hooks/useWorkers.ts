@@ -6,7 +6,9 @@ import type {
   UpdateWorkerRatesDto,
   CreateWorkerPaymentDto,
   WorkerPayment,
-  WorkerAttendanceRecord,
+  WorkerEarning,
+  CreateWorkerEarningDto,
+  UpdateWorkerEarningDto,
 } from '../types/api'
 
 /**
@@ -83,7 +85,7 @@ export function useDeleteWorker() {
 export function useUpdateWorker() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, body }: { id: string; body: { name?: string; phone?: string | null; notes?: string | null; dailyRate?: string } }) => {
+    mutationFn: async ({ id, body }: { id: string; body: { name?: string; phone?: string | null; notes?: string | null } }) => {
       const res = await api.patch<Worker>(`/workers/${id}`, body)
       return res.data
     },
@@ -163,60 +165,74 @@ export function useWorkerPayments(workerId: string | undefined) {
 }
 
 /**
- * List attendance records for a worker, filtered to a calendar month.
- * @param workerId - worker UUID (skip if undefined)
- * @param month    - "YYYY-MM" string
- * @returns React Query result of WorkerAttendanceRecord[]
- * GET /workers/:id/attendance?month=YYYY-MM
+ * List earnings entries for a worker (paginated, newest first).
+ * @param workerId - worker UUID (skip query if undefined)
+ * @returns React Query result of WorkerEarning[]
+ * GET /workers/:id/earnings
  */
-export function useWorkerAttendance(workerId: string | undefined, month: string) {
+export function useWorkerEarnings(workerId: string | undefined) {
   return useQuery({
-    queryKey: ['workers', workerId, 'attendance', month],
+    queryKey: ['workers', workerId, 'earnings'],
     queryFn: async () => {
-      const res = await api.get<{ id: string; date: string }[]>(
-        `/workers/${workerId}/attendance`,
-        { params: { month } },
-      )
-      return res.data
+      const res = await api.get<{ data: WorkerEarning[] }>(`/workers/${workerId}/earnings`, {
+        params: { limit: 50 },
+      })
+      return res.data.data
     },
     enabled: Boolean(workerId),
   })
 }
 
 /**
- * Mark a day attended (POST /workers/:id/attendance). Idempotent.
- * Invalidates the worker's attendance query AND the worker totals query.
+ * Log an earnings entry for a worker (daily wage, bonus, deduction, etc.).
+ * @returns mutation accepting { id, body: CreateWorkerEarningDto }
+ * POST /workers/:id/earnings
  */
-export function useMarkAttendance() {
+export function useCreateWorkerEarning() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ workerId, date }: { workerId: string; date: string }) => {
-      const res = await api.post<{ id: string; date: string }>(
-        `/workers/${workerId}/attendance`,
-        { date },
-      )
+    mutationFn: async ({
+      id,
+      body,
+    }: {
+      id: string
+      body: CreateWorkerEarningDto
+    }) => {
+      const res = await api.post<WorkerEarning>(`/workers/${id}/earnings`, body)
       return res.data
     },
-    onSuccess: (_data, { workerId }) => {
-      qc.invalidateQueries({ queryKey: ['workers', workerId, 'attendance'] })
+    onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['workers'] })
+      qc.invalidateQueries({ queryKey: ['workers', id] })
     },
   })
 }
 
 /**
- * Unmark a day (DELETE /workers/:id/attendance/:date).
- * Invalidates the worker's attendance query AND the worker totals query.
+ * Edit an earnings entry — the backend only accepts this within a short
+ * window of creation (EDIT_WINDOW_EXPIRED past that); the UI should offer a
+ * "log a correction entry" path instead once the window has passed.
+ * @returns mutation accepting { id, earningId, body: UpdateWorkerEarningDto }
+ * PATCH /workers/:id/earnings/:earningId
  */
-export function useUnmarkAttendance() {
+export function useUpdateWorkerEarning() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ workerId, date }: { workerId: string; date: string }) => {
-      await api.delete(`/workers/${workerId}/attendance/${date}`)
+    mutationFn: async ({
+      id,
+      earningId,
+      body,
+    }: {
+      id: string
+      earningId: string
+      body: UpdateWorkerEarningDto
+    }) => {
+      const res = await api.patch<WorkerEarning>(`/workers/${id}/earnings/${earningId}`, body)
+      return res.data
     },
-    onSuccess: (_data, { workerId }) => {
-      qc.invalidateQueries({ queryKey: ['workers', workerId, 'attendance'] })
+    onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['workers'] })
+      qc.invalidateQueries({ queryKey: ['workers', id] })
     },
   })
 }

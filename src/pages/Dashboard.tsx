@@ -5,18 +5,16 @@ import { useWarehouseSummary, useStockLots } from '../hooks/useWarehouse'
 import { useOrders } from '../hooks/useOrders'
 import { useOverdueClients } from '../hooks/useClients'
 import { useContainers } from '../hooks/useContainers'
-import { useProfitLoss, useActivity } from '../hooks/useReports'
+import { useProfitLoss, useArSummary, useActivity, useDailyRevenue } from '../hooks/useReports'
 import type { ActivityItem } from '../hooks/useReports'
 import { useWorkers } from '../hooks/useWorkers'
+import { formatUsd } from '../lib/money'
+import { currentMonthToDateRange } from '../lib/date'
+import DailyRevenueChart from '../components/DailyRevenueChart'
 
 function fmtKg(value?: string | null) {
   const n = value != null ? parseFloat(value) : NaN
   return Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'
-}
-
-function fmtUsd(value?: string | null) {
-  const n = value != null ? parseFloat(value) : NaN
-  return Number.isFinite(n) ? `$${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : '—'
 }
 
 function timeAgo(ts: string): string {
@@ -75,11 +73,17 @@ export default function Dashboard() {
   const stockLotsQ = useStockLots({ limit: 5 })
   const workersQ = useWorkers()
 
-  // Profit & loss for current month.
+  // Profit & loss for current month-to-date — same shared helper Reports.tsx
+  // uses for its own default, so the two pages always open on the same period.
   const now = new Date()
-  const dateFrom = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-01'
-  const dateTo = now.toISOString().slice(0, 10)
+  const { dateFrom, dateTo } = currentMonthToDateRange()
   const plQ = useProfitLoss({ dateFrom, dateTo })
+  // Same hook, same endpoint, same date range as the Reports P&L tab's Daily
+  // revenue chart — reused here (not reimplemented) so both pages agree exactly.
+  const dailyRevenueQ = useDailyRevenue({ dateFrom, dateTo })
+  // Outstanding receivables — reuses the existing AR summary (Phase 4); no date range,
+  // since receivables are a point-in-time balance, not a period flow like gross profit.
+  const arQ = useArSummary()
 
   const inDeliveryQ = useOrders({ status: 'partially_delivered', limit: 10 })
   const inDeliveryOrders = inDeliveryQ.data?.data ?? []
@@ -109,6 +113,7 @@ export default function Dashboard() {
     stockLotsQ.refetch()
     workersQ.refetch()
     plQ.refetch()
+    dailyRevenueQ.refetch()
     inDeliveryQ.refetch()
     activityQ.refetch()
   }
@@ -118,6 +123,13 @@ export default function Dashboard() {
     setToast(true)
     setTimeout(() => setToast(false), 2800)
   }
+
+  // Profit card derived values — sign drives color (green = healthy, red = loss),
+  // computed once here so gross profit and margin always agree on sign/color.
+  const grossProfitNum = plQ.data ? parseFloat(plQ.data.grossProfit) : 0
+  const revenueNum     = plQ.data ? parseFloat(plQ.data.revenue) : 0
+  const marginText     = plQ.data && revenueNum > 0 ? `${((grossProfitNum / revenueNum) * 100).toFixed(1)}%` : '—'
+  const profitSignCls  = grossProfitNum < 0 ? 'neg' : 'pos'
 
   return (
     <>
@@ -330,7 +342,7 @@ export default function Dashboard() {
                 <div className="alert-dot" style={{ background: 'var(--accent2)' }} />
                 <div style={{ flex: 1 }}>
                   <div className="alert-name">{c.name}</div>
-                  <div className="alert-meta">{c.type} · {fmtUsd(c.balance)} balance</div>
+                  <div className="alert-meta">{c.type} · {formatUsd(c.balance, { decimals: 0 })} balance</div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <div className="alert-days" style={{ color: 'var(--accent2)' }}>overdue</div>
@@ -351,37 +363,70 @@ export default function Dashboard() {
           {/* Profit */}
           <div className="card" style={{ animationDelay: '0.45s' }}>
             <div className="card-head">
-              <div className="card-title"><i className="ti ti-chart-pie" /> Profit — {now.toLocaleString('en-US', { month: 'long' })} {now.getFullYear()}</div>
+              <div className="card-title"><i className="ti ti-chart-pie" /> Gross Profit — {now.toLocaleString('en-US', { month: 'long' })} {now.getFullYear()}</div>
               <button className="card-action" onClick={() => navigate('/reports')}>Full report</button>
             </div>
             <div className="profit-block">
+              <div className="section-title">Profitability</div>
+
               <div className="profit-main">
                 <div>
-                  <div className="profit-period">gross profit</div>
-                  <div className="profit-value">{plQ.isLoading ? '—' : fmtUsd(plQ.data?.grossProfit)}</div>
+                  <div className="profit-period">
+                    Gross Profit
+                    <i
+                      className="ti ti-info-circle info-icon"
+                      title="Accrual basis. Revenue is recognized when invoices are issued. Cash collection is displayed separately."
+                    />
+                  </div>
+                  <div className={`profit-value ${profitSignCls}`}>{plQ.isLoading ? '—' : formatUsd(plQ.data?.grossProfit, { decimals: 0 })}</div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div className="profit-period">margin</div>
-                  <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: -0.5, color: 'var(--accent)' }}>
-                    {plQ.isLoading || !plQ.data ? '—' : (() => {
-                      const rev = parseFloat(plQ.data.revenue)
-                      const gp = parseFloat(plQ.data.grossProfit)
-                      return rev > 0 ? `${((gp / rev) * 100).toFixed(1)}%` : '—'
-                    })()}
+                  <div className="profit-period" style={{ justifyContent: 'flex-end' }}>Gross Margin</div>
+                  <div className={`profit-margin ${profitSignCls}`}>
+                    {plQ.isLoading ? '—' : marginText}
                   </div>
                 </div>
               </div>
+
               <div className="profit-breakdown">
-                <div className="pb-item"><div className="pb-label">Revenue</div><div className="pb-value">{plQ.isLoading ? '—' : fmtUsd(plQ.data?.revenue)}</div></div>
-                <div className="pb-item"><div className="pb-label">COGS</div><div className="pb-value red">{plQ.isLoading ? '—' : fmtUsd(plQ.data?.cogs)}</div></div>
-                <div className="pb-item"><div className="pb-label">Bag costs</div><div className="pb-value red">{plQ.isLoading ? '—' : fmtUsd(plQ.data?.bagCost)}</div></div>
-                <div className="pb-item"><div className="pb-label">Variances</div><div className="pb-value red">{plQ.isLoading ? '—' : fmtUsd(plQ.data?.varianceCost)}</div></div>
+                <div className="pb-item"><div className="pb-label">Revenue</div><div className="pb-value">{plQ.isLoading ? '—' : formatUsd(plQ.data?.revenue, { decimals: 0 })}</div></div>
+                <div className="pb-item">
+                  <div className="pb-label">
+                    COGS
+                    <i className="ti ti-info-circle info-icon" title="Direct charcoal material cost of goods sold." />
+                  </div>
+                  <div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.cogs, { decimals: 0 })}</div>
+                </div>
+                <div className="pb-item"><div className="pb-label">Packaging</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.bagCost, { decimals: 0 })}</div></div>
+                <div className="pb-item"><div className="pb-label">Variance</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.varianceCost, { decimals: 0 })}</div></div>
+                <div className="pb-item"><div className="pb-label">Delivery</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.deliveryCost, { decimals: 0 })}</div></div>
               </div>
+
+              <div className="section-divider" style={{ margin: 0 }} />
+
+              <div>
+                <div className="section-title">Cash Flow</div>
+                <div className="profit-breakdown">
+                  <div className="pb-item">
+                    <div className="pb-label">
+                      Cash Collected
+                      <i className="ti ti-info-circle info-icon" title="Money actually received during the selected period." />
+                    </div>
+                    <div className="pb-value green">{plQ.isLoading ? '—' : formatUsd(plQ.data?.cashCollected, { decimals: 0 })}</div>
+                  </div>
+                  <div className="pb-item">
+                    <div className="pb-label">
+                      Outstanding Receivables
+                      <i className="ti ti-info-circle info-icon" title="Total unpaid invoice balances still owed by customers." />
+                    </div>
+                    <div className="pb-value amber">{arQ.isLoading ? '—' : formatUsd(arQ.data?.totalOutstanding, { decimals: 0 })}</div>
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace", paddingBottom: 6 }}>daily revenue — {now.toLocaleString('en-US', { month: 'long' }).toLowerCase()}</div>
-                <div style={{ height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: 'var(--text3)', fontStyle: 'italic' }}>
-                  Daily chart · coming soon
-                </div>
+                <DailyRevenueChart data={dailyRevenueQ.data?.data} isLoading={dailyRevenueQ.isLoading} height={70} />
               </div>
             </div>
           </div>
@@ -435,33 +480,29 @@ export default function Dashboard() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
                     <div>
                       <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 3 }}>total owed</div>
-                      <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: -1, color: 'var(--accent2)' }}>{fmtUsd(firstWorker.totalOwed)}</div>
+                      <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: -1, color: 'var(--accent2)' }}>{formatUsd(firstWorker.totalOwed, { decimals: 0 })}</div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontSize: 12, color: 'var(--text3)' }}>total earned</div>
-                      <div style={{ fontSize: 16, fontWeight: 600 }}>{fmtUsd(firstWorker.totalEarned)}</div>
+                      <div style={{ fontSize: 16, fontWeight: 600 }}>{formatUsd(firstWorker.totalEarned, { decimals: 0 })}</div>
                     </div>
                   </div>
                 </div>
                 <div style={{ padding: '4px 0 2px' }}>
                   {([
                     { label: 'Bag earnings', value: firstWorker.pieceEarned },
-                    { label: 'Daily wages',  value: firstWorker.dailyEarned },
+                    { label: 'Earnings entries', value: firstWorker.costEarned },
                     { label: 'Paid out',     value: firstWorker.totalPaid },
                   ] as { label: string; value: string }[]).map(({ label, value }) => (
                     <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 18px', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
                       <span style={{ color: 'var(--text2)' }}>{label}</span>
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>{fmtUsd(value)}</span>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>{formatUsd(value, { decimals: 0 })}</span>
                     </div>
                   ))}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 18px', fontSize: 13 }}>
-                    <span style={{ color: 'var(--text3)' }}>Attendance this month</span>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)' }}>{firstWorker.attendanceDays} day{firstWorker.attendanceDays === 1 ? '' : 's'}</span>
-                  </div>
                 </div>
                 <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>Total earned all-time</span>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>{fmtUsd(firstWorker.totalEarned)}</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>{formatUsd(firstWorker.totalEarned, { decimals: 0 })}</span>
                 </div>
               </>
             )}
@@ -534,7 +575,7 @@ export default function Dashboard() {
             <div className="modal-head">
               <div>
                 <div className="modal-title">Pay worker — {firstWorker.name}</div>
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Total owed: <strong style={{ color: 'var(--accent2)' }}>{fmtUsd(firstWorker.totalOwed)}</strong></div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Total owed: <strong style={{ color: 'var(--accent2)' }}>{formatUsd(firstWorker.totalOwed, { decimals: 0 })}</strong></div>
               </div>
               <button className="panel-close-btn" onClick={() => setPayOpen(false)}>✕</button>
             </div>

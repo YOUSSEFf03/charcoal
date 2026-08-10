@@ -1,0 +1,174 @@
+- generic [ref=f37e3]:
+  - complementary [ref=f37e4]:
+    - generic [ref=f37e5]:
+      - generic [ref=f37e6]: 
+      - generic [ref=f37e8]:
+        - generic [ref=f37e9]: Farah Charcoal
+        - generic [ref=f37e10]: management system
+    - generic [ref=f37e11]:
+      - generic [ref=f37e12]: Overview
+      - link " Dashboard" [ref=f37e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f37e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f37e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f37e16]: 
+        - text: Reports
+    - generic [ref=f37e17]:
+      - generic [ref=f37e18]: Stock
+      - link " Containers" [ref=f37e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f37e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f37e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f37e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f37e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f37e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f37e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f37e26]: 
+        - text: Bag purchases
+    - generic [ref=f37e27]:
+      - generic [ref=f37e28]: Sales
+      - link " Clients" [ref=f37e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f37e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f37e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f37e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f37e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f37e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f37e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f37e36]:
+      - generic [ref=f37e37]: Finance
+      - link " Balances" [ref=f37e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f37e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f37e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f37e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f37e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f37e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f37e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f37e45]: 
+        - text: Expenses
+    - generic [ref=f37e46]:
+      - generic [ref=f37e47]: Setup
+      - link " Employees" [ref=f37e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f37e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f37e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f37e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f37e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f37e53]: 
+        - text: Settings
+    - generic [ref=f37e56] [cursor=pointer]:
+      - generic [ref=f37e57]: KA
+      - generic [ref=f37e58]:
+        - generic [ref=f37e59]: Khalil Abi Nader
+        - generic [ref=f37e60]: owner
+      - generic [ref=f37e61]: 
+  - generic [ref=f37e62]:
+    - banner [ref=f37e254]:
+      - generic [ref=f37e255]: Reports
+      - generic [ref=f37e257]:
+        - generic [ref=f37e258]: "Rate: 89,550 LL/$"
+        - button " Export PDF" [ref=f37e259] [cursor=pointer]:
+          - generic [ref=f37e260]: 
+          - text: Export PDF
+    - generic [ref=f37e261]:
+      - generic [ref=f37e262] [cursor=pointer]:
+        - generic [ref=f37e263]: 
+        - text: P&L
+      - generic [ref=f37e264] [cursor=pointer]:
+        - generic [ref=f37e265]: 
+        - text: Variance
+      - generic [ref=f37e266] [cursor=pointer]:
+        - generic [ref=f37e267]: 
+        - text: Worker earnings
+      - generic [ref=f37e268] [cursor=pointer]:
+        - generic [ref=f37e269]: 
+        - text: Client ledger
+    - generic [ref=f37e270]:
+      - generic [ref=f37e271]:
+        - generic [ref=f37e272]: Period
+        - textbox [ref=f37e273]: 2026-05-01
+        - generic [ref=f37e274]: →
+        - textbox [ref=f37e275]: 2026-05-31
+        - combobox [ref=f37e276] [cursor=pointer]:
+          - option "All charcoal types" [selected]
+          - option "BBQ Hardwood"
+          - option "Shisha"
+          - option "Restaurant Grade"
+        - combobox [ref=f37e277] [cursor=pointer]:
+          - option "All clients" [selected]
+          - option "Restaurants only"
+          - option "Wholesale only"
+          - option "Export only"
+        - button " Refresh" [ref=f37e278] [cursor=pointer]:
+          - generic [ref=f37e279]: 
+          - text: Refresh
+      - generic [ref=f37e280]:
+        - generic [ref=f37e281]:
+          - generic [ref=f37e282]:
+            - generic [ref=f37e283]: Total invoiced
+            - generic [ref=f37e284]: $240
+            - generic [ref=f37e285]: 3 clients
+          - generic [ref=f37e286]:
+            - generic [ref=f37e287]: Total collected
+            - generic [ref=f37e288]: $0
+            - generic [ref=f37e289]: 0.0% collection rate
+          - generic [ref=f37e290]:
+            - generic [ref=f37e291]: Outstanding
+            - generic [ref=f37e292]: $240
+            - generic [ref=f37e293]: 1 clients with balance
+        - generic [ref=f37e294]:
+          - generic [ref=f37e295]:
+            - generic [ref=f37e296]:
+              - generic [ref=f37e297]: 
+              - text: Client ledger
+            - button " Export" [ref=f37e298] [cursor=pointer]:
+              - generic [ref=f37e299]: 
+              - text: Export
+          - table [ref=f37e300]:
+            - rowgroup [ref=f37e301]:
+              - row [ref=f37e302]:
+                - columnheader "Client" [ref=f37e303]
+                - columnheader "Type" [ref=f37e304]
+                - columnheader "Balance" [ref=f37e305]
+                - columnheader "Status" [ref=f37e306]
+            - rowgroup [ref=f37e307]:
+              - row [ref=f37e308]:
+                - cell "Marina Walk Café" [ref=f37e309]
+                - cell "restaurant" [ref=f37e310]
+                - cell "$0" [ref=f37e312]
+                - cell "Clear" [ref=f37e313]
+              - row [ref=f37e315]:
+                - cell "Beirut Shisha Lounge" [ref=f37e316]
+                - cell "wholesale" [ref=f37e317]
+                - cell "$0" [ref=f37e319]
+                - cell "Clear" [ref=f37e320]
+              - row [ref=f37e322]:
+                - cell "Al Nakheel Restaurant" [ref=f37e323]
+                - cell "restaurant" [ref=f37e324]
+                - cell "$240" [ref=f37e326]
+                - cell "Has balance" [ref=f37e327]

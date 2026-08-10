@@ -5,12 +5,22 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { parseCorsOrigins } from './common/utils/cors.utils';
+import { isDevAuthBypassEnabled } from './auth/auth.guard';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     // Raw body is required for Svix webhook signature verification.
     rawBody: true,
   });
+
+  if (isDevAuthBypassEnabled()) {
+    // Loud and impossible to miss in deployment logs — if this appears on a
+    // real deployment, DEV_AUTH_BYPASS_ENABLED and/or NODE_ENV are wrong.
+    // eslint-disable-next-line no-console
+    console.warn(
+      '\n*** DEV AUTH BYPASS IS ACTIVE — "Authorization: Bearer dev:<role>" grants unauthenticated access to any role. NEVER enable this in a deployed environment. ***\n',
+    );
+  }
 
   const configService = app.get(ConfigService);
 

@@ -37,6 +37,23 @@ export class UsersService {
   }
 
   /**
+   * Cash Management System (Phase 1, PR 6) — validates that a user id is a real,
+   * currently-eligible cash holder before a ledger write is allowed to reference
+   * it. Temporary home: this check moves to CashHolderService once the dedicated
+   * CashHolder entity lands in Phase 2 (see CASH_MANAGEMENT_FINAL_BLUEPRINT.md §6).
+   *
+   * "Eligible" here means: exists, and not soft-deleted. No Role restriction is
+   * applied — any user can be a ledger holder, matching today's behavior where
+   * owner/accountant/sales_rep/worker can all be picked as a receiver/collector.
+   */
+  async validateCashCapable(userId: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || user.deletedAt) {
+      throw new NotFoundException({ error: 'Receiver not found', code: 'NOT_FOUND' });
+    }
+  }
+
+  /**
    * Create a local (non-Clerk) user — used for receivers and other internal-only accounts.
    * Generates a synthetic clerkId so the unique constraint is satisfied without a real Clerk account.
    */

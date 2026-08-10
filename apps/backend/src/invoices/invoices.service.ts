@@ -102,7 +102,13 @@ export class InvoicesService {
   }
 
   /**
-   * Return a single invoice with client, payments, and loggedBy details.
+   * Return a single invoice with client, payments, allocations, and loggedBy details.
+   *
+   * `payments` (Payment.invoiceId = this invoice) only shows payments directly
+   * linked at creation time. `allocations` is the complete picture — it also
+   * includes amounts FIFO-allocated here from a client-level payment created
+   * with invoiceId null (see PaymentAllocationService) — so it's the field to
+   * use for "what has actually been applied to this invoice."
    *
    * @param id - Invoice UUID
    * @throws NotFoundException if not found
@@ -114,6 +120,13 @@ export class InvoicesService {
         client: true,
         payments: {
           include: { loggedBy: { select: { id: true, name: true } } },
+        },
+        allocations: {
+          include: {
+            payment: {
+              select: { id: true, displayId: true, clientId: true, date: true, method: true, invoiceId: true },
+            },
+          },
         },
       },
     });

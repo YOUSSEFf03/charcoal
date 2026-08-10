@@ -1,13 +1,12 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
 import { useUsers, useUpdateUserRole, useCreateLocalUser } from '../hooks/useUsers'
 import { useBagTypes, useCreateBagType, useUpdateBagType, useDeleteBagType } from '../hooks/useBagTypes'
 import { useReceivers } from '../hooks/useReceivers'
 import { useRate } from '../context/RateContext'
-import { useWorkers } from '../hooks/useWorkers'
 import type { User, Role } from '../types/api'
 
-type Section = 'company' | 'currency' | 'bagtypes' | 'workerrates' | 'driverrates' | 'receivers' | 'users' | 'preferences' | 'danger'
+type Section = 'company' | 'currency' | 'bagtypes' | 'driverrates' | 'receivers' | 'users' | 'preferences' | 'danger'
 
 interface PrefToggle { label: string; desc: string; on: boolean }
 
@@ -42,7 +41,6 @@ const NAV: NavItem[] = [
   { section: 'company', label: 'Company info', icon: 'ti-building', group: 'Business' },
   { section: 'currency', label: 'Currency & rate', icon: 'ti-currency-dollar' },
   { section: 'bagtypes',    label: 'Bag types',    icon: 'ti-box',   group: 'Stock' },
-  { section: 'workerrates', label: 'Worker rates', icon: 'ti-tools', group: 'Employees' },
   { section: 'driverrates', label: 'Driver rates', icon: 'ti-truck' },
   { section: 'receivers', label: 'Money receivers', icon: 'ti-cash', group: 'Finance' },
   { section: 'users', label: 'Users & roles', icon: 'ti-users', group: 'Access' },
@@ -59,7 +57,6 @@ export default function Settings() {
   const createBagType = useCreateBagType()
   const updateBagType = useUpdateBagType()
   const deleteBagType = useDeleteBagType()
-  const workersQ = useWorkers()
   const driversQ = useUsers({ role: 'driver' })
 
   const [section, setSection] = useState<Section>('company')
@@ -72,6 +69,7 @@ export default function Settings() {
   const [newReceiverRole, setNewReceiverRole] = useState('')
   const [editReceiver, setEditReceiver] = useState<{ id: string; name: string; role: string } | null>(null)
   const [newBag, setNewBag] = useState({ name: '', nominalKg: '', costPerBag: '', workerRate: '', note: '' })
+  const [editedBagRates, setEditedBagRates] = useState<Record<string, string>>({})
   const [showAddBag, setShowAddBag] = useState(false)
   const [showAddUser, setShowAddUser] = useState(false)
   const [newUserName, setNewUserName] = useState('')
@@ -82,14 +80,8 @@ export default function Settings() {
   const [dangerModalOpen, setDangerModalOpen] = useState<'reset' | 'clear' | 'export' | null>(null)
   const [editingUser, setEditingUser] = useState<User | null>(null)
   const [editingRole, setEditingRole] = useState<Role>('accountant')
-  const [workerDailyRate, setWorkerDailyRate] = useState('15.00')
   const [driverRates, setDriverRates] = useState<Record<string, string>>({})
   const [company, setCompany] = useState({ name: 'Farah Charcoal', phone: '+961 1 234 567', address: 'Beirut, Lebanon', addressAr: 'بيروت، لبنان', taxNo: '', email: 'contact@farahcharcoal.lb', footer: '' })
-
-  useEffect(() => {
-    const r = workersQ.data?.[0]?.dailyRate
-    if (r) setWorkerDailyRate(parseFloat(r).toFixed(2))
-  }, [workersQ.data])
 
   function showToast(msg?: string) {
     setToastMsg(msg || 'Changes saved')
@@ -104,6 +96,21 @@ export default function Settings() {
     showToast('Exchange rate updated — saved to backend')
   }
   function togglePref(i: number) { setPrefs(p => p.map((t, idx) => idx === i ? { ...t, on: !t.on } : t)) }
+
+  React.useEffect(() => {
+    const initial: Record<string, string> = {}
+    ;(bagTypesQ.data ?? []).forEach(b => { initial[b.id] = b.workerRate ?? '' })
+    setEditedBagRates(initial)
+  }, [bagTypesQ.data])
+
+  function saveBagRates() {
+    const bagTypes = bagTypesQ.data ?? []
+    const changed = bagTypes.filter(b => editedBagRates[b.id] !== undefined && editedBagRates[b.id] !== (b.workerRate ?? ''))
+    if (changed.length === 0) return
+    Promise.all(changed.map(b =>
+      updateBagType.mutateAsync({ id: b.id, body: { workerRate: parseFloat(editedBagRates[b.id] || '0').toFixed(4) } })
+    )).then(() => showToast('Worker rates saved'))
+  }
 
   const inp: React.CSSProperties = { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 13, fontFamily: "'IBM Plex Sans',sans-serif", color: 'var(--text)', outline: 'none', background: 'var(--surface)' }
   const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 500, color: 'var(--text2)', marginBottom: 5, display: 'block' }
@@ -196,7 +203,7 @@ export default function Settings() {
           </>}
 
           {section === 'bagtypes' && <>
-            <SectionHeader title="Bag types" desc="Define every bag size used. Nominal kg is used for all stock calculations." />
+            <SectionHeader title="Bag types" desc="Define every bag size used. Nominal kg is used for all stock calculations. Worker rate is the packing pay rate for this bag type — the amount a worker earns per bag packed." />
             <div style={card}>
               <div style={cardHd}>
                 <div style={cardTl}><i className="ti ti-box" style={{ fontSize: 15, color: 'var(--text2)' }} /> Bag types</div>
@@ -220,10 +227,29 @@ export default function Settings() {
                   <span style={{ fontSize: 13, fontWeight: 500, padding: '0 2px' }}>{b.name}</span>
                   <span style={{ fontSize: 13, fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', padding: '0 10px' }}>{parseFloat(b.nominalKg).toFixed(1)}</span>
                   <span style={{ fontSize: 13, fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', padding: '0 10px' }}>{b.costPerBag ? `$${parseFloat(b.costPerBag).toFixed(3)}` : '—'}</span>
-                  <span style={{ fontSize: 13, fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', padding: '0 10px' }}>{b.workerRate ? `$${parseFloat(b.workerRate).toFixed(3)}` : '—'}</span>
+                  <input
+                    type="number"
+                    step={0.005}
+                    value={editedBagRates[b.id] ?? b.workerRate ?? ''}
+                    onChange={e => setEditedBagRates(p => ({ ...p, [b.id]: e.target.value }))}
+                    style={{ width: '100%', padding: '5px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 13, fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', outline: 'none', background: 'var(--surface)' }}
+                    placeholder="0.000"
+                  />
                   <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>{b.note ?? ''}</span>
                   <button
-                    onClick={() => deleteBagType.mutate(b.id, { onSuccess: () => showToast('Bag type deleted') })}
+                    onClick={() => {
+                      if (!confirm(`Delete bag type "${b.name}"? This cannot be undone.`)) return
+                      deleteBagType.mutate(b.id, {
+                        onSuccess: () => showToast('Bag type deleted'),
+                        onError: (err: any) => {
+                          showToast(
+                            err?.code === 'CONFLICT'
+                              ? `Cannot delete "${b.name}" — it is referenced by existing records (orders, packing, sales, purchases, etc.)`
+                              : err?.error ?? 'Failed to delete bag type'
+                          )
+                        },
+                      })
+                    }}
                     disabled={deleteBagType.isPending}
                     style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)' }}
                   >
@@ -234,8 +260,11 @@ export default function Settings() {
               {!bagTypesQ.isLoading && (bagTypesQ.data ?? []).length === 0 && (
                 <div style={{ padding: '18px', fontSize: 13, color: 'var(--text3)', textAlign: 'center' }}>No bag types yet. Add one above.</div>
               )}
-              <div style={{ padding: '12px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)' }}>
+              <div style={{ padding: '12px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                 <span style={{ fontSize: 12, color: 'var(--text3)' }}>Changes apply to all future packing sessions.</span>
+                <button style={saveBtn} onClick={saveBagRates} disabled={updateBagType.isPending || (bagTypesQ.data ?? []).length === 0}>
+                  <i className="ti ti-check" style={{ fontSize: 14 }} /> {updateBagType.isPending ? 'Saving…' : 'Save rates'}
+                </button>
               </div>
             </div>
 
@@ -289,18 +318,6 @@ export default function Settings() {
               </div>
             )}
           </>}
-
-
-
-          {section === 'workerrates' && <WorkerRatesSection
-            bagTypesQ={bagTypesQ}
-            updateBagType={updateBagType}
-            workerDailyRate={workerDailyRate}
-            setWorkerDailyRate={setWorkerDailyRate}
-            showToast={showToast}
-            inp={inp} lbl={lbl} card={card} cardHd={cardHd} cardTl={cardTl} saveBtn={saveBtn} ftr={ftr}
-          />}
-
 
           {section === 'driverrates' && <>
             <SectionHeader title="Driver rates" desc="Daily rate per driver. Each driver can have a different rate." />
@@ -666,85 +683,3 @@ function SectionHeader({ title, desc }: { title: string; desc: string }) {
   )
 }
 
-function WorkerRatesSection({ bagTypesQ, updateBagType, workerDailyRate, setWorkerDailyRate, showToast, inp, lbl, card, cardHd, cardTl, saveBtn, ftr }: any) {
-  const [editedRates, setEditedRates] = React.useState<Record<string, string>>({})
-  const bagTypes = bagTypesQ.data ?? []
-
-  React.useEffect(() => {
-    const initial: Record<string, string> = {}
-    bagTypes.forEach((b: any) => { initial[b.id] = b.workerRate ?? '' })
-    setEditedRates(initial)
-  }, [bagTypesQ.data])
-
-  function saveRates() {
-    const changed = bagTypes.filter((b: any) => editedRates[b.id] !== undefined && editedRates[b.id] !== (b.workerRate ?? ''))
-    Promise.all(changed.map((b: any) =>
-      updateBagType.mutateAsync({ id: b.id, body: { workerRate: parseFloat(editedRates[b.id] || '0').toFixed(4) } })
-    )).then(() => showToast('Rates saved'))
-  }
-
-  return (
-    <>
-      <SectionHeader title="Worker rates" desc="Per-bag rates paid to the worker for each bag type they pack." />
-      <div style={card}>
-        <div style={cardHd}>
-          <div style={cardTl}><i className="ti ti-tools" style={{ fontSize: 15, color: 'var(--text2)' }} /> Daily rate</div>
-        </div>
-        <div style={{ padding: 18 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <div>
-              <label style={lbl}>Daily rate ($ per day worked)</label>
-              <input style={{ ...inp, fontFamily: "'IBM Plex Mono',monospace", fontSize: 16 }} type="number" step={0.5} value={workerDailyRate} onChange={(e: any) => setWorkerDailyRate(e.target.value)} />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-              <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '10px 14px', fontSize: 12, color: 'var(--text2)', width: '100%' }}>
-                At 22 working days/month = <strong>${(parseFloat(workerDailyRate || '0') * 22).toFixed(0)}/month</strong> base wage
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div style={card}>
-        <div style={cardHd}>
-          <div style={cardTl}><i className="ti ti-box" style={{ fontSize: 15, color: 'var(--text2)' }} /> Per-bag rates</div>
-        </div>
-        <div style={{ padding: '10px 18px', background: 'var(--surface2)', fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.6, display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr', gap: 10, borderBottom: '1px solid var(--border)' }}>
-          <span>Bag type</span><span style={{ textAlign: 'right' }}>Nominal kg</span><span style={{ textAlign: 'right' }}>Rate / bag ($)</span>
-        </div>
-        {bagTypesQ.isLoading && (
-          <div style={{ padding: 18, fontSize: 13, color: 'var(--text3)' }}>Loading bag types…</div>
-        )}
-        {bagTypes.map((b: any) => (
-          <div key={b.id} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr', gap: 10, alignItems: 'center', padding: '11px 18px', borderBottom: '1px solid var(--border)' }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 500 }}>{b.name}</div>
-              {b.note && <div style={{ fontSize: 11, color: 'var(--text3)' }}>{b.note}</div>}
-            </div>
-            <div style={{ fontSize: 13, fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', color: 'var(--text2)' }}>
-              {parseFloat(b.nominalKg).toFixed(1)} kg
-            </div>
-            <input
-              type="number"
-              step={0.005}
-              value={editedRates[b.id] ?? ''}
-              onChange={(e: any) => setEditedRates((p: any) => ({ ...p, [b.id]: e.target.value }))}
-              style={{ width: '100%', padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 13, fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', outline: 'none', background: 'var(--surface)' }}
-              placeholder="0.000"
-            />
-          </div>
-        ))}
-        {!bagTypesQ.isLoading && bagTypes.length === 0 && (
-          <div style={{ padding: 18, fontSize: 13, color: 'var(--text3)', textAlign: 'center' }}>
-            No bag types defined yet. Add bag types in the <strong>Bag types</strong> section first.
-          </div>
-        )}
-        <div style={ftr}>
-          <button style={saveBtn} onClick={saveRates} disabled={updateBagType.isPending}>
-            <i className="ti ti-check" style={{ fontSize: 14 }} /> {updateBagType.isPending ? 'Saving…' : 'Save rates'}
-          </button>
-        </div>
-      </div>
-    </>
-  )
-}

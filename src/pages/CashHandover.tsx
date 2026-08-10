@@ -2,13 +2,12 @@ import { useState, useRef } from 'react'
 import Topbar from '../components/layout/Topbar'
 import { useDailyPayments, useCashHandovers, useCreateCashHandover, useReceiverBalance, useAllBalances } from '../hooks/useCashHandover'
 import { useStockExits } from '../hooks/useWarehouse'
+import { formatUsd } from '../lib/money'
+import { formatDate } from '../lib/date'
 
-function fmt2(n: number) { return `$${n.toFixed(2)}` }
-function fmt0(n: number) { return `$${Math.round(n).toLocaleString()}` }
-function fmtDate(iso: string) {
-  const d = new Date(iso)
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-}
+function fmt2(n: number) { return formatUsd(n, { decimals: 2 }) }
+function fmt0(n: number) { return formatUsd(n, { decimals: 0 }) }
+function fmtDate(iso: string) { return formatDate(iso) }
 
 interface Expense { id: number; desc: string; amount: number }
 
@@ -71,8 +70,21 @@ export default function CashHandover() {
 
   function confirmHandover() {
     if (!selectedReceiver) { showToast('Select a receiver'); return }
+    // Same `expenses` array used above to compute `expected` — persisted verbatim so the
+    // itemized deductions survive (previously discarded on submit) and stay consistent
+    // with the expectedAmt they produced. Blank/zero rows (an unfilled "+" row) are dropped.
+    const expenseItems = expenses
+      .filter(e => e.desc.trim() && e.amount > 0)
+      .map(e => ({ description: e.desc.trim(), amount: e.amount.toFixed(2) }))
     createHandover.mutate(
-      { date: selectedDate, receiverId: selectedReceiver, expectedAmt: expected.toFixed(2), handedAmt: handed.toFixed(2), notes: notes || null },
+      {
+        date: selectedDate,
+        receiverId: selectedReceiver,
+        expectedAmt: expected.toFixed(2),
+        handedAmt: handed.toFixed(2),
+        notes: notes || null,
+        expenses: expenseItems.length > 0 ? expenseItems : undefined,
+      },
       {
         onSuccess: () => {
           setShowModal(false)
@@ -454,12 +466,14 @@ export default function CashHandover() {
                     <th style={{ textAlign: 'right' }}>Expected</th>
                     <th style={{ textAlign: 'right' }}>Handed over</th>
                     <th style={{ textAlign: 'right' }}>Difference</th>
+                    <th>Expenses deducted</th>
                     <th>Notes</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(historyQ.data?.data ?? []).map((h: any) => {
                     const d = parseFloat(h.difference)
+                    const hExpenses = h.expenses ?? []
                     return (
                       <tr key={h.id}>
                         <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>{fmtDate(h.date)}</td>
@@ -468,6 +482,11 @@ export default function CashHandover() {
                         <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>{fmt2(parseFloat(h.handedAmt))}</td>
                         <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", color: Math.abs(d) < 0.01 ? 'var(--accent)' : d < 0 ? 'var(--red)' : 'var(--accent2)' }}>
                           {Math.abs(d) < 0.01 ? '✓' : d > 0 ? `+${fmt2(d)}` : fmt2(d)}
+                        </td>
+                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>
+                          {hExpenses.length === 0
+                            ? '—'
+                            : hExpenses.map((e: any) => `${e.description} ${fmt2(parseFloat(e.amount))}`).join(', ')}
                         </td>
                         <td style={{ fontSize: 12, color: 'var(--text3)' }}>{h.notes ?? '—'}</td>
                       </tr>

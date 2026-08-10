@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
 import {
   useWorkers,
@@ -6,94 +6,115 @@ import {
   useLogWorkerPayment,
   useUpdateWorker,
   useDeleteWorker,
-  useWorkerAttendance,
-  useMarkAttendance,
-  useUnmarkAttendance,
+  useWorkerPayments,
+  useWorkerEarnings,
+  useCreateWorkerEarning,
 } from '../hooks/useWorkers'
-import { useBagTypes } from '../hooks/useBagTypes'
 import { usePackingSessions } from '../hooks/usePacking'
-import type { Worker } from '../types/api'
+import type { Worker, WorkerCostCategory, PaymentMethod } from '../types/api'
 
 type View = 'list' | 'worker'
-
-const _now = new Date()
-const _firstOfMonth = new Date(_now.getFullYear(), _now.getMonth(), 1)
-const MONTH_LABEL = _now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-const MONTH_KEY   = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}`
-const MAY_START_PAD = _firstOfMonth.getDay()
-const MAY_DAYS = new Date(_now.getFullYear(), _now.getMonth() + 1, 0).getDate()
-const TODAY_DAY = _now.getDate()
+type HistoryFilter = 'all' | 'earnings' | 'payments' | 'this_month' | 'last_month'
 
 function initials(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase()
 }
 
+// Business-language labels — the underlying model is WorkerCost, but factory
+// staff never see the word "cost": this records what a worker earned, not a
+// business expense.
+const CATEGORY_LABEL: Record<WorkerCostCategory, string> = {
+  daily_wage: 'Daily wage',
+  weekly_wage: 'Weekly wage',
+  monthly_salary: 'Monthly salary',
+  bonus: 'Bonus',
+  deduction: 'Deduction',
+  fuel: 'Fuel',
+  food: 'Food',
+  transport: 'Transport',
+  advance: 'Advance',
+  correction: 'Correction',
+  other: 'Other',
+}
+const CATEGORY_OPTIONS = Object.keys(CATEGORY_LABEL) as WorkerCostCategory[]
+
+const METHOD_LABEL: Record<PaymentMethod, string> = {
+  cash: 'Cash', whish: 'Whish', omt: 'OMT', bank_transfer: 'Bank', cheque: 'Cheque',
+}
+const PAYMENT_METHODS = Object.keys(METHOD_LABEL) as PaymentMethod[]
+
+const HISTORY_FILTERS: [HistoryFilter, string][] = [
+  ['all', 'All'],
+  ['earnings', 'Earnings'],
+  ['payments', 'Payments'],
+  ['this_month', 'This month'],
+  ['last_month', 'Last month'],
+]
+
+interface HistoryRow {
+  id: string
+  date: string
+  label: string
+  sub?: string
+  amount: number // signed — earnings/sessions positive, payments negative
+  icon: string
+  color: 'green' | 'red' | 'blue'
+  isPayment: boolean
+}
+
+function dayLabel(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+function monthKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
 export default function Employees() {
   const [view, setView] = useState<View>('list')
 
-  const workersQ    = useWorkers()
-  const bagTypesQ   = useBagTypes()
-  const createWorker = useCreateWorker()
-  const updateWorker = useUpdateWorker()
-  const deleteWorker = useDeleteWorker()
-  const logPayment   = useLogWorkerPayment()
-  const markAttend   = useMarkAttendance()
-  const unmarkAttend = useUnmarkAttendance()
+  const workersQ      = useWorkers()
+  const createWorker   = useCreateWorker()
+  const updateWorker   = useUpdateWorker()
+  const deleteWorker   = useDeleteWorker()
+  const logPayment     = useLogWorkerPayment()
+  const createEarning  = useCreateWorkerEarning()
 
   const workers = workersQ.data ?? []
-  const bagTypeNameById = new Map((bagTypesQ.data ?? []).map(b => [b.id, b.name]))
 
   const [selectedWorker, setSelectedWorker] = useState<Worker | null>(null)
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
-  const [payModalOpen, setPayModalOpen] = useState(false)
-  const [payAmt, setPayAmt]     = useState('')
-  const [payMethod, setPayMethod] = useState('cash')
-  const [addEmpOpen, setAddEmpOpen]   = useState(false)
-  const [editEmpOpen, setEditEmpOpen] = useState(false)
-  const [editName, setEditName]   = useState('')
-  const [editPhone, setEditPhone] = useState('')
-  const [empName, setEmpName]   = useState('')
-  const [empPhone, setEmpPhone] = useState('')
-  const [empRate, setEmpRate]   = useState('')
+  const [addEmpOpen, setAddEmpOpen]     = useState(false)
+  const [editEmpOpen, setEditEmpOpen]   = useState(false)
+  const [editName, setEditName]         = useState('')
+  const [editPhone, setEditPhone]       = useState('')
+  const [empName, setEmpName]           = useState('')
+  const [empPhone, setEmpPhone]         = useState('')
 
-  // Daily rate input — local while editing, saved on blur
-  const [dailyRateInput, setDailyRateInput] = useState('')
-  const dailyRateSaved = useRef(false)
+  const [payModalOpen, setPayModalOpen]   = useState(false)
+  const [payAmt, setPayAmt]               = useState('')
+  const [payMethod, setPayMethod]         = useState<PaymentMethod>('cash')
+  const [payReference, setPayReference]   = useState('')
 
-  // Attendance query for selected worker
-  const attendanceQ = useWorkerAttendance(selectedWorker?.id, MONTH_KEY)
-  const attendedDates = new Set((attendanceQ.data ?? []).map(r => r.date))
+  const [earnModalOpen, setEarnModalOpen] = useState(false)
+  const [earnAmt, setEarnAmt]             = useState('')
+  const [earnCategory, setEarnCategory]   = useState<WorkerCostCategory>('daily_wage')
+  const [earnDate, setEarnDate]           = useState(() => new Date().toISOString().slice(0, 10))
+  const [earnNotes, setEarnNotes]         = useState('')
 
-  // Packing sessions for the selected worker (auto-detected session days)
-  const workerSessionsQ = usePackingSessions(
-    selectedWorker ? { workerEntityId: selectedWorker.id, limit: 365 } : undefined
-  )
-  const sessionDays = new Set<number>(
-    (workerSessionsQ.data?.data ?? [])
-      .filter(s => {
-        const d = new Date(s.date)
-        return d.getMonth() === _now.getMonth() && d.getFullYear() === _now.getFullYear()
-      })
-      .map(s => new Date(s.date).getDate())
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all')
+
+  const earningsQ = useWorkerEarnings(selectedWorker?.id)
+  const paymentsQ = useWorkerPayments(selectedWorker?.id)
+  // Packing sessions appear read-only in the same timeline — still calculated
+  // from PackingSession.sessionEarnings, untouched by this redesign; they're
+  // just another earning event from the user's point of view.
+  const sessionsQ = usePackingSessions(
+    selectedWorker ? { workerEntityId: selectedWorker.id, limit: 50 } : undefined
   )
 
-  // Build set of all "worked" days for display: session days + attendance days
-  const attendedDayNums = new Set<number>(
-    Array.from(attendedDates)
-      .filter(dateStr => {
-        const d = new Date(dateStr)
-        return d.getMonth() === _now.getMonth() && d.getFullYear() === _now.getFullYear()
-      })
-      .map(dateStr => new Date(dateStr).getDate())
-  )
-  const workerDays = new Set([...sessionDays, ...attendedDayNums])
-
-  // Worker financials from API (include daily earnings)
-  const WORKER_OWED    = selectedWorker ? parseFloat(selectedWorker.totalOwed)   : 0
-  const workerEarned   = selectedWorker ? parseFloat(selectedWorker.totalEarned) : 0
-  const workerPaid     = selectedWorker ? parseFloat(selectedWorker.totalPaid)   : 0
-  const pieceEarned    = selectedWorker ? parseFloat(selectedWorker.pieceEarned  ?? '0') : 0
-  const dailyEarned    = selectedWorker ? parseFloat(selectedWorker.dailyEarned  ?? '0') : 0
+  const WORKER_OWED   = selectedWorker ? parseFloat(selectedWorker.totalOwed)   : 0
+  const workerEarned  = selectedWorker ? parseFloat(selectedWorker.totalEarned) : 0
+  const workerPaid    = selectedWorker ? parseFloat(selectedWorker.totalPaid)   : 0
 
   const payAmtNum = parseFloat(payAmt) || 0
   const diffVal   = payAmtNum - WORKER_OWED
@@ -102,109 +123,120 @@ export default function Employees() {
 
   function openWorker(w: Worker) {
     setSelectedWorker(w)
-    setDailyRateInput(parseFloat(w.dailyRate ?? '0').toString())
-    dailyRateSaved.current = true
+    setHistoryFilter('all')
     setView('worker')
+  }
+
+  function refetchSelectedWorker() {
+    return workersQ.refetch().then(result => {
+      const updated = (result.data ?? []).find(w => w.id === selectedWorker?.id)
+      if (updated) setSelectedWorker(updated)
+    })
   }
 
   function submitNewWorker() {
     if (!empName.trim()) return
     createWorker.mutate(
       { name: empName.trim(), phone: empPhone || null },
-      { onSuccess: () => { setAddEmpOpen(false); setEmpName(''); setEmpPhone(''); setEmpRate('') } },
+      { onSuccess: () => { setAddEmpOpen(false); setEmpName(''); setEmpPhone('') } },
     )
   }
 
   function submitWorkerPayment() {
     if (!selectedWorker || payAmtNum <= 0) return
     logPayment.mutate(
-      { id: selectedWorker.id, body: { amount: payAmtNum.toFixed(2), date: new Date().toISOString().slice(0, 10) } },
+      {
+        id: selectedWorker.id,
+        body: {
+          amount: payAmtNum.toFixed(2),
+          method: payMethod,
+          referenceNumber: payReference || null,
+          date: new Date().toISOString().slice(0, 10),
+        },
+      },
       {
         onSuccess: async () => {
           setPayModalOpen(false)
-          setPayAmt('')
-          const result = await workersQ.refetch()
-          const updated = (result.data ?? []).find(w => w.id === selectedWorker?.id)
-          if (updated) setSelectedWorker(updated)
+          setPayAmt(''); setPayMethod('cash'); setPayReference('')
+          await refetchSelectedWorker()
         },
       },
     )
   }
 
-  function toggleWorkerDay(d: number) {
-    if (!selectedWorker || d > TODAY_DAY) return
-    if (sessionDays.has(d)) return // session days are read-only
-    const dateStr = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-    if (attendedDayNums.has(d)) {
-      unmarkAttend.mutate({ workerId: selectedWorker.id, date: dateStr })
-    } else {
-      markAttend.mutate({ workerId: selectedWorker.id, date: dateStr })
-    }
-  }
-
-  function saveDailyRate() {
+  function submitEarning() {
     if (!selectedWorker) return
-    const rate = parseFloat(dailyRateInput) || 0
-    if (rate.toFixed(2) === parseFloat(selectedWorker.dailyRate ?? '0').toFixed(2)) return
-    updateWorker.mutate(
-      { id: selectedWorker.id, body: { dailyRate: rate.toFixed(2) } },
+    const amt = parseFloat(earnAmt) || 0
+    if (amt <= 0) return
+    createEarning.mutate(
       {
-        onSuccess: updated => {
-          setSelectedWorker(updated)
-          dailyRateSaved.current = true
+        id: selectedWorker.id,
+        body: { amount: amt.toFixed(2), category: earnCategory, date: earnDate, notes: earnNotes || null },
+      },
+      {
+        onSuccess: async () => {
+          setEarnModalOpen(false)
+          setEarnAmt(''); setEarnCategory('daily_wage'); setEarnDate(new Date().toISOString().slice(0, 10)); setEarnNotes('')
+          await refetchSelectedWorker()
         },
       },
     )
   }
 
-  function renderCalendar(days: Set<number>, toggle: (d: number) => void, sessionDaysSet?: Set<number>) {
-    const cells = []
-    for (let i = 0; i < MAY_START_PAD; i++) {
-      cells.push(<div key={`pad-${i}`} className="day-cell" style={{ background: 'transparent', border: 'none', cursor: 'default' }} />)
-    }
-    for (let d = 1; d <= MAY_DAYS; d++) {
-      const worked    = days.has(d)
-      const isSession = sessionDaysSet?.has(d) ?? false
-      const isToday   = d === TODAY_DAY
-      const isFuture  = d > TODAY_DAY
-      let cls = 'day-cell'
-      if (isFuture)      cls += ' future'
-      else if (isSession) cls += ' worked session-day'
-      else if (worked)   cls += ' worked manual-day'
-      if (isToday) cls += ' today'
-      cells.push(
-        <div
-          key={d}
-          className={cls}
-          onClick={() => toggle(d)}
-          title={isSession ? 'Packing session recorded' : undefined}
-          style={isSession ? { cursor: 'default', opacity: 0.85 } : {}}
-        >
-          {d}
-          {isSession && <span style={{ display: 'block', fontSize: 7, lineHeight: 1, marginTop: 1, color: 'var(--accent)', fontWeight: 700 }}>●</span>}
-        </div>
-      )
-    }
-    return (
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <span style={{ fontWeight: 600, fontSize: 14 }}>{MONTH_LABEL}</span>
-          <span style={{ fontSize: 12, color: 'var(--text3)' }}>
-            {days.size} days worked
-            {sessionDaysSet && sessionDaysSet.size > 0 && (
-              <span style={{ marginLeft: 8, color: 'var(--accent)', fontFamily: "'IBM Plex Mono',monospace" }}>· {sessionDaysSet.size} packing sessions</span>
-            )}
-          </span>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 3, marginBottom: 6 }}>
-          {['Su','Mo','Tu','We','Th','Fr','Sa'].map(d => (
-            <div key={d} style={{ textAlign: 'center', fontSize: 10, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace", paddingBottom: 4 }}>{d}</div>
-          ))}
-        </div>
-        <div className="days-grid">{cells}</div>
-      </div>
-    )
+  // ── Merge earnings + payments + packing sessions into one timeline ──────
+  const historyRows: HistoryRow[] = [
+    ...(earningsQ.data ?? []).map(e => ({
+      id: `earning-${e.id}`,
+      date: e.date,
+      label: CATEGORY_LABEL[e.category],
+      sub: e.notes ?? undefined,
+      amount: parseFloat(e.amount),
+      icon: 'ti-plus',
+      color: 'green' as const,
+      isPayment: false,
+    })),
+    ...(paymentsQ.data ?? []).map(p => ({
+      id: `payment-${p.id}`,
+      date: p.date,
+      label: 'Payment',
+      sub: p.referenceNumber ? `${METHOD_LABEL[p.method]} · ${p.referenceNumber}` : METHOD_LABEL[p.method],
+      amount: -parseFloat(p.amount),
+      icon: 'ti-cash',
+      color: 'red' as const,
+      isPayment: true,
+    })),
+    ...(sessionsQ.data?.data ?? []).map(s => ({
+      id: `session-${s.id}`,
+      date: s.date,
+      label: 'Packing session',
+      sub: undefined,
+      amount: parseFloat(s.sessionEarnings ?? '0'),
+      icon: 'ti-box',
+      color: 'blue' as const,
+      isPayment: false,
+    })),
+  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+
+  const now = new Date()
+  const thisMonth = monthKey(now)
+  const lastMonth = monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1))
+
+  const filteredRows = historyRows.filter(r => {
+    if (historyFilter === 'earnings' && r.isPayment) return false
+    if (historyFilter === 'payments' && !r.isPayment) return false
+    if (historyFilter === 'this_month' && !r.date.startsWith(thisMonth)) return false
+    if (historyFilter === 'last_month' && !r.date.startsWith(lastMonth)) return false
+    return true
+  })
+
+  const groupedRows: { date: string; rows: HistoryRow[] }[] = []
+  for (const row of filteredRows) {
+    const last = groupedRows[groupedRows.length - 1]
+    if (last && last.date === row.date) last.rows.push(row)
+    else groupedRows.push({ date: row.date, rows: [row] })
   }
+
+  const historyLoading = earningsQ.isLoading || paymentsQ.isLoading || sessionsQ.isLoading
 
   // ── LIST VIEW ────────────────────────────────────────────────────────
   if (view === 'list') {
@@ -227,13 +259,12 @@ export default function Employees() {
           )}
           {!workersQ.isLoading && !workersQ.isError && workers.map(w => {
             const owed = parseFloat(w.totalOwed)
-            const totalBags = (w.totalBagsPacked ?? []).reduce((acc, b) => acc + b.count, 0)
             return (
               <div key={w.id} className="emp-list-card" style={{ cursor: 'pointer' }} onClick={() => openWorker(w)}>
                 <div className="emp-big-avatar" style={{ background: 'var(--accent)', color: '#fff' }}>{initials(w.name)}</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600, marginBottom: 2 }}>{w.name}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>Warehouse worker · {totalBags.toLocaleString()} bags packed</div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>Warehouse worker</div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontWeight: 700, color: owed > 0 ? 'var(--red)' : 'var(--accent)', fontSize: 15 }}>${owed.toFixed(2)} owed</div>
@@ -272,15 +303,9 @@ export default function Employees() {
                   <label className="form-label">Full name</label>
                   <input className="form-input" type="text" placeholder="e.g. Ali Karimi" value={empName} onChange={e => setEmpName(e.target.value)} />
                 </div>
-                <div className="form-row">
-                  <div className="form-group">
-                    <label className="form-label">Phone</label>
-                    <input className="form-input" type="tel" placeholder="+961 3 000 000" value={empPhone} onChange={e => setEmpPhone(e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Rate per bag ($)</label>
-                    <input className="form-input" type="number" placeholder="0.20" step="0.01" value={empRate} onChange={e => setEmpRate(e.target.value)} />
-                  </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Phone</label>
+                  <input className="form-input" type="tel" placeholder="+961 3 000 000" value={empPhone} onChange={e => setEmpPhone(e.target.value)} />
                 </div>
               </div>
               <div className="modal-footer">
@@ -300,8 +325,11 @@ export default function Employees() {
   return (
     <>
       <Topbar title="Employees">
+        <button className="btn" onClick={() => setEarnModalOpen(true)}>
+          <i className="ti ti-plus" style={{ fontSize: 14 }} /> Add earnings
+        </button>
         <button className="btn primary" onClick={() => setPayModalOpen(true)}>
-          <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay employee
+          <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay worker
         </button>
       </Topbar>
       <div className="content">
@@ -309,121 +337,91 @@ export default function Employees() {
           <i className="ti ti-arrow-left" /> Back to employees
         </button>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 24, alignItems: 'start' }}>
-          {/* Left column */}
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 24 }}>
-              <div className="emp-big-avatar" style={{ background: 'var(--accent)', color: '#fff', width: 56, height: 56, fontSize: 20 }}>{initials(selectedWorker?.name ?? '')}</div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700, fontSize: 18 }}>{selectedWorker?.name ?? '—'}</div>
-                <div style={{ fontSize: 13, color: 'var(--text3)' }}>
-                  Warehouse worker · Per-bag rate
-                  {selectedWorker?.phone && <span style={{ marginLeft: 8, fontFamily: "'IBM Plex Mono',monospace" }}>{selectedWorker.phone}</span>}
-                </div>
-              </div>
-              <button className="btn" onClick={() => {
-                setEditName(selectedWorker?.name ?? '')
-                setEditPhone(selectedWorker?.phone ?? '')
-                setEditEmpOpen(true)
-              }}>
-                <i className="ti ti-edit" style={{ fontSize: 14 }} /> Edit
-              </button>
-              <button
-                className="btn"
-                style={{ background: 'var(--red-bg)', color: 'var(--red)', borderColor: '#fca5a5' }}
-                onClick={() => setConfirmDeleteOpen(true)}
-              >
-                <i className="ti ti-trash" style={{ fontSize: 14 }} /> Remove
-              </button>
-            </div>
-
-            {renderCalendar(workerDays, toggleWorkerDay, sessionDays)}
-
-            {/* Per-bag breakdown */}
-            <div style={{ marginTop: 24, fontWeight: 600, fontSize: 14, marginBottom: 12 }}>Per-bag breakdown</div>
-            <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ color: 'var(--text3)', fontSize: 11 }}>
-                  <th style={{ textAlign: 'left', padding: '4px 0', fontWeight: 500 }}>Bag type</th>
-                  <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 500 }}>Bags</th>
-                  <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 500 }}>Rate</th>
-                  <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 500 }}>Earned</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(selectedWorker?.totalBagsPacked ?? []).map(b => {
-                  const rate = parseFloat(selectedWorker?.ratesPerBagType.find(r => r.bagTypeId === b.bagTypeId)?.ratePerBag ?? '0')
-                  return (
-                    <tr key={b.bagTypeId} style={{ borderTop: '1px solid var(--border)' }}>
-                      <td style={{ padding: '8px 0' }}>{bagTypeNameById.get(b.bagTypeId) ?? b.bagTypeId.slice(0, 8)}</td>
-                      <td style={{ textAlign: 'right', padding: '8px 0', fontFamily: "'IBM Plex Mono', monospace" }}>{b.count}</td>
-                      <td style={{ textAlign: 'right', padding: '8px 0', fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)' }}>${rate.toFixed(3)}</td>
-                      <td style={{ textAlign: 'right', padding: '8px 0', fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${(b.count * rate).toFixed(2)}</td>
-                    </tr>
-                  )
-                })}
-                {(selectedWorker?.totalBagsPacked?.length ?? 0) === 0 && (
-                  <tr><td colSpan={4} className="empty">No bags packed yet.</td></tr>
-                )}
-              </tbody>
-            </table>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
+          <div className="emp-big-avatar" style={{ background: 'var(--accent)', color: '#fff', width: 56, height: 56, fontSize: 20 }}>{initials(selectedWorker?.name ?? '')}</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 18 }}>{selectedWorker?.name ?? '—'}</div>
+            {selectedWorker?.phone && <div style={{ fontSize: 13, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>{selectedWorker.phone}</div>}
           </div>
+          <button className="btn" onClick={() => {
+            setEditName(selectedWorker?.name ?? '')
+            setEditPhone(selectedWorker?.phone ?? '')
+            setEditEmpOpen(true)
+          }}>
+            <i className="ti ti-edit" style={{ fontSize: 14 }} /> Edit
+          </button>
+          <button
+            className="btn"
+            style={{ background: 'var(--red-bg)', color: 'var(--red)', borderColor: '#fca5a5' }}
+            onClick={() => setConfirmDeleteOpen(true)}
+          >
+            <i className="ti ti-trash" style={{ fontSize: 14 }} /> Remove
+          </button>
+        </div>
 
-          {/* Earnings sidebar */}
-          <div style={{ position: 'sticky', top: 24 }}>
-            <div className="earn-breakdown">
-              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 16 }}>Earnings summary</div>
-
-              {/* Daily rate input — saved on blur */}
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6, fontFamily: "'IBM Plex Mono',monospace", textTransform: 'uppercase', letterSpacing: '0.4px' }}>Daily rate</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 13, color: 'var(--text3)' }}>$</span>
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    value={dailyRateInput}
-                    onChange={e => { setDailyRateInput(e.target.value); dailyRateSaved.current = false }}
-                    onBlur={saveDailyRate}
-                    placeholder="0.00"
-                    style={{ width: '100%', fontFamily: "'IBM Plex Mono',monospace", fontSize: 15, fontWeight: 600, border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '6px 10px', background: 'var(--surface2)', color: 'var(--text)' }}
-                  />
-                  <span style={{ fontSize: 12, color: 'var(--text3)', whiteSpace: 'nowrap' }}>/ day</span>
-                </div>
-              </div>
-
-              <div className="eb-row">
-                <span>Days worked</span>
-                <span style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{selectedWorker?.attendanceDays ?? workerDays.size}</span>
-              </div>
-              {dailyEarned > 0 && (
-                <div className="eb-row" style={{ color: 'var(--accent)', fontWeight: 600 }}>
-                  <span>Days salary</span><span>${dailyEarned.toFixed(2)}</span>
-                </div>
-              )}
-              {pieceEarned > 0 && (
-                <div className="eb-row">
-                  <span>Bag earnings</span><span>${pieceEarned.toFixed(2)}</span>
-                </div>
-              )}
-
-              <div style={{ borderTop: '1px solid var(--border)', margin: '12px 0' }} />
-
-              <div className="eb-row" style={{ fontWeight: 600 }}>
-                <span>Total earned</span><span>${workerEarned.toFixed(2)}</span>
-              </div>
-              <div className="eb-row" style={{ color: 'var(--text3)' }}>
-                <span>Paid out</span><span>-${workerPaid.toFixed(2)}</span>
-              </div>
-              <div className="eb-row" style={{ color: WORKER_OWED > 0 ? 'var(--red)' : 'var(--accent)', fontWeight: 700, fontSize: 16, marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-                <span>Owed</span><span>${WORKER_OWED.toFixed(2)}</span>
-              </div>
-              <button className="btn primary" style={{ width: '100%', marginTop: 16, justifyContent: 'center' }} onClick={() => setPayModalOpen(true)}>
-                <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay ${WORKER_OWED.toFixed(2)}
-              </button>
-            </div>
+        {/* Summary strip */}
+        <div className="earn-breakdown" style={{ marginBottom: 20 }}>
+          <div className="eb-row" style={{ fontWeight: 700, fontSize: 16, color: WORKER_OWED > 0 ? 'var(--red)' : 'var(--accent)' }}>
+            <span>Outstanding balance</span><span>${WORKER_OWED.toFixed(2)}</span>
           </div>
+          <div className="eb-row"><span>Total earned</span><span>${workerEarned.toFixed(2)}</span></div>
+          <div className="eb-row" style={{ borderBottom: 'none' }}><span>Total paid</span><span>-${workerPaid.toFixed(2)}</span></div>
+        </div>
+
+        {/* Quick actions */}
+        <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+          <button className="btn" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setEarnModalOpen(true)}>
+            <i className="ti ti-plus" style={{ fontSize: 14 }} /> Add earnings
+          </button>
+          <button className="btn primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setPayModalOpen(true)}>
+            <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay ${WORKER_OWED.toFixed(2)}
+          </button>
+        </div>
+
+        {/* History */}
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>History</div>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+          {HISTORY_FILTERS.map(([key, label]) => (
+            <button
+              key={key}
+              className="btn"
+              style={{
+                padding: '5px 12px', fontSize: 12,
+                background: historyFilter === key ? 'var(--text)' : undefined,
+                color: historyFilter === key ? '#fff' : undefined,
+                borderColor: historyFilter === key ? 'var(--text)' : undefined,
+              }}
+              onClick={() => setHistoryFilter(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+          {historyLoading && <div className="empty">Loading…</div>}
+          {!historyLoading && groupedRows.length === 0 && (
+            <div className="empty">No earnings or payments recorded yet.</div>
+          )}
+          {!historyLoading && groupedRows.map(group => (
+            <div key={group.date}>
+              <div style={{ padding: '8px 18px', fontSize: 11, fontWeight: 600, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", background: 'var(--surface2)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                {dayLabel(group.date)}
+              </div>
+              {group.rows.map(row => (
+                <div key={row.id} className="activity-row">
+                  <div className={`act-icon ${row.color}`}><i className={`ti ${row.icon}`} /></div>
+                  <div className="act-body">
+                    <div className="act-text">{row.label}</div>
+                    {row.sub && <div className="act-time">{row.sub}</div>}
+                  </div>
+                  <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: row.isPayment ? 'var(--text3)' : 'var(--accent)' }}>
+                    {row.isPayment ? '-' : '+'}${Math.abs(row.amount).toFixed(2)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
         </div>
       </div>
 
@@ -439,7 +437,7 @@ export default function Employees() {
             <div className="modal-body">
               <p style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
                 Are you sure you want to permanently remove <strong>{selectedWorker.name}</strong>?
-                Their payment history will also be deleted. This cannot be undone.
+                Their earnings and payment history will also be deleted. This cannot be undone.
               </p>
             </div>
             <div className="modal-footer">
@@ -557,19 +555,92 @@ export default function Employees() {
               </div>
               <div className="form-group">
                 <label className="form-label">Method</label>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {['cash','whish','omt','bank'].map(m => (
+                <div className="method-pills">
+                  {PAYMENT_METHODS.map(m => (
                     <button key={m} className={`method-pill${payMethod === m ? ' sel' : ''}`} onClick={() => setPayMethod(m)}>
-                      {m.charAt(0).toUpperCase() + m.slice(1)}
+                      {METHOD_LABEL[m]}
                     </button>
                   ))}
                 </div>
               </div>
+              {payMethod !== 'cash' && (
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Reference # (receipt, transfer, cheque)</label>
+                  <input
+                    className="form-input"
+                    type="text"
+                    placeholder="e.g. CHQ-00214"
+                    value={payReference}
+                    onChange={e => setPayReference(e.target.value)}
+                  />
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn" onClick={() => setPayModalOpen(false)}>Cancel</button>
               <button className="btn primary" onClick={submitWorkerPayment} disabled={logPayment.isPending || payAmtNum <= 0}>
                 {logPayment.isPending ? 'Saving…' : 'Confirm payment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add earnings modal */}
+      {earnModalOpen && (
+        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setEarnModalOpen(false)}>
+          <div className="modal" style={{ width: 380 }}>
+            <div className="modal-head">
+              <div className="modal-title">Add earnings — {selectedWorker?.name ?? 'worker'}</div>
+              <button className="panel-close-btn" onClick={() => setEarnModalOpen(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">Amount (USD)</label>
+                <input
+                  type="number"
+                  className="pay-big-input"
+                  placeholder="0.00"
+                  value={earnAmt}
+                  onChange={e => setEarnAmt(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Category</label>
+                <select
+                  className="form-input"
+                  value={earnCategory}
+                  onChange={e => setEarnCategory(e.target.value as WorkerCostCategory)}
+                >
+                  {CATEGORY_OPTIONS.map(c => (
+                    <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Date</label>
+                <input
+                  className="form-input"
+                  type="date"
+                  value={earnDate}
+                  onChange={e => setEarnDate(e.target.value)}
+                />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Notes (optional)</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="e.g. half day, left early"
+                  value={earnNotes}
+                  onChange={e => setEarnNotes(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setEarnModalOpen(false)}>Cancel</button>
+              <button className="btn primary" onClick={submitEarning} disabled={createEarning.isPending || (parseFloat(earnAmt) || 0) <= 0}>
+                {createEarning.isPending ? 'Saving…' : 'Save earnings'}
               </button>
             </div>
           </div>

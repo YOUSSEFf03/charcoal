@@ -649,14 +649,21 @@ tr.entry-clickable:hover td { background: var(--surface2); }
 /* ── PROFIT ── */
 .profit-block { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
 .profit-main { display: flex; align-items: flex-end; justify-content: space-between; }
-.profit-value { font-size: 32px; font-weight: 600; letter-spacing: -1.5px; color: var(--accent); }
-.profit-period { font-size: 12px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-bottom: 4px; }
-.profit-breakdown { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.pb-item { background: var(--surface2); border-radius: var(--radius); padding: 10px 12px; }
-.pb-label { font-size: 11px; color: var(--text3); margin-bottom: 3px; }
-.pb-value { font-size: 15px; font-weight: 600; letter-spacing: -0.5px; }
+.profit-value { font-size: 32px; font-weight: 600; letter-spacing: -1.5px; }
+.profit-value.pos { color: var(--accent); }
+.profit-value.neg { color: var(--red); }
+.profit-margin { font-size: 20px; font-weight: 600; letter-spacing: -0.5px; }
+.profit-margin.pos { color: var(--accent); }
+.profit-margin.neg { color: var(--red); }
+.profit-period { font-size: 12px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; margin-bottom: 4px; display: flex; align-items: center; gap: 5px; }
+.profit-breakdown { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.pb-item { background: var(--surface2); border-radius: var(--radius); padding: 10px 12px; min-width: 0; }
+.pb-label { font-size: 11px; color: var(--text3); margin-bottom: 3px; display: flex; align-items: center; gap: 4px; }
+.pb-value { font-size: 15px; font-weight: 600; letter-spacing: -0.5px; overflow-wrap: break-word; }
 .pb-value.red   { color: var(--red); }
 .pb-value.green { color: var(--accent); }
+.pb-value.amber { color: var(--accent2); }
+.info-icon { font-size: 12px; color: var(--text3); cursor: help; }
 
 /* ── MINI CHART ── */
 .mini-chart { display: flex; align-items: flex-end; gap: 4px; height: 36px; padding: 0 20px 14px; }
@@ -968,12 +975,6 @@ tr.entry-clickable:hover td { background: var(--surface2); }
 .month-tab.active { background:var(--text); color:#fff; border-color:var(--text); }
 .days-header { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-bottom:4px; }
 .day-header-cell { text-align:center; font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--text3); padding:2px 0; }
-.days-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-bottom:12px; }
-.day-cell { aspect-ratio:1; border-radius:6px; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:11px; font-family:'IBM Plex Mono',monospace; cursor:pointer; transition:all 0.1s; background:var(--surface2); color:var(--text3); }
-.day-cell.worked { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
-.day-cell.today { border:2px solid var(--text); }
-.day-cell.future { opacity:0.3; cursor:not-allowed; pointer-events:none; }
-.day-cell:hover:not(.future) { border-color:var(--text); }
 .work-log-row { display:flex; align-items:center; gap:12px; padding:11px 18px; border-bottom:1px solid var(--border); font-size:13px; }
 .work-log-row:last-child { border-bottom:none; }
 .wl-icon { width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; flex-shrink:0; }
@@ -2287,6 +2288,10 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 .entries-list .entry-row .etot { font-family: 'IBM Plex Mono', monospace; font-weight: 600; text-align: right; font-size: 14px; }
 .entries-list .entry-row .etot small { font-size: 10.5px; color: var(--text3); font-weight: 400; text-transform: uppercase; letter-spacing: 0.5px; margin-left: 3px; }
 .entries-list .entry-row .ekg { font-family: 'IBM Plex Mono', monospace; color: var(--accent); text-align: right; font-weight: 500; }
+.entries-list .entry-row .eworker { font-size: 12.5px; color: var(--text2); }
+.entries-list .entry-row .ewaste { font-family: 'IBM Plex Mono', monospace; font-weight: 600; text-align: right; font-size: 13px; }
+.entries-list .entry-row.clickable { cursor: pointer; }
+.entries-list .entry-row.clickable:hover { background: var(--surface2); }
 .pack-empty { padding: 40px 20px; text-align: center; color: var(--text3); }
 .pack-empty i { font-size: 32px; color: var(--border2); margin-bottom: 8px; display: block; }
 .pack-empty .t { font-size: 14px; color: var(--text2); margin-bottom: 4px; }

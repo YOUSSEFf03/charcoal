@@ -24,14 +24,16 @@ import { ClerkUser } from '../auth/clerk.strategy';
 export class GeneralExpensesController {
   constructor(private readonly service: GeneralExpensesService) {}
 
-  @ApiOperation({ summary: 'List general expenses (paginated)' })
+  @ApiOperation({ summary: 'List general expenses (paginated, optionally filtered by date range)' })
   @ApiResponse({ status: 200 })
   @Get()
   findAll(
     @Query('page', new ParsePagePipe()) page: number,
     @Query('limit', new ParseLimitPipe(100)) limit: number,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
-    return this.service.findAll(page, limit);
+    return this.service.findAll(page, limit, dateFrom, dateTo);
   }
 
   @ApiOperation({ summary: 'Get a general expense by ID' })

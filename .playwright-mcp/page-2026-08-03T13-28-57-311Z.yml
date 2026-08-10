@@ -1,0 +1,260 @@
+- generic [ref=f12e3]:
+  - complementary [ref=f12e4]:
+    - generic [ref=f12e5]:
+      - generic [ref=f12e6]: 
+      - generic [ref=f12e8]:
+        - generic [ref=f12e9]: Farah Charcoal
+        - generic [ref=f12e10]: management system
+    - generic [ref=f12e11]:
+      - generic [ref=f12e12]: Overview
+      - link " Dashboard" [ref=f12e13] [cursor=pointer]:
+        - /url: /dashboard
+        - generic [ref=f12e14]: 
+        - text: Dashboard
+      - link " Reports" [ref=f12e15] [cursor=pointer]:
+        - /url: /reports
+        - generic [ref=f12e16]: 
+        - text: Reports
+    - generic [ref=f12e17]:
+      - generic [ref=f12e18]: Stock
+      - link " Containers" [ref=f12e19] [cursor=pointer]:
+        - /url: /containers
+        - generic [ref=f12e20]: 
+        - text: Containers
+      - link " Warehouse" [ref=f12e21] [cursor=pointer]:
+        - /url: /warehouse
+        - generic [ref=f12e22]: 
+        - text: Warehouse
+      - link " Packing" [ref=f12e23] [cursor=pointer]:
+        - /url: /packing
+        - generic [ref=f12e24]: 
+        - text: Packing
+      - link " Bag purchases" [ref=f12e25] [cursor=pointer]:
+        - /url: /bag-purchases
+        - generic [ref=f12e26]: 
+        - text: Bag purchases
+    - generic [ref=f12e27]:
+      - generic [ref=f12e28]: Sales
+      - link " Clients" [ref=f12e29] [cursor=pointer]:
+        - /url: /clients
+        - generic [ref=f12e30]: 
+        - text: Clients
+      - link " Fill clients" [ref=f12e31] [cursor=pointer]:
+        - /url: /fill-clients
+        - generic [ref=f12e32]: 
+        - text: Fill clients
+      - link " Orders" [ref=f12e33] [cursor=pointer]:
+        - /url: /orders
+        - generic [ref=f12e34]: 
+        - text: Orders
+      - link "Warehouse sales" [ref=f12e35] [cursor=pointer]:
+        - /url: /warehouse-sales
+    - generic [ref=f12e36]:
+      - generic [ref=f12e37]: Finance
+      - link " Balances" [ref=f12e38] [cursor=pointer]:
+        - /url: /balances
+        - generic [ref=f12e39]: 
+        - text: Balances
+      - link " Invoices" [ref=f12e40] [cursor=pointer]:
+        - /url: /invoices
+        - generic [ref=f12e41]: 
+        - text: Invoices
+      - link " Cash handover" [ref=f12e42] [cursor=pointer]:
+        - /url: /cash-handover
+        - generic [ref=f12e43]: 
+        - text: Cash handover
+      - link " Expenses" [ref=f12e44] [cursor=pointer]:
+        - /url: /expenses
+        - generic [ref=f12e45]: 
+        - text: Expenses
+    - generic [ref=f12e46]:
+      - generic [ref=f12e47]: Setup
+      - link " Employees" [ref=f12e48] [cursor=pointer]:
+        - /url: /employees
+        - generic [ref=f12e49]: 
+        - text: Employees
+      - link " Suppliers" [ref=f12e50] [cursor=pointer]:
+        - /url: /suppliers
+        - generic [ref=f12e51]: 
+        - text: Suppliers
+      - link " Settings" [ref=f12e52] [cursor=pointer]:
+        - /url: /settings
+        - generic [ref=f12e53]: 
+        - text: Settings
+    - generic [ref=f12e56] [cursor=pointer]:
+      - generic [ref=f12e57]: KA
+      - generic [ref=f12e58]:
+        - generic [ref=f12e59]: Khalil Abi Nader
+        - generic [ref=f12e60]: owner
+      - generic [ref=f12e61]: 
+  - generic [ref=f12e62]:
+    - banner [ref=f12e63]:
+      - generic [ref=f12e64]: GCLX-2024-001
+      - generic [ref=f12e70]:
+        - button " Edit" [ref=f12e71] [cursor=pointer]:
+          - generic [ref=f12e72]: 
+          - text: Edit
+        - button " Duplicate" [ref=f12e73] [cursor=pointer]:
+          - generic [ref=f12e74]: 
+          - text: Duplicate
+        - button " Mark arrived" [ref=f12e75] [cursor=pointer]:
+          - generic [ref=f12e76]: 
+          - text: Mark arrived
+        - button " Delete" [ref=f12e77] [cursor=pointer]:
+          - generic [ref=f12e78]: 
+          - text: Delete
+    - generic [ref=f12e66]:
+      - generic [ref=f12e67]:
+        - generic [ref=f12e79]:
+          - button " All containers" [ref=f12e81] [cursor=pointer]:
+            - generic [ref=f12e82]: 
+            - text: All containers
+          - heading "GCLX-2024-001" [level=1] [ref=f12e83]
+          - generic [ref=f12e84]:
+            - generic [ref=f12e85]:
+              - generic [ref=f12e86]: 
+              - text: Gulf Charcoal Co. · Saudi Arabia
+            - generic [ref=f12e87]:
+              - generic [ref=f12e88]: 
+              - text: created 1 Aug 2026
+            - generic [ref=f12e89]:
+              - generic [ref=f12e90]: 
+              - text: ETA —
+            - generic [ref=f12e91]: In transit
+          - generic [ref=f12e92]:
+            - generic [ref=f12e93]: Created
+            - generic [ref=f12e96]: At port
+            - generic [ref=f12e100]: In transit
+            - generic [ref=f12e104]: Arrived
+        - generic [ref=f12e108]:
+          - generic [ref=f12e109]:
+            - generic [ref=f12e110]: Total weight
+            - generic [ref=f12e111]: 15.00 tons
+            - generic [ref=f12e112]: 1,500 paid bags
+          - generic [ref=f12e113]:
+            - generic [ref=f12e114]: Avg cost / kg
+            - generic [ref=f12e115]: $0.43
+            - generic [ref=f12e116]: all-in, with expenses
+      - generic [ref=f12e68]:
+        - generic [ref=f12e117]:
+          - generic [ref=f12e118]:
+            - generic [ref=f12e119]:
+              - generic [ref=f12e120]:
+                - generic [ref=f12e121]: 
+                - text: Product lines
+              - button " Add line" [ref=f12e122] [cursor=pointer]:
+                - generic [ref=f12e123]: 
+                - text: Add line
+            - table [ref=f12e124]:
+              - rowgroup [ref=f12e125]:
+                - row [ref=f12e126]:
+                  - columnheader "Charcoal" [ref=f12e127]
+                  - columnheader "Paid bags" [ref=f12e128]
+                  - columnheader "Kg/bag" [ref=f12e129]
+                  - columnheader "$/ton" [ref=f12e130]
+                  - columnheader "Tonnage" [ref=f12e131]
+                  - columnheader "All-in $/kg" [ref=f12e132]
+                  - columnheader "Actions" [ref=f12e133]
+              - rowgroup [ref=f12e134]:
+                - row [ref=f12e135]:
+                  - cell "BBQ hardwood Grade A · +50 gift bags" [ref=f12e136]:
+                    - generic [ref=f12e137]:
+                      - generic [ref=f12e138]: BBQ hardwood
+                      - generic [ref=f12e139]: Grade A · +50 gift bags
+                  - cell "1,000" [ref=f12e140]
+                  - cell "10.0" [ref=f12e141]
+                  - cell "$450" [ref=f12e142]
+                  - cell "10.00" [ref=f12e143]
+                  - cell "$0.45" [ref=f12e144]
+                  - cell [ref=f12e145]:
+                    - generic [ref=f12e146]:
+                      - button "" [ref=f12e147] [cursor=pointer]
+                      - button "" [ref=f12e149] [cursor=pointer]
+                - row [ref=f12e151]:
+                  - cell "BBQ hardwood Grade B · +0 gift bags" [ref=f12e152]:
+                    - generic [ref=f12e153]:
+                      - generic [ref=f12e154]: BBQ hardwood
+                      - generic [ref=f12e155]: Grade B · +0 gift bags
+                  - cell "500" [ref=f12e156]
+                  - cell "10.0" [ref=f12e157]
+                  - cell "$380" [ref=f12e158]
+                  - cell "5.00" [ref=f12e159]
+                  - cell "$0.38" [ref=f12e160]
+                  - cell [ref=f12e161]:
+                    - generic [ref=f12e162]:
+                      - button "" [ref=f12e163] [cursor=pointer]
+                      - button "" [ref=f12e165] [cursor=pointer]
+            - generic [ref=f12e167]:
+              - generic [ref=f12e168]: 2 product lines · 1,500 bags · 15.00 t paid weight
+              - generic [ref=f12e169]: kg/bag is reference only, not used in cost
+          - generic [ref=f12e170]:
+            - generic [ref=f12e171]:
+              - generic [ref=f12e172]:
+                - generic [ref=f12e173]: 
+                - text: Expenses
+              - generic [ref=f12e174]: split by tonnage
+            - generic [ref=f12e175]:
+              - generic [ref=f12e176]: Description
+              - generic [ref=f12e177]: Amount (USD)
+            - generic [ref=f12e178]: No expenses logged.
+            - generic [ref=f12e179]:
+              - textbox "Expense description…" [ref=f12e180]
+              - spinbutton "0.00" [ref=f12e181]
+              - button "" [ref=f12e182] [cursor=pointer]
+            - generic [ref=f12e184]:
+              - generic [ref=f12e185]: Fill in description and amount, then press + or Enter
+              - generic [ref=f12e186]: "Total: $0.00"
+        - generic [ref=f12e187]:
+          - generic [ref=f12e188]:
+            - generic [ref=f12e190]:
+              - generic [ref=f12e191]: 
+              - text: Supplier discount
+            - generic [ref=f12e192]:
+              - generic [ref=f12e193]:
+                - generic: $
+                - spinbutton [ref=f12e194]: "0"
+              - button " Save discount" [ref=f12e195] [cursor=pointer]:
+                - generic [ref=f12e196]: 
+                - text: Save discount
+              - paragraph [ref=f12e197]: applied to whole container, split across product lines proportionally by tonnage
+          - generic [ref=f12e198]:
+            - generic [ref=f12e199]:
+              - generic [ref=f12e200]:
+                - generic [ref=f12e201]: 
+                - text: Cost summary
+              - generic [ref=f12e202]: live
+            - generic [ref=f12e203]:
+              - generic [ref=f12e204]: Total weight
+              - generic [ref=f12e205]: 15.00 t
+            - generic [ref=f12e206]:
+              - generic [ref=f12e207]: Product cost
+              - generic [ref=f12e208]: $6,400.00
+            - generic [ref=f12e209]:
+              - generic [ref=f12e210]: + Expenses (0 items)
+              - generic [ref=f12e211]: + $0.00
+            - generic [ref=f12e212]:
+              - generic [ref=f12e213]: − Discount
+              - generic [ref=f12e214]: − $0.00
+            - generic [ref=f12e215]:
+              - generic [ref=f12e216]: All-in cost
+              - generic [ref=f12e217]: $6,400.00
+            - generic [ref=f12e218]:
+              - generic [ref=f12e219]: Avg cost / ton
+              - generic [ref=f12e220]: $426.67
+            - generic [ref=f12e221]:
+              - generic [ref=f12e222]: Avg cost / kg
+              - generic [ref=f12e223]: $0.43
+          - generic [ref=f12e224]:
+            - generic [ref=f12e226]:
+              - generic [ref=f12e227]: 
+              - text: On arrival — preview
+            - generic [ref=f12e228]:
+              - text: Marking this container as arrived will create
+              - strong [ref=f12e229]: 2 stock lots
+              - text: in the warehouse with the cost/kg shown below.
+            - generic [ref=f12e230]:
+              - generic [ref=f12e231]: BBQ hardwood · A
+              - generic [ref=f12e232]: 10000 kg @ $0.45
+            - generic [ref=f12e233]:
+              - generic [ref=f12e234]: BBQ hardwood · B
+              - generic [ref=f12e235]: 5000 kg @ $0.38

@@ -107,24 +107,40 @@ export class BagTypesService {
    * @param id - Bag type UUID
    * @returns void
    * @throws NotFoundException - If bag type with given ID does not exist
-   * @throws ConflictException - If bag type is referenced by packed stock, order lines, shipment bags, stock exits, or client orders
+   * @throws ConflictException - If bag type is referenced by packed stock, order lines,
+   *   shipment bags, stock exits, client orders, or bag purchases. Also thrown (rather than
+   *   letting a raw Prisma error escape) if the delete itself hits a foreign-key constraint
+   *   the count check didn't anticipate — see the try/catch below.
    */
   async remove(id: string): Promise<void> {
     await this.findOne(id);
-    const [packed, orderLines, shipmentBags, stockExits, clientOrders] =
+    const [packed, orderLines, shipmentBags, stockExits, clientOrders, bagPurchases] =
       await Promise.all([
         this.prisma.packedStock.count({ where: { bagTypeId: id } }),
         this.prisma.orderBagLine.count({ where: { bagTypeId: id } }),
         this.prisma.shipmentBag.count({ where: { bagTypeId: id } }),
         this.prisma.stockExit.count({ where: { bagTypeId: id } }),
         this.prisma.clientOrder.count({ where: { bagTypeId: id } }),
+        this.prisma.bagPurchase.count({ where: { bagTypeId: id } }),
       ]);
-    if (packed + orderLines + shipmentBags + stockExits + clientOrders > 0) {
+    if (packed + orderLines + shipmentBags + stockExits + clientOrders + bagPurchases > 0) {
       throw new ConflictException({
         error: 'Bag type has linked records',
         code: 'CONFLICT',
       });
     }
-    await this.prisma.bagType.delete({ where: { id } });
+    try {
+      await this.prisma.bagType.delete({ where: { id } });
+    } catch (e) {
+      // Defense in depth: if some relation is added later and this guard isn't updated
+      // to match, fail as a clean 409 instead of leaking a raw Prisma error as a 500.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2003') {
+        throw new ConflictException({
+          error: 'Bag type has linked records',
+          code: 'CONFLICT',
+        });
+      }
+      throw e;
+    }
   }
 }

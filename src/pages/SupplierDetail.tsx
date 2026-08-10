@@ -3,6 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useSupplier, useSupplierPayments, useCreateSupplierPayment } from '../hooks/useSuppliers'
 import { useContainers } from '../hooks/useContainers'
+import { useSupplierLedger } from '../hooks/useReports'
+import { exportSheet } from '../lib/exportXlsx'
+import { formatUsd } from '../lib/money'
+import { formatDate } from '../lib/date'
+
+type View = 'detail' | 'statement'
 
 function initialsOf(name?: string | null): string {
   if (!name) return '?'
@@ -14,25 +20,34 @@ function initialsOf(name?: string | null): string {
     .join('')
 }
 
-function money(n: number) { return '$' + Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',') }
+function money(n: number) { return formatUsd(n) }
+function fmtDate(iso?: string | null): string { return formatDate(iso, { day: '2-digit' }) }
 
 /* ── component ─────────────────────────────────────── */
 export default function SupplierDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const supplierId = id ?? ''
+
+  const [view, setView] = useState<View>('detail')
 
   // Real supplier data from the API.
-  const supplierQuery = useSupplier(id ?? '')
+  const supplierQuery = useSupplier(supplierId)
   const supplier = supplierQuery.data
 
   // Containers + payments for this supplier.
-  const containersQ  = useContainers({ supplierId: id ?? '', limit: 20 })
-  const paymentsQ    = useSupplierPayments(id ?? '')
-  const createPaymentM = useCreateSupplierPayment(id ?? '')
+  const containersQ  = useContainers({ supplierId, limit: 20 })
+  const paymentsQ    = useSupplierPayments(supplierId)
+  const createPaymentM = useCreateSupplierPayment(supplierId)
   const containers   = containersQ.data?.data ?? []
   const payments     = paymentsQ.data?.data ?? []
 
   // All KPIs come directly from the supplier detail response (computed server-side).
+  // NOTE: this is an inventory-cost-basis figure (raw StockLot.costPerKg, which for
+  // container lots already folds in allocated container expenses/discounts) — NOT
+  // the same basis as the Statement of Account balance below, which excludes those
+  // by design. Labeled "inventory cost outstanding" everywhere it's shown so the
+  // two numbers are never confused with each other.
   const totalSpent      = parseFloat(supplier?.totalSpentUsd    ?? '0') || 0
   const totalPaid       = parseFloat(supplier?.totalPaidUsd     ?? '0') || 0
   const outstanding     = parseFloat(supplier?.outstandingUsd   ?? '0') || 0
@@ -62,6 +77,62 @@ export default function SupplierDetail() {
   const [payRef, setPayRef] = useState('')
   const [toast, setToast] = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
+
+  // Statement of Account sub-view filters. dateFrom/dateTo are sent to the backend
+  // (the opening balance is computed server-side for the exact selected range);
+  // type/search are display-only filters applied client-side to the fetched entries.
+  const [stmtFrom, setStmtFrom] = useState('')
+  const [stmtTo, setStmtTo] = useState('')
+  const [stmtType, setStmtType] = useState<'all' | 'debit' | 'credit'>('all')
+  const [stmtQ, setStmtQ] = useState('')
+
+  const ledgerQ = useSupplierLedger(supplierId, {
+    dateFrom: stmtFrom || undefined,
+    dateTo:   stmtTo   || undefined,
+  })
+
+  // Statement ledger sourced from backend — Container Product Line + direct Stock
+  // Lot purchases, and Supplier Payments only. Container expenses, discounts, and
+  // bag purchases are excluded (Supplier Statement scope — see design review).
+  const LEDGER = (ledgerQ.data?.entries ?? []).map(e => ({
+    rawDate:     e.date,
+    date:        fmtDate(e.date),
+    ref:         e.displayId ?? e.reference.slice(0, 8).toUpperCase(),
+    referenceId: e.reference,
+    sourceType:  e.sourceType,
+    desc:        e.description,
+    kind:        e.type as 'purchase' | 'payment',
+    debit:       parseFloat(e.debit),
+    credit:      parseFloat(e.credit),
+    balance:     parseFloat(e.runningBalance),
+  }))
+
+  // Type/search filters only — date range is already applied server-side above.
+  const stmtFiltered = LEDGER.filter(e => {
+    if (stmtType === 'debit'  && !e.debit)  return false
+    if (stmtType === 'credit' && !e.credit) return false
+    if (stmtQ && !(e.desc + ' ' + e.ref).toLowerCase().includes(stmtQ.toLowerCase())) return false
+    return true
+  })
+  const stmtDebit   = stmtFiltered.reduce((s, e) => s + e.debit, 0)
+  const stmtCredit  = stmtFiltered.reduce((s, e) => s + e.credit, 0)
+  // Server-computed opening balance for the exact selected date range — no client-side
+  // "previous row" workaround needed since the backend already supports dateFrom/dateTo.
+  const stmtOpening = parseFloat(ledgerQ.data?.summary.openingBalance ?? '0')
+  const stmtClosing = stmtFiltered.length ? stmtFiltered[stmtFiltered.length - 1].balance : stmtOpening
+  const stmtOpeningDate = stmtFiltered.length ? stmtFiltered[0].date : (LEDGER[0]?.date ?? fmtDate(new Date().toISOString()))
+  const stmtPeriod = stmtFiltered.length ? `${stmtFiltered[0].date} — ${stmtFiltered[stmtFiltered.length - 1].date}` : '—'
+  const stmtFilterActive = stmtFrom || stmtTo || stmtType !== 'all' || stmtQ
+  function resetStmt() { setStmtFrom(''); setStmtTo(''); setStmtType('all'); setStmtQ('') }
+
+  function exportStatement() {
+    const aoa: unknown[][] = [['Date', 'Source', 'Ref', 'Description', 'Debit', 'Credit', 'Balance']]
+    aoa.push([stmtOpeningDate, '', '', 'Opening balance', '', '', stmtOpening])
+    stmtFiltered.forEach(e => aoa.push([e.date, e.sourceType ?? 'payment', e.ref, e.desc, e.debit || '', e.credit || '', e.balance]))
+    if (aoa.length === 2) { showToast('Nothing to export'); return }
+    exportSheet(aoa, 'Statement', `${supplierId}-statement`)
+    showToast(`Exported ${aoa.length - 2} rows`)
+  }
 
   function showToast(msg: string) {
     setToast(msg)
@@ -119,12 +190,27 @@ export default function SupplierDetail() {
   return (
     <>
       <Topbar title={supplier?.name ?? 'Supplier'}>
-        <button className="btn"><i className="ti ti-edit" style={{ fontSize: 15 }} /> Edit</button>
-        <button className="btn primary" onClick={() => setPayOpen(true)}>
-          <i className="ti ti-cash" style={{ fontSize: 15 }} /> Pay supplier
-        </button>
+        {view === 'detail' ? (
+          <>
+            <button className="btn"><i className="ti ti-edit" style={{ fontSize: 15 }} /> Edit</button>
+            <button className="btn" onClick={() => setView('statement')}>
+              <i className="ti ti-table" style={{ fontSize: 15 }} /> Statement of account
+            </button>
+            <button className="btn primary" onClick={() => setPayOpen(true)}>
+              <i className="ti ti-cash" style={{ fontSize: 15 }} /> Pay supplier
+            </button>
+          </>
+        ) : (
+          <button className="btn" onClick={() => setView('detail')}>
+            <i className="ti ti-arrow-left" style={{ fontSize: 15 }} /> Back to supplier
+          </button>
+        )}
       </Topbar>
       <div className="content">
+
+        {/* ════════════ OVERVIEW ════════════ */}
+        {view === 'detail' && (
+          <>
 
         {/* ── HERO: outstanding balance is the star ── */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 20, alignItems: 'stretch', marginBottom: 16 }}>
@@ -156,10 +242,13 @@ export default function SupplierDetail() {
             display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4,
           }}>
             <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", textTransform: 'uppercase', letterSpacing: '0.8px', color: outstanding > 0 ? 'var(--accent2)' : 'var(--accent)', fontWeight: 600 }}>
-              We still owe
+              Inventory cost outstanding
             </div>
             <div style={{ fontSize: '2.4rem', fontWeight: 800, letterSpacing: -1.5, fontFamily: "'IBM Plex Mono',monospace", color: outstanding > 0 ? 'var(--accent2)' : 'var(--accent)', lineHeight: 1 }}>
               {outstanding > 0 ? money(outstanding) : totalSpent > 0 ? 'Settled' : '—'}
+            </div>
+            <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: -2 }}>
+              cost basis — see <a href="#" onClick={e => { e.preventDefault(); setView('statement') }} style={{ color: 'inherit', textDecoration: 'underline' }}>statement</a> for accounts payable
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 16, marginTop: 6 }}>
               <span style={{ fontSize: 12, color: 'var(--text2)' }}>
@@ -440,6 +529,107 @@ export default function SupplierDetail() {
 
           </div>
         </div>
+          </>
+        )}
+
+        {/* ════════════ STATEMENT OF ACCOUNT ════════════ */}
+        {view === 'statement' && (
+          <div className="fade-up stmt-view">
+            <div className="view-head">
+              <div>
+                <div className="view-title">Statement of account</div>
+                <div className="view-sub">
+                  <span className="meta-row"><i className="ti ti-truck" /> {supplier?.name}</span>
+                  <span className="meta-row"><i className="ti ti-calendar" /> {stmtPeriod}</span>
+                  <span className="meta-row"><i className="ti ti-currency-dollar" /> USD</span>
+                </div>
+              </div>
+              <div className="stmt-actions">
+                <button className="btn" onClick={() => window.print()}><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print</button>
+                <button className="btn-export" onClick={exportStatement}><i className="ti ti-table-export" /> Export Excel</button>
+              </div>
+            </div>
+
+            {/* Filter bar */}
+            <div className="filter-row">
+              <div className="filter-search">
+                <i className="ti ti-search" />
+                <input placeholder="Search description or ref…" value={stmtQ} onChange={e => setStmtQ(e.target.value)} />
+              </div>
+              <div className="seg">
+                {([['all', 'All'], ['debit', 'Purchases'], ['credit', 'Payments']] as const).map(([k, lbl]) => (
+                  <div key={k} className={`seg-opt ${stmtType === k ? 'sel' : ''}`} onClick={() => setStmtType(k)}>{lbl}</div>
+                ))}
+              </div>
+              <div className="filter-dates">
+                <span className="lbl">From</span>
+                <input className="date-mini" type="date" value={stmtFrom} onChange={e => setStmtFrom(e.target.value)} />
+                <span className="lbl">To</span>
+                <input className="date-mini" type="date" value={stmtTo} onChange={e => setStmtTo(e.target.value)} />
+              </div>
+              {stmtFilterActive ? <button className="btn" onClick={resetStmt}><i className="ti ti-x" style={{ fontSize: 14 }} /> Reset</button> : null}
+            </div>
+
+            {/* Opening / closing summary */}
+            <div className="stmt-summary">
+              <div className="stmt-cell"><div className="l">Opening balance</div><div className="v">{money(stmtOpening)}</div><div className="s">{stmtOpeningDate}</div></div>
+              <div className="stmt-cell"><div className="l">Total purchased</div><div className="v amber">{money(stmtDebit)}</div><div className="s">container &amp; direct</div></div>
+              <div className="stmt-cell"><div className="l">Total paid</div><div className="v green">{money(stmtCredit)}</div><div className="s">payments recorded</div></div>
+              <div className="stmt-cell"><div className="l">Closing balance</div><div className={`v ${stmtClosing > 0 ? 'amber' : stmtClosing < 0 ? 'red' : 'green'}`}>{money(stmtClosing)}</div><div className="s">{stmtClosing > 0 ? 'we owe' : stmtClosing < 0 ? 'in credit' : 'settled'}</div></div>
+            </div>
+
+            <div className="card">
+              <table className="data-table stmt-table">
+                <thead><tr>
+                  <th style={{ width: 120 }}>Date</th><th style={{ width: 100 }}>Source</th><th style={{ width: 90 }}>Ref</th><th>Description</th>
+                  <th className="right" style={{ width: 120 }}>Debit</th><th className="right" style={{ width: 120 }}>Credit</th>
+                  <th className="right" style={{ width: 130 }}>Balance</th>
+                </tr></thead>
+                <tbody>
+                  <tr className="opening">
+                    <td className="mono">{stmtOpeningDate}</td>
+                    <td></td><td></td>
+                    <td className="desc">Opening balance</td>
+                    <td className="num"></td><td className="num"></td>
+                    <td className="num">{money(stmtOpening)}</td>
+                  </tr>
+                  {ledgerQ.isLoading && <tr><td colSpan={7} className="empty">Loading…</td></tr>}
+                  {!ledgerQ.isLoading && stmtFiltered.map((e, i) => (
+                    <tr key={i}>
+                      <td className="mono">{e.date}</td>
+                      <td>
+                        {e.kind === 'purchase' ? (
+                          <span className={`badge ${e.sourceType === 'container' ? 'badge-blue' : 'badge-amber'}`}>{e.sourceType === 'container' ? 'Container' : 'Direct'}</span>
+                        ) : (
+                          <span className="badge badge-green">Payment</span>
+                        )}
+                      </td>
+                      <td className="mono ref-cell">
+                        {e.kind === 'purchase' && e.sourceType === 'container' ? (
+                          <a href={`/containers/${e.referenceId}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{e.ref}</a>
+                        ) : (
+                          <span>{e.ref}</span>
+                        )}
+                      </td>
+                      <td className="desc">{e.desc}</td>
+                      <td className="num dr">{e.debit ? money(e.debit) : ''}</td>
+                      <td className="num cr">{e.credit ? money(e.credit) : ''}</td>
+                      <td className={`num ${e.balance < 0 ? 'bal-neg' : 'bal-pos'}`} style={{ fontWeight: 600 }}>{money(e.balance)}</td>
+                    </tr>
+                  ))}
+                  {!ledgerQ.isLoading && stmtFiltered.length === 0 && <tr><td colSpan={7} className="empty">No entries match this filter</td></tr>}
+                </tbody>
+                <tfoot><tr>
+                  <td colSpan={4} style={{ textAlign: 'right' }}>Totals</td>
+                  <td className="num dr">{money(stmtDebit)}</td>
+                  <td className="num cr">{money(stmtCredit)}</td>
+                  <td className="num">{money(stmtClosing)}</td>
+                </tr></tfoot>
+              </table>
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* Pay modal */}
@@ -486,7 +676,7 @@ export default function SupplierDetail() {
               </div>
               {outstanding > 0 && (
                 <div style={{ marginTop: 14, padding: '11px 14px', background: 'var(--accent2-bg)', borderRadius: 'var(--radius)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, color: 'var(--text2)' }}>Outstanding balance</span>
+                  <span style={{ fontSize: 12, color: 'var(--text2)' }}>Outstanding (inventory cost)</span>
                   <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 18, fontWeight: 700, color: 'var(--accent2)' }}>{money(outstanding)}</span>
                 </div>
               )}

@@ -7,8 +7,10 @@ import { Currency } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoiceCalculatorService } from '../invoices/invoice-calculator.service';
+import { PaymentAllocationService } from '../invoices/payment-allocation.service';
 import { SettingsService } from '../settings/settings.service';
-import { creditAccount } from '../cash-handovers/cash-handovers.service';
+import { LedgerWriteService } from '../ledger/ledger-write.service';
+import { UsersService } from '../users/users.service';
 import { CreateWalkInSaleDto } from './dto/create-walk-in-sale.dto';
 
 @Injectable()
@@ -16,7 +18,10 @@ export class WalkInSalesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly calculator: InvoiceCalculatorService,
+    private readonly paymentAllocationService: PaymentAllocationService,
     private readonly settings: SettingsService,
+    private readonly ledgerWriteService: LedgerWriteService,
+    private readonly usersService: UsersService,
   ) {}
 
   /**
@@ -120,9 +125,17 @@ export class WalkInSalesService {
     if (receivedLbp.gt(0)) received = received.plus(toClientCurrency(receivedLbp, 'LBP'));
 
     return this.prisma.$transaction(async (tx) => {
-      // ── 1) Process BAG lines — drain packed stock ────────────────────────────
+      // ── 1) Validate stock availability for every line BEFORE writing anything.
+      // The invoice must never be created for a request that's about to be
+      // rejected — so all lines are checked (read-only) first, and the actual
+      // stock decrement + StockExit creation happens after the invoice exists
+      // (step 3), once every line is already known to be satisfiable.
+      const bagStock: { bag: (typeof bags)[number]; charcoalType: string; grade: string }[] = [];
       for (const bag of bags) {
-        const stock = await tx.packedStock.findUnique({ where: { id: bag.packedStockId } });
+        const stock = await tx.packedStock.findUnique({
+          where: { id: bag.packedStockId },
+          include: { lot: true },
+        });
         if (!stock) {
           throw new NotFoundException({ error: `Packed stock not found: ${bag.packedStockId}`, code: 'NOT_FOUND' });
         }
@@ -134,28 +147,10 @@ export class WalkInSalesService {
             code: 'CONSTRAINT_VIOLATION',
           });
         }
-        await tx.packedStock.update({
-          where: { id: bag.packedStockId },
-          data: { quantity: { decrement: bag.quantity } },
-        });
-
-        await tx.stockExit.create({
-          data: {
-            packedStockId: bag.packedStockId,
-            bagTypeId:     bag.bagTypeId,
-            quantity:      bag.quantity,
-            exitType:      'walk_in',
-            date:          new Date(dto.date),
-            clientId:      dto.clientId,
-            loggedById:    user.id,
-            amount:        null, // null keeps invoiced sale out of P&L walk-in aggregate
-            ...(dto.recipient ? { recipient: dto.recipient } : {}),
-            ...(dto.notes     ? { reason:    dto.notes     } : {}),
-          },
-        });
+        bagStock.push({ bag, charcoalType: stock.lot.charcoalType, grade: stock.lot.grade });
       }
 
-      // ── 2) Process KG lines — drain raw stock lots ───────────────────────────
+      const kgStock: { kg: (typeof kgLines)[number]; available: Decimal; charcoalType: string; grade: string }[] = [];
       for (const kg of kgLines) {
         const lot = await tx.stockLot.findUnique({ where: { id: kg.lotId } });
         if (!lot) {
@@ -169,31 +164,28 @@ export class WalkInSalesService {
             code: 'CONSTRAINT_VIOLATION',
           });
         }
-        await tx.stockLot.update({
-          where: { id: kg.lotId },
-          data:  { kgRemaining: available.minus(requested).toFixed(3) },
-        });
-
-        await tx.stockExit.create({
-          data: {
-            lotId:      kg.lotId,
-            kgQuantity: requested.toFixed(3),
-            exitType:   'walk_in',
-            date:       new Date(dto.date),
-            clientId:   dto.clientId,
-            loggedById: user.id,
-            amount:     null, // null keeps invoiced KG sale out of P&L walk-in aggregate
-            ...(dto.recipient ? { recipient: dto.recipient } : {}),
-            ...(dto.notes     ? { reason:    dto.notes     } : {}),
-          },
-        });
+        kgStock.push({ kg, available, charcoalType: lot.charcoalType, grade: lot.grade });
       }
 
-      // ── 3) Create the issued invoice ─────────────────────────────────────────
+      // Stamp each enriched line with the charcoal type/grade of the stock it
+      // draws from, for revenue/cost-by-charcoal-type reporting. enrichedLines
+      // is positionally [...bag lines in bags[] order, ...kg lines in kgLines[]
+      // order] — exactly matching bagStock/kgStock above, since both are built
+      // by iterating the same bags/kgLines arrays in the same order.
+      const linesWithType = enrichedLines.map((line, i) =>
+        i < bagStock.length
+          ? { ...line, charcoalType: bagStock[i].charcoalType, grade: bagStock[i].grade }
+          : { ...line, charcoalType: kgStock[i - bagStock.length].charcoalType, grade: kgStock[i - bagStock.length].grade },
+      );
+
+      // ── 2) Create the issued invoice — every line has already been validated,
+      // so exits below can safely link back to it.
+      // (invoiceId is display-only on StockExit — never used to derive `amount`,
+      // so the P&L walk-in aggregate below stays untouched.)
       const invoice = await tx.invoice.create({
         data: {
           clientId:             dto.clientId,
-          lines:                enrichedLines as any,
+          lines:                linesWithType as any,
           subtotal,
           total,
           currency:             clientCurrency,
@@ -206,9 +198,75 @@ export class WalkInSalesService {
         },
       });
 
-      // ── 4) Create the payment if anything was collected ──────────────────────
+      // ── 3) Process BAG lines — drain packed stock ────────────────────────────
+      for (const { bag } of bagStock) {
+        await tx.packedStock.update({
+          where: { id: bag.packedStockId },
+          data: { quantity: { decrement: bag.quantity } },
+        });
+
+        await tx.stockExit.create({
+          data: {
+            packedStockId: bag.packedStockId,
+            bagTypeId:     bag.bagTypeId,
+            quantity:      bag.quantity,
+            exitType:      'walk_in',
+            date:          new Date(dto.date),
+            clientId:      dto.clientId,
+            invoiceId:     invoice.id,
+            loggedById:    user.id,
+            amount:        null, // null keeps invoiced sale out of P&L walk-in aggregate
+            ...(dto.recipient ? { recipient: dto.recipient } : {}),
+            ...(dto.notes     ? { reason:    dto.notes     } : {}),
+          },
+        });
+      }
+
+      // ── 4) Process KG lines — drain raw stock lots ───────────────────────────
+      for (const { kg, available } of kgStock) {
+        const requested = new Decimal(kg.kgQuantity);
+        await tx.stockLot.update({
+          where: { id: kg.lotId },
+          data:  { kgRemaining: available.minus(requested).toFixed(3) },
+        });
+
+        await tx.stockExit.create({
+          data: {
+            lotId:      kg.lotId,
+            kgQuantity: requested.toFixed(3),
+            exitType:   'walk_in',
+            date:       new Date(dto.date),
+            clientId:   dto.clientId,
+            invoiceId:  invoice.id,
+            loggedById: user.id,
+            amount:     null, // null keeps invoiced KG sale out of P&L walk-in aggregate
+            ...(dto.recipient ? { recipient: dto.recipient } : {}),
+            ...(dto.notes     ? { reason:    dto.notes     } : {}),
+          },
+        });
+      }
+
+      // ── 5) Create the payment if anything was collected ──────────────────────
       let payment: { id: string } | null = null;
       if (received.gt(0)) {
+        // Resolve receiver: if a receiverId is provided, look up the name for the
+        // string field too — mirrors PaymentsService's resolution exactly, so a
+        // picked name that can't be resolved to a real User.id (e.g. a Worker,
+        // who has no ledger identity) is still preserved instead of being
+        // silently dropped.
+        let receiverFields: { receiverId?: string; receiverName?: string } = {};
+        if (dto.receiverId) {
+          // PR 6b: validate before the FK-constrained write (Payment.receiverId) is
+          // attempted, so an invalid receiver fails with a clean NotFoundException
+          // instead of a raw DB foreign-key-violation error. LedgerWriteService
+          // .creditAccount()'s own validation (PR 6) is unchanged and still runs
+          // later — this is additional, not a replacement.
+          await this.usersService.validateCashCapable(dto.receiverId);
+          const receiverUser = await tx.user.findUnique({ where: { id: dto.receiverId }, select: { name: true } });
+          receiverFields = { receiverId: dto.receiverId, receiverName: receiverUser?.name };
+        } else if (dto.receiverName) {
+          receiverFields = { receiverName: dto.receiverName };
+        }
         payment = await tx.payment.create({
           data: {
             clientId:  dto.clientId,
@@ -218,19 +276,19 @@ export class WalkInSalesService {
             method:    dto.method,
             date:      new Date(dto.date),
             loggedById: user.id,
-            ...(dto.receiverId ? { receiverId: dto.receiverId } : {}),
-            ...(dto.notes      ? { notes:      dto.notes      } : {}),
+            ...receiverFields,
+            ...(dto.notes ? { notes: dto.notes } : {}),
           },
         });
 
-        // Keep invoice paidAmount/status consistent with its payments.
-        const { paidAmount, status } = await this.calculator.recomputeStatus(invoice.id, tx);
-        await tx.invoice.update({ where: { id: invoice.id }, data: { paidAmount, status } });
+        // Keep invoice paidAmount/status consistent with its payments — this
+        // payment is always directly linked to the invoice just created above.
+        await this.paymentAllocationService.allocateDirect(tx, payment.id, invoice.id, received);
 
-        // Credit the receiver's cash account ledger when assigned.
-        if (dto.receiverId) {
-          await creditAccount(
-            tx, dto.receiverId, received, 'payment_received', payment.id,
+        // Credit the receiver's cash account ledger when a real holder is assigned.
+        if (receiverFields.receiverId) {
+          await this.ledgerWriteService.creditAccount(
+            tx, receiverFields.receiverId, received, 'payment_received', payment.id,
             `Walk-in sale — ${client.name}`, new Date(dto.date),
           );
         }

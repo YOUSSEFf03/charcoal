@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,11 +8,22 @@ import { ExitType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStockExitDto } from './dto/create-stock-exit.dto';
 import Decimal from 'decimal.js';
-import { creditAccount } from '../cash-handovers/cash-handovers.service';
+import { LedgerWriteService } from '../ledger/ledger-write.service';
+import { UsersService } from '../users/users.service';
+
+// SPEC.md §3.4 — Worker: "Log non-sale exits (samples, internal use)" and
+// "Cannot see: prices, costs, client information". Workers are role-gated
+// into this endpoint (@Roles includes 'worker') but @Roles can't see the
+// request body, so the sale-vs-non-sale distinction is enforced here instead.
+const WORKER_ALLOWED_EXIT_TYPES: ExitType[] = ['sample', 'internal', 'gift'];
 
 @Injectable()
 export class StockExitsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ledgerWriteService: LedgerWriteService,
+    private readonly usersService: UsersService,
+  ) {}
 
   /**
    * Return a paginated list of stock exits with optional filters.
@@ -65,6 +77,10 @@ export class StockExitsService {
               lot: { select: { id: true, charcoalType: true, grade: true, kgReceived: true } },
             },
           },
+          // Display-only — lets the UI show the real per-line sale price for
+          // invoice-linked walk-ins, whose own `amount` column stays null
+          // (see StockExit.invoiceId doc comment in schema.prisma).
+          invoice: { select: { id: true, displayId: true, lines: true, currency: true } },
         },
       }),
       this.prisma.stockExit.count({ where }),
@@ -86,6 +102,7 @@ export class StockExitsService {
         bagType: true,
         packedStock: true,
         loggedBy: { select: { id: true, name: true } },
+        invoice: { select: { id: true, displayId: true, lines: true, currency: true } },
       },
     });
     if (!exit) {
@@ -151,6 +168,15 @@ export class StockExitsService {
   async updateExit(id: string, dto: { amount?: number; recipient?: string }) {
     const exit = await this.prisma.stockExit.findUnique({ where: { id } });
     if (!exit) throw new NotFoundException({ error: 'Exit not found', code: 'NOT_FOUND' });
+    // This exit's price already lives on its invoice line — setting `amount`
+    // here too would double-count its revenue in the P&L walk-in aggregate
+    // (which sums StockExit.amount for exitType='walk_in' rows).
+    if (dto.amount != null && exit.invoiceId) {
+      throw new BadRequestException({
+        error: 'This sale is already invoiced — its amount is set by the invoice, not the exit',
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
     return this.prisma.stockExit.update({
       where: { id },
       data: {
@@ -172,10 +198,19 @@ export class StockExitsService {
    *
    * @param dto    - Exit creation data; must not include loggedById
    * @param userId - Clerk user ID from @CurrentUser — sole source of loggedById
+   * @param role   - Caller's role from @CurrentUser — workers are restricted to
+   *                 non-sale exitTypes (SPEC.md §3.4); see WORKER_ALLOWED_EXIT_TYPES.
    * @constraint 2 packedStock.quantity - dto.quantity < 0 → 400 CONSTRAINT_VIOLATION; transaction rolled back
    * @constraint 5 loggedById is always user.id resolved from the JWT, never from the request body
    */
-  async create(dto: CreateStockExitDto, userId: string) {
+  async create(dto: CreateStockExitDto, userId: string, role?: string) {
+    if (role === 'worker' && !WORKER_ALLOWED_EXIT_TYPES.includes(dto.exitType)) {
+      throw new ForbiddenException({
+        error: 'Workers may only log non-sale exits (sample, internal, gift)',
+        code: 'FORBIDDEN',
+      });
+    }
+
     // Resolve caller before opening a transaction — this read is safe outside
     // the tx because the user record is not mutated during the operation.
     const user = await this.prisma.user.findUnique({ where: { clerkId: userId } });
@@ -184,6 +219,12 @@ export class StockExitsService {
     // Resolve collector name outside tx (display-only, not a constraint)
     let collectorFields: { collectedById?: string; collectedBy?: string } = {};
     if (dto.collectedById) {
+      // PR 6b: validate before any FK-constrained write (StockExit.collectedById) is
+      // attempted, so an invalid collector fails with a clean NotFoundException instead
+      // of a raw DB foreign-key-violation error. LedgerWriteService.creditAccount()'s own
+      // validation (PR 6) is unchanged and still runs later — this is additional, not a
+      // replacement.
+      await this.usersService.validateCashCapable(dto.collectedById);
       const collector = await this.prisma.user.findUnique({ where: { id: dto.collectedById }, select: { name: true } });
       collectorFields = { collectedById: dto.collectedById, collectedBy: collector?.name };
     } else if (dto.collectedBy) {
@@ -273,7 +314,7 @@ export class StockExitsService {
 
       // Credit the collector's account when a collector is assigned and an amount was recorded
       if (collectorFields.collectedById && dto.amount != null && dto.amount > 0) {
-        await creditAccount(
+        await this.ledgerWriteService.creditAccount(
           tx, collectorFields.collectedById,
           new Decimal(dto.amount),
           'sale_collected',

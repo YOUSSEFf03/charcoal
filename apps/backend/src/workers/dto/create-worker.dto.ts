@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsNotEmpty, IsNumberString, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsNotEmpty, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { WorkerRateDto } from './worker-rate.dto';
 
@@ -19,7 +19,4 @@ export class CreateWorkerDto {
 
   @ApiProperty({ description: 'Optional notes', required: false, example: 'Experienced packer' })
   @IsOptional() @IsString() notes?: string;
-
-  @ApiProperty({ description: 'Daily wage rate (decimal string, e.g. "15.00")', required: false, example: '15.00' })
-  @IsOptional() @IsNumberString() dailyRate?: string;
 }
