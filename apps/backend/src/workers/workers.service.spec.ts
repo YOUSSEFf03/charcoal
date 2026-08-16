@@ -291,6 +291,51 @@ describe('WorkersService', () => {
   });
 
   // =========================================================================
+  // listPayments() — server-side pagination backing Employees.tsx's "See
+  // more" history feed (useWorkerPayments). Page size is fixed by the
+  // frontend at 20; these tests verify the backend actually honors page/limit
+  // (skip/take) and returns the {data,total,page,limit} contract every
+  // paginated endpoint in this codebase uses — not just a happy-path list.
+  // =========================================================================
+
+  describe('listPayments()', () => {
+    it('throws NotFoundException NOT_FOUND when worker does not exist', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(null);
+      await expect(service.listPayments('ghost', 1, 20)).rejects.toThrow(NotFoundException);
+    });
+
+    it('page 1: returns the first `limit` rows, newest first, with the full pagination envelope', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      mockPrisma.$transaction.mockResolvedValue([
+        [{ id: 'wp-1', workerId: 'w1', amount: '25.00', date: new Date('2026-01-10') }],
+        45, // total across all pages — more than fit on page 1
+      ]);
+
+      const result = await service.listPayments('w1', 1, 20);
+
+      expect(mockPrisma.workerPayment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { workerId: 'w1' }, skip: 0, take: 20, orderBy: { date: 'desc' } }),
+      );
+      expect(result).toEqual({ data: [{ id: 'wp-1', workerId: 'w1', amount: '25.00', date: new Date('2026-01-10') }], total: 45, page: 1, limit: 20 });
+    });
+
+    it('page 2: computes skip = (page-1)*limit — proves "See more" fetches the NEXT batch, not the same one again', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      mockPrisma.$transaction.mockResolvedValue([
+        [{ id: 'wp-21', workerId: 'w1', amount: '10.00', date: new Date('2025-12-01') }],
+        45,
+      ]);
+
+      const result = await service.listPayments('w1', 2, 20);
+
+      expect(mockPrisma.workerPayment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 20, take: 20 }),
+      );
+      expect(result.page).toBe(2);
+    });
+  });
+
+  // =========================================================================
   // Worker earnings (WorkerCost) CRUD
   // =========================================================================
 
@@ -311,6 +356,39 @@ describe('WorkersService', () => {
       const result = await service.listEarnings('w1', 1, 20);
       expect(result.data).toHaveLength(1);
       expect(result.total).toBe(1);
+    });
+
+    it('orders newest-first and computes skip/take for a requested page — proves page 2 returns the next batch, not a duplicate of page 1', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      mockPrisma.$transaction.mockResolvedValue([
+        [{ id: 'wc-51', workerId: 'w1', amount: '5.00', category: 'bonus' }],
+        120, // e.g. 120 earnings total — the exact "many records" scenario See More exists for
+      ]);
+
+      const result = await service.listEarnings('w1', 2, 50);
+
+      expect(mockPrisma.workerCost.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { workerId: 'w1' }, skip: 50, take: 50, orderBy: { date: 'desc' } }),
+      );
+      expect(result).toEqual({ data: [{ id: 'wc-51', workerId: 'w1', amount: '5.00', category: 'bonus' }], total: 120, page: 2, limit: 50 });
+    });
+
+    it('last page: fewer rows than `limit` still returns correctly, proving See More correctly detects exhaustion', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      // 120 total, limit 50 → page 3 has only 20 rows (101-120) — the batch
+      // after which the frontend's hasNextPage must become false.
+      mockPrisma.$transaction.mockResolvedValue([
+        Array.from({ length: 20 }, (_, i) => ({ id: `wc-${101 + i}`, workerId: 'w1', amount: '1.00', category: 'bonus' })),
+        120,
+      ]);
+
+      const result = await service.listEarnings('w1', 3, 50);
+
+      expect(result.data).toHaveLength(20);
+      expect(result.total).toBe(120);
+      // page * limit (150) >= total (120) → frontend's nextPageParam formula
+      // correctly yields "no more pages" from this response alone.
+      expect(result.page * result.limit).toBeGreaterThanOrEqual(result.total);
     });
   });
 

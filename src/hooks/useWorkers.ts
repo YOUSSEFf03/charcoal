@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type {
   Worker,
@@ -9,7 +9,15 @@ import type {
   WorkerEarning,
   CreateWorkerEarningDto,
   UpdateWorkerEarningDto,
+  PaginatedResponse,
 } from '../types/api'
+
+// "Next page" is available whenever fewer records have been fetched so far
+// than the server reports as the total — the same page/limit/total contract
+// every paginated list endpoint in this codebase already returns.
+function nextPageParam(lastPage: PaginatedResponse<unknown>): number | undefined {
+  return lastPage.page * lastPage.limit < lastPage.total ? lastPage.page + 1 : undefined
+}
 
 /**
  * List all workers (totalOwed computed).
@@ -145,40 +153,59 @@ export function useLogWorkerPayment() {
   })
 }
 
+// Page sizes match what these two endpoints were already hardcoded to before
+// "See more" existed (20 payments, 50 earnings per page) — kept unchanged so
+// the batch size a user sees per load stays the same; only the ability to
+// fetch page 2+ is new.
+const WORKER_PAYMENTS_PAGE_SIZE = 20
+const WORKER_EARNINGS_PAGE_SIZE = 50
+
 /**
- * List payments for a worker (paginated).
+ * List payments for a worker as an accumulating "See more" history feed —
+ * newest first, paginated server-side (page/limit/total, the same contract
+ * every paginated list endpoint in this codebase returns). Each call to
+ * `fetchNextPage()` fetches only the next page and appends it to
+ * `data.pages`; already-loaded pages are kept, never re-fetched from page 1.
  * @param workerId - worker UUID (skip query if undefined)
- * @returns React Query result of WorkerPayment[]
+ * @returns React Query infinite-query result; flatten via
+ *   `data?.pages.flatMap(p => p.data)` for the full list loaded so far
  * GET /workers/:id/payments
  */
 export function useWorkerPayments(workerId: string | undefined) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['workers', workerId, 'payments'],
-    queryFn: async () => {
-      const res = await api.get<{ data: WorkerPayment[] }>(`/workers/${workerId}/payments`, {
-        params: { limit: 20 },
+    queryFn: async ({ pageParam }) => {
+      const res = await api.get<PaginatedResponse<WorkerPayment>>(`/workers/${workerId}/payments`, {
+        params: { page: pageParam, limit: WORKER_PAYMENTS_PAGE_SIZE },
       })
-      return res.data.data
+      return res.data
     },
+    initialPageParam: 1,
+    getNextPageParam: nextPageParam,
     enabled: Boolean(workerId),
   })
 }
 
 /**
- * List earnings entries for a worker (paginated, newest first).
+ * List earnings entries for a worker as an accumulating "See more" history
+ * feed — newest first, paginated server-side. See {@link useWorkerPayments}
+ * for the pagination contract; identical shape, different endpoint/page size.
  * @param workerId - worker UUID (skip query if undefined)
- * @returns React Query result of WorkerEarning[]
+ * @returns React Query infinite-query result; flatten via
+ *   `data?.pages.flatMap(p => p.data)` for the full list loaded so far
  * GET /workers/:id/earnings
  */
 export function useWorkerEarnings(workerId: string | undefined) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['workers', workerId, 'earnings'],
-    queryFn: async () => {
-      const res = await api.get<{ data: WorkerEarning[] }>(`/workers/${workerId}/earnings`, {
-        params: { limit: 50 },
+    queryFn: async ({ pageParam }) => {
+      const res = await api.get<PaginatedResponse<WorkerEarning>>(`/workers/${workerId}/earnings`, {
+        params: { page: pageParam, limit: WORKER_EARNINGS_PAGE_SIZE },
       })
-      return res.data.data
+      return res.data
     },
+    initialPageParam: 1,
+    getNextPageParam: nextPageParam,
     enabled: Boolean(workerId),
   })
 }

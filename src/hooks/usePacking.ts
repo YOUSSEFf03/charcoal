@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type {
   PackingSession,
@@ -37,6 +37,35 @@ export function usePackingSessions(params?: PackingSessionsQuery) {
       )
       return res.data
     },
+  })
+}
+
+/**
+ * List one worker's packing sessions as an accumulating "See more" history
+ * feed — same /packing-sessions endpoint and page/limit/total contract as
+ * {@link usePackingSessions}, but kept as a separate hook (useInfiniteQuery,
+ * not useQuery) so Packing.tsx/Warehouse.tsx — the other two callers of
+ * usePackingSessions() — are unaffected; they expect a single page, not an
+ * accumulated page list. Used by Employees.tsx's merged history timeline.
+ * @param workerEntityId - worker UUID (skip query if undefined)
+ * @param limit - page size (defaults to 50, matching Employees.tsx's prior
+ *   single-page limit — unchanged, only page 2+ is newly reachable)
+ * @returns React Query infinite-query result; flatten via
+ *   `data?.pages.flatMap(p => p.data)` for the full list loaded so far
+ */
+export function useWorkerPackingSessionsHistory(workerEntityId: string | undefined, limit = 50) {
+  return useInfiniteQuery({
+    queryKey: ['packing-sessions', 'worker-history', workerEntityId, limit],
+    queryFn: async ({ pageParam }) => {
+      const res = await api.get<PaginatedResponse<PackingSession>>('/packing-sessions', {
+        params: { workerEntityId, page: pageParam, limit },
+      })
+      return res.data
+    },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) =>
+      lastPage.page * lastPage.limit < lastPage.total ? lastPage.page + 1 : undefined,
+    enabled: Boolean(workerEntityId),
   })
 }
 

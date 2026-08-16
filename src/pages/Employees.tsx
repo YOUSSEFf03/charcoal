@@ -10,7 +10,7 @@ import {
   useWorkerEarnings,
   useCreateWorkerEarning,
 } from '../hooks/useWorkers'
-import { usePackingSessions } from '../hooks/usePacking'
+import { useWorkerPackingSessionsHistory } from '../hooks/usePacking'
 import type { Worker, WorkerCostCategory, PaymentMethod } from '../types/api'
 
 type View = 'list' | 'worker'
@@ -103,14 +103,17 @@ export default function Employees() {
 
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all')
 
+  // History is a merge of three independently server-paginated feeds
+  // (earnings, payments, packing sessions), each loaded "See more"-style via
+  // useInfiniteQuery — see useWorkers.ts / usePacking.ts. Every "See more"
+  // click fetches only the next page of whichever feed(s) still have more,
+  // appending to what's already loaded; nothing is ever re-fetched from page 1.
   const earningsQ = useWorkerEarnings(selectedWorker?.id)
   const paymentsQ = useWorkerPayments(selectedWorker?.id)
   // Packing sessions appear read-only in the same timeline — still calculated
   // from PackingSession.sessionEarnings, untouched by this redesign; they're
   // just another earning event from the user's point of view.
-  const sessionsQ = usePackingSessions(
-    selectedWorker ? { workerEntityId: selectedWorker.id, limit: 50 } : undefined
-  )
+  const sessionsQ = useWorkerPackingSessionsHistory(selectedWorker?.id)
 
   const WORKER_OWED   = selectedWorker ? parseFloat(selectedWorker.totalOwed)   : 0
   const workerEarned  = selectedWorker ? parseFloat(selectedWorker.totalEarned) : 0
@@ -184,8 +187,15 @@ export default function Employees() {
   }
 
   // ── Merge earnings + payments + packing sessions into one timeline ──────
+  // Each source flattens every page loaded SO FAR (not just the first) —
+  // .pages accumulates as the user clicks "See more"; nothing here re-fetches,
+  // it just re-derives the merged view from whatever's already in the cache.
+  const loadedEarnings = earningsQ.data?.pages.flatMap(p => p.data) ?? []
+  const loadedPayments  = paymentsQ.data?.pages.flatMap(p => p.data) ?? []
+  const loadedSessions  = sessionsQ.data?.pages.flatMap(p => p.data) ?? []
+
   const historyRows: HistoryRow[] = [
-    ...(earningsQ.data ?? []).map(e => ({
+    ...loadedEarnings.map(e => ({
       id: `earning-${e.id}`,
       date: e.date,
       label: CATEGORY_LABEL[e.category],
@@ -195,7 +205,7 @@ export default function Employees() {
       color: 'green' as const,
       isPayment: false,
     })),
-    ...(paymentsQ.data ?? []).map(p => ({
+    ...loadedPayments.map(p => ({
       id: `payment-${p.id}`,
       date: p.date,
       label: 'Payment',
@@ -205,7 +215,7 @@ export default function Employees() {
       color: 'red' as const,
       isPayment: true,
     })),
-    ...(sessionsQ.data?.data ?? []).map(s => ({
+    ...loadedSessions.map(s => ({
       id: `session-${s.id}`,
       date: s.date,
       label: 'Packing session',
@@ -237,6 +247,26 @@ export default function Employees() {
   }
 
   const historyLoading = earningsQ.isLoading || paymentsQ.isLoading || sessionsQ.isLoading
+
+  // "See more" only needs to fetch the sources the active filter can actually
+  // show more of — 'payments' shows only payment rows, 'earnings' shows
+  // earning + session rows (both isPayment:false), 'all'/'this_month'/
+  // 'last_month' span every source. Scoping it this way means the button
+  // never appears to do nothing (fetching a source the current filter can't
+  // display) while still fetching all three once the filter is broad enough.
+  const historySourcesForFilter: Array<typeof earningsQ | typeof paymentsQ | typeof sessionsQ> =
+    historyFilter === 'payments' ? [paymentsQ]
+    : historyFilter === 'earnings' ? [earningsQ, sessionsQ]
+    : [earningsQ, paymentsQ, sessionsQ]
+
+  const hasMoreHistory = historySourcesForFilter.some(q => q.hasNextPage)
+  const isLoadingMoreHistory = historySourcesForFilter.some(q => q.isFetchingNextPage)
+
+  function loadMoreHistory() {
+    for (const q of historySourcesForFilter) {
+      if (q.hasNextPage && !q.isFetchingNextPage) q.fetchNextPage()
+    }
+  }
 
   // ── LIST VIEW ────────────────────────────────────────────────────────
   if (view === 'list') {
@@ -422,6 +452,13 @@ export default function Employees() {
               ))}
             </div>
           ))}
+          {!historyLoading && hasMoreHistory && (
+            <div style={{ padding: 14, textAlign: 'center', borderTop: groupedRows.length > 0 ? '1px solid var(--border)' : 'none' }}>
+              <button className="btn" onClick={loadMoreHistory} disabled={isLoadingMoreHistory}>
+                {isLoadingMoreHistory ? 'Loading…' : 'See more'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
