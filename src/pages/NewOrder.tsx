@@ -60,6 +60,12 @@ export default function NewOrder() {
   const driverList = driversQ.data?.data ?? []
   const availableByBagType = new Map(packedSummary.map(p => [p.bagTypeId, p.totalBags]))
 
+  const [toast, setToast] = useState('')
+  function showToast(msg: string) {
+    setToast(msg)
+    setTimeout(() => setToast(''), 2800)
+  }
+
   // ── Shared form fields ────────────────────────────────────────────────────
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10))
   const [driverId, setDriverId] = useState('')
@@ -103,6 +109,19 @@ export default function NewOrder() {
   const subtotal = orderMode === 'bag' ? bagSubtotal : kgSubtotal
   const totalKg  = orderMode === 'bag' ? bagTotalKg  : kgTotalKg
 
+  // ── Multi-line submission guard ──────────────────────────────────────────
+  // CreateOrderDto only accepts ONE bagType/lot + ONE price per order — there
+  // is no line-array field on the backend. Submitting more than one active
+  // line here would silently collapse: totalKgRequested sums every line, but
+  // bagTypeId/pricePerBag only ever come from the first one, corrupting the
+  // invoice later generated from this order. Until real multi-line order
+  // persistence exists, block submission instead of silently discarding data.
+  const validBagLines = bagLines.filter(l => l.bagTypeId && l.qty > 0)
+  const validKgLines = kgLines.filter(l => l.lotId && l.kgQty > 0)
+  const activeLineCount = orderMode === 'bag' ? validBagLines.length : validKgLines.length
+  const multiLineBlocked = activeLineCount > 1
+  const multiLineMessage = 'Multi-line orders are not supported yet — please create a separate order for each line.'
+
   // ── Bag line actions ──────────────────────────────────────────────────────
   function addBagLine() {
     setBagLines(prev => [...prev, { id: _nid++, bagTypeId: '', qty: 0, kgPerBag: 0, price: 0 }])
@@ -136,12 +155,26 @@ export default function NewOrder() {
   }
 
   // ── Submit ────────────────────────────────────────────────────────────────
-  function confirmOrder() {
-    if (!selectedClient) return
+  // BUG FIX: every guard below used to `return` silently — a click on a
+  // disabled/blocked button (or one whose validation failed) produced zero
+  // feedback, which read as "the button does nothing". Guards now surface
+  // via toast, and createOrder.mutate() now has an onError handler so a
+  // backend rejection is shown too, instead of vanishing silently.
+  // `navTo` is the only thing that differs between the three submit buttons —
+  // the backend has exactly one order-creation outcome (status always
+  // 'draft', see ClientOrder.status @default(draft) — there is no
+  // client-settable status field), so "Save as draft" and "Confirm order"
+  // create an identical order; they only differ in where you land afterward.
+  function submitOrder(navTo: 'detail' | 'list') {
+    if (!selectedClient) { showToast('Select a client first'); return }
+    // Guard runs before createOrder.mutate() in both branches below — a
+    // multi-line order can never reach the backend. See multiLineBlocked's
+    // doc comment above for why.
+    if (multiLineBlocked) { showToast(multiLineMessage); return }
 
     if (orderMode === 'bag') {
       const lines = bagLines.filter(l => l.bagTypeId && l.qty > 0)
-      if (lines.length === 0) return
+      if (lines.length === 0) { showToast('Add at least one bag line with a bag type and quantity'); return }
       const firstLine = bagLines.find(l => l.qty > 0) ?? bagLines[0]
       createOrder.mutate(
         {
@@ -155,11 +188,14 @@ export default function NewOrder() {
           notes: notes || null,
           ...(driverId ? { driverId } : {}),
         },
-        { onSuccess: (created) => navigate('/orders/' + created.id) },
+        {
+          onSuccess: (created) => navigate(navTo === 'detail' ? '/orders/' + created.id : '/orders'),
+          onError: (err: any) => showToast(err?.error ?? 'Failed to create order'),
+        },
       )
     } else {
       const lines = kgLines.filter(l => l.lotId && l.kgQty > 0)
-      if (lines.length === 0) return
+      if (lines.length === 0) { showToast('Add at least one charcoal lot with a quantity'); return }
       const firstLot = stockLots.find(s => s.id === lines[0].lotId)
       createOrder.mutate(
         {
@@ -173,7 +209,10 @@ export default function NewOrder() {
           ...(driverId ? { driverId } : {}),
           ...(firstLot?.supplier?.name ? { supplierName: firstLot.supplier.name } : {}),
         },
-        { onSuccess: (created) => navigate('/orders/' + created.id) },
+        {
+          onSuccess: (created) => navigate(navTo === 'detail' ? '/orders/' + created.id : '/orders'),
+          onError: (err: any) => showToast(err?.error ?? 'Failed to create order'),
+        },
       )
     }
   }
@@ -184,8 +223,10 @@ export default function NewOrder() {
       <Topbar title="New order">
         <span className="badge badge-gray" style={{ marginLeft: 4 }}>draft</span>
         <button className="btn" onClick={() => navigate('/orders')} style={{ marginLeft: 'auto' }}>Cancel</button>
-        <button className="btn">Save draft</button>
-        <button className="btn primary" onClick={confirmOrder} disabled={createOrder.isPending || !selectedClient}>
+        <button className="btn" onClick={() => submitOrder('list')} disabled={createOrder.isPending} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : undefined}>
+          Save draft
+        </button>
+        <button className="btn primary" onClick={() => submitOrder('detail')} disabled={createOrder.isPending} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : undefined}>
           <i className="ti ti-check" style={{ fontSize: 15 }} /> {createOrder.isPending ? 'Creating…' : 'Confirm order'}
         </button>
       </Topbar>
@@ -549,19 +590,33 @@ export default function NewOrder() {
                 <span className="val">${subtotal.toFixed(2)}</span>
               </div>
             </div>
+            {multiLineBlocked && (
+              <div style={{ margin: '8px 0', padding: '8px 10px', borderRadius: 6, background: 'var(--red-bg)', color: 'var(--red)', fontSize: 12, lineHeight: 1.4 }}>
+                {multiLineMessage}
+              </div>
+            )}
             <div className="sum-actions">
-              <button className="btn green" onClick={confirmOrder} disabled={createOrder.isPending || !selectedClient}>
+              <button className="btn green" onClick={() => submitOrder('detail')} disabled={createOrder.isPending} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : undefined}>
                 <i className="ti ti-check" style={{ fontSize: 14 }} /> {createOrder.isPending ? 'Creating…' : 'Confirm order'}
               </button>
-              <button className="btn" onClick={confirmOrder} disabled={createOrder.isPending || !selectedClient}>
+              <button className="btn" onClick={() => submitOrder('detail')} disabled={createOrder.isPending} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : undefined}>
                 Confirm + go to detail
               </button>
-              <button className="btn">Save as draft</button>
+              <button className="btn" onClick={() => submitOrder('list')} disabled={createOrder.isPending} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : undefined}>
+                Save as draft
+              </button>
             </div>
           </div>
 
         </div>
       </div>
+
+      {/* TOAST */}
+      {toast && (
+        <div style={{ position: 'fixed', bottom: 28, left: '50%', transform: 'translateX(-50%)', background: 'var(--text)', color: '#fff', padding: '10px 20px', borderRadius: 'var(--radius-lg)', fontSize: 13, fontWeight: 500, zIndex: 9999, display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.18)' }}>
+          <i className="ti ti-alert-circle" style={{ color: 'var(--red)', fontSize: 15 }} /> {toast}
+        </div>
+      )}
     </>
   )
 }

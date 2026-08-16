@@ -78,10 +78,14 @@ export class OrdersController {
   @ApiOperation({ summary: 'Mark order and all its shipments as delivered (owner override)' })
   @ApiResponse({ status: 200, description: 'OK' })
   @ApiResponse({ status: 404, description: 'Not found' })
+  @ApiResponse({ status: 409, description: 'NO_SHIPMENT — order has no shipment to mark delivered' })
   @Patch(':id/mark-delivered')
   @Roles('owner')
-  markDelivered(@Param('id', ParseUUIDPipe) id: string) {
-    return this.ordersService.markDelivered(id);
+  markDelivered(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: ClerkUser,
+  ) {
+    return this.ordersService.markDelivered(id, user.userId);
   }
 
   @ApiOperation({ summary: 'Generate (or return existing) invoice for a delivered order' })

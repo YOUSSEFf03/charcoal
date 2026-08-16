@@ -5,6 +5,7 @@ import { OrderStatus, Prisma } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoicesService } from '../invoices/invoices.service';
+import { ShipmentsService } from '../shipments/shipments.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 
@@ -22,6 +23,100 @@ function foreignKeyError(): Prisma.PrismaClientKnownRequestError {
     code: 'P2003',
     clientVersion: 'test',
   });
+}
+
+// ---------------------------------------------------------------------------
+// markDelivered() stock-drain fixtures
+//
+// A real ShipmentsService instance (not a mock) is used for these tests so
+// markDelivered() exercises ShipmentsService.drainShipment()'s actual logic —
+// the same method ShipmentsService.confirmDelivery() uses — rather than
+// asserting it was merely "called". drainShipment() only ever touches the
+// `tx` argument passed to it, so ShipmentsService's other constructor
+// dependencies (InvoicesService, PaymentAllocationService, LedgerWriteService,
+// UsersService) are never invoked here and can stay unused stubs.
+// ---------------------------------------------------------------------------
+
+interface PsRow {
+  id: string;
+  bagTypeId: string;
+  quantity: number;
+  reservedQuantity: number;
+  createdAt: Date;
+}
+interface ResRow {
+  id: string;
+  shipmentId: string;
+  packedStockId: string;
+  quantity: number;
+}
+interface ShipRow {
+  id: string;
+  orderId: string;
+  status: string;
+}
+
+/**
+ * Minimal in-transaction store covering exactly what
+ * OrdersService.markDelivered() + ShipmentsService.drainShipment() touch:
+ * packed_stocks, shipment_reservations, stock_exits, shipments, and the
+ * order-status write. Modelled on shipments.service.spec.ts's makeStore().
+ */
+function makeDeliveryTx(
+  packedRows: PsRow[],
+  shipRows: ShipRow[],
+  resRows: ResRow[],
+  // Optional fixture for the no-shipment direct-deduction path's inside-tx
+  // re-fetch (tx.clientOrder.findUnique) — only needed by tests that exercise
+  // that branch (activeShipments.length === 0).
+  orderFixture?: { id: string; bagTypeId: string | null; totalKgRequested: string; bagType: { nominalKg: string } | null },
+) {
+  const packed: PsRow[] = packedRows.map((r) => ({ ...r }));
+  const reservations: ResRow[] = resRows.map((r) => ({ ...r }));
+  const shipments = new Map<string, ShipRow>(shipRows.map((s) => [s.id, { ...s }]));
+
+  const tx: any = {
+    _packed: packed,
+    _reservations: reservations,
+    _shipments: shipments,
+    $queryRaw: fn().mockResolvedValue([]),
+    packedStock: {
+      update: fn().mockImplementation(async (args: any) => {
+        const row = packed.find((r) => r.id === args.where.id)!;
+        if (args.data.quantity?.decrement != null) row.quantity -= args.data.quantity.decrement;
+        if (args.data.reservedQuantity?.decrement != null) row.reservedQuantity -= args.data.reservedQuantity.decrement;
+        return row;
+      }),
+    },
+    shipmentReservation: {
+      delete: fn().mockImplementation(async (args: any) => {
+        const idx = reservations.findIndex((r) => r.id === args.where.id);
+        if (idx >= 0) reservations.splice(idx, 1);
+        return {};
+      }),
+    },
+    stockExit: { create: fn().mockResolvedValue({}) },
+    shipment: {
+      findUnique: fn().mockImplementation(async (args: any) => {
+        const s = shipments.get(args.where.id);
+        if (!s) return null;
+        const myRes = reservations
+          .filter((r) => r.shipmentId === s.id)
+          .map((r) => ({ ...r, packedStock: packed.find((p) => p.id === r.packedStockId)! }));
+        return { ...s, reservations: myRes };
+      }),
+      update: fn().mockImplementation(async (args: any) => {
+        const s = shipments.get(args.where.id);
+        if (s) Object.assign(s, args.data);
+        return s;
+      }),
+    },
+    clientOrder: {
+      update: fn().mockResolvedValue({ id: 'updated-order', status: 'delivered' }),
+      findUnique: fn().mockResolvedValue(orderFixture ?? null),
+    },
+  };
+  return tx;
 }
 
 // ---------------------------------------------------------------------------
@@ -50,11 +145,31 @@ describe('OrdersService', () => {
     createFromOrder: jest.fn() as any,
   };
 
+  // Real ShipmentsService — see the "markDelivered() stock-drain fixtures"
+  // comment above makeDeliveryTx() for why this isn't a mock. Its own
+  // constructor dependencies are never exercised by drainShipment(); only
+  // drainPackedStockDirect() (the no-shipment path) touches packedStockService,
+  // via getFifoDraw() — mocked here so its plan can be controlled per test
+  // without re-deriving PackedStockService's own FIFO logic (already covered
+  // by packed-stock.service.spec.ts).
+  const mockPackedStockService = { getFifoDraw: jest.fn() as any };
+  const realShipmentsService = new ShipmentsService(
+    {} as any, // PrismaService — unused by drainShipment()/drainPackedStockDirect(), which only touch their `tx` arg
+    {} as any, // InvoicesService
+    {} as any, // PaymentAllocationService
+    {} as any, // LedgerWriteService
+    {} as any, // UsersService
+    mockPackedStockService as any, // PackedStockService
+  );
+
   beforeEach(async () => {
     jest.clearAllMocks();
     // Models Prisma's array-form $transaction: submits every operation
     // together and, like a real transaction, rejects (rolling back) as soon
-    // as any one of them rejects — mirrored here via Promise.all.
+    // as any one of them rejects — mirrored here via Promise.all. markDelivered()
+    // tests override this per-test with a callback-form implementation (see
+    // makeDeliveryTx() usage below), matching the callback-form $transaction it
+    // actually uses.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockPrisma.$transaction.mockImplementation((ops: any[]) => Promise.all(ops));
 
@@ -63,6 +178,7 @@ describe('OrdersService', () => {
         OrdersService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: InvoicesService, useValue: mockInvoices },
+        { provide: ShipmentsService, useValue: realShipmentsService },
       ],
     }).compile();
 
@@ -75,124 +191,413 @@ describe('OrdersService', () => {
 
   describe('markDelivered()', () => {
     const orderId = 'order-uuid-md';
-    const deliveredOrder = {
-      id: orderId,
-      status: 'delivered',
-      shipments: [],
-      client: {},
-      orderBagLines: [],
-      bagType: null,
-    };
-    const confirmedOrder = {
-      id: orderId,
-      status: 'confirmed',
-      shipments: [],
-      client: {},
-      orderBagLines: [],
-      bagType: null,
-    };
+    const clerkUserId = 'clerk-owner-1';
+    const internalUserId = 'db-user-owner-1';
 
-    it('marks order and shipments as delivered then calls createFromOrder() with autoIssue=true', async () => {
-      mockPrisma.clientOrder.findUnique.mockResolvedValue(confirmedOrder);
-      mockPrisma.shipment.updateMany.mockResolvedValue({ count: 0 });
-      mockPrisma.clientOrder.update.mockResolvedValue(deliveredOrder);
+    beforeEach(() => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: internalUserId, clerkId: clerkUserId });
       mockInvoices.createFromOrder.mockResolvedValue({ id: 'inv-1', status: 'issued' });
+    });
 
-      await service.markDelivered(orderId);
+    function orderWith(shipments: Array<{ id: string; status: string }>) {
+      return {
+        id: orderId,
+        status: 'confirmed',
+        shipments,
+        client: {},
+        orderBagLines: [],
+        bagType: null,
+      };
+    }
 
-      expect(mockPrisma.shipment.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: expect.objectContaining({ orderId }) }),
+    // No-shipment order fixture — bagTypeId + totalKgRequested + bagType.nominalKg
+    // drive the same qty formula InvoicesService.createFromOrder() uses.
+    function noShipOrder(bagTypeId: string, totalKgRequested: string, nominalKg: string, status = 'confirmed') {
+      return {
+        id: orderId,
+        status,
+        shipments: [] as Array<{ id: string; status: string }>,
+        client: {},
+        orderBagLines: [],
+        bagTypeId,
+        totalKgRequested,
+        bagType: { nominalKg },
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // BUG fix (Order→Sale stock desync): markDelivered() must actually drain
+    // packed stock through ShipmentsService.drainShipment() — the same logic
+    // ShipmentsService.confirmDelivery() uses — not just flip status columns.
+    // -----------------------------------------------------------------------
+
+    it('[edge case A] single shipment, single reservation: decrements PackedStock.quantity/reservedQuantity exactly once, consumes the reservation, creates one StockExit, and still issues the invoice', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(orderWith([{ id: 'ship-1', status: 'pending' }]));
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId: 'bt-1', quantity: 100, reservedQuantity: 20, createdAt: new Date('2024-01-01') }],
+        [{ id: 'ship-1', orderId, status: 'pending' }],
+        [{ id: 'res-1', shipmentId: 'ship-1', packedStockId: 'ps-1', quantity: 20 }],
       );
-      expect(mockPrisma.clientOrder.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: 'delivered' } }),
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.markDelivered(orderId, clerkUserId);
+
+      // 1) PackedStock.quantity decremented exactly once, by the reserved amount.
+      expect(tx.packedStock.update).toHaveBeenCalledTimes(1);
+      expect(tx._packed[0]).toMatchObject({ quantity: 80, reservedQuantity: 0 });
+      // 2) ShipmentReservation consumed.
+      expect(tx._reservations).toHaveLength(0);
+      // 3) reservedQuantity decremented correctly (asserted above: 20 → 0).
+      // 4) StockExit created with the required fields.
+      expect(tx.stockExit.create).toHaveBeenCalledTimes(1);
+      expect(tx.stockExit.create.mock.calls[0][0].data).toMatchObject({
+        exitType: 'order',
+        packedStockId: 'ps-1',
+        quantity: 20,
+        orderId,
+        loggedById: internalUserId,
+      });
+      // Shipment and order both finalized as delivered.
+      expect(tx._shipments.get('ship-1')?.status).toBe('delivered');
+      expect(tx.clientOrder.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: orderId }, data: { status: 'delivered' } }),
       );
+      // 5) Invoice still created/issued after successful physical delivery.
       expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, undefined, true);
     });
 
-    it('calls createFromOrder() exactly once per markDelivered() call', async () => {
-      mockPrisma.clientOrder.findUnique.mockResolvedValue(confirmedOrder);
-      mockPrisma.shipment.updateMany.mockResolvedValue({ count: 0 });
-      mockPrisma.clientOrder.update.mockResolvedValue(deliveredOrder);
-      mockInvoices.createFromOrder.mockResolvedValue({ id: 'inv-1', status: 'issued' });
+    it('[edge case B / task 7] multiple reservations across multiple PackedStock rows are each drained exactly once, each with its own StockExit', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(orderWith([{ id: 'ship-1', status: 'loaded' }]));
+      const tx = makeDeliveryTx(
+        [
+          { id: 'ps-a', bagTypeId: 'bt-a', quantity: 100, reservedQuantity: 30, createdAt: new Date('2024-01-01') },
+          { id: 'ps-b', bagTypeId: 'bt-b', quantity: 50, reservedQuantity: 10, createdAt: new Date('2024-01-02') },
+        ],
+        [{ id: 'ship-1', orderId, status: 'loaded' }],
+        [
+          { id: 'res-a', shipmentId: 'ship-1', packedStockId: 'ps-a', quantity: 30 },
+          { id: 'res-b', shipmentId: 'ship-1', packedStockId: 'ps-b', quantity: 10 },
+        ],
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
-      await service.markDelivered(orderId);
+      await service.markDelivered(orderId, clerkUserId);
 
-      expect(mockInvoices.createFromOrder).toHaveBeenCalledTimes(1);
+      expect(tx._packed.find((p: PsRow) => p.id === 'ps-a')).toMatchObject({ quantity: 70, reservedQuantity: 0 });
+      expect(tx._packed.find((p: PsRow) => p.id === 'ps-b')).toMatchObject({ quantity: 40, reservedQuantity: 0 });
+      expect(tx._reservations).toHaveLength(0);
+      expect(tx.stockExit.create).toHaveBeenCalledTimes(2);
+      const exitedIds = tx.stockExit.create.mock.calls.map((c: any) => c[0].data.packedStockId).sort();
+      expect(exitedIds).toEqual(['ps-a', 'ps-b']);
     });
 
-    it('still returns the updated order even if createFromOrder() rejects (best-effort invoice)', async () => {
-      mockPrisma.clientOrder.findUnique.mockResolvedValue(confirmedOrder);
-      mockPrisma.shipment.updateMany.mockResolvedValue({ count: 0 });
-      mockPrisma.clientOrder.update.mockResolvedValue(deliveredOrder);
+    it('[edge case C] multiple shipments on one order: every eligible shipment is processed exactly once', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(
+        orderWith([{ id: 'ship-1', status: 'pending' }, { id: 'ship-2', status: 'pending' }]),
+      );
+      const tx = makeDeliveryTx(
+        [
+          { id: 'ps-1', bagTypeId: 'bt-1', quantity: 50, reservedQuantity: 10, createdAt: new Date('2024-01-01') },
+          { id: 'ps-2', bagTypeId: 'bt-2', quantity: 30, reservedQuantity: 5, createdAt: new Date('2024-01-01') },
+        ],
+        [{ id: 'ship-1', orderId, status: 'pending' }, { id: 'ship-2', orderId, status: 'pending' }],
+        [
+          { id: 'res-1', shipmentId: 'ship-1', packedStockId: 'ps-1', quantity: 10 },
+          { id: 'res-2', shipmentId: 'ship-2', packedStockId: 'ps-2', quantity: 5 },
+        ],
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.markDelivered(orderId, clerkUserId);
+
+      expect(tx._shipments.get('ship-1')?.status).toBe('delivered');
+      expect(tx._shipments.get('ship-2')?.status).toBe('delivered');
+      expect(tx._packed.find((p: PsRow) => p.id === 'ps-1')).toMatchObject({ quantity: 40, reservedQuantity: 0 });
+      expect(tx._packed.find((p: PsRow) => p.id === 'ps-2')).toMatchObject({ quantity: 25, reservedQuantity: 0 });
+      expect(tx.stockExit.create).toHaveBeenCalledTimes(2);
+      expect(tx.clientOrder.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('[edge case D / task 8] a cancelled shipment is never fetched or drained', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(
+        orderWith([{ id: 'ship-cancelled', status: 'cancelled' }, { id: 'ship-active', status: 'pending' }]),
+      );
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId: 'bt-1', quantity: 50, reservedQuantity: 10, createdAt: new Date('2024-01-01') }],
+        [{ id: 'ship-cancelled', orderId, status: 'cancelled' }, { id: 'ship-active', orderId, status: 'pending' }],
+        [{ id: 'res-1', shipmentId: 'ship-active', packedStockId: 'ps-1', quantity: 10 }],
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.markDelivered(orderId, clerkUserId);
+
+      // The cancelled shipment was excluded before the transaction even opened —
+      // the only shipment.findUnique call inside tx is for the active one.
+      expect(tx.shipment.findUnique).toHaveBeenCalledTimes(1);
+      expect(tx.shipment.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'ship-active' } }));
+      expect(tx._shipments.get('ship-cancelled')?.status).toBe('cancelled');
+      expect(tx._packed[0]).toMatchObject({ quantity: 40, reservedQuantity: 0 });
+    });
+
+    it('[edge case E / task 6] insufficient/inconsistent stock fails the transaction safely — no invoice issued, order not advanced, no partial drain', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(orderWith([{ id: 'ship-1', status: 'pending' }]));
+      // Corrupted state: reservation asks for more than the row physically has.
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId: 'bt-1', quantity: 5, reservedQuantity: 5, createdAt: new Date('2024-01-01') }],
+        [{ id: 'ship-1', orderId, status: 'pending' }],
+        [{ id: 'res-1', shipmentId: 'ship-1', packedStockId: 'ps-1', quantity: 20 }],
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.markDelivered(orderId, clerkUserId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+
+      // Nothing was drained, the shipment/order were never finalized, and the
+      // invoice — which would otherwise auto-issue — is never reached.
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.stockExit.create).not.toHaveBeenCalled();
+      expect(tx.clientOrder.update).not.toHaveBeenCalled();
+      expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
+    });
+
+    it('[edge case F / task 9] an already-delivered shipment is skipped entirely — no double deduction', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(orderWith([{ id: 'ship-1', status: 'delivered' }]));
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId: 'bt-1', quantity: 80, reservedQuantity: 0, createdAt: new Date('2024-01-01') }],
+        [{ id: 'ship-1', orderId, status: 'delivered' }],
+        [], // reservation already consumed by the original delivery
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.markDelivered(orderId, clerkUserId);
+
+      // Already-delivered shipments are filtered out before any tx read/write.
+      expect(tx.shipment.findUnique).not.toHaveBeenCalled();
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.stockExit.create).not.toHaveBeenCalled();
+      expect(tx._packed[0].quantity).toBe(80); // unchanged
+      // The order is still finalized / invoice still (idempotently) generated.
+      expect(tx.clientOrder.update).toHaveBeenCalled();
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, undefined, true);
+    });
+
+    it('still returns the updated order even if createFromOrder() rejects (best-effort invoice) — stock is already correctly drained by then', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(orderWith([{ id: 'ship-1', status: 'pending' }]));
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId: 'bt-1', quantity: 40, reservedQuantity: 10, createdAt: new Date('2024-01-01') }],
+        [{ id: 'ship-1', orderId, status: 'pending' }],
+        [{ id: 'res-1', shipmentId: 'ship-1', packedStockId: 'ps-1', quantity: 10 }],
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
       // Simulate transient invoice creation failure
       mockInvoices.createFromOrder.mockRejectedValue(new Error('DB timeout'));
 
       // markDelivered propagates the error from createFromOrder — callers
       // should handle it and the owner can use POST /orders/:id/invoice
-      await expect(service.markDelivered(orderId)).rejects.toThrow('DB timeout');
-      // But the order WAS marked delivered in the DB before the failure
-      expect(mockPrisma.clientOrder.update).toHaveBeenCalled();
+      await expect(service.markDelivered(orderId, clerkUserId)).rejects.toThrow('DB timeout');
+      // But the stock WAS drained and the order WAS marked delivered before the failure.
+      expect(tx._packed[0]).toMatchObject({ quantity: 30, reservedQuantity: 0 });
+      expect(tx.clientOrder.update).toHaveBeenCalled();
     });
 
     it('throws NotFoundException when order does not exist', async () => {
       mockPrisma.clientOrder.findUnique.mockResolvedValue(null);
 
-      await expect(service.markDelivered('no-such-order')).rejects.toThrow(NotFoundException);
+      await expect(service.markDelivered('no-such-order', clerkUserId)).rejects.toThrow(NotFoundException);
+      expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the caller user does not exist, before opening a transaction', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(orderWith([{ id: 'ship-1', status: 'pending' }]));
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.markDelivered(orderId, 'no-such-clerk-user')).rejects.toThrow(NotFoundException);
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
       expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
     });
 
     // -----------------------------------------------------------------------
-    // Finding #2 remediation: shipment.updateMany + clientOrder.update are now
-    // wrapped in a single $transaction, so a failure partway through can never
-    // leave shipments delivered while the order status is stale (or vice versa).
+    // No-shipment direct deduction (shipments are no longer required to mark
+    // an order delivered). An order with zero active shipments now succeeds
+    // via ShipmentsService.drainPackedStockDirect() instead of the old
+    // NO_SHIPMENT rejection — reusing PackedStockService.getFifoDraw() for
+    // the FIFO plan (mocked here per-test) and the real decrement/StockExit
+    // write path.
     // -----------------------------------------------------------------------
 
-    it('transaction: submits shipment.updateMany and clientOrder.update together in one $transaction call', async () => {
-      mockPrisma.clientOrder.findUnique.mockResolvedValue(confirmedOrder);
-      mockPrisma.shipment.updateMany.mockResolvedValue({ count: 2 });
-      mockPrisma.clientOrder.update.mockResolvedValue(deliveredOrder);
-      mockInvoices.createFromOrder.mockResolvedValue({ id: 'inv-1', status: 'issued' });
+    it('order with 10kg bags, no shipment: mark delivered decreases PackedStock correctly and creates StockExit(exitType:order)', async () => {
+      const orderFixture = { id: orderId, bagTypeId: 'bt-10', totalKgRequested: '100', bagType: { nominalKg: '10' } };
+      // zero shipments — used to be NO_SHIPMENT; outer fixture needs bagTypeId
+      // set so markDelivered() takes the direct-deduction branch.
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(noShipOrder('bt-10', '100', '10'));
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId: 'bt-10', quantity: 50, reservedQuantity: 0, createdAt: new Date('2024-01-01') }],
+        [], [],
+        orderFixture,
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      // 100kg / 10kg-per-bag = 10 bags — same formula createFromOrder() uses.
+      mockPackedStockService.getFifoDraw.mockResolvedValue({
+        draws: [{ packedStockId: 'ps-1', quantity: 10 }], fulfilled: true, requested: 10, available: 50,
+      });
 
-      const result = await service.markDelivered(orderId);
+      await service.markDelivered(orderId, clerkUserId);
 
-      // Exactly one $transaction call, carrying both writes as a single array —
-      // proving they are submitted atomically rather than as two independent calls.
-      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
-      const submittedOps = mockPrisma.$transaction.mock.calls[0][0];
-      expect(Array.isArray(submittedOps)).toBe(true);
-      expect(submittedOps).toHaveLength(2);
-      expect(result).toEqual(deliveredOrder);
+      expect(mockPackedStockService.getFifoDraw).toHaveBeenCalledWith('bt-10', 10);
+      expect(tx._packed[0]).toMatchObject({ quantity: 40 });
+      expect(tx.stockExit.create).toHaveBeenCalledTimes(1);
+      expect(tx.stockExit.create.mock.calls[0][0].data).toMatchObject({
+        exitType: 'order', packedStockId: 'ps-1', bagTypeId: 'bt-10', quantity: 10, orderId, loggedById: internalUserId,
+      });
+      // No Shipment or ShipmentReservation is touched or required for this path.
+      expect(tx.shipment.findUnique).not.toHaveBeenCalled();
+      expect(tx.clientOrder.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: orderId }, data: { status: 'delivered' } }),
+      );
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, undefined, true);
     });
 
-    it('transaction: a failure in the order-status write rolls back — shipments are never left delivered on their own, and invoice creation is never reached', async () => {
-      mockPrisma.clientOrder.findUnique.mockResolvedValue(confirmedOrder);
-      // shipment.updateMany itself "succeeds" in isolation, but because both
-      // writes are submitted inside the same $transaction (modelled as
-      // Promise.all below), the failing clientOrder.update rolls the whole
-      // transaction back rather than letting the shipment write stand alone.
-      mockPrisma.shipment.updateMany.mockResolvedValue({ count: 2 });
-      mockPrisma.clientOrder.update.mockRejectedValue(new Error('DB connection lost'));
+    it('direct-deduction path locks the order row via FOR UPDATE before reading it, closing the race with a concurrent PATCH /orders/:id', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(noShipOrder('bt-10', '100', '10'));
+      const orderFixture = { id: orderId, bagTypeId: 'bt-10', totalKgRequested: '100', bagType: { nominalKg: '10' } };
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId: 'bt-10', quantity: 50, reservedQuantity: 0, createdAt: new Date('2024-01-01') }],
+        [], [],
+        orderFixture,
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      mockPackedStockService.getFifoDraw.mockResolvedValue({
+        draws: [{ packedStockId: 'ps-1', quantity: 10 }], fulfilled: true, requested: 10, available: 50,
+      });
 
-      await expect(service.markDelivered(orderId)).rejects.toThrow('DB connection lost');
+      const callOrder: string[] = [];
+      const originalQueryRaw = tx.$queryRaw;
+      tx.$queryRaw = fn().mockImplementation(async (...args: any[]) => { callOrder.push('lock'); return originalQueryRaw(...args); });
+      const originalFindUnique = tx.clientOrder.findUnique;
+      tx.clientOrder.findUnique = fn().mockImplementation(async (...args: any[]) => { callOrder.push('read'); return originalFindUnique(...args); });
 
-      // Both writes were requested inside the same transaction call...
-      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
-      // ...and because the transaction as a whole rejected, execution never
-      // reached the post-transaction invoice step.
+      await service.markDelivered(orderId, clerkUserId);
+
+      // First two events prove the order-row lock precedes the order read.
+      // (A third 'lock' event follows — drainPackedStockDirect()'s own
+      // separate PackedStock-row lock — already covered by its own tests.)
+      expect(callOrder.slice(0, 2)).toEqual(['lock', 'read']);
+      const lockCall = tx.$queryRaw.mock.calls[0][0] as any;
+      expect(lockCall.sql).toContain('FOR UPDATE');
+      expect(lockCall.sql).toContain('client_orders');
+    });
+
+    it.each([
+      ['bt-2', '16', '2', 8],
+      ['bt-5', '20', '5', 4],
+      ['bt-10', '20', '10', 2],
+    ])('order with %s-kg bags (nominalKg=%s, totalKg=%s): correct quantity (%i bags) deducted', async (bagTypeId, totalKg, nominalKg, expectedQty) => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(noShipOrder(bagTypeId, totalKg, nominalKg));
+      const orderFixture = { id: orderId, bagTypeId, totalKgRequested: totalKg, bagType: { nominalKg } };
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId, quantity: 100, reservedQuantity: 0, createdAt: new Date('2024-01-01') }],
+        [], [],
+        orderFixture,
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      mockPackedStockService.getFifoDraw.mockResolvedValue({
+        draws: [{ packedStockId: 'ps-1', quantity: expectedQty }], fulfilled: true, requested: expectedQty, available: 100,
+      });
+
+      await service.markDelivered(orderId, clerkUserId);
+
+      expect(mockPackedStockService.getFifoDraw).toHaveBeenCalledWith(bagTypeId, expectedQty);
+      expect(tx._packed[0]).toMatchObject({ quantity: 100 - expectedQty });
+    });
+
+    it('insufficient stock, no shipment: fails safely — no invoice issued, order status not advanced, nothing partially deducted', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(noShipOrder('bt-10', '100', '10'));
+      const orderFixture = { id: orderId, bagTypeId: 'bt-10', totalKgRequested: '100', bagType: { nominalKg: '10' } };
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId: 'bt-10', quantity: 3, reservedQuantity: 0, createdAt: new Date('2024-01-01') }],
+        [], [],
+        orderFixture,
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      mockPackedStockService.getFifoDraw.mockResolvedValue({
+        draws: [{ packedStockId: 'ps-1', quantity: 3 }], fulfilled: false, requested: 10, available: 3,
+      });
+
+      await expect(service.markDelivered(orderId, clerkUserId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.stockExit.create).not.toHaveBeenCalled();
+      expect(tx.clientOrder.update).not.toHaveBeenCalled();
       expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
     });
 
-    it('invoice creation still runs exactly once, after the transaction settles, unchanged from prior behavior', async () => {
-      mockPrisma.clientOrder.findUnique.mockResolvedValue(confirmedOrder);
-      mockPrisma.shipment.updateMany.mockResolvedValue({ count: 1 });
-      mockPrisma.clientOrder.update.mockResolvedValue(deliveredOrder);
-      mockInvoices.createFromOrder.mockResolvedValue({ id: 'inv-1', status: 'issued' });
+    it('second delivery attempt on an already-delivered order: idempotent no-op, no second deduction', async () => {
+      // order.status is already 'delivered' — the idempotency guard returns
+      // before opening a transaction at all, so a second click can never
+      // deduct stock twice.
+      const deliveredFixture = orderWith([]);
+      deliveredFixture.status = 'delivered';
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(deliveredFixture);
 
-      await service.markDelivered(orderId);
+      const result = await service.markDelivered(orderId, clerkUserId);
 
-      const transactionOrder = mockPrisma.$transaction.mock.invocationCallOrder[0];
-      const invoiceOrder = mockInvoices.createFromOrder.mock.invocationCallOrder[0];
-      expect(transactionOrder).toBeLessThan(invoiceOrder);
+      // findOne() aliases orderBagLines → bagLines on its way out, so compare
+      // by contained fields rather than deep-equal against the raw fixture.
+      expect(result).toMatchObject({ id: orderId, status: 'delivered' });
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      expect(mockPackedStockService.getFifoDraw).not.toHaveBeenCalled();
+      expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
+    });
+
+    it('KG order (no bagTypeId), no shipment: order still transitions to delivered with no packed-stock deduction attempted', async () => {
+      const kgOrder = orderWith([]);
+      (kgOrder as any).bagTypeId = null;
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(kgOrder);
+      const tx = makeDeliveryTx([], [], []);
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.markDelivered(orderId, clerkUserId);
+
+      expect(mockPackedStockService.getFifoDraw).not.toHaveBeenCalled();
+      expect(tx.clientOrder.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: orderId }, data: { status: 'delivered' } }),
+      );
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, undefined, true);
+    });
+
+    it('succeeds when at least one shipment is non-cancelled, even if others on the order are cancelled', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(
+        orderWith([{ id: 'ship-cancelled', status: 'cancelled' }, { id: 'ship-active', status: 'pending' }]),
+      );
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId: 'bt-1', quantity: 20, reservedQuantity: 5, createdAt: new Date('2024-01-01') }],
+        [{ id: 'ship-cancelled', orderId, status: 'cancelled' }, { id: 'ship-active', orderId, status: 'pending' }],
+        [{ id: 'res-1', shipmentId: 'ship-active', packedStockId: 'ps-1', quantity: 5 }],
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.markDelivered(orderId, clerkUserId);
+
+      expect(tx.clientOrder.update).toHaveBeenCalled();
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledTimes(1);
+      expect(tx._packed[0]).toMatchObject({ quantity: 15, reservedQuantity: 0 });
+    });
+
+    it('invoice creation runs exactly once, after the transaction settles, with the same (id, undefined, true) signature as before', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(orderWith([{ id: 'ship-1', status: 'pending' }]));
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId: 'bt-1', quantity: 20, reservedQuantity: 5, createdAt: new Date('2024-01-01') }],
+        [{ id: 'ship-1', orderId, status: 'pending' }],
+        [{ id: 'res-1', shipmentId: 'ship-1', packedStockId: 'ps-1', quantity: 5 }],
+      );
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.markDelivered(orderId, clerkUserId);
+
+      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
       expect(mockInvoices.createFromOrder).toHaveBeenCalledTimes(1);
       expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, undefined, true);
     });

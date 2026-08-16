@@ -44,7 +44,7 @@ export type OrderStatus =
   | 'invoiced'
   | 'paid';
 
-export type ShipmentStatus = 'pending' | 'loaded' | 'delivered' | 'returned';
+export type ShipmentStatus = 'pending' | 'loaded' | 'delivered' | 'returned' | 'cancelled';
 
 export type TripStatus = 'planned' | 'in_progress' | 'completed';
 
@@ -700,13 +700,16 @@ export interface ToggleClientPhoneDto {
 
 export interface ClientLedgerEntry {
   date: string;
-  type: 'invoice' | 'payment';
+  /** 'fill_pickup' — Fill Client bag pickup (StockExit, exitType='client_bags_fill'); always a debit. */
+  type: 'invoice' | 'payment' | 'fill_pickup';
   reference: string; // UUID — use for links
   displayId: string | null;
   description: string;
   debit: string;
   credit: string;
   runningBalance: string;
+  /** Present on 'invoice' entries only — lets callers derive an open-invoice count without a second query. */
+  status?: string;
 }
 
 export interface ClientLedger {
@@ -802,6 +805,7 @@ export interface UpdateOrderDto {
   pricePerBag?: string;
   bagLines?: CreateOrderBagLineDto[];
   notes?: string | null;
+  supplierName?: string;
 }
 
 export interface UpdateOrderStatusDto {
@@ -1041,6 +1045,7 @@ export interface Payment {
   date: string; // ISO date
   loggedById: string;
   loggedBy?: { id: string; name: string };
+  invoice?: { id: string; displayId: string | null } | null;
   notes: string | null;
   receiverId: string | null;
   receiverName: string | null;

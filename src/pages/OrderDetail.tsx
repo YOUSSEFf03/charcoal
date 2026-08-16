@@ -1,8 +1,9 @@
+import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useOrder, useMarkOrderDelivered, useGenerateOrderInvoice } from '../hooks/useOrders'
+import { useOrder, useUpdateOrder, useDeleteOrder, useMarkOrderDelivered, useGenerateOrderInvoice } from '../hooks/useOrders'
 import { useBagTypes } from '../hooks/useBagTypes'
-import type { OrderStatus, ShipmentStatus } from '../types/api'
+import type { OrderStatus, ShipmentStatus, UpdateOrderDto } from '../types/api'
 import { formatUsd } from '../lib/money'
 
 function orderStatusMeta(s: OrderStatus): { cls: string; label: string } {
@@ -29,12 +30,60 @@ export default function OrderDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const orderQ = useOrder(id ?? '')
+  const updateOrder = useUpdateOrder()
+  const deleteOrder = useDeleteOrder()
   const markDelivered = useMarkOrderDelivered()
   const generateInvoice = useGenerateOrderInvoice()
   const bagTypesQ = useBagTypes()
   const bagTypeById = new Map((bagTypesQ.data ?? []).map(b => [b.id, b]))
   const bagTypeNameById = new Map((bagTypesQ.data ?? []).map(b => [b.id, b.name]))
   const order = orderQ.data
+
+  const [toast, setToast] = useState('')
+  function showToast(msg: string) {
+    setToast(msg)
+    setTimeout(() => setToast(''), 2800)
+  }
+
+  // ── Edit modal — reuses useUpdateOrder() (PATCH /orders/:id), already
+  // correct and already unlocked for every field on a draft order server-side
+  // (OrdersService.update()); the backend itself rejects locked fields on a
+  // non-draft order, so no client-side status gate is needed here.
+  const [editOpen, setEditOpen] = useState(false)
+  const [editForm, setEditForm] = useState<{
+    charcoalType: string; grade: string; totalKgRequested: string
+    pricePerBag: string; supplierName: string; notes: string
+  }>({ charcoalType: '', grade: '', totalKgRequested: '', pricePerBag: '', supplierName: '', notes: '' })
+  function openEdit() {
+    if (!order) return
+    setEditForm({
+      charcoalType: order.charcoalType,
+      grade: order.grade,
+      totalKgRequested: order.totalKgRequested,
+      pricePerBag: order.pricePerBag,
+      supplierName: order.supplierName ?? '',
+      notes: order.notes ?? '',
+    })
+    setEditOpen(true)
+  }
+  function submitEdit() {
+    if (!order) return
+    const body: UpdateOrderDto = {
+      charcoalType: editForm.charcoalType,
+      grade: editForm.grade,
+      totalKgRequested: editForm.totalKgRequested,
+      pricePerBag: editForm.pricePerBag,
+      supplierName: editForm.supplierName || undefined,
+      notes: editForm.notes || null,
+    }
+    updateOrder.mutate(
+      { id: order.id, body },
+      {
+        onSuccess: () => { setEditOpen(false); showToast('Order updated') },
+        onError: (err: any) => showToast(err?.error ?? 'Failed to update order'),
+      },
+    )
+  }
 
   if (orderQ.isLoading) {
     return (
@@ -86,14 +135,34 @@ export default function OrderDetail() {
             <i className="ti ti-printer" style={{ fontSize: 15 }} /> Print invoice
           </a>
         )}
-        <button className="btn"><i className="ti ti-edit" style={{ fontSize: 15 }} /> Edit</button>
+        <button className="btn" onClick={openEdit}><i className="ti ti-edit" style={{ fontSize: 15 }} /> Edit</button>
+        {order.status === 'draft' && (
+          <button
+            className="btn"
+            style={{ color: 'var(--red)' }}
+            disabled={deleteOrder.isPending}
+            onClick={() => {
+              if (confirm('Delete this draft order? This cannot be undone.')) {
+                deleteOrder.mutate(order.id, {
+                  onSuccess: () => navigate('/orders'),
+                  onError: (err: any) => showToast(err?.error ?? 'Failed to delete order'),
+                })
+              }
+            }}
+          >
+            <i className="ti ti-trash" style={{ fontSize: 15 }} />
+            {deleteOrder.isPending ? 'Deleting…' : 'Delete'}
+          </button>
+        )}
         {!['delivered', 'invoiced', 'paid'].includes(order.status) && (
           <button
             className="btn primary"
             disabled={markDelivered.isPending}
             onClick={() => {
-              if (confirm('Mark this order and all its shipments as delivered?')) {
-                markDelivered.mutate(order.id)
+              if (confirm('Mark this order as delivered?')) {
+                markDelivered.mutate(order.id, {
+                  onError: (err: any) => showToast(err?.error ?? 'Failed to mark order as delivered'),
+                })
               }
             }}
           >
@@ -225,10 +294,9 @@ export default function OrderDetail() {
             <div className="card">
               <div className="card-head">
                 <div className="card-title"><i className="ti ti-truck" /> Shipments</div>
-                <button className="card-action"><i className="ti ti-plus" style={{ fontSize: 13 }} /> Split</button>
               </div>
               <div style={{ padding: '12px 18px 4px' }}>
-                {order.shipments.length === 0 && <div className="empty">No shipments yet.</div>}
+                {order.shipments.length === 0 && <div className="empty">No shipment for this order — delivered directly.</div>}
                 {order.shipments.map((sh, idx) => {
                   const badge = shipmentBadge(sh.status)
                   const done = sh.status === 'delivered'
@@ -351,6 +419,66 @@ export default function OrderDetail() {
           </div>
         </div>
       </div>
+
+      {/* EDIT ORDER MODAL */}
+      {editOpen && (
+        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setEditOpen(false)}>
+          <div className="modal" style={{ width: 480 }}>
+            <div className="modal-head">
+              <div className="modal-title"><i className="ti ti-edit" style={{ fontSize: 14, marginRight: 6 }} />Edit order</div>
+              <button className="panel-close-btn" onClick={() => setEditOpen(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-row">
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">Charcoal type</label>
+                  <input className="form-input" type="text" value={editForm.charcoalType} onChange={e => setEditForm(f => ({ ...f, charcoalType: e.target.value }))} />
+                </div>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">Grade</label>
+                  <input className="form-input" type="text" value={editForm.grade} onChange={e => setEditForm(f => ({ ...f, grade: e.target.value }))} />
+                </div>
+              </div>
+              <div className="form-row" style={{ marginTop: 16 }}>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">{isBagOrder ? 'Total kg (nominal)' : 'Total kg requested'}</label>
+                  <input className="form-input" type="number" min="0" step="0.5" value={editForm.totalKgRequested} onChange={e => setEditForm(f => ({ ...f, totalKgRequested: e.target.value }))} />
+                </div>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">{isBagOrder ? 'Price / bag' : 'Price / kg'}</label>
+                  <input className="form-input" type="number" min="0" step="0.01" value={editForm.pricePerBag} onChange={e => setEditForm(f => ({ ...f, pricePerBag: e.target.value }))} />
+                </div>
+              </div>
+              <div className="form-group" style={{ marginTop: 16 }}>
+                <label className="form-label">Supplier (optional)</label>
+                <input className="form-input" type="text" value={editForm.supplierName} onChange={e => setEditForm(f => ({ ...f, supplierName: e.target.value }))} />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Notes</label>
+                <textarea className="form-input" rows={3} value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} />
+              </div>
+              {order.status !== 'draft' && (
+                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text3)' }}>
+                  This order is no longer a draft — the client, currency, and bag type are locked, but the fields above remain editable.
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setEditOpen(false)}>Cancel</button>
+              <button className="btn primary" disabled={updateOrder.isPending} onClick={submitEdit}>
+                {updateOrder.isPending ? 'Saving…' : 'Save changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TOAST */}
+      {toast && (
+        <div style={{ position: 'fixed', bottom: 28, left: '50%', transform: 'translateX(-50%)', background: 'var(--text)', color: '#fff', padding: '10px 20px', borderRadius: 'var(--radius-lg)', fontSize: 13, fontWeight: 500, zIndex: 9999, display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.18)' }}>
+          <i className="ti ti-check" style={{ color: 'var(--accent)', fontSize: 15 }} /> {toast}
+        </div>
+      )}
     </>
   )
 }

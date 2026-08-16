@@ -6,6 +6,7 @@ import {
 import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoicesService } from '../invoices/invoices.service';
+import { ShipmentsService } from '../shipments/shipments.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 
@@ -14,6 +15,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly invoices: InvoicesService,
+    private readonly shipments: ShipmentsService,
   ) {}
 
   /**
@@ -215,38 +217,138 @@ export class OrdersService {
   }
 
   /**
-   * Force-mark an order and all its pending shipments as delivered.
-   * Intended for owner use when the driver forgets to update status.
+   * Mark an order delivered. Shipments are NOT required — this business's
+   * workflow is New Order → Mark Delivered directly, with no
+   * shipment/delivery-address step in between (shipments remain a separate,
+   * optional feature for whoever still uses driver trips / DriverMobile; see
+   * ShipmentsService.confirmDelivery()).
    *
-   * The shipment and order status writes are wrapped in a single transaction
-   * so a failure partway through can never leave shipments marked delivered
-   * while the order itself is stuck in an earlier status (or vice versa).
+   * Stock handling branches on whether the order happens to have an active
+   * (non-cancelled) shipment:
+   *   - Has one or more → drain them via ShipmentsService.drainShipment(),
+   *     UNCHANGED from before — preserves correctness for any order that DID
+   *     go through the shipment/reservation flow (legacy data, or a future
+   *     caller that still creates one via POST /shipments directly).
+   *   - Has none (the normal case now — nothing in the UI creates a shipment
+   *     for an order anymore) → deduct PackedStock directly against the
+   *     order's own line via ShipmentsService.drainPackedStockDirect(), using
+   *     the EXACT same qty formula InvoicesService.createFromOrder() uses to
+   *     build the invoice line (round(totalKgRequested / bagType.nominalKg)),
+   *     so the invoice and the physical deduction can never disagree on how
+   *     many bags this order actually contains.
+   * These two paths are mutually exclusive per order, so an order can never
+   * be drained twice over for the same delivery.
    *
-   * After marking the order delivered, a draft invoice is automatically created
-   * via createFromOrder(). createFromOrder() is idempotent — safe to call even
-   * if the order was already delivered or already has an invoice.
+   * KG orders (bagTypeId null) have no packed-stock line to deduct — this
+   * pre-existing gap (no order-level raw-lot deduction exists anywhere in
+   * this codebase, shipment-based or otherwise) is unchanged by this method.
+   *
+   * Idempotent: an order that is already delivered/invoiced/paid is returned
+   * as-is with no further deduction or transaction — this is what prevents a
+   * double deduction if Mark Delivered is clicked twice in a row.
+   *
+   * The stock deduction and the order-status write happen inside one
+   * transaction — insufficient stock rolls everything back (no partial
+   * deduction, order status unchanged), and the invoice below is only ever
+   * reached once that transaction has committed.
+   *
+   * @param id - Order UUID
+   * @param userId - Clerk user ID from @CurrentUser — resolved to the internal
+   *   User.id stamped on every StockExit this creates (CONSTRAINT 5)
+   * @throws NotFoundException if the order or caller user does not exist
+   * @throws BadRequestException (CONSTRAINT_VIOLATION) if packed stock can't
+   *   cover the order's bag line — rolls back the whole transaction
    */
-  async markDelivered(id: string) {
-    await this.findOne(id);
+  async markDelivered(id: string, userId: string) {
+    const order = await this.findOne(id);
 
-    const now = new Date();
-    const [, order] = await this.prisma.$transaction([
-      this.prisma.shipment.updateMany({
-        where: { orderId: id, status: { not: 'delivered' } },
-        data: { status: 'delivered', deliveredAt: now },
-      }),
-      this.prisma.clientOrder.update({
+    // Idempotent no-op — already delivered (or further along); nothing to
+    // (re-)drain and nothing new to invoice. Prevents a double deduction on a
+    // second click.
+    if (['delivered', 'invoiced', 'paid'].includes(order.status)) {
+      return order;
+    }
+
+    const activeShipments = order.shipments.filter(s => s.status !== 'cancelled');
+
+    // Resolve caller before opening a transaction — needed to stamp
+    // StockExit.loggedById for whatever gets drained below (CONSTRAINT 5:
+    // never from a DTO/request body).
+    const user = await this.prisma.user.findUnique({ where: { clerkId: userId } });
+    if (!user) {
+      throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
+    }
+
+    // Generous timeout — same reasoning as ShipmentsService.confirmDelivery():
+    // a FIFO drain can touch several packed-stock rows.
+    const updatedOrder = await this.prisma.$transaction(async (tx) => {
+      if (activeShipments.length > 0) {
+        // Legacy/shipment-bearing path — unchanged.
+        for (const activeShipment of activeShipments) {
+          if (activeShipment.status === 'delivered') continue;
+
+          // Re-fetch inside the transaction with reservations + their packed-stock
+          // rows — findOne()'s outer include doesn't carry these (it's the public
+          // order-detail payload and has no reason to expose reservation internals).
+          const shipment = await tx.shipment.findUnique({
+            where: { id: activeShipment.id },
+            include: { reservations: { include: { packedStock: true } } },
+          });
+          if (!shipment) continue; // defense in depth — existed a moment ago on the order
+
+          await this.shipments.drainShipment(tx, shipment, user.id);
+        }
+      } else if (order.bagTypeId) {
+        // Normal path — no shipment. Lock the order row BEFORE reading it —
+        // unlike the shipment-based branch (whose quantity is anchored to
+        // already-created ShipmentReservation rows, immune to later order
+        // edits), this branch derives its deduction quantity directly from
+        // totalKgRequested/bagTypeId. OrdersService.update() only blocks
+        // editing those fields once status !== 'draft', and every order is
+        // still 'draft' right up until this transaction commits — so without
+        // this lock, a concurrent PATCH could commit a totalKgRequested/
+        // bagTypeId change in the gap between this read and the status write
+        // below, after which createFromOrder()'s own fresh read (post-commit)
+        // would compute a different qty than what was actually deducted here.
+        // update() itself takes no lock, so this side must be the one to
+        // serialize against it.
+        await tx.$queryRaw(Prisma.sql`SELECT id FROM "client_orders" WHERE id = ${id} FOR UPDATE`);
+        const freshOrder = await tx.clientOrder.findUnique({
+          where: { id },
+          include: { bagType: true },
+        });
+        if (!freshOrder) {
+          throw new NotFoundException({ error: 'Order not found', code: 'NOT_FOUND' });
+        }
+        if (freshOrder.bagTypeId && freshOrder.bagType) {
+          // Same formula InvoicesService.createFromOrder() uses to build the
+          // invoice line — keeps the invoice and the physical deduction in
+          // agreement on bag count.
+          const qty = Math.round(
+            parseFloat(freshOrder.totalKgRequested.toString()) /
+              parseFloat(freshOrder.bagType.nominalKg.toString()),
+          );
+          await this.shipments.drainPackedStockDirect(tx, freshOrder.bagTypeId, qty, id, user.id);
+        }
+      }
+      // KG order (bagTypeId null) with no shipment: nothing to deduct —
+      // pre-existing gap, see doc comment above.
+
+      return tx.clientOrder.update({
         where: { id },
         data: { status: 'delivered' },
-      }),
-    ]);
+      });
+    }, { timeout: 15_000, maxWait: 5_000 });
 
-    // Auto-create and immediately issue the invoice. Not wrapped in a transaction
-    // with the status update — if this fails the order is still marked delivered
-    // and the owner can use POST /orders/:id/invoice to generate it manually.
+    // Auto-create and immediately issue the invoice. Not wrapped in the same
+    // transaction — if this fails, the order is still marked delivered with
+    // stock already correctly drained, and the owner can use
+    // POST /orders/:id/invoice to generate it manually. If the stock drain
+    // itself failed above, the transaction rolled back and this line is never
+    // reached — the invoice can never be issued for undelivered stock.
     await this.invoices.createFromOrder(id, undefined, true);
 
-    return order;
+    return updatedOrder;
   }
 
   /**

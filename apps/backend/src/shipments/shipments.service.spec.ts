@@ -7,6 +7,7 @@ import { InvoicesService } from '../invoices/invoices.service';
 import { PaymentAllocationService } from '../invoices/payment-allocation.service';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { UsersService } from '../users/users.service';
+import { PackedStockService } from '../packed-stock/packed-stock.service';
 
 // ---------------------------------------------------------------------------
 // Shared mock factory helpers
@@ -49,6 +50,7 @@ function makeStore(rows: PsRow[]) {
   const tx: any = {
     _packed: packed,
     _reservations: reservations,
+    $queryRaw: fn().mockResolvedValue([]),
     packedStock: {
       findMany: fn().mockImplementation(async (args: any) => {
         let res = packed.filter((r) => r.bagTypeId === args.where.bagTypeId);
@@ -176,6 +178,11 @@ describe('ShipmentsService', () => {
   // only assert ShipmentsService delegates to it correctly.
   const mockPaymentAllocationService = { allocateDirect: fn(), allocateFifo: fn() };
 
+  // drainPackedStockDirect() delegates FIFO planning to PackedStockService.getFifoDraw() —
+  // mocked here so each test controls the plan directly rather than re-deriving
+  // PackedStockService's own FIFO logic (already covered by packed-stock.service.spec.ts).
+  const mockPackedStockService = { getFifoDraw: fn() };
+
   beforeEach(async () => {
     jest.clearAllMocks();
     // Default: createFromOrder succeeds and returns an issued invoice (autoIssue=true path).
@@ -193,6 +200,7 @@ describe('ShipmentsService', () => {
         { provide: PaymentAllocationService, useValue: mockPaymentAllocationService },
         { provide: LedgerWriteService, useValue: mockLedgerWriteService },
         { provide: UsersService, useValue: mockUsersService },
+        { provide: PackedStockService, useValue: mockPackedStockService },
       ],
     }).compile();
 
@@ -245,6 +253,89 @@ describe('ShipmentsService', () => {
       ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }) });
 
       expect(tx._packed[0].reservedQuantity).toBeLessThanOrEqual(tx._packed[0].quantity);
+    });
+
+    // =======================================================================
+    // Concurrency safety — SELECT ... FOR UPDATE locking on every candidate
+    // PackedStock row BEFORE the FIFO reservation walk reads them. Mirrors
+    // stock-exits.service.ts's already-fixed pattern, which createShipment()
+    // did not previously share despite mutating the same reservedQuantity
+    // rows a concurrent sale/exit can also draw against.
+    //
+    // Unit tests against a mocked tx cannot spin up two real concurrent
+    // Postgres transactions — see test/stock-concurrency.integration-spec.ts
+    // for the real-Postgres proof. These only prove the lock precedes the
+    // read and covers the full candidate set in one deterministic-order call.
+    // =======================================================================
+    describe('concurrency safety (FOR UPDATE locking)', () => {
+      it('locks candidate packed_stocks rows via FOR UPDATE before the FIFO read', async () => {
+        const bagTypeId = 'bag-type-lock-1';
+        const tx = makeStore([{ id: 'ps-lock-1', bagTypeId, quantity: 20, reservedQuantity: 0, createdAt: new Date('2024-01-01') }]);
+        mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+        const callOrder: string[] = [];
+        const originalQueryRaw = tx.$queryRaw;
+        tx.$queryRaw = fn().mockImplementation(async (...args: any[]) => { callOrder.push('lock'); return originalQueryRaw(...args); });
+        const originalFindMany = tx.packedStock.findMany;
+        tx.packedStock.findMany = fn().mockImplementation(async (...args: any[]) => { callOrder.push('read'); return originalFindMany(...args); });
+
+        await service.createShipment(
+          { orderId: 'order-lock-1', address: 'a', nominalKg: '1', bags: [{ bagTypeId, quantity: 5 }] } as any,
+          'clerk-1',
+        );
+
+        expect(callOrder).toEqual(['lock', 'read']);
+        const lockCall = tx.$queryRaw.mock.calls[0][0] as any;
+        expect(lockCall.sql).toContain('FOR UPDATE');
+        expect(lockCall.sql).toContain('packed_stocks');
+      });
+
+      it('locks the full candidate set for ALL bag types in one statement, deduplicated', async () => {
+        const bagTypeA = 'bag-type-lock-a';
+        const bagTypeB = 'bag-type-lock-b';
+        const tx = makeStore([
+          { id: 'ps-lock-a', bagTypeId: bagTypeA, quantity: 20, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+          { id: 'ps-lock-b', bagTypeId: bagTypeB, quantity: 20, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+        ]);
+        mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+        await service.createShipment(
+          {
+            orderId: 'order-lock-2', address: 'a', nominalKg: '1',
+            bags: [
+              { bagTypeId: bagTypeA, quantity: 5 },
+              { bagTypeId: bagTypeB, quantity: 5 },
+              { bagTypeId: bagTypeA, quantity: 3 }, // same bagType referenced twice — must not double-lock
+            ],
+          } as any,
+          'clerk-1',
+        );
+
+        // Exactly ONE lock statement for the whole shipment, not one per bag line.
+        expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+        const lockCall = tx.$queryRaw.mock.calls[0][0] as any;
+        expect(lockCall.values).toEqual([bagTypeA, bagTypeB]);
+      });
+
+      it('insufficient-stock rejection is unchanged: the lock is taken before the FIFO walk still rejects', async () => {
+        // Pre-existing behavior (unchanged by this fix): the FIFO loop reserves
+        // whatever free quantity IS available before discovering the shortfall
+        // and throwing — a real Postgres transaction rolls that partial write
+        // back atomically with everything else; this mocked in-memory store
+        // (unlike real Postgres) does not simulate rollback, so the assertion
+        // here only covers the locking behavior, not post-rollback state — see
+        // the existing "CONSTRAINT 4" test above for the same pattern.
+        const bagTypeId = 'bag-type-lock-insufficient';
+        const tx = makeStore([{ id: 'ps-lock-insuf', bagTypeId, quantity: 5, reservedQuantity: 0, createdAt: new Date('2024-01-01') }]);
+        mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+        await expect(
+          service.createShipment({ orderId: 'order-lock-3', address: 'a', nominalKg: '1', bags: [{ bagTypeId, quantity: 10 }] } as any, 'clerk-1'),
+        ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }) });
+
+        expect(tx.$queryRaw).toHaveBeenCalledTimes(1); // lock still acquired before the (failed) FIFO walk
+        expect(tx._packed[0].reservedQuantity).toBeLessThanOrEqual(tx._packed[0].quantity);
+      });
     });
   });
 
@@ -724,6 +815,125 @@ describe('ShipmentsService', () => {
 
         expect(callOrder).toEqual(['validate', 'payment.create', 'creditAccount']);
       });
+    });
+  });
+
+  // =========================================================================
+  // drainPackedStockDirect() — shipment-independent direct deduction, used by
+  // OrdersService.markDelivered() for orders with no shipment.
+  // =========================================================================
+
+  describe('drainPackedStockDirect()', () => {
+    const orderId = 'order-direct-1';
+    const userId = 'db-user-direct-1';
+
+    it('single PackedStock row: decrements quantity and creates one StockExit(exitType:order)', async () => {
+      const bagTypeId = 'bt-10kg';
+      const tx = makeStore([{ id: 'ps-1', bagTypeId, quantity: 100, reservedQuantity: 0, createdAt: new Date('2024-01-01') }]);
+      mockPackedStockService.getFifoDraw.mockResolvedValue({
+        draws: [{ packedStockId: 'ps-1', quantity: 20 }],
+        fulfilled: true, requested: 20, available: 100,
+      });
+
+      await service.drainPackedStockDirect(tx, bagTypeId, 20, orderId, userId);
+
+      expect(tx._packed[0]).toMatchObject({ quantity: 80 });
+      expect(tx.stockExit.create).toHaveBeenCalledTimes(1);
+      expect(tx.stockExit.create.mock.calls[0][0].data).toMatchObject({
+        packedStockId: 'ps-1', bagTypeId, quantity: 20,
+        exitType: 'order', orderId, loggedById: userId,
+      });
+      // No shipment or reservation entity is touched by this path.
+      expect(tx._reservations).toHaveLength(0);
+    });
+
+    it('FIFO across multiple PackedStock rows: each drawn chunk gets its own StockExit', async () => {
+      const bagTypeId = 'bt-5kg';
+      const tx = makeStore([
+        { id: 'ps-a', bagTypeId, quantity: 10, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+        { id: 'ps-b', bagTypeId, quantity: 30, reservedQuantity: 0, createdAt: new Date('2024-01-02') },
+      ]);
+      mockPackedStockService.getFifoDraw.mockResolvedValue({
+        draws: [{ packedStockId: 'ps-a', quantity: 10 }, { packedStockId: 'ps-b', quantity: 5 }],
+        fulfilled: true, requested: 15, available: 40,
+      });
+
+      await service.drainPackedStockDirect(tx, bagTypeId, 15, orderId, userId);
+
+      expect(tx._packed.find((p: any) => p.id === 'ps-a')).toMatchObject({ quantity: 0 });
+      expect(tx._packed.find((p: any) => p.id === 'ps-b')).toMatchObject({ quantity: 25 });
+      expect(tx.stockExit.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('multiple bag types (2kg/5kg/10kg): each call drains only its own bagTypeId', async () => {
+      const tx = makeStore([
+        { id: 'ps-2kg', bagTypeId: 'bt-2', quantity: 50, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+        { id: 'ps-5kg', bagTypeId: 'bt-5', quantity: 50, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+        { id: 'ps-10kg', bagTypeId: 'bt-10', quantity: 50, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+      ]);
+      mockPackedStockService.getFifoDraw.mockImplementation(async (bagTypeId: string, quantity: number) => ({
+        draws: [{ packedStockId: `ps-${bagTypeId.replace('bt-', '')}kg`, quantity }],
+        fulfilled: true, requested: quantity, available: 50,
+      }));
+
+      await service.drainPackedStockDirect(tx, 'bt-2', 8, orderId, userId);
+      await service.drainPackedStockDirect(tx, 'bt-5', 4, orderId, userId);
+      await service.drainPackedStockDirect(tx, 'bt-10', 2, orderId, userId);
+
+      expect(tx._packed.find((p: any) => p.id === 'ps-2kg')).toMatchObject({ quantity: 42 });
+      expect(tx._packed.find((p: any) => p.id === 'ps-5kg')).toMatchObject({ quantity: 46 });
+      expect(tx._packed.find((p: any) => p.id === 'ps-10kg')).toMatchObject({ quantity: 48 });
+      expect(tx.stockExit.create).toHaveBeenCalledTimes(3);
+    });
+
+    it('insufficient stock: throws CONSTRAINT_VIOLATION and writes nothing (complete rollback)', async () => {
+      const bagTypeId = 'bt-10kg';
+      const tx = makeStore([{ id: 'ps-1', bagTypeId, quantity: 5, reservedQuantity: 0, createdAt: new Date('2024-01-01') }]);
+      mockPackedStockService.getFifoDraw.mockResolvedValue({
+        draws: [{ packedStockId: 'ps-1', quantity: 5 }],
+        fulfilled: false, requested: 20, available: 5,
+      });
+
+      await expect(service.drainPackedStockDirect(tx, bagTypeId, 20, orderId, userId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.stockExit.create).not.toHaveBeenCalled();
+      expect(tx._packed[0]).toMatchObject({ quantity: 5 }); // unchanged
+    });
+
+    it('quantity <= 0 is a no-op — does not even call getFifoDraw', async () => {
+      const tx = makeStore([{ id: 'ps-1', bagTypeId: 'bt-1', quantity: 10, reservedQuantity: 0, createdAt: new Date('2024-01-01') }]);
+
+      await service.drainPackedStockDirect(tx, 'bt-1', 0, orderId, userId);
+
+      expect(mockPackedStockService.getFifoDraw).not.toHaveBeenCalled();
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+    });
+
+    it('locks candidate packed_stocks rows via FOR UPDATE before planning', async () => {
+      const bagTypeId = 'bt-lock';
+      const tx = makeStore([{ id: 'ps-1', bagTypeId, quantity: 10, reservedQuantity: 0, createdAt: new Date('2024-01-01') }]);
+      mockPackedStockService.getFifoDraw.mockResolvedValue({
+        draws: [{ packedStockId: 'ps-1', quantity: 3 }],
+        fulfilled: true, requested: 3, available: 10,
+      });
+
+      const callOrder: string[] = [];
+      const originalQueryRaw = tx.$queryRaw;
+      tx.$queryRaw = fn().mockImplementation(async (...args: any[]) => { callOrder.push('lock'); return originalQueryRaw(...args); });
+      mockPackedStockService.getFifoDraw.mockImplementation(async () => {
+        callOrder.push('plan');
+        return { draws: [{ packedStockId: 'ps-1', quantity: 3 }], fulfilled: true, requested: 3, available: 10 };
+      });
+
+      await service.drainPackedStockDirect(tx, bagTypeId, 3, orderId, userId);
+
+      expect(callOrder).toEqual(['lock', 'plan']);
+      const lockCall = tx.$queryRaw.mock.calls[0][0] as any;
+      expect(lockCall.sql).toContain('FOR UPDATE');
+      expect(lockCall.sql).toContain('packed_stocks');
     });
   });
 

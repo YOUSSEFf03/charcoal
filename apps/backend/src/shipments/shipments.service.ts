@@ -10,6 +10,7 @@ import { InvoicesService } from '../invoices/invoices.service';
 import { PaymentAllocationService } from '../invoices/payment-allocation.service';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { UsersService } from '../users/users.service';
+import { PackedStockService } from '../packed-stock/packed-stock.service';
 import { CreateShipmentDto } from './dto/create-shipment.dto';
 import { ConfirmDeliveryDto } from './dto/confirm-delivery.dto';
 import { LogReturnDto } from './dto/log-return.dto';
@@ -23,6 +24,7 @@ export class ShipmentsService {
     private readonly paymentAllocationService: PaymentAllocationService,
     private readonly ledgerWriteService: LedgerWriteService,
     private readonly usersService: UsersService,
+    private readonly packedStockService: PackedStockService,
   ) {}
 
   /**
@@ -123,6 +125,23 @@ export class ShipmentsService {
         },
       });
 
+      // Lock every PackedStock row that could be drawn from for ANY bag type
+      // in this shipment, in ONE statement sorted ascending by id, BEFORE any
+      // read — same FOR UPDATE pattern as stock-exits.service.ts, extended to
+      // the full candidate set (rather than locking rows one bagType/one FIFO
+      // step at a time) so a concurrent reservation, sale, or stock consumer
+      // touching an overlapping row always acquires locks in the same
+      // deterministic order and cannot deadlock against this transaction.
+      // Once held, a concurrent writer on the same row is forced to wait
+      // until this transaction commits or rolls back, so the FIFO walk below
+      // always reads true, current free quantity.
+      const bagTypeIds = [...new Set(dto.bags.map((b) => b.bagTypeId))];
+      if (bagTypeIds.length > 0) {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT id FROM "packed_stocks" WHERE "bagTypeId" IN (${Prisma.join(bagTypeIds)}) ORDER BY id FOR UPDATE`,
+        );
+      }
+
       // Reserve each bag line FIFO, pinning each chunk to this shipment.
       for (const bag of dto.bags) {
         let remaining = bag.quantity;
@@ -194,16 +213,205 @@ export class ShipmentsService {
   }
 
   /**
-   * Confirm delivery of a shipment. Drains packed stock FIFO, creates
-   * StockExit records, updates order status, and optionally logs a payment.
+   * Drain a shipment's reserved packed stock and mark it delivered — the one
+   * code path that turns a {@link ShipmentReservation} into a real physical
+   * stock movement. Shared by {@link confirmDelivery} (single shipment,
+   * driver/owner-confirmed) and OrdersService.markDelivered() (owner override,
+   * all of an order's active shipments at once) so both produce byte-identical
+   * PackedStock/StockExit side effects — there is exactly one place that
+   * decrements PackedStock.quantity for an order.
+   *
+   * Caller supplies the already-fetched shipment (with
+   * `reservations.packedStock` included) and owns the transaction — this
+   * method performs no reads of its own, only writes.
+   *
+   * Idempotent guard: a shipment that is already 'delivered', or is
+   * 'cancelled'/'returned', is a no-op — safe to call without the caller
+   * pre-filtering, and prevents double-draining the same shipment.
+   *
+   * Step 1: For each ShipmentReservation — drain PackedStock FIFO (packedStock.createdAt asc)
+   * Step 2: CONSTRAINT 2 — guard against negative packed stock per drain
+   * Step 3: Create StockExit per drain chunk with exitType='order' (CONSTRAINT 5: loggedById from userId)
+   * Step 4: Update shipment status to 'delivered', set deliveredAt
+   *
+   * @param tx - Prisma transaction client the caller is already inside
+   * @param shipment - Shipment with `reservations.packedStock` included
+   * @param userId - Internal User.id to stamp as StockExit.loggedById (CONSTRAINT 5)
+   * @param notes - Optional shipment notes to persist alongside the delivered status
+   * @constraint 2 guard against negative packed stock per drain
+   * @constraint 5 loggedById is always the resolved internal user id, never from a DTO
+   */
+  async drainShipment(
+    tx: Prisma.TransactionClient,
+    shipment: {
+      id: string;
+      orderId: string;
+      status: ShipmentStatus;
+      reservations: Array<{
+        id: string;
+        packedStockId: string;
+        quantity: number;
+        packedStock: { quantity: number; bagTypeId: string; createdAt: Date };
+      }>;
+    },
+    userId: string,
+    notes?: string,
+  ): Promise<void> {
+    // Already delivered (double-confirm) or terminal-without-delivery (cancelled/
+    // returned) — nothing physical to drain, and re-draining would double-decrement
+    // stock the reservation rows no longer even reference (they're already gone).
+    if (shipment.status === 'delivered' || shipment.status === 'cancelled' || shipment.status === 'returned') {
+      return;
+    }
+
+    // BUG-I (P1): drain the EXACT rows this shipment reserved, never bags another
+    // pending shipment reserved. Delivery consumes this shipment's own reservation
+    // rows (and the matching physical quantity) — proportional cross-shipment release
+    // is gone. Process reservations FIFO (the same packed-stock createdAt order used
+    // to reserve) for deterministic, per-shipment-keyed draining.
+    const reservations = [...shipment.reservations].sort(
+      (a, b) => a.packedStock.createdAt.getTime() - b.packedStock.createdAt.getTime(),
+    );
+
+    for (const reservation of reservations) {
+      const take = reservation.quantity;
+      if (take <= 0) continue;
+
+      // CONSTRAINT 2: guard against going negative. The reserved quantity can never
+      // exceed the row's physical quantity (Σ reservations ≤ quantity invariant), so
+      // this is a defensive check.
+      if (reservation.packedStock.quantity - take < 0) {
+        throw new BadRequestException({
+          error: `Packed stock would go negative for stock id ${reservation.packedStockId}`,
+          code: 'CONSTRAINT_VIOLATION',
+        });
+      }
+
+      // Consume the physical bags AND release ONLY this shipment's reservation on this
+      // row: decrement quantity by `take` and the denormalized reservedQuantity cache
+      // by the same amount (this shipment's exact hold). Other shipments' reservations
+      // on the same row are untouched.
+      await tx.packedStock.update({
+        where: { id: reservation.packedStockId },
+        data: {
+          quantity: { decrement: take },
+          reservedQuantity: { decrement: take },
+        },
+      });
+
+      // Remove the consumed reservation row — its bags have physically left.
+      await tx.shipmentReservation.delete({ where: { id: reservation.id } });
+
+      // CONSTRAINT 5: loggedById comes from the resolved internal user id, NEVER from a DTO
+      await tx.stockExit.create({
+        data: {
+          packedStockId: reservation.packedStockId,
+          bagTypeId: reservation.packedStock.bagTypeId,
+          quantity: take,
+          exitType: 'order',
+          orderId: shipment.orderId,
+          loggedById: userId,
+          date: new Date(),
+        },
+      });
+    }
+
+    // Mark shipment as delivered
+    await tx.shipment.update({
+      where: { id: shipment.id },
+      data: {
+        status: 'delivered',
+        deliveredAt: new Date(),
+        ...(notes ? { notes } : {}),
+      },
+    });
+  }
+
+  /**
+   * Directly drain PackedStock for one order bag line — no Shipment or
+   * ShipmentReservation involved. This is the shipment-independent
+   * counterpart to {@link drainShipment}: used by
+   * OrdersService.markDelivered() for orders that have no shipment, which is
+   * now the normal case — shipments are no longer required to mark an order
+   * delivered.
+   *
+   * Reuses PackedStockService.getFifoDraw() for the draw plan (same
+   * createdAt-ascending order, same `quantity − reservedQuantity` free-stock
+   * rule as every other consumer of packed stock in this codebase —
+   * StockExitsService, WalkInSalesService, ShipmentsService.createShipment())
+   * rather than re-implementing the FIFO walk. Only the write step — the
+   * locked decrement + StockExit(exitType:'order') creation per drawn chunk —
+   * is new, and it mirrors {@link drainShipment}'s per-chunk write exactly.
+   *
+   * Step 1: Lock every PackedStock row for this bag type BEFORE reading (same
+   *         FOR UPDATE pattern as createShipment()), so the plan below reflects
+   *         true, concurrency-safe free quantity — a second concurrent drain of
+   *         the same bag type blocks until this transaction commits or rolls back.
+   * Step 2: Get the FIFO draw plan; reject the whole operation (nothing written)
+   *         if the bag type's free stock can't fully cover `quantity`.
+   * Step 3: Decrement PackedStock.quantity and create one StockExit per
+   *         drawn chunk (CONSTRAINT 5: loggedById from the resolved user id).
+   *
+   * Must run inside the caller's transaction.
+   *
+   * @param tx - Prisma transaction client the caller is already inside
+   * @param bagTypeId - Bag type to draw from
+   * @param quantity - Bags needed; a no-op when <= 0 (e.g. a KG order has no bagTypeId at all)
+   * @param orderId - Order this deduction belongs to (stamped on each StockExit)
+   * @param userId - Internal User.id to stamp as StockExit.loggedById (CONSTRAINT 5)
+   * @throws BadRequestException (CONSTRAINT_VIOLATION) if free packed stock can't cover `quantity`
+   */
+  async drainPackedStockDirect(
+    tx: Prisma.TransactionClient,
+    bagTypeId: string,
+    quantity: number,
+    orderId: string,
+    userId: string,
+  ): Promise<void> {
+    if (quantity <= 0) return;
+
+    // Lock BEFORE reading — see doc comment above for why this is required
+    // for the subsequent plan to be concurrency-safe.
+    await tx.$queryRaw(Prisma.sql`SELECT id FROM "packed_stocks" WHERE "bagTypeId" = ${bagTypeId} FOR UPDATE`);
+
+    const plan = await this.packedStockService.getFifoDraw(bagTypeId, quantity);
+    if (!plan.fulfilled) {
+      throw new BadRequestException({
+        error: `Insufficient packed stock for bagTypeId ${bagTypeId} — available: ${plan.available}, requested: ${quantity}`,
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
+
+    for (const draw of plan.draws) {
+      if (draw.quantity <= 0) continue;
+
+      await tx.packedStock.update({
+        where: { id: draw.packedStockId },
+        data: { quantity: { decrement: draw.quantity } },
+      });
+
+      await tx.stockExit.create({
+        data: {
+          packedStockId: draw.packedStockId,
+          bagTypeId,
+          quantity: draw.quantity,
+          exitType: 'order',
+          orderId,
+          loggedById: userId,
+          date: new Date(),
+        },
+      });
+    }
+  }
+
+  /**
+   * Confirm delivery of a shipment. Drains packed stock FIFO via
+   * {@link drainShipment}, updates order status, and optionally logs a payment.
    *
    * Step 1: Fetch shipment with bags and order; resolve caller's internal User
-   * Step 2: For each ShipmentBag — drain PackedStock FIFO (orderBy createdAt asc)
-   * Step 3: CONSTRAINT 2 — guard against negative packed stock per drain
-   * Step 4: Create StockExit per drain chunk with exitType='order' (CONSTRAINT 5: loggedById from user.id)
-   * Step 5: Update shipment status to 'delivered', set deliveredAt
-   * Step 6: Recompute order status from all sibling shipments
-   * Step 7: Optional payment creation if dto.paymentAmount && dto.paymentMethod
+   * Step 2: Drain this shipment's reservations and mark it delivered (see {@link drainShipment})
+   * Step 3: Recompute order status from all sibling shipments
+   * Step 4: Optional payment creation if dto.paymentAmount && dto.paymentMethod
    *         — FIFO-allocated across the client's open invoices via
    *         PaymentAllocationService (this payment is never linked to one
    *         specific invoiceId; see that service for why unlinked payments
@@ -240,69 +448,10 @@ export class ShipmentsService {
         throw new NotFoundException({ error: 'Shipment not found', code: 'NOT_FOUND' });
       }
 
-      // BUG-I (P1): drain the EXACT rows this shipment reserved, never bags another
-      // pending shipment reserved. Delivery consumes this shipment's own reservation
-      // rows (and the matching physical quantity) — proportional cross-shipment release
-      // is gone. Process reservations FIFO (the same packed-stock createdAt order used
-      // to reserve) for deterministic, per-shipment-keyed draining.
-      const reservations = [...shipment.reservations].sort(
-        (a, b) => a.packedStock.createdAt.getTime() - b.packedStock.createdAt.getTime(),
-      );
+      // Step 2: Drain this shipment's reservations and mark it delivered.
+      await this.drainShipment(tx, shipment, user.id, dto.notes);
 
-      for (const reservation of reservations) {
-        const take = reservation.quantity;
-        if (take <= 0) continue;
-
-        // CONSTRAINT 2: guard against going negative. The reserved quantity can never
-        // exceed the row's physical quantity (Σ reservations ≤ quantity invariant), so
-        // this is a defensive check.
-        if (reservation.packedStock.quantity - take < 0) {
-          throw new BadRequestException({
-            error: `Packed stock would go negative for stock id ${reservation.packedStockId}`,
-            code: 'CONSTRAINT_VIOLATION',
-          });
-        }
-
-        // Consume the physical bags AND release ONLY this shipment's reservation on this
-        // row: decrement quantity by `take` and the denormalized reservedQuantity cache
-        // by the same amount (this shipment's exact hold). Other shipments' reservations
-        // on the same row are untouched.
-        await tx.packedStock.update({
-          where: { id: reservation.packedStockId },
-          data: {
-            quantity: { decrement: take },
-            reservedQuantity: { decrement: take },
-          },
-        });
-
-        // Remove the consumed reservation row — its bags have physically left.
-        await tx.shipmentReservation.delete({ where: { id: reservation.id } });
-
-        // CONSTRAINT 5: loggedById comes from user.id, NEVER from DTO
-        await tx.stockExit.create({
-          data: {
-            packedStockId: reservation.packedStockId,
-            bagTypeId: reservation.packedStock.bagTypeId,
-            quantity: take,
-            exitType: 'order',
-            orderId: shipment.orderId,
-            loggedById: user.id,
-            date: new Date(),
-          },
-        });
-      }
-
-      // Step 4: Mark shipment as delivered
-      await tx.shipment.update({
-        where: { id },
-        data: {
-          status: 'delivered',
-          deliveredAt: new Date(),
-          ...(dto.notes ? { notes: dto.notes } : {}),
-        },
-      });
-
-      // Step 5: Recompute order status from all sibling shipments
+      // Step 3: Recompute order status from all sibling shipments
       const siblings = await tx.shipment.findMany({
         where: { orderId: shipment.orderId },
         select: { status: true },
@@ -324,7 +473,7 @@ export class ShipmentsService {
         });
       }
 
-      // Step 6: Auto-create and immediately issue invoice when ALL shipments are
+      // Step 4: Auto-create and immediately issue invoice when ALL shipments are
       // delivered. Runs inside the same transaction — invoice write is atomic with
       // the stock drain and order status update.
       // createFromOrder() is idempotent — safe if markDelivered() already ran.
@@ -332,7 +481,7 @@ export class ShipmentsService {
         await this.invoices.createFromOrder(shipment.orderId, tx, true);
       }
 
-      // Step 7: Optional payment at delivery.
+      // Step 5: Optional payment at delivery.
       // PR 10.1: cash collected on delivery is attributed to the order's assigned
       // driver (ClientOrder.driverId) — a real User, known before the transaction
       // opens, so no receiver picker is needed. Orders with no assigned driver
