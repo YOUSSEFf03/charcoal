@@ -19,10 +19,7 @@ import type {
 export interface ProfitLossQuery {
   dateFrom?: string
   dateTo?: string
-  charcoalType?: string
-  grade?: string
   clientId?: string
-  clientType?: string
 }
 
 /** Date-range params accepted by GET /reports/daily-revenue. */

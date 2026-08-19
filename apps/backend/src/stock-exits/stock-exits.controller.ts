@@ -55,6 +55,45 @@ export class StockExitsController {
     return this.stockExitsService.getWalkInSummary(dateFrom, dateTo);
   }
 
+  /**
+   * IMPORTANT: must come before GET /:id so NestJS does not treat
+   * "warehouse-cash-summary" as a UUID parameter — same reasoning as the
+   * GET /summary route above.
+   */
+  @ApiOperation({ summary: 'Warehouse cash box — cash actually collected (anonymous exits + warehouse-sale payments) for one date' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @Get('warehouse-cash-summary')
+  @Roles('owner', 'sales_rep')
+  getWarehouseCashSummary(@Query('date') date: string) {
+    return this.stockExitsService.getWarehouseCashSummary(date);
+  }
+
+  /**
+   * IMPORTANT: must come before GET /:id so NestJS does not treat
+   * "on-account-summary" as a UUID parameter — same reasoning as the
+   * GET /summary route above.
+   */
+  @ApiOperation({ summary: '"On account" diagnostic — count of unpaid client-tagged walk-in exits for one date, no page limit' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @Get('on-account-summary')
+  @Roles('owner', 'sales_rep')
+  getOnAccountCount(@Query('date') date: string) {
+    return this.stockExitsService.getOnAccountCount(date);
+  }
+
+  /**
+   * IMPORTANT: must come before GET /:id so NestJS does not treat
+   * "client-summary" as a UUID parameter — same reasoning as the
+   * GET /summary route above.
+   */
+  @ApiOperation({ summary: "One client's complete warehouse-sales totals (count/kg/amount), no page limit" })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @Get('client-summary/:clientId')
+  @Roles('owner', 'accountant', 'sales_rep')
+  getClientWarehouseSummary(@Param('clientId', ParseUUIDPipe) clientId: string) {
+    return this.stockExitsService.getClientWarehouseSummary(clientId);
+  }
+
   @ApiOperation({ summary: 'Get a stock exit by ID' })
   @ApiResponse({ status: 200, description: 'OK' })
   @ApiResponse({ status: 404, description: 'Not found' })

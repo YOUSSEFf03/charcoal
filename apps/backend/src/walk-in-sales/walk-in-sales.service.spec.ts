@@ -89,6 +89,7 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     return {
       _invoice: null as any,
       _payment: null as any,
+      $queryRaw: fn().mockResolvedValue([]),
       packedStock: {
         findUnique: fn().mockResolvedValue({
           id: packedStockId, quantity: 100, reservedQuantity: 0,
@@ -731,6 +732,154 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
       await service.create(baseDto({ receivedUsd: '120.00', receiverId }), clerkId);
 
       expect(callOrder).toEqual(['validate', 'payment.create', 'creditAccount']);
+    });
+  });
+
+  // =========================================================================
+  // Concurrency safety — SELECT ... FOR UPDATE locking on the stock rows this
+  // service reads/writes, mirroring stock-exits.service.ts's already-fixed
+  // pattern (see that file's own "concurrency safety" describe block) which
+  // this service did NOT previously share, despite mutating the exact same
+  // StockLot.kgRemaining / PackedStock.quantity rows.
+  //
+  // These are unit tests against a mocked tx, so — like stock-exits.service
+  // .spec.ts's own concurrency tests — they cannot spin up two real
+  // concurrent Postgres transactions. They prove:
+  //   1) the lock is issued before the corresponding read,
+  //   2) multiple distinct target ids are deduplicated, sorted, and locked
+  //      in ONE statement (not one-by-one in DTO order), and
+  //   3) packed_stocks is always locked before stock_lots in a mixed sale,
+  //      so every transaction in the codebase that can lock both tables
+  //      does so in the same order.
+  // Real concurrent-transaction proof requires a Postgres integration test —
+  // see test/stock-concurrency.integration-spec.ts.
+  // =========================================================================
+
+  describe('create() — concurrency safety (FOR UPDATE locking)', () => {
+    it('locks the packed_stocks row via FOR UPDATE before reading packedStock (bag-only sale)', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      const tx = makeTx();
+      const callOrder: string[] = [];
+      tx.$queryRaw.mockImplementation(async () => { callOrder.push('lock'); return []; });
+      const originalFindUnique = tx.packedStock.findUnique;
+      tx.packedStock.findUnique = fn().mockImplementation(async (args: any) => {
+        callOrder.push('read');
+        return originalFindUnique(args);
+      });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(baseDto({}), clerkId);
+
+      expect(callOrder).toEqual(['lock', 'read']);
+      const lockCall = tx.$queryRaw.mock.calls[0][0] as any;
+      expect(lockCall.sql).toContain('FOR UPDATE');
+      expect(lockCall.sql).toContain('packed_stocks');
+      expect(lockCall.values).toEqual([packedStockId]);
+    });
+
+    it('locks the stock_lots row via FOR UPDATE before reading stockLot (kg-only sale)', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      const tx = makeTx();
+      const callOrder: string[] = [];
+      tx.$queryRaw.mockImplementation(async () => { callOrder.push('lock'); return []; });
+      const originalFindUnique = tx.stockLot.findUnique;
+      tx.stockLot.findUnique = fn().mockImplementation(async (args: any) => {
+        callOrder.push('read');
+        return originalFindUnique(args);
+      });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(kgDto({}), clerkId);
+
+      expect(callOrder).toEqual(['lock', 'read']);
+      const lockCall = tx.$queryRaw.mock.calls[0][0] as any;
+      expect(lockCall.sql).toContain('FOR UPDATE');
+      expect(lockCall.sql).toContain('stock_lots');
+      expect(lockCall.values).toEqual([lotId]);
+    });
+
+    it('does not issue a stock_lots lock when the sale has no kg lines, and vice versa', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      const tx = makeTx();
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(baseDto({}), clerkId); // bag-only
+
+      // Exactly one lock statement (packed_stocks) — no second call for the
+      // (empty) kg-line set.
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+      const lockCall = tx.$queryRaw.mock.calls[0][0] as any;
+      expect(lockCall.sql).toContain('packed_stocks');
+    });
+
+    it('mixed BAG + KG sale locks packed_stocks BEFORE stock_lots, in that fixed order', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      const tx = makeTx();
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(
+        { ...baseDto({}), kgLines: [{ lotId, kgQuantity: '500.000', description: 'BBQ Hardwood Grade A', pricePerKg: '2.50', currency: 'USD' }] } as any,
+        clerkId,
+      );
+
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+      const firstLock = tx.$queryRaw.mock.calls[0][0] as any;
+      const secondLock = tx.$queryRaw.mock.calls[1][0] as any;
+      expect(firstLock.sql).toContain('packed_stocks');
+      expect(secondLock.sql).toContain('stock_lots');
+    });
+
+    it('deduplicates and sorts multiple distinct packedStockIds into one lock statement, ascending by id', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      const tx = makeTx();
+      tx.packedStock.findUnique = fn().mockImplementation(async ({ where }: any) => ({
+        id: where.id, quantity: 100, reservedQuantity: 0,
+        lot: { charcoalType: 'BBQ Hardwood', grade: 'A' },
+      }));
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      // Deliberately unsorted, with a duplicate id — 'ps-z', 'ps-a', 'ps-z' again.
+      await service.create(
+        {
+          ...baseDto({}),
+          bags: [
+            { packedStockId: 'ps-z', bagTypeId, bagTypeName: '25kg', quantity: 1, pricePerBag: '12.00', currency: 'USD' },
+            { packedStockId: 'ps-a', bagTypeId, bagTypeName: '25kg', quantity: 1, pricePerBag: '12.00', currency: 'USD' },
+            { packedStockId: 'ps-z', bagTypeId, bagTypeName: '25kg', quantity: 1, pricePerBag: '12.00', currency: 'USD' },
+          ],
+        } as any,
+        clerkId,
+      );
+
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+      const lockCall = tx.$queryRaw.mock.calls[0][0] as any;
+      // Deduplicated (2 distinct ids, not 3) and sorted ascending — never DTO order.
+      expect(lockCall.values).toEqual(['ps-a', 'ps-z']);
+    });
+
+    it('insufficient-stock rejection is unchanged: the lock is taken, but validation still rejects and nothing is written', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      const tx = makeTx();
+      tx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 3, reservedQuantity: 0 }); // only 3, need 10
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.create(baseDto({}), clerkId)).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(1); // lock still acquired before the (failed) validation
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.invoice.create).not.toHaveBeenCalled();
     });
   });
 });

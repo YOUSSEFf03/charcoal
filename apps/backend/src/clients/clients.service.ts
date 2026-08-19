@@ -34,6 +34,8 @@ export class ClientsService {
    * @param isActive - Optional active status filter
    * @param excludeFillClient - When true and type is not set, exclude fill_client type
    * @param hasBalance - When defined, filter by whether client has an outstanding balance
+   * @param minTotalInvoiced - When defined, only clients with totalInvoiced >= this value
+   * @param maxTotalInvoiced - When defined, only clients with totalInvoiced <= this value
    */
   async findAll(
     page: number,
@@ -43,6 +45,10 @@ export class ClientsService {
     isActive?: boolean,
     excludeFillClient?: boolean,
     hasBalance?: boolean,
+    sortBy?: string,
+    sortOrder?: string,
+    minTotalInvoiced?: number,
+    maxTotalInvoiced?: number,
   ) {
     const skip = (page - 1) * limit;
 
@@ -55,24 +61,58 @@ export class ClientsService {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    if (hasBalance !== undefined) {
-      // Fetch all matching clients (no pagination) then filter by balance
+    const direction: 'asc' | 'desc' = sortOrder === 'asc' ? 'asc' : 'desc';
+    // 'balance'/'totalInvoiced'/'totalCollected'/'orderCount' are not stored
+    // columns — they're computed per client (same as this function's existing
+    // hasBalance branch below), so sorting by them needs every matching
+    // client fetched and computed first, same as hasBalance already does.
+    // 'name'/'lastOrderDate' are real columns, sortable directly in SQL with
+    // real pagination — cheaper, so they don't force the full-fetch path.
+    const computedSortKeys = ['balance', 'totalInvoiced', 'totalCollected', 'orderCount'];
+    // totalInvoiced is also not a stored column (see computedSortKeys above) — a
+    // min/max range on it needs the same full-fetch-then-filter path as hasBalance.
+    const hasSalesRangeFilter = minTotalInvoiced !== undefined || maxTotalInvoiced !== undefined;
+    const needsFullFetch = hasBalance !== undefined || hasSalesRangeFilter || (sortBy != null && computedSortKeys.includes(sortBy));
+
+    if (needsFullFetch) {
+      // Fetch all matching clients (no pagination) then filter/sort/paginate in memory.
       const allClients = await this.prisma.client.findMany({
         where,
         orderBy: { createdAt: 'desc' },
       });
 
-      const withBalance = await Promise.all(
+      const withStats = await Promise.all(
         allClients.map(async (c) => {
-          const balance = await this.clientBalanceService.computeBalance(c.id);
+          const [balance, stats] = await Promise.all([
+            this.clientBalanceService.computeBalance(c.id),
+            this.getInvoicedAndCollected(c.id),
+          ]);
           const isOverdue = balance.gt(0) && c.lastOrderDate != null && c.lastOrderDate < thirtyDaysAgo;
-          return { ...c, balance: balance.toFixed(2), isOverdue };
+          return { ...c, balance: balance.toFixed(2), isOverdue, ...stats };
         }),
       );
 
-      const filtered = withBalance.filter((c) =>
-        hasBalance ? parseFloat(c.balance) > 0 : parseFloat(c.balance) <= 0,
-      );
+      const byBalance = hasBalance !== undefined
+        ? withStats.filter((c) => hasBalance ? parseFloat(c.balance) > 0 : parseFloat(c.balance) <= 0)
+        : withStats;
+
+      const filtered = hasSalesRangeFilter
+        ? byBalance.filter((c) => {
+            const invoiced = parseFloat(c.totalInvoiced);
+            if (minTotalInvoiced !== undefined && invoiced < minTotalInvoiced) return false;
+            if (maxTotalInvoiced !== undefined && invoiced > maxTotalInvoiced) return false;
+            return true;
+          })
+        : byBalance;
+
+      if (sortBy && computedSortKeys.includes(sortBy)) {
+        const key = sortBy as 'balance' | 'totalInvoiced' | 'totalCollected' | 'orderCount';
+        filtered.sort((a, b) => {
+          const av = key === 'orderCount' ? a.orderCount : parseFloat(a[key]);
+          const bv = key === 'orderCount' ? b.orderCount : parseFloat(b[key]);
+          return direction === 'asc' ? av - bv : bv - av;
+        });
+      }
 
       return {
         data: filtered.slice(skip, skip + limit),
@@ -82,25 +122,63 @@ export class ClientsService {
       };
     }
 
+    const orderBy: Prisma.ClientOrderByWithRelationInput =
+      sortBy === 'name' ? { name: direction } :
+      sortBy === 'lastOrderDate' ? { lastOrderDate: direction } :
+      sortBy === 'avgOrderDays' ? { avgOrderDays: direction } :
+      { createdAt: 'desc' };
+
     const [data, total] = await this.prisma.$transaction([
       this.prisma.client.findMany({
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
       }),
       this.prisma.client.count({ where }),
     ]);
 
     const dataWithBalance = await Promise.all(
       data.map(async (c) => {
-        const balance = await this.clientBalanceService.computeBalance(c.id);
+        const [balance, stats] = await Promise.all([
+          this.clientBalanceService.computeBalance(c.id),
+          this.getInvoicedAndCollected(c.id),
+        ]);
         const isOverdue = balance.gt(0) && c.lastOrderDate != null && c.lastOrderDate < thirtyDaysAgo;
-        return { ...c, balance: balance.toFixed(2), isOverdue };
+        return { ...c, balance: balance.toFixed(2), isOverdue, ...stats };
       }),
     );
 
     return { data: dataWithBalance, total, page, limit };
+  }
+
+  /**
+   * Total invoiced (accrual, excludes draft/cancelled — same rule as
+   * ClientBalanceService.computeBalance()) and total collected (sum of all
+   * payments) for one client, plus its order count. Used to surface
+   * objectively-measurable "highest sales" / "most orders" client rankings
+   * on the Clients list — deliberately NOT a profitability figure: it
+   * carries no cost attribution (COGS/bags/delivery/labor aren't tracked
+   * per-client anywhere in the schema — see the Reports P&L client-filter
+   * audit), so it must never be labeled or used as "profit".
+   */
+  private async getInvoicedAndCollected(clientId: string) {
+    const [invoicedAgg, collectedAgg, orderCount] = await Promise.all([
+      this.prisma.invoice.aggregate({
+        where: { clientId, status: { notIn: ['draft', 'cancelled'] } },
+        _sum: { total: true },
+      }),
+      this.prisma.payment.aggregate({
+        where: { clientId },
+        _sum: { amount: true },
+      }),
+      this.prisma.clientOrder.count({ where: { clientId } }),
+    ]);
+    return {
+      totalInvoiced: (invoicedAgg._sum.total?.toString() ?? '0'),
+      totalCollected: (collectedAgg._sum.amount?.toString() ?? '0'),
+      orderCount,
+    };
   }
 
   /**

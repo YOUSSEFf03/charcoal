@@ -16,6 +16,8 @@ import { BagTypesService } from './bag-types.service';
 import { CreateBagTypeDto } from './dto/create-bag-type.dto';
 import { UpdateBagTypeDto } from './dto/update-bag-type.dto';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { ClerkUser } from '../auth/clerk.strategy';
 
 @ApiTags('bag-types')
 @ApiBearerAuth()
@@ -23,22 +25,32 @@ import { Roles } from '../auth/roles.decorator';
 export class BagTypesController {
   constructor(private readonly bagTypesService: BagTypesService) {}
 
-  @ApiOperation({ summary: 'List all bag types' })
+  // Matches stock-lots.controller.ts's role set exactly — driver deliberately
+  // excluded (this data is cost-bearing; the service-level redaction below
+  // only strips it for sales_rep/worker, so without this controller-level
+  // gate a driver would see the raw, unredacted costPerBag/workerRate).
+  @ApiOperation({ summary: 'List all bag types; costPerBag/workerRate hidden from sales_rep and worker' })
   @ApiResponse({ status: 200, description: 'List of bag types' })
   @Get()
+  @Roles('owner', 'accountant', 'sales_rep', 'worker')
   findAll(
     @Query('page', new ParsePagePipe()) page: number,
     @Query('limit', new ParseLimitPipe(20)) limit: number,
+    @CurrentUser() user?: ClerkUser,
   ) {
-    return this.bagTypesService.findAll(page, limit);
+    return this.bagTypesService.findAll(page, limit, user?.role);
   }
 
-  @ApiOperation({ summary: 'Get a bag type by ID' })
+  @ApiOperation({ summary: 'Get a bag type by ID; costPerBag/workerRate hidden from sales_rep and worker' })
   @ApiResponse({ status: 200, description: 'Bag type' })
   @ApiResponse({ status: 404, description: 'Not found' })
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.bagTypesService.findOne(id);
+  @Roles('owner', 'accountant', 'sales_rep', 'worker')
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user?: ClerkUser,
+  ) {
+    return this.bagTypesService.findOne(id, user?.role);
   }
 
   @ApiOperation({ summary: 'Create a new bag type' })

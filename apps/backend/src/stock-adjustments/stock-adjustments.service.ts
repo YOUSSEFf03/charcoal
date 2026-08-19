@@ -317,17 +317,37 @@ export class StockAdjustmentsService {
         // BUG-H: only an APPROVED adjustment has already moved stock; editing it adjusts
         // stock by the delta. A PENDING adjustment never touched stock, so editing its
         // target only rewrites the record — no stock mutation until it is approved.
+        //
+        // The delta itself is computed correctly (new vs. old qtyAfter), but applying it
+        // blindly can still drive the LIVE value negative (or, for packed stock, below
+        // reservedQuantity) if consumption happened between the original adjustment and
+        // this edit — resolveAndApply() guards this for create()/approve() by validating
+        // the target BEFORE mutating; update()/remove() previously had no equivalent
+        // check at all. Validate the POST-increment result and roll back (the whole
+        // $transaction throws) if it would corrupt stock.
         if (adj.status === 'approved') {
           if (adj.adjustmentType === 'lot' && adj.lotId) {
-            await tx.stockLot.update({
+            const updatedLot = await tx.stockLot.update({
               where: { id: adj.lotId },
               data: { kgRemaining: { increment: editDelta.toFixed(3) } },
             });
+            if (new Decimal(updatedLot.kgRemaining.toString()).lt(0)) {
+              throw new BadRequestException({
+                error: `Editing this adjustment would drive kgRemaining negative (${updatedLot.kgRemaining}) — other stock activity has happened since the original adjustment`,
+                code: 'CONSTRAINT_VIOLATION',
+              });
+            }
           } else if (adj.adjustmentType === 'packed_stock' && adj.packedStockId) {
-            await tx.packedStock.update({
+            const updatedStock = await tx.packedStock.update({
               where: { id: adj.packedStockId },
               data: { quantity: { increment: editDelta.toNumber() } },
             });
+            if (updatedStock.quantity < 0 || updatedStock.quantity < updatedStock.reservedQuantity) {
+              throw new BadRequestException({
+                error: `Editing this adjustment would drive packed stock quantity (${updatedStock.quantity}) below 0 or below reserved (${updatedStock.reservedQuantity}) — other stock activity has happened since the original adjustment`,
+                code: 'CONSTRAINT_VIOLATION',
+              });
+            }
           }
         }
 
@@ -365,17 +385,34 @@ export class StockAdjustmentsService {
 
       // BUG-H: only an APPROVED adjustment moved stock and therefore needs reversing.
       // A pending/rejected adjustment never applied a delta — deleting it must NOT touch stock.
+      //
+      // Same validation gap as update() (see its comment): reversing a correctly-computed
+      // delta can still drive the live value negative / below reserved if consumption
+      // happened after the original adjustment. Validate the POST-increment result and
+      // roll back rather than silently corrupting stock.
       if (adj.status === 'approved') {
         if (adj.adjustmentType === 'lot' && adj.lotId) {
-          await tx.stockLot.update({
+          const updatedLot = await tx.stockLot.update({
             where: { id: adj.lotId },
             data: { kgRemaining: { increment: inverseDelta.toFixed(3) } },
           });
+          if (new Decimal(updatedLot.kgRemaining.toString()).lt(0)) {
+            throw new BadRequestException({
+              error: `Deleting this adjustment would drive kgRemaining negative (${updatedLot.kgRemaining}) — other stock activity has happened since it was approved`,
+              code: 'CONSTRAINT_VIOLATION',
+            });
+          }
         } else if (adj.adjustmentType === 'packed_stock' && adj.packedStockId) {
-          await tx.packedStock.update({
+          const updatedStock = await tx.packedStock.update({
             where: { id: adj.packedStockId },
             data: { quantity: { increment: inverseDelta.toNumber() } },
           });
+          if (updatedStock.quantity < 0 || updatedStock.quantity < updatedStock.reservedQuantity) {
+            throw new BadRequestException({
+              error: `Deleting this adjustment would drive packed stock quantity (${updatedStock.quantity}) below 0 or below reserved (${updatedStock.reservedQuantity}) — other stock activity has happened since it was approved`,
+              code: 'CONSTRAINT_VIOLATION',
+            });
+          }
         }
       }
 

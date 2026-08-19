@@ -154,4 +154,110 @@ describe('StockLotsService', () => {
       }
     });
   });
+
+  // =========================================================================
+  // findAvailable() — unbounded list of lots with kgRemaining > 0, for the
+  // warehouse-sale KG lot selector (WarehouseSales.tsx). Replaces relying on
+  // findAll()'s paginated limit:100 fetch, which could hide an older lot
+  // with real stock beyond the 100 most-recently-received.
+  //
+  // NOTE on test scope: unlike the packed-stock FIFO draw fix
+  // (PackedStockService.getFifoDraw()), tracing the KG-sale flow confirmed
+  // there is no automatic multi-lot consumption/FIFO-split here — a KG sale
+  // always draws from exactly ONE StockLot, manually chosen by the user, and
+  // StockLot has no reservedQuantity column. So "FIFO ordering" here means
+  // preserving the existing createdAt-desc list order (same as findAll()),
+  // "reserved/zero-available" means a kgRemaining=0 lot is correctly
+  // excluded, and "no duplicate consumption" means no lot appears twice in
+  // the result — this is a read-only listing endpoint, it does not decrement
+  // or reserve anything.
+  // =========================================================================
+
+  describe('findAvailable()', () => {
+    function makeLots(count: number, kgRemainingEach = 100) {
+      return Array.from({ length: count }, (_, i) => ({
+        id: `lot-${i + 1}`,
+        charcoalType: 'BBQ',
+        grade: 'A',
+        kgRemaining: { toString: () => kgRemainingEach.toString() },
+        costPerKg: { toString: () => '0.8100' },
+        supplier: null,
+      }));
+    }
+
+    it('scalability: a lot beyond record #100 is still returned — not capped at any page size', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue(makeLots(150));
+      const result = await service.findAvailable('owner');
+      expect(result).toHaveLength(150);
+      expect(result.find((l: any) => l.id === 'lot-150')).toBeDefined();
+      expect(result.find((l: any) => l.id === 'lot-101')).toBeDefined();
+    });
+
+    it('the query itself is unbounded — no take/skip passed to findMany', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue([]);
+      await service.findAvailable('owner');
+      const args = mockPrisma.stockLot.findMany.mock.calls[0][0];
+      expect(args.take).toBeUndefined();
+      expect(args.skip).toBeUndefined();
+    });
+
+    it('existing order preserved: createdAt descending, same as findAll()', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue([]);
+      await service.findAvailable('owner');
+      const args = mockPrisma.stockLot.findMany.mock.calls[0][0];
+      expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    });
+
+    it('scoped to kgRemaining > 0 — a zero-remaining lot is excluded via the where clause (the "reserved/zero-available" case for StockLot)', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue([]);
+      await service.findAvailable('owner');
+      const args = mockPrisma.stockLot.findMany.mock.calls[0][0];
+      expect(args.where).toEqual({ kgRemaining: { gt: 0 } });
+    });
+
+    it('multiple lots: all are returned, each exactly once — no duplicate rows', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue(makeLots(5));
+      const result = await service.findAvailable('owner');
+      const ids = result.map((l: any) => l.id);
+      expect(ids).toEqual(['lot-1', 'lot-2', 'lot-3', 'lot-4', 'lot-5']);
+      expect(new Set(ids).size).toBe(5);
+    });
+
+    it('small (≤100-lot) case still resolves identically to before — existing behavior unchanged', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue(makeLots(3, 250));
+      const result = await service.findAvailable('owner');
+      expect(result).toHaveLength(3);
+      expect(result.every((l: any) => l.kgRemaining.toString() === '250')).toBe(true);
+    });
+
+    it('CONSTRAINT 12: strips costPerKg for sales_rep, same as findAll()', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue(makeLots(2));
+      const result = await service.findAvailable('sales_rep');
+      for (const lot of result) {
+        expect(lot).not.toHaveProperty('costPerKg');
+      }
+    });
+
+    it('CONSTRAINT 12: strips costPerKg for worker, same as findAll()', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue(makeLots(2));
+      const result = await service.findAvailable('worker');
+      for (const lot of result) {
+        expect(lot).not.toHaveProperty('costPerKg');
+      }
+    });
+
+    it('includes costPerKg for owner, same as findAll()', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue(makeLots(2));
+      const result = await service.findAvailable('owner');
+      for (const lot of result) {
+        expect(lot).toHaveProperty('costPerKg');
+      }
+    });
+
+    it('zero lots with stock returns an empty array without throwing', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue([]);
+      const result = await service.findAvailable('owner');
+      expect(result).toEqual([]);
+    });
+  });
 });

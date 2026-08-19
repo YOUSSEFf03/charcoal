@@ -11,6 +11,7 @@ import {
   useCreateWorkerEarning,
 } from '../hooks/useWorkers'
 import { useWorkerPackingSessionsHistory } from '../hooks/usePacking'
+import { useToast } from '../context/ToastContext'
 import type { Worker, WorkerCostCategory, PaymentMethod } from '../types/api'
 
 type View = 'list' | 'worker'
@@ -71,6 +72,7 @@ function monthKey(d: Date): string {
 
 export default function Employees() {
   const [view, setView] = useState<View>('list')
+  const { showToast } = useToast()
 
   const workersQ      = useWorkers()
   const createWorker   = useCreateWorker()
@@ -306,7 +308,9 @@ export default function Employees() {
                   onClick={e => {
                     e.stopPropagation()
                     if (confirm(`Remove ${w.name} permanently?`)) {
-                      deleteWorker.mutate(w.id)
+                      deleteWorker.mutate(w.id, {
+                        onError: (err: any) => showToast(err?.error ?? 'Failed to remove worker'),
+                      })
                     }
                   }}
                 >
@@ -490,6 +494,7 @@ export default function Employees() {
                       setView('list')
                       setSelectedWorker(null)
                     },
+                    onError: (err: any) => showToast(err?.error ?? 'Failed to remove worker'),
                   })
                 }}
               >

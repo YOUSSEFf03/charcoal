@@ -143,4 +143,141 @@ describe('BagTypesService', () => {
       await expect(service.remove('bt-1')).rejects.toBe(otherError);
     });
   });
+
+  // =========================================================================
+  // CONSTRAINT 12 — costPerBag/workerRate hidden from sales_rep and worker.
+  // Same pattern as StockLotsService.stripCostField() / PackedStockService
+  // .stripLotCostPerKg() — bag-type names/nominal weights stay visible to
+  // every role (no @Roles() restriction on the routes themselves); only the
+  // two cost-bearing fields are stripped per caller role.
+  // =========================================================================
+
+  describe('findOne() — CONSTRAINT 12 cost-field stripping', () => {
+    it('owner: costPerBag and workerRate are present', async () => {
+      const result = await service.findOne('bt-1', 'owner');
+      expect(result).toHaveProperty('costPerBag');
+      expect(result).toHaveProperty('workerRate');
+    });
+
+    it('accountant: costPerBag and workerRate are present', async () => {
+      const result = await service.findOne('bt-1', 'accountant');
+      expect(result).toHaveProperty('costPerBag');
+      expect(result).toHaveProperty('workerRate');
+    });
+
+    it('worker: costPerBag is absent', async () => {
+      const result = await service.findOne('bt-1', 'worker');
+      expect(result).not.toHaveProperty('costPerBag');
+    });
+
+    it('sales_rep: costPerBag is absent', async () => {
+      const result = await service.findOne('bt-1', 'sales_rep');
+      expect(result).not.toHaveProperty('costPerBag');
+    });
+
+    it('worker: workerRate is absent', async () => {
+      const result = await service.findOne('bt-1', 'worker');
+      expect(result).not.toHaveProperty('workerRate');
+    });
+
+    it('sales_rep: workerRate is absent', async () => {
+      const result = await service.findOne('bt-1', 'sales_rep');
+      expect(result).not.toHaveProperty('workerRate');
+    });
+
+    it('worker/sales_rep: non-cost fields (id, name, nominalKg, note) remain unchanged', async () => {
+      const result = await service.findOne('bt-1', 'worker');
+      expect(result).toMatchObject({ id: 'bt-1', name: '5kg bag', nominalKg: '5.000', note: null });
+
+      const result2 = await service.findOne('bt-1', 'sales_rep');
+      expect(result2).toMatchObject({ id: 'bt-1', name: '5kg bag', nominalKg: '5.000', note: null });
+    });
+
+    it('no role specified — costPerBag/workerRate are preserved (not stripped)', async () => {
+      const result = await service.findOne('bt-1');
+      expect(result).toHaveProperty('costPerBag');
+      expect(result).toHaveProperty('workerRate');
+    });
+
+    it('stripping does not mutate the original DB object', async () => {
+      const original = { ...bagType };
+      mockPrisma.bagType.findUnique.mockResolvedValue(original);
+
+      await service.findOne('bt-1', 'worker');
+
+      expect(original).toHaveProperty('costPerBag');
+      expect(original).toHaveProperty('workerRate');
+    });
+  });
+
+  describe('findAll() — CONSTRAINT 12 cost-field stripping', () => {
+    const bagTypes = [
+      { id: 'bt-1', name: '5kg bag', nominalKg: '5.000', costPerBag: '0.5000', workerRate: '0.1000', note: null },
+      { id: 'bt-2', name: '10kg bag', nominalKg: '10.000', costPerBag: '0.9000', workerRate: '0.1500', note: null },
+    ];
+
+    it('owner: every row keeps costPerBag and workerRate', async () => {
+      mockPrisma.$transaction.mockResolvedValue([bagTypes, 2]);
+
+      const result = await service.findAll(1, 20, 'owner');
+
+      for (const bt of result.data) {
+        expect(bt).toHaveProperty('costPerBag');
+        expect(bt).toHaveProperty('workerRate');
+      }
+    });
+
+    it('accountant: every row keeps costPerBag and workerRate', async () => {
+      mockPrisma.$transaction.mockResolvedValue([bagTypes, 2]);
+
+      const result = await service.findAll(1, 20, 'accountant');
+
+      for (const bt of result.data) {
+        expect(bt).toHaveProperty('costPerBag');
+        expect(bt).toHaveProperty('workerRate');
+      }
+    });
+
+    it('worker: every row has costPerBag and workerRate stripped', async () => {
+      mockPrisma.$transaction.mockResolvedValue([bagTypes, 2]);
+
+      const result = await service.findAll(1, 20, 'worker');
+
+      for (const bt of result.data) {
+        expect(bt).not.toHaveProperty('costPerBag');
+        expect(bt).not.toHaveProperty('workerRate');
+      }
+    });
+
+    it('sales_rep: every row has costPerBag and workerRate stripped', async () => {
+      mockPrisma.$transaction.mockResolvedValue([bagTypes, 2]);
+
+      const result = await service.findAll(1, 20, 'sales_rep');
+
+      for (const bt of result.data) {
+        expect(bt).not.toHaveProperty('costPerBag');
+        expect(bt).not.toHaveProperty('workerRate');
+      }
+    });
+
+    it('worker: non-cost fields (id, name, nominalKg) remain unchanged for every row', async () => {
+      mockPrisma.$transaction.mockResolvedValue([bagTypes, 2]);
+
+      const result = await service.findAll(1, 20, 'worker');
+
+      expect(result.data[0]).toMatchObject({ id: 'bt-1', name: '5kg bag', nominalKg: '5.000' });
+      expect(result.data[1]).toMatchObject({ id: 'bt-2', name: '10kg bag', nominalKg: '10.000' });
+    });
+
+    it('no role specified — costPerBag/workerRate are preserved (not stripped)', async () => {
+      mockPrisma.$transaction.mockResolvedValue([bagTypes, 2]);
+
+      const result = await service.findAll(1, 20);
+
+      for (const bt of result.data) {
+        expect(bt).toHaveProperty('costPerBag');
+        expect(bt).toHaveProperty('workerRate');
+      }
+    });
+  });
 });

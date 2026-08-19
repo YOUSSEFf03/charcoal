@@ -668,11 +668,19 @@ export interface Client {
   lastOrderDate: string | null; // ISO date (computed)
   paymentTerms: string | null;
   notes: string | null; // AR
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
   // Computed (CONSTRAINT 15)
   balance: string; // Decimal — Σ invoice.total − Σ payment.amount
   isOverdue: boolean; // CRM alert flag
+  // Computed ranking fields (GET /clients only). totalInvoiced/totalCollected
+  // are accrual/cash totals, NOT profit — this app has no per-client cost
+  // attribution (COGS/bags/delivery/labor aren't tracked per client), so
+  // there is no "most profitable client" figure anywhere in the API.
+  totalInvoiced?: string; // Decimal — Σ invoice.total, excludes draft/cancelled
+  totalCollected?: string; // Decimal — Σ payment.amount
+  orderCount?: number;
 }
 
 export interface CreateClientDto {

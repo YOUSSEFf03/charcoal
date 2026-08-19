@@ -36,9 +36,16 @@ class CreateSupplierPaymentDto {
 export class SuppliersController {
   constructor(private readonly suppliersService: SuppliersService) {}
 
+  // Supplier cost/pricing data (costPerKg, totalSpentUsd, avgPricePerKg,
+  // outstandingUsd) is sensitive the same way it's already treated everywhere
+  // else in this codebase (see reports.controller.ts's supplier-cost redaction
+  // for sales_rep) — restricted to owner/accountant, matching every other
+  // endpoint in this controller, rather than left open to every authenticated
+  // role (the previous, unintentional default when no @Roles() is present).
   @ApiOperation({ summary: 'List all suppliers' })
   @ApiResponse({ status: 200, description: 'Paginated list of suppliers' })
   @Get()
+  @Roles('owner', 'accountant')
   findAll(
     @Query('page', new ParsePagePipe()) page: number,
     @Query('limit', new ParseLimitPipe(20)) limit: number,
@@ -51,6 +58,7 @@ export class SuppliersController {
   @ApiResponse({ status: 200, description: 'Supplier with purchase history' })
   @ApiResponse({ status: 404, description: 'Supplier not found' })
   @Get(':id')
+  @Roles('owner', 'accountant')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.suppliersService.findOne(id);
   }

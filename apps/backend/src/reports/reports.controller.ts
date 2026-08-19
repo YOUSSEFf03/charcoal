@@ -38,11 +38,9 @@ export class ReportsController {
   getProfitLoss(
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
-    @Query('charcoalType') charcoalType?: string,
-    @Query('grade') grade?: string,
     @Query('clientId') clientId?: string,
   ) {
-    return this.reportsService.getProfitLoss({ dateFrom, dateTo, charcoalType, grade, clientId });
+    return this.reportsService.getProfitLoss({ dateFrom, dateTo, clientId });
   }
 
   /**

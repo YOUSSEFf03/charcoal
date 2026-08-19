@@ -1,12 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import Topbar from '../components/layout/Topbar'
 import { useBagTypes } from '../hooks/useBagTypes'
-import { useStockLots, usePackedStockSummary, usePackedStockRecords, useStockExits, useCreateStockExit, useUpdateStockExit, useWalkInSummary } from '../hooks/useWarehouse'
+import { useAvailableStockLots, usePackedStockSummary, useStockExits, useCreateStockExit, useUpdateStockExit, useWalkInSummary, useWarehouseCashSummary, useOnAccountCount, useFifoDraw } from '../hooks/useWarehouse'
 import { useClients } from '../hooks/useClients'
 import { useWorkers } from '../hooks/useWorkers'
 import { useReceivers } from '../hooks/useReceivers'
 import { useCreateWalkInSale } from '../hooks/useWalkInSales'
-import { usePayments } from '../hooks/usePayments'
 import { useRate } from '../context/RateContext'
 import { roundDp } from '../lib/money'
 
@@ -36,15 +35,16 @@ function mkInitials(name: string) {
 export default function WarehouseSales() {
   // Real data from API
   const bagTypesQ = useBagTypes()
-  const lotsQ = useStockLots({ hasStock: true, limit: 100 })
+  // Unbounded (not limit:100) — a KG sale draws from exactly ONE manually-
+  // selected lot, so every lot with stock must be listable in the dropdown,
+  // not just the 100 most recently received. See useAvailableStockLots()'s
+  // doc comment / StockLotsService.findAvailable() for the full reasoning.
+  const lotsQ = useAvailableStockLots()
   const packedSummaryQ = usePackedStockSummary()
-  const clientsQ = useClients({ limit: 100 })
   const workersQ = useWorkers()
   const { receivers: customReceivers } = useReceivers()
   const rateCtx = useRate()
   const rawRate = rateCtx.rawRate
-
-  const packedRecordsQ = usePackedStockRecords({ limit: 200 })
 
   // Log tab date filter — must be declared before exitsQ uses them.
   const thirtyDaysAgoStr = (() => {
@@ -53,12 +53,23 @@ export default function WarehouseSales() {
   const [logDateFrom, setLogDateFrom] = useState(thirtyDaysAgoStr)
   const [logDateTo, setLogDateTo] = useState('')
 
+  // Sales Log pagination — 20/page, matching the Orders/Invoices convention.
+  const SALES_LOG_PAGE_SIZE = 20
+  const [salesLogPage, setSalesLogPage] = useState(1)
+  // Any change to the log's date filter must land back on page 1 — otherwise
+  // a user on page 3 of "last 30 days" could switch filters and see a stale
+  // out-of-range page instead of their new results.
+  useEffect(() => { setSalesLogPage(1) }, [logDateFrom, logDateTo])
+
   const exitsQ = useStockExits({
     exitType: 'walk_in',
     dateFrom: logDateFrom || undefined,
     dateTo: logDateTo || undefined,
-    limit: 100,
+    page: salesLogPage,
+    limit: SALES_LOG_PAGE_SIZE,
   })
+  const exitsTotal = exitsQ.data?.total ?? 0
+  const exitsTotalPages = Math.max(1, Math.ceil(exitsTotal / SALES_LOG_PAGE_SIZE))
 
   const today = new Date().toISOString().slice(0, 10)
   const weekStart = (() => {
@@ -68,20 +79,25 @@ export default function WarehouseSales() {
   const todaySummaryQ = useWalkInSummary({ dateFrom: today, dateTo: today })
   const weekSummaryQ  = useWalkInSummary({ dateFrom: weekStart, dateTo: today })
 
-  // Paginated exits list — kept for the today's log table and cash-box totals only.
+  // Paginated exits list — kept for the today's log table only. Counts
+  // ("Sales today" etc.) use todayExitsQ.data?.total (already unbounded,
+  // straight from the backend's count()), never todayExits.length (capped
+  // at 100 rows — would silently undercount on a busy day).
   const todayExitsQ = useStockExits({ exitType: 'walk_in', dateFrom: today, dateTo: today, limit: 100 })
-  // Registered-client sales record their collected cash as a Payment tied to the
-  // issued invoice, not on the StockExit itself (StockExit.amount stays null there
-  // so it isn't double-counted in the walk-in P&L aggregate). Pull today's payments
-  // too so the cash box reflects money actually collected at the counter.
-  const todayPaymentsQ = usePayments({ dateFrom: today, dateTo: today, limit: 100 })
+  // Cash actually collected today — anonymous StockExit amounts + payments on
+  // warehouse-sale invoices, computed server-side. See
+  // StockExitsService.getWarehouseCashSummary() for the accounting rule.
+  const cashSummaryQ = useWarehouseCashSummary(today)
+  // "On account (no amount)" diagnostic — computed server-side, unbounded.
+  // See StockExitsService.getOnAccountCount() for the exact (unchanged)
+  // business definition this preserves.
+  const onAccountQ = useOnAccountCount(today)
   const createExit = useCreateStockExit()
   const createWalkInSale = useCreateWalkInSale()
+  const fifoDraw = useFifoDraw()
 
   const bagTypes = bagTypesQ.data ?? []
-  const activeLots = lotsQ.data?.data ?? []
-  const apiClients = clientsQ.data?.data ?? []
-  const packedRecords = packedRecordsQ.data ?? []
+  const activeLots = lotsQ.data ?? []
   const totalBagsInStock = (packedSummaryQ.data ?? []).reduce((s, p) => s + p.totalBags, 0)
 
   // Map bagTypeId → AVAILABLE bags in stock (free = totalBags − reservedBags).
@@ -105,6 +121,13 @@ export default function WarehouseSales() {
   const [buyerOpen, setBuyerOpen] = useState(false)
   const [selectedBuyerId, setSelectedBuyerId] = useState<string | null>(null)
   const comboRef = useRef<HTMLDivElement>(null)
+
+  // Server-side search (GET /clients?search=) reactive on buyerInput — a
+  // static limit:100 fetch (newest-first) would silently hide any client
+  // older than the 100 most recently created, making them unselectable and
+  // pushing their sales into the anonymous/walk-in path by mistake.
+  const clientsQ = useClients({ search: buyerInput || undefined, limit: 100 })
+  const apiClients = clientsQ.data?.data ?? []
 
   const [saleDate, setSaleDate] = useState(new Date().toISOString().slice(0, 10))
   const [mode, setMode] = useState<SaleMode>('packed')
@@ -163,8 +186,10 @@ export default function WarehouseSales() {
     meta: `${c.type} · ${c.currency}`,
   }))]
   const q = buyerInput.toLowerCase().trim()
+  // apiClients is already server-filtered by `search` (see clientsQ above) —
+  // only WALK_IN (a synthetic, non-API entry) still needs local filtering.
   const filteredClients = q
-    ? allBuyers.filter(c => c.name.toLowerCase().includes(q) || c.meta.toLowerCase().includes(q))
+    ? allBuyers.filter(c => c.id === 'walk-in' ? (c.name.toLowerCase().includes(q) || c.meta.toLowerCase().includes(q)) : true)
     : allBuyers
   const showAddNew = q.length > 0 && !allBuyers.some(c => c.name.toLowerCase() === q)
   const selectedBuyer = allBuyers.find(c => c.id === selectedBuyerId) ?? null
@@ -292,31 +317,34 @@ export default function WarehouseSales() {
         }
       }
 
-      // FIFO across multiple packed-stock records per bag type.
+      // FIFO across multiple packed-stock records per bag type — computed
+      // server-side (unbounded), not from the capped packedRecords list.
       // BUG-E (P2): only FREE bags (quantity − reservedQuantity) are sellable.
       const bagsPayload: { packedStockId: string; bagTypeId: string; bagTypeName: string; quantity: number; pricePerBag: string; currency: 'USD' | 'LBP' }[] = []
       for (const ln of activeLines) {
         const bt = bagTypes.find(b => b.id === ln.bagTypeId)
-        const recs = packedRecords
-          .filter(r => r.bagTypeId === ln.bagTypeId && (r.quantity - (r.reservedQuantity ?? 0)) > 0)
-          .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-        if (recs.length === 0) { showToast(`No packed stock found for ${bt?.name ?? 'bag'}`); return }
-        let remaining = parseInt(ln.qty)
-        for (const rec of recs) {
-          if (remaining <= 0) break
-          const take = Math.min(rec.quantity - (rec.reservedQuantity ?? 0), remaining)
+        const qty = parseInt(ln.qty)
+        let plan
+        try {
+          plan = await fifoDraw.mutateAsync({ bagTypeId: ln.bagTypeId, quantity: qty })
+        } catch (err: any) {
+          showToast(err?.error ?? 'Failed to check stock availability')
+          return
+        }
+        if (plan.draws.length === 0) { showToast(`No packed stock found for ${bt?.name ?? 'bag'}`); return }
+        for (const d of plan.draws) {
           bagsPayload.push({
-            packedStockId: rec.id,
+            packedStockId: d.packedStockId,
             bagTypeId: ln.bagTypeId,
             bagTypeName: bt?.name ?? 'Bag',
-            quantity: take,
+            quantity: d.quantity,
             pricePerBag: (parseFloat(ln.price) || 0).toFixed(2),
             currency: ln.curr,
           })
-          remaining -= take
         }
-        if (remaining > 0) {
-          showToast(`Only ${parseInt(ln.qty) - remaining} of ${parseInt(ln.qty)} bags available for ${bt?.name ?? 'bag'}`)
+        if (!plan.fulfilled) {
+          const drawn = plan.draws.reduce((s, d) => s + d.quantity, 0)
+          showToast(`Only ${drawn} of ${qty} bags available for ${bt?.name ?? 'bag'}`)
           return
         }
       }
@@ -370,35 +398,41 @@ export default function WarehouseSales() {
       // Workers come from the workers table — their IDs are invalid here.
       const collectedById = allReceivers.find(r => r.name === receiver && r.role === 'receiver')?.id
 
-      // For each bag line find a packed stock record and create an exit
+      // Anonymous packed-bag sale — no invoice, no client; amount recorded
+      // directly on each exit (mirrors the anonymous KG-sale branch below).
+      // This branch is only reachable when isRegisteredClient is false (see
+      // the early return above), so clientId is never sent here.
       for (const ln of activeLines) {
         const qty = parseInt(ln.qty)
-        // Find packed stock records for this bag type sorted by oldest first
-        // BUG-E (P2): draw FIFO from FREE bags only (quantity − reservedQuantity).
-        const records = packedRecords
-          .filter(r => r.bagTypeId === ln.bagTypeId && (r.quantity - (r.reservedQuantity ?? 0)) > 0)
-          .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+        const bt = bagTypes.find(b => b.id === ln.bagTypeId)
+        // FIFO draw plan computed server-side (unbounded, not from the
+        // capped packedRecords list — see PackedStockService.getFifoDraw()).
+        // BUG-E (P2): only FREE bags (quantity − reservedQuantity) are
+        // drawable — same rule the backend already enforces at write time.
+        let plan
+        try {
+          plan = await fifoDraw.mutateAsync({ bagTypeId: ln.bagTypeId, quantity: qty })
+        } catch (err: any) {
+          showToast(err?.error ?? 'Failed to check stock availability')
+          return
+        }
 
         let remaining = qty
-        for (const rec of records) {
-          if (remaining <= 0) break
-          const take = Math.min(rec.quantity - (rec.reservedQuantity ?? 0), remaining)
+        for (const d of plan.draws) {
           try {
-            const bt = bagTypes.find(b => b.id === ln.bagTypeId)
-            const lineAmt = bt ? roundDp(take * (parseFloat(ln.price) || 0) * (ln.curr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1), 2) : 0
+            const lineAmt = bt ? roundDp(d.quantity * (parseFloat(ln.price) || 0) * (ln.curr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1), 2) : 0
             await createExit.mutateAsync({
-              packedStockId: rec.id,
+              packedStockId: d.packedStockId,
               bagTypeId: ln.bagTypeId,
-              quantity: take,
+              quantity: d.quantity,
               exitType: 'walk_in',
               date: saleDate,
               recipient: buyerName,
               reason: notes || undefined,
-              ...(selectedBuyerId && selectedBuyerId !== 'walk-in' ? { clientId: selectedBuyerId } : {}),
-              ...(lineAmt > 0 && selectedBuyerId && selectedBuyerId !== 'walk-in' ? { amount: lineAmt } : {}),
+              ...(lineAmt > 0 ? { amount: lineAmt, currency: ln.curr } : {}),
               ...(collectedById ? { collectedById } : receiver ? { collectedBy: receiver } : {}),
             })
-            remaining -= take
+            remaining -= d.quantity
           } catch (err: any) {
             showToast(err?.error ?? 'Failed to record sale')
             return
@@ -481,8 +515,11 @@ export default function WarehouseSales() {
     // NOTE: registered-client PACKED sales are handled atomically above via
     // POST /walk-in-sales (stock exit + issued invoice + payment, in client currency).
     // The old block here created a Payment with NO invoice and hardcoded USD — the
-    // BUG-3/BUG-4 root cause — and has been removed. By-kg and anonymous sales record
-    // the amount on the stock exit itself; no standalone payment is created.
+    // BUG-3/BUG-4 root cause — and has been removed. Anonymous packed-bag and anonymous
+    // by-kg sales both record the amount directly on the stock exit itself (previously
+    // the packed-bag branch's amount/currency were incorrectly gated behind a registered
+    // buyer, which that branch can never have — fixed above); no standalone payment is
+    // created for either.
 
     showToast(`Sale recorded · $${totalUSD.toFixed(2)} from ${buyerName}`)
     setBuyerInput(''); setSelectedBuyerId(null)
@@ -492,22 +529,16 @@ export default function WarehouseSales() {
     setPackedLines([{ id: Date.now(), bagTypeId: bagTypes[0]?.id ?? '', qty: '', price: '', curr: 'USD' }])
   }
 
-  // Cash box — derived from today's real exit data
+  // Cash box — today's log list, kept only for the "Today's sales" table below.
   const todayExits = todayExitsQ.data?.data ?? []
-  const todayPayments = todayPaymentsQ.data?.data ?? []
-  // Clients who paid something today — an exit tied to one of these was collected,
-  // even though its own StockExit.amount is null (the cash lives on the Payment row).
-  const paidClientIds = new Set(todayPayments.map(p => p.clientId))
-  const paymentsUsd = roundDp(
-    todayPayments.reduce((s, p) => {
-      const amt = parseFloat(p.amount) || 0
-      return s + (p.currency === 'LBP' ? (rawRate > 0 ? amt / rawRate : 0) : amt)
-    }, 0),
-    2,
-  )
-  const exitsAmountUsd = roundDp(todayExits.reduce((s, e) => s + (e.amount ? parseFloat(e.amount) : 0), 0), 2)
-  const cashBoxCollected = roundDp(exitsAmountUsd + paymentsUsd, 2)
-  const cashBoxOnAccountCount = todayExits.filter((e: any) => e.clientId && !e.amount && !paidClientIds.has(e.clientId)).length
+  const todayExitsTotal = todayExitsQ.data?.total ?? 0
+  // "On account (no amount)" — server-computed, unbounded. NOT a client-side
+  // filter over the capped todayExits/todayPayments lists.
+  const cashBoxOnAccountCount = onAccountQ.data?.onAccountCount ?? 0
+  // Total collected — server-computed (anonymous StockExit amounts + payments
+  // on warehouse-sale invoices only). NOT a client-side reduce over a capped
+  // list, and NOT invoice totals.
+  const cashBoxCollected = parseFloat(cashSummaryQ.data?.cashCollected ?? '0')
   const cashBoxTotal2 = cashBoxCollected
 
   return (
@@ -516,9 +547,6 @@ export default function WarehouseSales() {
         <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
           Rate: 89,550 LL/$
         </span>
-        <button className="btn">
-          <i className="ti ti-history" style={{ fontSize: 15 }} /> Full history
-        </button>
       </Topbar>
 
 
@@ -933,25 +961,29 @@ export default function WarehouseSales() {
                 <div className="cb-row">
                   <span className="cb-label">Amount recorded</span>
                   <span className="cb-val green">
-                    {todayExitsQ.isLoading ? '—' : `$${cashBoxCollected.toFixed(2)}`}
+                    {cashSummaryQ.isLoading ? '—' : cashSummaryQ.isError ? <span style={{ color: 'var(--red)' }}>error</span> : `$${cashBoxCollected.toFixed(2)}`}
                   </span>
                 </div>
                 <div className="cb-row">
                   <span className="cb-label">Sales today</span>
                   <span className="cb-val">
-                    {todayExitsQ.isLoading ? '—' : `${todayExits.length} exit${todayExits.length !== 1 ? 's' : ''}`}
+                    {todayExitsQ.isLoading ? '—' : `${todayExitsTotal} exit${todayExitsTotal !== 1 ? 's' : ''}`}
                   </span>
                 </div>
                 <div className="cb-row">
                   <span className="cb-label">On account (no amount)</span>
                   <span className="cb-val amber">
-                    {todayExitsQ.isLoading ? '—' : `${cashBoxOnAccountCount} sale${cashBoxOnAccountCount !== 1 ? 's' : ''}`}
+                    {onAccountQ.isLoading ? '—' : `${cashBoxOnAccountCount} sale${cashBoxOnAccountCount !== 1 ? 's' : ''}`}
                   </span>
                 </div>
                 <div className="cb-total">
                   <span className="cb-total-label">Total collected today</span>
                   <span className="cb-total-val">
-                    {todayExitsQ.isLoading ? '—' : `$${cashBoxTotal2.toFixed(2)}`}
+                    {cashSummaryQ.isLoading
+                      ? '—'
+                      : cashSummaryQ.isError
+                        ? <span style={{ color: 'var(--red)', cursor: 'pointer' }} onClick={() => cashSummaryQ.refetch()} title="Failed to load — click to retry">error · retry</span>
+                        : `$${cashBoxTotal2.toFixed(2)}`}
                   </span>
                 </div>
               </div>
@@ -959,7 +991,7 @@ export default function WarehouseSales() {
               <div className="card" style={{ marginTop: 14 }}>
                 <div className="card-head">
                   <div className="card-title"><i className="ti ti-list" /> Today's sales</div>
-                  <span className="badge badge-gray">{todayExits.length} sales</span>
+                  <span className="badge badge-gray">{todayExitsTotal} sales</span>
                 </div>
                 {todayExitsQ.isLoading && <div className="empty" style={{ fontSize: 12 }}>Loading…</div>}
                 {!todayExitsQ.isLoading && todayExits.length === 0 && (
@@ -1111,6 +1143,19 @@ export default function WarehouseSales() {
                 })}
               </tbody>
             </table>
+            {!exitsQ.isLoading && (exitsQ.data?.data ?? []).length > 0 && exitsTotalPages > 1 && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
+                <button className="btn" disabled={salesLogPage <= 1} onClick={() => setSalesLogPage(p => Math.max(1, p - 1))}>
+                  <i className="ti ti-chevron-left" style={{ fontSize: 14 }} /> Previous
+                </button>
+                <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                  Page {salesLogPage} of {exitsTotalPages}
+                </span>
+                <button className="btn" disabled={salesLogPage >= exitsTotalPages} onClick={() => setSalesLogPage(p => Math.min(exitsTotalPages, p + 1))}>
+                  Next <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                </button>
+              </div>
+            )}
           </div>
         )}
 

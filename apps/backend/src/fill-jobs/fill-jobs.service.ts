@@ -72,6 +72,96 @@ export class FillJobsService {
   }
 
   /**
+   * Year-to-date fill-client KPI summary — bags filled, waste, revenue, cost,
+   * profit, margin — for the current calendar year, unbounded per client.
+   *
+   * This is a direct server-side port of FillClientDetail.tsx's own
+   * `ytdStats` useMemo (previously computed client-side from two
+   * limit:100-capped queries, which silently undercounted for any client
+   * with more than 100 fill jobs or pickups within the year). Same formulas,
+   * same field names — only the source is now unbounded.
+   *
+   * Cost/bags/waste come from FillJob rows for this client dated this year:
+   *   - totalCharcoalKg/totalBags/totalCost are scalar Decimal/Int columns.
+   *   - totalOutputKg is NOT a stored column — bagOutputs is a JSON array
+   *     (one entry per bag spec produced) — summing size×qty per row can't
+   *     be done as a plain SQL aggregate without reimplementing that JSON
+   *     shape in raw SQL, so this fetches bagOutputs (small per-row JSON,
+   *     bounded to ONE client's fill jobs this year — the same "safe
+   *     unbounded per-entity history" scale profile getPriceStats() above
+   *     and getClientWarehouseSummary() (StockExitsService) already use) and
+   *     sums it the same way the frontend's loop always has.
+   *
+   * Revenue comes from StockExit(exitType='client_bags_fill', clientId,
+   * amount NOT NULL) — the pickup-confirmation rows (see
+   * ConfirmFillPickup / POST /stock-exits). FillJobsService.create() itself
+   * also writes a client_bags_fill StockExit per fill job (Step 7 above,
+   * charcoal consumption bookkeeping) but that row never has `amount` set,
+   * so the amount:{not:null} filter excludes it here — the exact same
+   * exclusion the frontend's `pk.amount ? parseFloat(pk.amount) : 0` already
+   * relied on.
+   *
+   * profitYTD/marginYTD are then derived exactly as the frontend always did:
+   * profit = revenue − cost; margin = profit / revenue × 100 (0 when there's
+   * no revenue yet, to avoid divide-by-zero — same guard as before).
+   */
+  async getYtdSummary(clientId: string): Promise<{
+    bagsYTD: number;
+    wasteKg: string;
+    wastePct: number;
+    revenueYTD: string;
+    costYTD: string;
+    profitYTD: string;
+    marginYTD: number;
+    hasData: boolean;
+  }> {
+    const yearStart = new Date(new Date().getFullYear(), 0, 1);
+
+    const [fillJobRows, pickupAgg] = await Promise.all([
+      this.prisma.fillJob.findMany({
+        where: { clientId, date: { gte: yearStart } },
+        select: { totalCharcoalKg: true, totalBags: true, totalCost: true, bagOutputs: true },
+      }),
+      this.prisma.stockExit.aggregate({
+        where: { clientId, exitType: 'client_bags_fill', date: { gte: yearStart }, amount: { not: null } },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    let totalCharcoalKg = new Decimal(0);
+    let totalOutputKg = new Decimal(0);
+    let costYTD = new Decimal(0);
+    let bagsYTD = 0;
+
+    for (const fj of fillJobRows) {
+      totalCharcoalKg = totalCharcoalKg.plus(fj.totalCharcoalKg.toString());
+      bagsYTD += fj.totalBags;
+      costYTD = costYTD.plus(fj.totalCost.toString());
+      const outputs = (fj.bagOutputs as unknown as { size: number; qty: number }[]) ?? [];
+      for (const out of outputs) {
+        totalOutputKg = totalOutputKg.plus(new Decimal(out.size).mul(out.qty));
+      }
+    }
+
+    const revenueYTD = new Decimal(pickupAgg._sum.amount?.toString() ?? '0');
+    const wasteKg = Decimal.max(0, totalCharcoalKg.minus(totalOutputKg));
+    const wastePct = totalCharcoalKg.gt(0) ? wasteKg.div(totalCharcoalKg).mul(100) : new Decimal(0);
+    const profitYTD = revenueYTD.minus(costYTD);
+    const marginYTD = revenueYTD.gt(0) ? profitYTD.div(revenueYTD).mul(100) : new Decimal(0);
+
+    return {
+      bagsYTD,
+      wasteKg: wasteKg.toFixed(3),
+      wastePct: wastePct.toNumber(),
+      revenueYTD: revenueYTD.toFixed(2),
+      costYTD: costYTD.toFixed(2),
+      profitYTD: profitYTD.toFixed(2),
+      marginYTD: marginYTD.toNumber(),
+      hasData: fillJobRows.length > 0,
+    };
+  }
+
+  /**
    * Create a fill job in a single atomic transaction.
    *
    * Steps:

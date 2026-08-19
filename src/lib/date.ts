@@ -26,6 +26,23 @@ export function currentMonthToDateRange(): { dateFrom: string; dateTo: string } 
 }
 
 /**
+ * Current calendar week, local time — "most recent Sunday" through "today",
+ * both as "YYYY-MM-DD". Sunday-start matches the existing week convention
+ * already used for the "This week" KPI on WarehouseSales.tsx
+ * (`d.setDate(d.getDate() - d.getDay())`); this just pairs that same
+ * boundary math with toDateOnlyString() instead of toISOString(), so it
+ * doesn't inherit that call site's UTC-rollback risk after local midnight.
+ */
+export function currentWeekToDateRange(): { dateFrom: string; dateTo: string } {
+  const now = new Date()
+  const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay())
+  return {
+    dateFrom: toDateOnlyString(startOfWeek),
+    dateTo: toDateOnlyString(now),
+  }
+}
+
+/**
  * Format an ISO date string as "3 Aug 2026" (en-GB — day-month-year, the
  * convention used throughout the app and regionally correct for a
  * Lebanon-based business).

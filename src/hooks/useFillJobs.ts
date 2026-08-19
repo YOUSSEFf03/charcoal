@@ -77,6 +77,38 @@ export function useFillJobPriceStats(clientId: string) {
   })
 }
 
+/**
+ * Year-to-date fill-client KPI summary — bags filled, waste, revenue, cost,
+ * profit, margin — computed server-side, unbounded per client (not capped
+ * at limit:100 like the raw fill-jobs/pickups lists). See
+ * FillJobsService.getYtdSummary()'s doc comment for the exact formulas
+ * (a direct port of what FillClientDetail.tsx used to compute client-side).
+ * GET /fill-jobs/ytd-summary
+ */
+export interface FillJobYtdSummary {
+  bagsYTD: number
+  wasteKg: string
+  wastePct: number
+  revenueYTD: string
+  costYTD: string
+  profitYTD: string
+  marginYTD: number
+  hasData: boolean
+}
+
+export function useFillJobYtdSummary(clientId: string) {
+  return useQuery({
+    queryKey: ['fill-jobs', 'ytd-summary', clientId],
+    queryFn: async () => {
+      const res = await api.get<FillJobYtdSummary>('/fill-jobs/ytd-summary', {
+        params: { clientId },
+      })
+      return res.data
+    },
+    enabled: Boolean(clientId),
+  })
+}
+
 export function useCreateFillJob() {
   const qc = useQueryClient()
   return useMutation({

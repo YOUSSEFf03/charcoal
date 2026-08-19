@@ -12,14 +12,33 @@ import { UpdateBagTypeDto } from './dto/update-bag-type.dto';
 export class BagTypesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  // ---------------------------------------------------------------------------
+  // Cost-field helper (CONSTRAINT 12)
+  // ---------------------------------------------------------------------------
+
+  private stripCostFields(bagType: any): any {
+    const b = { ...bagType };
+    delete b.costPerBag;
+    delete b.workerRate;
+    return b;
+  }
+
+  private maybeStrip(data: any, role?: string): any {
+    if (role === 'sales_rep' || role === 'worker') return this.stripCostFields(data);
+    return data;
+  }
+
   /**
    * Retrieve a paginated list of bag types.
    *
    * @param page - Page number (1-indexed)
    * @param limit - Number of items per page
+   * @param userRole - Role used for CONSTRAINT 12 stripping (costPerBag/workerRate
+   *   hidden from sales_rep/worker — see StockLotsService/PackedStockService for
+   *   the same pattern applied to their own cost fields)
    * @returns Paginated bag type list with data, total count, page, and limit
    */
-  async findAll(page: number, limit: number) {
+  async findAll(page: number, limit: number, userRole?: string) {
     const skip = (page - 1) * limit;
     const [data, total] = await this.prisma.$transaction([
       this.prisma.bagType.findMany({
@@ -29,22 +48,23 @@ export class BagTypesService {
       }),
       this.prisma.bagType.count(),
     ]);
-    return { data, total, page, limit };
+    return { data: data.map((bagType) => this.maybeStrip(bagType, userRole)), total, page, limit };
   }
 
   /**
    * Retrieve a bag type by ID.
    *
    * @param id - Bag type UUID
+   * @param userRole - Role used for CONSTRAINT 12 stripping (see findAll())
    * @returns BagType object
    * @throws NotFoundException - If bag type with given ID does not exist
    */
-  async findOne(id: string) {
+  async findOne(id: string, userRole?: string) {
     const bagType = await this.prisma.bagType.findUnique({ where: { id } });
     if (!bagType) {
       throw new NotFoundException({ error: 'Bag type not found', code: 'NOT_FOUND' });
     }
-    return bagType;
+    return this.maybeStrip(bagType, userRole);
   }
 
   /**

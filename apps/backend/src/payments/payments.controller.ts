@@ -32,8 +32,10 @@ export class PaymentsController {
     @Query('invoiceId') invoiceId?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
   ) {
-    return this.paymentsService.findAll(page, limit, clientId, invoiceId, dateFrom, dateTo);
+    return this.paymentsService.findAll(page, limit, clientId, invoiceId, dateFrom, dateTo, sortBy, sortOrder);
   }
 
   @ApiOperation({ summary: 'Get a payment by ID' })

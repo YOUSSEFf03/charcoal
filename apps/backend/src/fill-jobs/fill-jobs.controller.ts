@@ -40,6 +40,14 @@ export class FillJobsController {
     return this.fillJobsService.getPriceStats(clientId);
   }
 
+  @ApiOperation({ summary: 'Year-to-date fill-client KPI summary (bags, waste, revenue, cost, profit, margin), unbounded per client' })
+  @ApiResponse({ status: 200, description: 'YTD summary' })
+  @Get('ytd-summary')
+  @Roles('owner', 'accountant', 'sales_rep')
+  getYtdSummary(@Query('clientId', ParseUUIDPipe) clientId: string) {
+    return this.fillJobsService.getYtdSummary(clientId);
+  }
+
   @ApiOperation({ summary: 'Create a fill job (auto-calculates fill price from stock lot cost)' })
   @ApiResponse({ status: 201, description: 'Created' })
   @ApiResponse({ status: 400, description: 'Bad request' })

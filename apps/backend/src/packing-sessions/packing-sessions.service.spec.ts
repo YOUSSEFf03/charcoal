@@ -43,6 +43,7 @@ describe('PackingSessionsService', () => {
   // Helpers — makeTx mirrors what the service calls inside the transaction
   function makeTx(overrides: Record<string, any> = {}) {
     return {
+      $queryRaw: fn().mockResolvedValue([]),
       user: { findUnique: fn(), ...overrides.user },
       // Default: resolves for updatePackingSession()'s worker-existence check (only
       // reached when a non-empty workerEntityId is being set). Individual tests that

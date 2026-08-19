@@ -126,7 +126,18 @@ export default function Payment() {
               <select
                 className="input"
                 value={selectedClientId}
-                onChange={e => { setSelectedClientId(e.target.value); setSelectedInvoiceId('') }}
+                onChange={e => {
+                  setSelectedClientId(e.target.value)
+                  setSelectedInvoiceId('')
+                  // Default the currency toggle to the newly selected client's own
+                  // currency instead of leaving it on whatever was last clicked —
+                  // the previous behavior (always defaulting/staying on USD) let an
+                  // operator log a payment for an LBP client without noticing the
+                  // toggle still said USD, corrupting that client's balance by
+                  // orders of magnitude once submitted.
+                  const client = clients.find(c => c.id === e.target.value)
+                  if (client) setCurr(client.currency)
+                }}
               >
                 <option value="">Select a client…</option>
                 {clients.map(c => (

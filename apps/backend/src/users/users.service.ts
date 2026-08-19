@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { clerkClient } from '@clerk/clerk-sdk-node';
 import { Role } from '@prisma/client';
+import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -74,6 +75,15 @@ export class UsersService {
   /**
    * Delete a local user (clerkId starts with 'local_').
    * Refuses to delete Clerk-linked users to prevent auth breakage.
+   *
+   * UserAccount and AccountEntry cascade-delete with the User row
+   * (schema.prisma: onDelete: Cascade on both). A receiver with an
+   * outstanding balance must never be deleted through this path — doing so
+   * would silently and irrecoverably destroy their cash balance and their
+   * entire AccountEntry audit trail, with no way to recover either. Same
+   * balance-read pattern (userAccount.findUnique by userId, compared via
+   * Decimal) already used by BalanceQueryService.getReceiverBalance() and
+   * LedgerWriteService's upsert calls.
    */
   async deleteLocal(id: string) {
     const user = await this.findOne(id);
@@ -83,6 +93,15 @@ export class UsersService {
         code: 'NOT_LOCAL_USER',
       });
     }
+
+    const account = await this.prisma.userAccount.findUnique({ where: { userId: id } });
+    if (account && !new Decimal(account.balance.toString()).isZero()) {
+      throw new BadRequestException({
+        error: `Cannot delete this receiver — they have an outstanding balance of $${account.balance.toString()}. Settle or transfer the balance before deleting.`,
+        code: 'OUTSTANDING_BALANCE',
+      });
+    }
+
     return this.prisma.user.delete({ where: { id } });
   }
 

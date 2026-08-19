@@ -73,19 +73,210 @@ describe('InvoicesService', () => {
   });
 
   // =========================================================================
+  // findAll() — paginated, filterable invoice listing. Previously had ZERO
+  // test coverage despite being the endpoint the Invoices page depends on for
+  // scalability — see the Invoices pagination/scalability audit.
+  // =========================================================================
+
+  describe('findAll()', () => {
+    beforeEach(() => {
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.invoice.count.mockResolvedValue(0);
+      mockPrisma.$transaction.mockImplementation((ops: any) => Promise.all(ops));
+    });
+
+    it('pagination: page 1 with limit 20 requests skip 0, take 20', async () => {
+      await service.findAll(1, 20);
+
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0, take: 20 }),
+      );
+    });
+
+    it('pagination: page 2 with limit 20 skips the first 20 rows', async () => {
+      await service.findAll(2, 20);
+
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 20, take: 20 }),
+      );
+    });
+
+    it('sorting: orders by createdAt descending (newest first) — the field now backed by invoices_createdAt_idx', async () => {
+      await service.findAll(1, 20);
+
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'desc' } }),
+      );
+    });
+
+    it('sortBy=date maps to issuedAt, honoring sortOrder', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, undefined, 'date', 'asc');
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { issuedAt: 'asc' } }),
+      );
+    });
+
+    it('sortBy=amount maps to the total column', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, undefined, 'amount', 'desc');
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { total: 'desc' } }),
+      );
+    });
+
+    it('sortBy=paid maps to the paidAmount column', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, undefined, 'paid', 'asc');
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { paidAmount: 'asc' } }),
+      );
+    });
+
+    it('sortBy=status maps to the status column', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, undefined, 'status', 'asc');
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { status: 'asc' } }),
+      );
+    });
+
+    it('an unrecognized sortBy value falls back to the default (createdAt desc) instead of reaching Prisma unfiltered', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, undefined, 'not-a-real-column' as any);
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'desc' } }),
+      );
+    });
+
+    it('omitting sortOrder defaults to desc, not asc', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, undefined, 'amount');
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { total: 'desc' } }),
+      );
+    });
+
+    it('"Due" (total − paidAmount) is intentionally not a sortable column — it is a computed value, not a stored one', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, undefined, 'due' as any);
+      // Falls back to the default rather than silently approximating a sort
+      // Prisma has no real column for.
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'desc' } }),
+      );
+    });
+
+    it('status filter: adds status to the where clause', async () => {
+      await service.findAll(1, 20, undefined, 'issued');
+
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { status: 'issued' } }),
+      );
+    });
+
+    it('"overdue" is a virtual status: issued/partially_paid + dueDate in the past, not a literal status column value', async () => {
+      await service.findAll(1, 20, undefined, 'overdue');
+
+      const call = mockPrisma.invoice.findMany.mock.calls[0][0];
+      expect(call.where.status).toEqual({ in: ['issued', 'partially_paid'] });
+      expect(call.where.dueDate.lt).toBeInstanceOf(Date);
+    });
+
+    it('clientId filter: adds clientId to the where clause', async () => {
+      await service.findAll(1, 20, 'client-42');
+
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { clientId: 'client-42' } }),
+      );
+    });
+
+    it('search filter: adds a case-insensitive client-name contains clause', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, 'acme');
+
+      expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { client: { name: { contains: 'acme', mode: 'insensitive' } } },
+        }),
+      );
+    });
+
+    it('dateFrom/dateTo filter: adds a createdAt range to the where clause', async () => {
+      await service.findAll(1, 20, undefined, undefined, '2026-01-01', '2026-01-31');
+
+      const call = mockPrisma.invoice.findMany.mock.calls[0][0];
+      expect(call.where.createdAt.gte).toEqual(new Date('2026-01-01'));
+      expect(call.where.createdAt.lte).toEqual(new Date('2026-01-31'));
+    });
+
+    it('combined filters: clientId + status + dateFrom/dateTo + search all apply together', async () => {
+      const data = [{ id: 'inv-1' }];
+      mockPrisma.invoice.findMany.mockResolvedValue(data);
+      mockPrisma.invoice.count.mockResolvedValue(1);
+
+      const result = await service.findAll(1, 20, 'client-42', 'draft', '2026-01-01', '2026-01-31', 'acme');
+
+      const call = mockPrisma.invoice.findMany.mock.calls[0][0];
+      expect(call.where.clientId).toBe('client-42');
+      expect(call.where.status).toBe('draft');
+      expect(call.where.client).toEqual({ name: { contains: 'acme', mode: 'insensitive' } });
+      expect(call.where.createdAt.gte).toEqual(new Date('2026-01-01'));
+      expect(call.where.createdAt.lte).toEqual(new Date('2026-01-31'));
+      expect(result).toEqual({ data, total: 1, page: 1, limit: 20 });
+    });
+
+    it('empty results: returns an empty data array with total 0', async () => {
+      const result = await service.findAll(1, 20);
+
+      expect(result).toEqual({ data: [], total: 0, page: 1, limit: 20 });
+    });
+
+    it('total count reflects the count() result, not data.length', async () => {
+      mockPrisma.invoice.findMany.mockResolvedValue([{ id: 'inv-1' }, { id: 'inv-2' }]);
+      mockPrisma.invoice.count.mockResolvedValue(57); // far more rows exist than this one page returns
+
+      const result = await service.findAll(1, 20);
+
+      expect(result.total).toBe(57);
+      expect(result.data).toHaveLength(2);
+    });
+
+    it('count() always runs with the SAME where filter as findMany() — total reflects the filtered set, not the whole table', async () => {
+      await service.findAll(1, 20, undefined, 'issued');
+
+      expect(mockPrisma.invoice.count).toHaveBeenCalledWith({ where: { status: 'issued' } });
+    });
+
+    it('list query stays lightweight: only client (id/name) is included — no payments, allocations, or lines expansion on the list endpoint', async () => {
+      await service.findAll(1, 20);
+
+      const call = mockPrisma.invoice.findMany.mock.calls[0][0];
+      expect(call.include).toEqual({ client: { select: { id: true, name: true } } });
+    });
+  });
+
+  // =========================================================================
   // cancel() — status transition guards
   // =========================================================================
 
   describe('cancel()', () => {
-    it('throws BadRequestException INVALID_TRANSITION when invoice is paid', async () => {
-      const invoiceId = 'inv-uuid-1';
-
-      const tx = {
+    // Shared tx factory — every cancel() test now needs paymentAllocation.findFirst
+    // and clientOrder.findUnique stubs (the new PAYMENT_EXISTS/DELIVERED_ORDER checks),
+    // defaulting to "nothing found" / "still draft" so pre-existing behavior is
+    // unaffected unless a test explicitly overrides one to simulate a payment/
+    // delivered order. clientOrder.findUnique (not shipment.findFirst) is the
+    // DELIVERED_ORDER signal — see the fix's doc comment in invoices.service.ts:
+    // ClientOrder.status is set by OrdersService.markDelivered() regardless of
+    // whether delivery went through the shipment path or the direct (no-shipment)
+    // path, whereas a delivered Shipment row only ever exists for the former.
+    function makeCancelTx() {
+      return {
         invoice: {
           findUnique: jest.fn() as any,
           update: jest.fn() as any,
         },
+        paymentAllocation: { findFirst: (jest.fn() as any).mockResolvedValue(null) },
+        clientOrder: { findUnique: (jest.fn() as any).mockResolvedValue({ status: 'draft' }) },
       };
+    }
+
+    it('throws BadRequestException INVALID_TRANSITION when invoice is paid', async () => {
+      const invoiceId = 'inv-uuid-1';
+
+      const tx = makeCancelTx();
       tx.invoice.findUnique.mockResolvedValue({
         id: invoiceId,
         status: 'paid',
@@ -114,12 +305,7 @@ describe('InvoicesService', () => {
     it('throws BadRequestException INVALID_TRANSITION when invoice is already cancelled', async () => {
       const invoiceId = 'inv-uuid-2';
 
-      const tx = {
-        invoice: {
-          findUnique: jest.fn() as any,
-          update: jest.fn() as any,
-        },
-      };
+      const tx = makeCancelTx();
       tx.invoice.findUnique.mockResolvedValue({
         id: invoiceId,
         status: 'cancelled',
@@ -142,22 +328,19 @@ describe('InvoicesService', () => {
       });
     });
 
-    it('succeeds and calls invoice.update with status=cancelled when invoice is issued', async () => {
+    it('succeeds and calls invoice.update with status=cancelled when invoice is issued with no payments and no delivered order', async () => {
       const invoiceId = 'inv-uuid-3';
 
-      const tx = {
-        invoice: {
-          findUnique: jest.fn() as any,
-          update: jest.fn() as any,
-        },
-      };
+      const tx = makeCancelTx();
       tx.invoice.findUnique.mockResolvedValue({
         id: invoiceId,
         status: 'issued',
+        source: 'WAREHOUSE_SALE',
+        orderId: null,
       });
       tx.invoice.update.mockResolvedValue({ id: invoiceId, status: 'cancelled' });
 
-      // validateCancellable: issued is valid, so do nothing
+      // validateCancellable: issued, no payments, no delivered order — valid, so do nothing
       mockCalculator.validateCancellable.mockReturnValue(undefined);
 
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
@@ -170,6 +353,239 @@ describe('InvoicesService', () => {
           data: { status: 'cancelled' },
         }),
       );
+      expect(result).toMatchObject({ status: 'cancelled' });
+    });
+
+    // =======================================================================
+    // Invoice Cancellation Accounting/Reconciliation fix — PAYMENT_EXISTS and
+    // DELIVERED_ORDER guards on top of the pre-existing INVALID_TRANSITION one.
+    // =======================================================================
+
+    it('PAYMENT_EXISTS: rejects cancelling a partially_paid invoice — a PaymentAllocation row exists', async () => {
+      const invoiceId = 'inv-uuid-partial';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'partially_paid',
+        source: 'WAREHOUSE_SALE',
+        orderId: null,
+      });
+      tx.paymentAllocation.findFirst.mockResolvedValue({ id: 'alloc-1' });
+
+      mockCalculator.validateCancellable.mockImplementation((inv: any) => {
+        if (inv.hasPayments) {
+          throw new BadRequestException({
+            message: 'Invoice cannot be cancelled because a payment has already been applied to it',
+            error: 'Invoice cannot be cancelled because a payment has already been applied to it',
+            code: 'PAYMENT_EXISTS',
+          });
+        }
+      });
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.cancel(invoiceId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'PAYMENT_EXISTS' }),
+      });
+
+      // Looked for an allocation on THIS invoice, scoped correctly.
+      expect(tx.paymentAllocation.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { invoiceId } }),
+      );
+      // Nothing written.
+      expect(tx.invoice.update).not.toHaveBeenCalled();
+    });
+
+    it('PAYMENT_EXISTS: rejects even an issued (not yet partially_paid) invoice if any PaymentAllocation exists', async () => {
+      const invoiceId = 'inv-uuid-issued-with-alloc';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'WAREHOUSE_SALE',
+        orderId: null,
+      });
+      tx.paymentAllocation.findFirst.mockResolvedValue({ id: 'alloc-2' });
+
+      mockCalculator.validateCancellable.mockImplementation((inv: any) => {
+        if (inv.hasPayments) {
+          throw new BadRequestException({ code: 'PAYMENT_EXISTS' } as any);
+        }
+      });
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.cancel(invoiceId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'PAYMENT_EXISTS' }),
+      });
+      expect(tx.invoice.update).not.toHaveBeenCalled();
+    });
+
+    it('zero-payment invoice: cancellation still succeeds when no PaymentAllocation exists', async () => {
+      const invoiceId = 'inv-uuid-zero-payment';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'WAREHOUSE_SALE',
+        orderId: null,
+      });
+      tx.invoice.update.mockResolvedValue({ id: invoiceId, status: 'cancelled' });
+      mockCalculator.validateCancellable.mockReturnValue(undefined);
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      const result = await service.cancel(invoiceId);
+
+      expect(mockCalculator.validateCancellable).toHaveBeenCalledWith(
+        expect.objectContaining({ hasPayments: false }),
+      );
+      expect(tx.invoice.update).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ status: 'cancelled' });
+    });
+
+    it('DELIVERED_ORDER: rejects cancelling an ORDER invoice whose order was delivered via the SHIPMENT path', async () => {
+      const invoiceId = 'inv-uuid-order-delivered';
+      const orderId = 'order-uuid-1';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'ORDER',
+        orderId,
+      });
+      tx.clientOrder.findUnique.mockResolvedValue({ status: 'delivered' });
+
+      mockCalculator.validateCancellable.mockImplementation((inv: any) => {
+        if (inv.hasDeliveredOrder) {
+          throw new BadRequestException({
+            message: 'This order has already been delivered — reverse the delivery via the shipment return workflow before cancelling the invoice',
+            error: 'This order has already been delivered — reverse the delivery via the shipment return workflow before cancelling the invoice',
+            code: 'DELIVERED_ORDER',
+          });
+        }
+      });
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.cancel(invoiceId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'DELIVERED_ORDER' }),
+      });
+
+      expect(tx.clientOrder.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: orderId } }),
+      );
+      expect(tx.invoice.update).not.toHaveBeenCalled();
+    });
+
+    // Regression for the actual bug: an order delivered via drainPackedStockDirect
+    // (no Shipment ever created — see OrdersService.markDelivered()'s no-shipment
+    // branch) previously sailed through this guard because it only ever checked
+    // for a delivered Shipment row, which a directly-delivered order never has.
+    it('DELIVERED_ORDER: rejects cancelling an ORDER invoice whose order was delivered DIRECTLY (no shipment at all)', async () => {
+      const invoiceId = 'inv-uuid-order-direct-delivered';
+      const orderId = 'order-uuid-direct';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'ORDER',
+        orderId,
+      });
+      // No Shipment row exists for this order at all — status is the only signal.
+      tx.clientOrder.findUnique.mockResolvedValue({ status: 'delivered' });
+
+      mockCalculator.validateCancellable.mockImplementation((inv: any) => {
+        if (inv.hasDeliveredOrder) {
+          throw new BadRequestException({ code: 'DELIVERED_ORDER' } as any);
+        }
+      });
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.cancel(invoiceId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'DELIVERED_ORDER' }),
+      });
+      expect(tx.invoice.update).not.toHaveBeenCalled();
+    });
+
+    it('DELIVERED_ORDER: also rejects a PARTIALLY delivered order — some stock has already left', async () => {
+      const invoiceId = 'inv-uuid-order-partial';
+      const orderId = 'order-uuid-partial';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'ORDER',
+        orderId,
+      });
+      tx.clientOrder.findUnique.mockResolvedValue({ status: 'partially_delivered' });
+
+      mockCalculator.validateCancellable.mockImplementation((inv: any) => {
+        if (inv.hasDeliveredOrder) {
+          throw new BadRequestException({ code: 'DELIVERED_ORDER' } as any);
+        }
+      });
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.cancel(invoiceId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'DELIVERED_ORDER' }),
+      });
+    });
+
+    it('ORDER invoice not yet delivered (order still draft) and unpaid: cancellation still succeeds', async () => {
+      const invoiceId = 'inv-uuid-order-not-delivered';
+      const orderId = 'order-uuid-2';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'ORDER',
+        orderId,
+      });
+      tx.invoice.update.mockResolvedValue({ id: invoiceId, status: 'cancelled' });
+      // clientOrder.findUnique already defaults to { status: 'draft' } via makeCancelTx().
+      mockCalculator.validateCancellable.mockReturnValue(undefined);
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      const result = await service.cancel(invoiceId);
+
+      expect(mockCalculator.validateCancellable).toHaveBeenCalledWith(
+        expect.objectContaining({ hasDeliveredOrder: false }),
+      );
+      expect(tx.invoice.update).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ status: 'cancelled' });
+    });
+
+    it('non-ORDER unpaid invoice: cancellation still succeeds, and the order-status check is skipped entirely', async () => {
+      const invoiceId = 'inv-uuid-warehouse-sale';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'WAREHOUSE_SALE',
+        orderId: null,
+      });
+      tx.invoice.update.mockResolvedValue({ id: invoiceId, status: 'cancelled' });
+      mockCalculator.validateCancellable.mockReturnValue(undefined);
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      const result = await service.cancel(invoiceId);
+
+      // No orderId — the order-status lookup must never even run (avoids an unnecessary query).
+      expect(tx.clientOrder.findUnique).not.toHaveBeenCalled();
+      expect(tx.invoice.update).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({ status: 'cancelled' });
     });
   });
@@ -817,6 +1233,56 @@ describe('InvoiceCalculatorService (real instance — no DB calls needed)', () =
     expect(() =>
       calculator.validateCancellable({ status: 'issued' as any }),
     ).not.toThrow();
+  });
+
+  it('validateCancellable: does not throw when hasPayments/hasDeliveredOrder are omitted (backward compatible)', () => {
+    expect(() =>
+      calculator.validateCancellable({ status: 'partially_paid' as any }),
+    ).not.toThrow();
+  });
+
+  it('validateCancellable: throws PAYMENT_EXISTS when hasPayments is true, even for an otherwise-valid status', () => {
+    expect(() =>
+      calculator.validateCancellable({ status: 'partially_paid' as any, hasPayments: true }),
+    ).toThrow(BadRequestException);
+
+    let caught: any;
+    try {
+      calculator.validateCancellable({ status: 'issued' as any, hasPayments: true });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught?.response?.code).toBe('PAYMENT_EXISTS');
+  });
+
+  it('validateCancellable: throws DELIVERED_ORDER when hasDeliveredOrder is true', () => {
+    let caught: any;
+    try {
+      calculator.validateCancellable({ status: 'issued' as any, hasDeliveredOrder: true });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught?.response?.code).toBe('DELIVERED_ORDER');
+  });
+
+  it('validateCancellable: INVALID_TRANSITION (paid/cancelled) takes priority over PAYMENT_EXISTS/DELIVERED_ORDER', () => {
+    let caught: any;
+    try {
+      calculator.validateCancellable({ status: 'paid' as any, hasPayments: true, hasDeliveredOrder: true });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught?.response?.code).toBe('INVALID_TRANSITION');
+  });
+
+  it('validateCancellable: PAYMENT_EXISTS takes priority over DELIVERED_ORDER when both are true', () => {
+    let caught: any;
+    try {
+      calculator.validateCancellable({ status: 'issued' as any, hasPayments: true, hasDeliveredOrder: true });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught?.response?.code).toBe('PAYMENT_EXISTS');
   });
 
   it('validateIssuable: throws INVALID_TRANSITION for issued status', () => {

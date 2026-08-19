@@ -10,6 +10,9 @@ export interface PaymentsQuery {
   dateTo?: string
   page?: number
   limit?: number
+  /** 'date' | 'amount'. Omit for the default (date desc). */
+  sortBy?: 'date' | 'amount'
+  sortOrder?: 'asc' | 'desc'
 }
 
 const paymentsKey = (params?: PaymentsQuery) => ['payments', params ?? {}] as const
@@ -50,6 +53,9 @@ export function useCreatePayment() {
       qc.invalidateQueries({ queryKey: ['clients'] })
       qc.invalidateQueries({ queryKey: ['reports', 'client-ledger'] })
       qc.invalidateQueries({ queryKey: ['reports', 'ar-summary'] })
+      // A payment against a warehouse-sale invoice changes the Warehouse
+      // Sales cash box for that payment's date.
+      qc.invalidateQueries({ queryKey: ['stock-exits', 'warehouse-cash-summary'] })
       if (data.clientId) {
         qc.invalidateQueries({ queryKey: ['clients', data.clientId, 'balance'] })
         qc.invalidateQueries({ queryKey: ['reports', 'client-ledger', data.clientId] })

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -280,9 +281,29 @@ export class WorkersService {
     });
   }
 
+  /**
+   * Delete a worker permanently, along with their WorkerPayment/WorkerCost history.
+   *
+   * A worker with a non-zero outstanding balance (owed to them, or overpaid) must
+   * never be deleted through this path — doing so would silently and irrecoverably
+   * destroy their earnings/payment audit trail with no way to recover it, and the
+   * balance itself would simply vanish from the books. Same live totalOwed
+   * computation (computeTotals) already used by findOne()/findAll() — mirrors the
+   * same balance-read-before-delete pattern UsersService.deleteLocal() already
+   * uses for local receivers.
+   */
   async remove(id: string): Promise<void> {
     const worker = await this.prisma.worker.findUnique({ where: { id } });
     if (!worker) throw new NotFoundException({ error: 'Worker not found', code: 'NOT_FOUND' });
+
+    const { totalOwed } = await this.computeTotals(id);
+    if (!new Decimal(totalOwed).isZero()) {
+      throw new BadRequestException({
+        error: `Cannot delete this worker — they have an outstanding balance of $${totalOwed}. Settle the balance before deleting.`,
+        code: 'OUTSTANDING_BALANCE',
+      });
+    }
+
     await this.prisma.workerPayment.deleteMany({ where: { workerId: id } });
     // WorkerCost.workerId is ON DELETE RESTRICT (unlike WorkerAttendance, which
     // cascades) — must clear these explicitly or worker.delete() below violates

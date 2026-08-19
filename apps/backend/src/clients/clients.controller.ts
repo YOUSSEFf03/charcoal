@@ -37,6 +37,10 @@ export class ClientsController {
     @Query('isActive') isActiveRaw?: string,
     @Query('excludeFillClient') excludeFillClientRaw?: string,
     @Query('hasBalance') hasBalanceRaw?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
+    @Query('minTotalInvoiced') minTotalInvoicedRaw?: string,
+    @Query('maxTotalInvoiced') maxTotalInvoicedRaw?: string,
   ) {
     const isActive = isActiveRaw === 'true' ? true : isActiveRaw === 'false' ? false : undefined;
     const excludeFillClient = excludeFillClientRaw === 'true';
@@ -44,7 +48,11 @@ export class ClientsController {
       hasBalanceRaw === 'true' ? true :
       hasBalanceRaw === 'false' ? false :
       undefined;
-    return this.clientsService.findAll(page, limit, search, type, isActive, excludeFillClient, hasBalance);
+    const minTotalInvoiced = minTotalInvoicedRaw !== undefined && minTotalInvoicedRaw !== '' && !isNaN(Number(minTotalInvoicedRaw))
+      ? Number(minTotalInvoicedRaw) : undefined;
+    const maxTotalInvoiced = maxTotalInvoicedRaw !== undefined && maxTotalInvoicedRaw !== '' && !isNaN(Number(maxTotalInvoicedRaw))
+      ? Number(maxTotalInvoicedRaw) : undefined;
+    return this.clientsService.findAll(page, limit, search, type, isActive, excludeFillClient, hasBalance, sortBy, sortOrder, minTotalInvoiced, maxTotalInvoiced);
   }
 
   /**

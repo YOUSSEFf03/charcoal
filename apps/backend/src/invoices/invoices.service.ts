@@ -35,7 +35,10 @@ export class InvoicesService {
    *                                      [paid]  ◄── POST /payments (paid >= total)
    *                                                   from issued state also
    *
-   *  POST /:id/cancel (owner only) transitions any non-paid/non-cancelled → [cancelled]
+   *  POST /:id/cancel (owner only) transitions any non-paid/non-cancelled → [cancelled],
+   *    UNLESS a payment has already been applied to it (PAYMENT_EXISTS) or it's an
+   *    ORDER invoice whose order already has a delivered shipment (DELIVERED_ORDER) —
+   *    see InvoiceCalculatorService.validateCancellable().
    *  PATCH /:id only allowed in [draft] state.
    * ─────────────────────────────────────────────────────
    */
@@ -58,8 +61,24 @@ export class InvoicesService {
     dateFrom?: string,
     dateTo?: string,
     search?: string,
+    sortBy?: string,
+    sortOrder?: string,
   ) {
     const skip = (page - 1) * limit;
+
+    // Allow-listed, not a raw pass-through of the query string, so an
+    // unrecognized/misspelled sortBy can never reach Prisma's orderBy — it
+    // just falls back to the existing default. Only columns with an
+    // unambiguous "greater/smaller" ordering are offered; "Due" is a
+    // computed value (total − paidAmount), not a stored column, so it's
+    // intentionally not sortable here rather than misleadingly approximated.
+    const direction: Prisma.SortOrder = sortOrder === 'asc' ? 'asc' : 'desc';
+    const orderBy: Prisma.InvoiceOrderByWithRelationInput =
+      sortBy === 'amount' ? { total: direction } :
+      sortBy === 'paid' ? { paidAmount: direction } :
+      sortBy === 'status' ? { status: direction } :
+      sortBy === 'date' ? { issuedAt: direction } :
+      { createdAt: 'desc' };
 
     // 'overdue' is a virtual status: unpaid invoices whose dueDate has passed.
     const isOverdue = status === 'overdue';
@@ -90,7 +109,7 @@ export class InvoicesService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         include: {
           client: { select: { id: true, name: true } },
         },
@@ -394,8 +413,19 @@ export class InvoicesService {
   /**
    * Transition invoice to cancelled (owner only, guarded at controller level).
    *
+   * Rejects (see InvoiceCalculatorService.validateCancellable() for the exact
+   * codes) when: the invoice is paid/already cancelled; a payment has already
+   * been applied to it (PAYMENT_EXISTS — this project has no payment-reversal
+   * mechanism, so cancelling would strand real money against a voided
+   * document); or it's an ORDER invoice whose order already has a delivered
+   * shipment (DELIVERED_ORDER — physical inventory already left; the
+   * sanctioned reversal is ShipmentsService.logReturn(), which cancellation
+   * must never bypass or auto-trigger).
+   *
    * @param id - Invoice UUID
-   * @throws BadRequestException if invoice is paid or already cancelled
+   * @throws BadRequestException if invoice is paid/cancelled (INVALID_TRANSITION),
+   *   has an existing payment allocation (PAYMENT_EXISTS), or is an ORDER
+   *   invoice with a delivered shipment (DELIVERED_ORDER)
    * @throws NotFoundException if invoice not found
    */
   async cancel(id: string) {
@@ -405,7 +435,39 @@ export class InvoicesService {
         throw new NotFoundException({ error: 'Invoice not found', code: 'NOT_FOUND' });
       }
 
-      this.calculator.validateCancellable(invoice);
+      // PAYMENT_EXISTS check — PaymentAllocation is the authoritative record of
+      // what's been applied (see PaymentAllocationService's own doc comment),
+      // not the cached Invoice.paidAmount.
+      const allocation = await tx.paymentAllocation.findFirst({
+        where: { invoiceId: id },
+        select: { id: true },
+      });
+
+      // DELIVERED_ORDER check — only meaningful for ORDER-sourced invoices.
+      // Reads ClientOrder.status directly rather than looking for a delivered
+      // Shipment row: OrdersService.markDelivered() sets this status the same
+      // way regardless of whether the order was delivered via the shipment
+      // path OR directly (drainPackedStockDirect, no Shipment ever created) —
+      // the old Shipment-only check was always false for a directly-delivered
+      // order, letting its invoice be cancelled even though stock had already
+      // physically left, after which a brand-new invoice could later be
+      // generated for the same already-consumed stock (createFromOrder()'s
+      // idempotency check only looks at active invoices, not physical stock).
+      let hasDeliveredOrder = false;
+      if (invoice.source === 'ORDER' && invoice.orderId) {
+        const order = await tx.clientOrder.findUnique({
+          where: { id: invoice.orderId },
+          select: { status: true },
+        });
+        hasDeliveredOrder = !!order &&
+          ['delivered', 'partially_delivered', 'invoiced', 'paid'].includes(order.status);
+      }
+
+      this.calculator.validateCancellable({
+        status: invoice.status,
+        hasPayments: !!allocation,
+        hasDeliveredOrder,
+      });
 
       return tx.invoice.update({
         where: { id },

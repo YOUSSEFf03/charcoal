@@ -103,6 +103,10 @@ export function useUpdatePackingSession() {
       qc.invalidateQueries({ queryKey: ['stock-lots'] })
       qc.invalidateQueries({ queryKey: ['packed-stock'] })
       qc.invalidateQueries({ queryKey: ['workers'] })
+      // Editing a session changes Consumed/Historical Output/Waste/Current Packed Stock
+      // for every lot it touches (old and new) — refresh any open Warehouse lot/container panel.
+      qc.invalidateQueries({ queryKey: ['warehouse', 'lot-material-flow'] })
+      qc.invalidateQueries({ queryKey: ['warehouse', 'container-material-flow'] })
     },
   })
 }
@@ -127,6 +131,10 @@ export function useCreatePackingSession() {
       qc.invalidateQueries({ queryKey: ['stock-lots'] })
       qc.invalidateQueries({ queryKey: ['packed-stock'] })
       qc.invalidateQueries({ queryKey: ['workers', data.workerId] })
+      // New session changes Consumed/Historical Output/Waste for every lot it drew from —
+      // refresh any open Warehouse lot/container panel.
+      qc.invalidateQueries({ queryKey: ['warehouse', 'lot-material-flow'] })
+      qc.invalidateQueries({ queryKey: ['warehouse', 'container-material-flow'] })
     },
   })
 }

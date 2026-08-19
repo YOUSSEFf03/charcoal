@@ -108,15 +108,49 @@ export class InvoiceCalculatorService {
   }
 
   /**
-   * Guard: throws INVALID_TRANSITION if invoice is paid or already cancelled.
-   * Terminal states (paid, cancelled) cannot be cancelled.
+   * Guard: throws if this invoice cannot be safely cancelled.
+   *
+   *  - INVALID_TRANSITION — terminal states (paid, cancelled) cannot be cancelled.
+   *  - PAYMENT_EXISTS — a payment has already been applied to this invoice
+   *    (any PaymentAllocation row). This project has no payment-reversal /
+   *    de-allocation mechanism, so cancelling here would strand real money
+   *    against a voided document — see PaymentAllocationService's own doc
+   *    comment for why PaymentAllocation is the authoritative record.
+   *  - DELIVERED_ORDER — this is an ORDER invoice whose order already has a
+   *    delivered shipment, i.e. physical inventory has already been consumed
+   *    (StockExit written, PackedStock decremented — see ShipmentsService
+   *    .confirmDelivery()). The only sanctioned reversal is
+   *    ShipmentsService.logReturn(); cancelling the invoice must never bypass
+   *    or auto-trigger it, so this is rejected instead.
+   *
+   * Pure/synchronous by design (no DB calls) — the caller resolves
+   * hasPayments/hasDeliveredOrder from the database (inside its own
+   * transaction) and passes them in, the same way it already resolves `status`.
    */
-  validateCancellable(invoice: { status: InvoiceStatus }): void {
+  validateCancellable(invoice: {
+    status: InvoiceStatus;
+    hasPayments?: boolean;
+    hasDeliveredOrder?: boolean;
+  }): void {
     if (invoice.status === 'paid' || invoice.status === 'cancelled') {
       throw new BadRequestException({
         message: 'Invoice cannot be cancelled from its current status',
         error: 'Invoice cannot be cancelled from its current status',
         code: 'INVALID_TRANSITION',
+      });
+    }
+    if (invoice.hasPayments) {
+      throw new BadRequestException({
+        message: 'Invoice cannot be cancelled because a payment has already been applied to it',
+        error: 'Invoice cannot be cancelled because a payment has already been applied to it',
+        code: 'PAYMENT_EXISTS',
+      });
+    }
+    if (invoice.hasDeliveredOrder) {
+      throw new BadRequestException({
+        message: 'This order has already been delivered — reverse the delivery via the shipment return workflow before cancelling the invoice',
+        error: 'This order has already been delivered — reverse the delivery via the shipment return workflow before cancelling the invoice',
+        code: 'DELIVERED_ORDER',
       });
     }
   }

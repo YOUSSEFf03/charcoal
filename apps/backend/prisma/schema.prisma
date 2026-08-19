@@ -726,6 +726,7 @@ model Invoice {
   @@index([status])
   @@index([issuedAt])
   @@index([orderId])
+  @@index([createdAt])
   @@map("invoices")
 }
 

@@ -70,6 +70,21 @@ export default function Invoices() {
     return { dateFrom: undefined, dateTo: undefined }
   })()
 
+  // Pagination — same proven architecture as Orders & Delivery: the backend's
+  // findAll() is already correctly paginated (skip/take + a matching count());
+  // this page previously requested a single fixed limit:100 batch with no way
+  // to reach anything beyond it.
+  const INVOICES_PAGE_SIZE = 20
+  const [page, setPage] = useState(1)
+  const [outstandingPage, setOutstandingPage] = useState(1)
+
+  // Every server-side filter must land back on page 1 — otherwise a user on
+  // page 5 of "All status" could apply a filter with only 1 matching page and
+  // see an empty page 5 instead of their results. debouncedSearch (not the
+  // raw `search` keystroke state) is the correct dependency here since that's
+  // what actually reaches the API.
+  useEffect(() => { setPage(1) }, [statusFilter, clientFilter, debouncedSearch, dateFrom, dateTo])
+
   // Live data sources.
   const apiStatus = ({ 'Paid': 'paid', 'Partial': 'partially_paid', 'Unpaid': 'issued', 'Overdue': 'overdue' } as Record<string, string>)[statusFilter]
   const invoicesQ = useInvoices({
@@ -78,11 +93,15 @@ export default function Invoices() {
     search: debouncedSearch || undefined,
     dateFrom,
     dateTo,
-    limit: 100,
+    page,
+    limit: INVOICES_PAGE_SIZE,
   })
   const paymentsQ = usePayments({ limit: 100 })
   // outstandingQ feeds the Outstanding tab TABLE only — not used for KPI numbers.
-  const outstandingQ = useInvoices({ status: 'overdue', limit: 100 })
+  // Paginated independently of the main tab (own page state) — it has no
+  // filters of its own beyond the fixed status:'overdue', so nothing else can
+  // invalidate its current page.
+  const outstandingQ = useInvoices({ status: 'overdue', page: outstandingPage, limit: INVOICES_PAGE_SIZE })
   const clientsQ = useClients({ limit: 100 })
   const arQ = useArSummary()
   const createPayment = useCreatePayment()
@@ -93,6 +112,10 @@ export default function Invoices() {
   const invoiceRows = invoicesQ.data?.data ?? []
   const paymentRows = paymentsQ.data?.data ?? []
   const outstandingRows = outstandingQ.data?.data ?? []
+  const invoiceTotal = invoicesQ.data?.total ?? invoiceRows.length
+  const invoiceTotalPages = Math.max(1, Math.ceil(invoiceTotal / INVOICES_PAGE_SIZE))
+  const outstandingTotal = outstandingQ.data?.total ?? outstandingRows.length
+  const outstandingTotalPages = Math.max(1, Math.ceil(outstandingTotal / INVOICES_PAGE_SIZE))
   const clientList = clientsQ.data?.data ?? []
   const clientNameById = new Map(clientList.map(c => [c.id, c.name]))
   // Real backend display IDs (INV-001 …) keyed by invoice id, for resolving the
@@ -351,6 +374,19 @@ export default function Invoices() {
                 )}
               </tbody>
             </table>
+            {!invoicesQ.isLoading && !invoicesQ.isError && invoiceRows.length > 0 && invoiceTotalPages > 1 && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
+                <button className="btn" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>
+                  <i className="ti ti-chevron-left" style={{ fontSize: 14 }} /> Previous
+                </button>
+                <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                  Page {page} of {invoiceTotalPages}
+                </span>
+                <button className="btn" disabled={page >= invoiceTotalPages} onClick={() => setPage(p => Math.min(invoiceTotalPages, p + 1))}>
+                  Next <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -470,6 +506,19 @@ export default function Invoices() {
                   )}
                 </tbody>
               </table>
+              {!outstandingQ.isLoading && !outstandingQ.isError && outstandingRows.length > 0 && outstandingTotalPages > 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
+                  <button className="btn" disabled={outstandingPage <= 1} onClick={() => setOutstandingPage(p => Math.max(1, p - 1))}>
+                    <i className="ti ti-chevron-left" style={{ fontSize: 14 }} /> Previous
+                  </button>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                    Page {outstandingPage} of {outstandingTotalPages}
+                  </span>
+                  <button className="btn" disabled={outstandingPage >= outstandingTotalPages} onClick={() => setOutstandingPage(p => Math.min(outstandingTotalPages, p + 1))}>
+                    Next <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                  </button>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -625,8 +674,8 @@ export default function Invoices() {
 
             <div className="panel-footer">
               <button className="panel-btn pbtn-ghost" onClick={() => setPrintOpen(true)}><i className="ti ti-printer" /> Print</button>
-              {activeInvoice && activeInvoice.status !== 'cancelled' && activeInvoice.status !== 'paid' && (
-                <button className="panel-btn pbtn-ghost" onClick={() => { if (activeInvoice) cancelInvoice.mutate(activeInvoice.id, { onSuccess: () => { setPanelOpen(false); showToast(`${activeInvoiceDisplay} cancelled`) } }) }} disabled={cancelInvoice.isPending}>
+              {activeInvoice && activeInvoice.status !== 'cancelled' && activeInvoice.status !== 'paid' && parseFloat(activeInvoice.paidAmount) === 0 && (
+                <button className="panel-btn pbtn-ghost" onClick={() => { if (activeInvoice) cancelInvoice.mutate(activeInvoice.id, { onSuccess: () => { setPanelOpen(false); showToast(`${activeInvoiceDisplay} cancelled`) }, onError: (err: any) => showToast(err?.error ?? 'Failed to cancel invoice') }) }} disabled={cancelInvoice.isPending}>
                   <i className="ti ti-ban" /> Cancel invoice
                 </button>
               )}

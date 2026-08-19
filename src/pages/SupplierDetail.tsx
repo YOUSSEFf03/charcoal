@@ -4,7 +4,8 @@ import Topbar from '../components/layout/Topbar'
 import { useSupplier, useSupplierPayments, useCreateSupplierPayment } from '../hooks/useSuppliers'
 import { useContainers } from '../hooks/useContainers'
 import { useSupplierLedger } from '../hooks/useReports'
-import { exportSheet } from '../lib/exportXlsx'
+import { exportExcel, type ExcelColumn } from '../lib/excelExport'
+import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
 import { formatUsd } from '../lib/money'
 import { formatDate } from '../lib/date'
 
@@ -77,6 +78,7 @@ export default function SupplierDetail() {
   const [payRef, setPayRef] = useState('')
   const [toast, setToast] = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
+  const { openExportModal, exportColumnsModal } = useExportColumnsModal()
 
   // Statement of Account sub-view filters. dateFrom/dateTo are sent to the backend
   // (the opening balance is computed server-side for the exact selected range);
@@ -126,12 +128,39 @@ export default function SupplierDetail() {
   function resetStmt() { setStmtFrom(''); setStmtTo(''); setStmtType('all'); setStmtQ('') }
 
   function exportStatement() {
-    const aoa: unknown[][] = [['Date', 'Source', 'Ref', 'Description', 'Debit', 'Credit', 'Balance']]
-    aoa.push([stmtOpeningDate, '', '', 'Opening balance', '', '', stmtOpening])
-    stmtFiltered.forEach(e => aoa.push([e.date, e.sourceType ?? 'payment', e.ref, e.desc, e.debit || '', e.credit || '', e.balance]))
-    if (aoa.length === 2) { showToast('Nothing to export'); return }
-    exportSheet(aoa, 'Statement', `${supplierId}-statement`)
-    showToast(`Exported ${aoa.length - 2} rows`)
+    if (stmtFiltered.length === 0) { showToast('Nothing to export'); return }
+    const stmtOpeningRawDate = stmtFiltered[0]?.rawDate ?? (LEDGER[0]?.rawDate ?? new Date().toISOString())
+    type StmtRow = { rawDate: string; source: string; ref: string; desc: string; debit: number | null; credit: number | null; balance: number }
+    const rows: StmtRow[] = [
+      { rawDate: stmtOpeningRawDate, source: '', ref: '', desc: 'Opening balance', debit: null, credit: null, balance: stmtOpening },
+      ...stmtFiltered.map(e => ({
+        rawDate: e.rawDate, source: e.sourceType ?? 'payment', ref: e.ref, desc: e.desc,
+        debit: e.debit || null, credit: e.credit || null, balance: e.balance,
+      })),
+    ]
+    const columns: ExcelColumn<StmtRow>[] = [
+      { key: 'date', header: 'Date', type: 'date', value: r => new Date(r.rawDate) },
+      { key: 'source', header: 'Source', value: r => r.source || null },
+      { key: 'ref', header: 'Ref', value: r => r.ref || null },
+      { key: 'desc', header: 'Description', value: r => r.desc },
+      { key: 'debit', header: 'Debit', type: 'currency', value: r => r.debit, total: 'sum' },
+      { key: 'credit', header: 'Credit', type: 'currency', value: r => r.credit, total: 'sum' },
+      // 'last', not 'sum' — same fix as ClientDetail's Client Statement:
+      // every row's balance is already the running balance as of that row,
+      // so the Total row should show the final row's balance, not Σ(all balances).
+      { key: 'balance', header: 'Balance', type: 'currency', value: r => r.balance, total: 'last' },
+    ]
+    openExportModal({
+      title: 'Supplier Statement', subtitle: supplier?.name ?? 'Supplier', columns,
+      onExport: async selectedColumns => {
+        await exportExcel({
+          filename: `${supplierId}-statement`, sheetName: 'Statement',
+          title: `Supplier Statement — ${supplier?.name ?? 'Supplier'}`,
+          columns: selectedColumns, rows, emphasizeRowIndexes: [0],
+        })
+        showToast(`Exported ${stmtFiltered.length} rows`)
+      },
+    })
   }
 
   function showToast(msg: string) {
@@ -544,14 +573,16 @@ export default function SupplierDetail() {
                   <span className="meta-row"><i className="ti ti-currency-dollar" /> USD</span>
                 </div>
               </div>
-              <div className="stmt-actions">
+              <div className="stmt-actions no-print">
                 <button className="btn" onClick={() => window.print()}><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print</button>
                 <button className="btn-export" onClick={exportStatement}><i className="ti ti-table-export" /> Export Excel</button>
               </div>
             </div>
 
-            {/* Filter bar */}
-            <div className="filter-row">
+            {/* Filter bar — hidden on print (see .no-print in index.css); the
+                view-head above already shows supplier name + selected period,
+                so nothing period-identifying is lost from the printout. */}
+            <div className="filter-row no-print">
               <div className="filter-search">
                 <i className="ti ti-search" />
                 <input placeholder="Search description or ref…" value={stmtQ} onChange={e => setStmtQ(e.target.value)} />
@@ -696,6 +727,8 @@ export default function SupplierDetail() {
           </div>
         </div>
       )}
+
+      {exportColumnsModal}
 
       {/* Toast */}
       <div className={`toast ${toast ? 'show' : ''}`}>

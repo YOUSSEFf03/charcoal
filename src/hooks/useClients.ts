@@ -16,8 +16,23 @@ export interface ClientsQuery {
   page?: number
   limit?: number
   type?: string
+  isActive?: boolean
   excludeFillClient?: boolean
   hasBalance?: boolean
+  /**
+   * 'balance'/'totalInvoiced'/'totalCollected'/'orderCount' are not stored
+   * columns, so sorting by them fetches the full matching set server-side
+   * and paginates after — real-column sorts ('name'/'lastOrderDate'/
+   * 'avgOrderDays') stay cheap. Omit for the default (createdAt desc).
+   */
+  sortBy?: 'name' | 'lastOrderDate' | 'avgOrderDays' | 'balance' | 'totalInvoiced' | 'totalCollected' | 'orderCount'
+  sortOrder?: 'asc' | 'desc'
+  /**
+   * totalInvoiced is also not a stored column, so a min/max range also
+   * forces the full-fetch-then-filter path server-side (same as hasBalance).
+   */
+  minTotalInvoiced?: number
+  maxTotalInvoiced?: number
 }
 
 const clientsKey = (params?: ClientsQuery) => ['clients', params ?? {}] as const

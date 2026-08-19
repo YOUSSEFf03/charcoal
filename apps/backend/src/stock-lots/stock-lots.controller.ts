@@ -49,6 +49,18 @@ export class StockLotsController {
     );
   }
 
+  /**
+   * IMPORTANT: must come before GET /:id so NestJS does not treat
+   * "available" as a UUID parameter.
+   */
+  @ApiOperation({ summary: 'All stock lots with kgRemaining > 0, unbounded (no page cap) — for the warehouse-sale KG lot selector' })
+  @ApiResponse({ status: 200, description: 'Success' })
+  @Get('available')
+  @Roles('owner', 'accountant', 'sales_rep', 'worker')
+  findAvailable(@CurrentUser() user?: ClerkUser) {
+    return this.stockLotsService.findAvailable(user?.role);
+  }
+
   @ApiOperation({ summary: 'Get stock lot by ID with supplier; costPerKg hidden for sales_rep/worker' })
   @ApiResponse({ status: 200, description: 'Success' })
   @ApiResponse({ status: 404, description: 'Not found' })

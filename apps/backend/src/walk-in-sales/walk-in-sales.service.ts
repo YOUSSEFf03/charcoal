@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Currency } from '@prisma/client';
+import { Currency, Prisma } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoiceCalculatorService } from '../invoices/invoice-calculator.service';
@@ -125,6 +125,30 @@ export class WalkInSalesService {
     if (receivedLbp.gt(0)) received = received.plus(toClientCurrency(receivedLbp, 'LBP'));
 
     return this.prisma.$transaction(async (tx) => {
+      // ── 0) Lock every StockLot/PackedStock row this transaction will read
+      // and write, BEFORE any read — same FOR UPDATE pattern already used by
+      // stock-exits.service.ts / payments.service.ts / payment-allocation
+      // .service.ts. Each table's complete, deduplicated target-id set is
+      // locked in ONE statement, sorted ascending by id, rather than row-by-
+      // row in bags/kgLines order — so any other transaction that also locks
+      // rows on these tables (packed_stocks locked before stock_lots,
+      // consistently) always acquires them in the same order and cannot
+      // deadlock against this one. Once these locks are held, a concurrent
+      // sale on the same row is forced to wait until this transaction
+      // commits or rolls back, so the reads below can never be stale.
+      const packedStockIds = [...new Set(bags.map((b) => b.packedStockId))].sort();
+      if (packedStockIds.length > 0) {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT id FROM "packed_stocks" WHERE id IN (${Prisma.join(packedStockIds)}) ORDER BY id FOR UPDATE`,
+        );
+      }
+      const lotIds = [...new Set(kgLines.map((k) => k.lotId))].sort();
+      if (lotIds.length > 0) {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT id FROM "stock_lots" WHERE id IN (${Prisma.join(lotIds)}) ORDER BY id FOR UPDATE`,
+        );
+      }
+
       // ── 1) Validate stock availability for every line BEFORE writing anything.
       // The invoice must never be created for a request that's about to be
       // rejected — so all lines are checked (read-only) first, and the actual

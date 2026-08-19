@@ -10,6 +10,7 @@ import { PaymentAllocationService } from '../invoices/payment-allocation.service
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { UsersService } from '../users/users.service';
+import { SettingsService } from '../settings/settings.service';
 
 @Injectable()
 export class PaymentsService {
@@ -18,6 +19,7 @@ export class PaymentsService {
     private readonly paymentAllocationService: PaymentAllocationService,
     private readonly ledgerWriteService: LedgerWriteService,
     private readonly usersService: UsersService,
+    private readonly settings: SettingsService,
   ) {}
 
   /**
@@ -37,6 +39,8 @@ export class PaymentsService {
     invoiceId?: string,
     dateFrom?: string,
     dateTo?: string,
+    sortBy?: string,
+    sortOrder?: string,
   ) {
     const skip = (page - 1) * limit;
 
@@ -53,15 +57,30 @@ export class PaymentsService {
         : {}),
     };
 
+    // Allow-listed (see InvoicesService.findAll's identical comment) — an
+    // unrecognized sortBy falls back to the existing default, never reaches
+    // Prisma directly.
+    const direction: Prisma.SortOrder = sortOrder === 'asc' ? 'asc' : 'desc';
+    const orderBy: Prisma.PaymentOrderByWithRelationInput =
+      sortBy === 'amount' ? { amount: direction } :
+      sortBy === 'date' ? { date: direction } :
+      { date: 'desc' };
+
     const [data, total] = await this.prisma.$transaction([
       this.prisma.payment.findMany({
         where,
         skip,
         take: limit,
-        orderBy: { date: 'desc' },
+        orderBy,
         include: {
           client: { select: { id: true, name: true } },
           loggedBy: { select: { id: true, name: true } },
+          // Lightweight only — id/displayId, nothing else. Lets a caller (e.g.
+          // ClientDetail's Payments tab) show the invoice reference directly on
+          // each payment row without a second, unbounded invoice fetch. A
+          // payment with no invoiceId (unapplied/client-level payment) simply
+          // has invoice: null here — same as today's behavior, not changed.
+          invoice: { select: { id: true, displayId: true } },
         },
       }),
       this.prisma.payment.count({ where }),
@@ -137,6 +156,33 @@ export class PaymentsService {
         });
       }
 
+      // Convert into the client's authoritative currency — same rule already
+      // established for walk-in sales (WalkInSalesService.toClientCurrency):
+      // a payment quoted in a currency other than the client's is converted
+      // via the global exchange rate before being stored, never stored as-is.
+      // Without this, every downstream balance calculation (ClientBalanceService,
+      // getClientLedger, getArSummary) sums Payment.amount alongside Invoice.total
+      // assuming a single uniform currency per client — a raw USD amount stored
+      // against an LBP client (or vice versa) would silently corrupt that client's
+      // balance by orders of magnitude. Throws RATE_UNAVAILABLE (never $0) if a
+      // conversion is actually required but no usable rate is configured.
+      const amount = new Decimal(dto.amount);
+      let convertedAmount = amount;
+      if (dto.currency !== client.currency) {
+        const rate = new Decimal(await this.settings.getExchangeRate());
+        if (rate.lte(0)) {
+          throw new BadRequestException({
+            message: 'Exchange rate is missing or zero — cannot record a converted amount',
+            error: 'Exchange rate is missing or zero',
+            code: 'RATE_UNAVAILABLE',
+          });
+        }
+        // rate = LBP per 1 USD
+        convertedAmount = dto.currency === 'USD' && client.currency === 'LBP'
+          ? amount.mul(rate)
+          : amount.div(rate);
+      }
+
       // Validate invoice if provided. Lock it first (SELECT ... FOR UPDATE) —
       // PaymentAllocationService.allocateDirect() takes the same lock later
       // in this same transaction, so this just makes sure the guard checks
@@ -181,13 +227,14 @@ export class PaymentsService {
         receiverFields = { receiverName: dto.receiverName };
       }
 
-      // Create the payment record
+      // Create the payment record — always stored in the client's own
+      // currency (converted above), never in whatever currency was quoted.
       const payment = await tx.payment.create({
         data: {
           clientId: dto.clientId,
           ...(dto.invoiceId ? { invoiceId: dto.invoiceId } : {}),
-          amount: dto.amount,
-          currency: dto.currency,
+          amount: convertedAmount.toFixed(2),
+          currency: client.currency,
           method: dto.method,
           date: dto.date ? new Date(dto.date) : new Date(),
           loggedById: user.id,
@@ -201,7 +248,7 @@ export class PaymentsService {
         const client = await tx.client.findUnique({ where: { id: dto.clientId }, select: { name: true } });
         await this.ledgerWriteService.creditAccount(
           tx, receiverFields.receiverId,
-          new Decimal(dto.amount),
+          convertedAmount,
           'payment_received',
           payment.id,
           `Payment — ${client?.name ?? dto.clientId}`,
@@ -216,11 +263,11 @@ export class PaymentsService {
       // visible only via ClientBalanceService's live calculation).
       if (dto.invoiceId) {
         await this.paymentAllocationService.allocateDirect(
-          tx, payment.id, dto.invoiceId, new Decimal(dto.amount),
+          tx, payment.id, dto.invoiceId, convertedAmount,
         );
       } else {
         await this.paymentAllocationService.allocateFifo(
-          tx, dto.clientId, payment.id, new Decimal(dto.amount),
+          tx, dto.clientId, payment.id, convertedAmount,
         );
       }
 

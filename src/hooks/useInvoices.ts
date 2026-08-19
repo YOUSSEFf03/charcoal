@@ -17,6 +17,9 @@ export interface InvoicesQuery {
   search?: string
   dateFrom?: string
   dateTo?: string
+  /** 'date' (issuedAt) | 'amount' (total) | 'paid' (paidAmount) | 'status'. Omit for the default (createdAt desc). */
+  sortBy?: 'date' | 'amount' | 'paid' | 'status'
+  sortOrder?: 'asc' | 'desc'
 }
 
 const invoicesKey = (params?: InvoicesQuery) => ['invoices', params ?? {}] as const

@@ -75,6 +75,39 @@ export class StockLotsService {
   }
 
   /**
+   * All stock lots with kgRemaining > 0, unbounded — populates the
+   * warehouse-sale KG-mode lot selector (WarehouseSales.tsx), which
+   * previously relied on findAll()'s paginated limit:100 fetch and could
+   * hide an older lot (received further back than the 100 most-recently-
+   * received) that still had real kgRemaining, making it unselectable even
+   * though it had stock.
+   *
+   * This is a DIFFERENT problem from the packed-stock FIFO draw fix
+   * (PackedStockService.getFifoDraw()) — that one exists because a packed-
+   * bag sale auto-splits ONE requested quantity across MULTIPLE PackedStock
+   * batches. A KG sale always draws from exactly ONE StockLot, manually
+   * chosen by the user from this list: StockLot has no reservedQuantity
+   * column and no automatic multi-lot consumption logic exists anywhere in
+   * this codebase (confirmed by inspecting both the anonymous and
+   * registered-client KG sale paths and the StockLot schema). The fix
+   * needed here is selector VISIBILITY — every lot with stock must be
+   * listable — not a server-side draw/split.
+   *
+   * Scoped to kgRemaining > 0 — bounded by how many DISTINCT lots are
+   * currently open in the warehouse, the same "safe unbounded" scale
+   * profile PackedStockService.findSummary() already uses for exactly the
+   * same reason (also an unbounded findMany with no pagination).
+   */
+  async findAvailable(userRole?: string) {
+    const lots = await this.prisma.stockLot.findMany({
+      where: { kgRemaining: { gt: 0 } },
+      orderBy: { createdAt: 'desc' },
+      include: { supplier: true },
+    });
+    return lots.map((lot) => this.maybeStrip(lot, userRole));
+  }
+
+  /**
    * Retrieve a single stock lot by ID.
    *
    * @param id - StockLot UUID

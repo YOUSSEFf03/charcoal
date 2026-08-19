@@ -6,6 +6,7 @@ import { PaymentAllocationService } from '../invoices/payment-allocation.service
 import { PrismaService } from '../prisma/prisma.service';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { UsersService } from '../users/users.service';
+import { SettingsService } from '../settings/settings.service';
 
 // ---------------------------------------------------------------------------
 // Shared mock factory helper
@@ -56,6 +57,12 @@ describe('PaymentsService', () => {
   // overrides this per-test to exercise the new rejection path.
   const mockUsersService = { validateCashCapable: fn() };
 
+  // Currency conversion (mirrors WalkInSalesService.toClientCurrency) — defaults
+  // to a usable rate so every pre-existing test (all currency:'USD', matching the
+  // 'USD' client mocks above) takes the no-conversion path unchanged. The
+  // dedicated currency-conversion block below overrides this per-test.
+  const mockSettingsService = { getExchangeRate: fn() };
+
   // Helper to build a tx object for the $transaction callback
   function makeTx(overrides: Record<string, any> = {}) {
     return {
@@ -72,6 +79,7 @@ describe('PaymentsService', () => {
     mockUsersService.validateCashCapable.mockResolvedValue(undefined);
     mockPaymentAllocationService.allocateDirect.mockResolvedValue(undefined);
     mockPaymentAllocationService.allocateFifo.mockResolvedValue({ allocations: [], unapplied: '0.00' });
+    mockSettingsService.getExchangeRate.mockResolvedValue(89550);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -80,10 +88,124 @@ describe('PaymentsService', () => {
         { provide: PaymentAllocationService, useValue: mockPaymentAllocationService },
         { provide: LedgerWriteService, useValue: mockLedgerWriteService },
         { provide: UsersService, useValue: mockUsersService },
+        { provide: SettingsService, useValue: mockSettingsService },
       ],
     }).compile();
 
     service = module.get<PaymentsService>(PaymentsService);
+  });
+
+  // =========================================================================
+  // findAll() — paginated payment listing. Previously had ZERO test coverage.
+  // The `invoice` include (id/displayId only) is new — added so ClientDetail's
+  // Payments tab can resolve invoice references directly from each payment row
+  // instead of a second, unbounded invoice fetch — see the ClientDetail
+  // invoice-scalability audit.
+  // =========================================================================
+
+  describe('findAll()', () => {
+    beforeEach(() => {
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+      mockPrisma.payment.count.mockResolvedValue(0);
+      mockPrisma.$transaction.mockImplementation((ops: any) => Promise.all(ops));
+    });
+
+    it('pagination: page 1 with limit 20 requests skip 0, take 20', async () => {
+      await service.findAll(1, 20);
+
+      expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0, take: 20 }),
+      );
+    });
+
+    it('pagination: page 2 with limit 20 skips the first 20 rows', async () => {
+      await service.findAll(2, 20);
+
+      expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 20, take: 20 }),
+      );
+    });
+
+    it('sorting: defaults to date descending when no sortBy is given', async () => {
+      await service.findAll(1, 20);
+      expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { date: 'desc' } }),
+      );
+    });
+
+    it('sortBy=amount, sortOrder=asc sorts by the amount column ascending', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, 'amount', 'asc');
+      expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { amount: 'asc' } }),
+      );
+    });
+
+    it('sortBy=date, sortOrder=asc sorts by the date column ascending (oldest first)', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, 'date', 'asc');
+      expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { date: 'asc' } }),
+      );
+    });
+
+    it('an unrecognized sortBy value falls back to the default (date desc)', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, 'method' as any);
+      expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { date: 'desc' } }),
+      );
+    });
+
+    it('clientId filter: adds clientId to the where clause — remains applied alongside the new include', async () => {
+      await service.findAll(1, 20, 'client-42');
+
+      expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { clientId: 'client-42' } }),
+      );
+    });
+
+    it('include: requests client, loggedBy, and invoice — invoice select is id/displayId ONLY (no lines/payments/allocations/other heavy relations)', async () => {
+      await service.findAll(1, 20);
+
+      const call = mockPrisma.payment.findMany.mock.calls[0][0];
+      expect(call.include).toEqual({
+        client: { select: { id: true, name: true } },
+        loggedBy: { select: { id: true, name: true } },
+        invoice: { select: { id: true, displayId: true } },
+      });
+    });
+
+    it('total count reflects count(), not data.length, and uses the same where as findMany', async () => {
+      mockPrisma.payment.findMany.mockResolvedValue([{ id: 'p1' }, { id: 'p2' }]);
+      mockPrisma.payment.count.mockResolvedValue(57);
+
+      const result = await service.findAll(1, 20, 'client-42');
+
+      expect(result.total).toBe(57);
+      expect(result.data).toHaveLength(2);
+      expect(mockPrisma.payment.count).toHaveBeenCalledWith({ where: { clientId: 'client-42' } });
+    });
+
+    it('a payment with no invoiceId (unapplied/client-level payment) still returns normally, with invoice: null — unchanged behavior', async () => {
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'p1', clientId: 'client-42', invoiceId: null, invoice: null, amount: '50.00' },
+      ]);
+      mockPrisma.payment.count.mockResolvedValue(1);
+
+      const result = await service.findAll(1, 20);
+
+      expect(result.data[0].invoice).toBeNull();
+      expect(result.data[0].invoiceId).toBeNull();
+    });
+
+    it('a payment WITH an invoice returns the lightweight invoice reference directly on the row', async () => {
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'p1', clientId: 'client-42', invoiceId: 'inv-1', invoice: { id: 'inv-1', displayId: 'INV-001' }, amount: '50.00' },
+      ]);
+      mockPrisma.payment.count.mockResolvedValue(1);
+
+      const result = await service.findAll(1, 20);
+
+      expect(result.data[0].invoice).toEqual({ id: 'inv-1', displayId: 'INV-001' });
+    });
   });
 
   // =========================================================================
@@ -111,7 +233,7 @@ describe('PaymentsService', () => {
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
 
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A', currency: 'USD' });
       tx.invoice.findUnique.mockResolvedValue({
         id: invoiceId,
         status: 'issued',
@@ -144,7 +266,7 @@ describe('PaymentsService', () => {
       const callOrder: string[] = [];
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A', currency: 'USD' });
       tx.$queryRaw.mockImplementation(async () => { callOrder.push('lock'); return []; });
       tx.invoice.findUnique.mockImplementation(async () => {
         callOrder.push('read');
@@ -163,7 +285,7 @@ describe('PaymentsService', () => {
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
 
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A', currency: 'USD' });
       tx.invoice.findUnique.mockResolvedValue({
         id: invoiceId,
         status: 'issued',
@@ -195,7 +317,7 @@ describe('PaymentsService', () => {
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
 
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A', currency: 'USD' });
       tx.invoice.findUnique.mockResolvedValue({
         id: invoiceId,
         status: 'draft',
@@ -216,7 +338,7 @@ describe('PaymentsService', () => {
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
 
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A', currency: 'USD' });
       tx.invoice.findUnique.mockResolvedValue({
         id: invoiceId,
         status: 'paid',
@@ -237,7 +359,7 @@ describe('PaymentsService', () => {
       mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
 
       // Client exists for dto.clientId
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client A', currency: 'USD' });
 
       // But the invoice belongs to a DIFFERENT client
       tx.invoice.findUnique.mockResolvedValue({
@@ -267,7 +389,7 @@ describe('PaymentsService', () => {
       const tx = makeTx();
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-2', clerkId: clerkUserId });
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client B' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client B', currency: 'USD' });
       tx.payment.create.mockResolvedValue({
         id: 'pay-standalone',
         clientId,
@@ -303,7 +425,7 @@ describe('PaymentsService', () => {
       const tx = makeTx();
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-2b', clerkId: clerkUserId });
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client B' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Client B', currency: 'USD' });
       tx.payment.create.mockResolvedValue({ id: 'pay-standalone-2', clientId, amount: '50.00' });
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
@@ -340,7 +462,7 @@ describe('PaymentsService', () => {
       const paymentDate = new Date('2026-07-31');
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-3', clerkId: clerkUserId });
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café', currency: 'USD' });
       tx.user.findUnique.mockResolvedValue({ id: receiverId, name: 'Dev owner' });
       tx.payment.create.mockResolvedValue({
         id: 'pay-ledger-1',
@@ -369,7 +491,7 @@ describe('PaymentsService', () => {
       const tx = makeTx();
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-4', clerkId: clerkUserId });
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café', currency: 'USD' });
       tx.payment.create.mockResolvedValue({ id: 'pay-no-receiver', clientId, amount: '75.00' });
 
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
@@ -383,7 +505,7 @@ describe('PaymentsService', () => {
       const tx = makeTx();
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-5', clerkId: clerkUserId });
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café', currency: 'USD' });
       tx.payment.create.mockResolvedValue({ id: 'pay-name-only', clientId, amount: '75.00' });
 
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
@@ -398,7 +520,7 @@ describe('PaymentsService', () => {
       const tx = makeTx();
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-6', clerkId: clerkUserId });
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café', currency: 'USD' });
       tx.user.findUnique.mockResolvedValue({ id: receiverId, name: 'Dev owner' });
       tx.payment.create.mockResolvedValue({ id: 'pay-fail', clientId, amount: '75.00', date: new Date() });
 
@@ -431,7 +553,7 @@ describe('PaymentsService', () => {
     it('1) rejects a nonexistent receiverId with NotFoundException BEFORE tx.payment.create() is called', async () => {
       const tx = makeTx();
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-6b', clerkId: clerkUserId });
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café', currency: 'USD' });
       mockUsersService.validateCashCapable.mockRejectedValue(
         new NotFoundException({ error: 'Receiver not found', code: 'NOT_FOUND' }),
       );
@@ -447,7 +569,7 @@ describe('PaymentsService', () => {
     it('4) leaves no side effects when validation fails — nothing to roll back because nothing was written', async () => {
       const tx = makeTx();
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-6b-2', clerkId: clerkUserId });
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café', currency: 'USD' });
       mockUsersService.validateCashCapable.mockRejectedValue(
         new NotFoundException({ error: 'Receiver not found', code: 'NOT_FOUND' }),
       );
@@ -465,7 +587,7 @@ describe('PaymentsService', () => {
       // LedgerWriteService.creditAccount() (PR 6) is still the final gate.
       const tx = makeTx();
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-6b-3', clerkId: clerkUserId });
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café', currency: 'USD' });
       tx.user.findUnique.mockResolvedValue({ id: receiverId, name: 'Deactivated User' });
       tx.payment.create.mockResolvedValue({ id: 'pay-6b-3', clientId, amount: '30.00', date: new Date() });
       mockUsersService.validateCashCapable.mockResolvedValue(undefined); // pre-write check passes
@@ -484,7 +606,7 @@ describe('PaymentsService', () => {
       const callOrder: string[] = [];
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-6b-4', clerkId: clerkUserId });
-      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café' });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Marina Walk Café', currency: 'USD' });
       tx.user.findUnique.mockResolvedValue({ id: receiverId, name: 'Dev owner' });
       mockUsersService.validateCashCapable.mockImplementation(async () => { callOrder.push('validate'); });
       tx.payment.create.mockImplementation(async () => {
@@ -497,6 +619,120 @@ describe('PaymentsService', () => {
       await service.create(baseDto({ receiverId }), clerkUserId);
 
       expect(callOrder).toEqual(['validate', 'payment.create', 'creditAccount']);
+    });
+  });
+
+  // =========================================================================
+  // create() — currency conversion (mirrors WalkInSalesService.toClientCurrency).
+  // Regression coverage for: a payment quoted in a currency other than the
+  // target client's own currency must be converted before being stored —
+  // otherwise every balance calculation that sums Payment.amount alongside
+  // Invoice.total (ClientBalanceService, getClientLedger, getArSummary)
+  // silently mixes USD and LBP figures as if they were the same unit.
+  // =========================================================================
+
+  describe('create() — currency conversion', () => {
+    const clientId = 'client-uuid-ccy';
+    const clerkUserId = 'clerk-user-ccy';
+    const userId = 'db-user-ccy';
+
+    function dto(overrides: Record<string, any> = {}) {
+      return {
+        clientId,
+        amount: '100.00',
+        currency: 'USD' as any,
+        method: 'cash' as any,
+        ...overrides,
+      };
+    }
+
+    it('a payment quoted in USD for an LBP client is converted (× rate) before being stored', async () => {
+      const tx = makeTx();
+      mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'LBP Client', currency: 'LBP' });
+      mockSettingsService.getExchangeRate.mockResolvedValue(90000);
+      tx.payment.create.mockResolvedValue({ id: 'pay-ccy-1', clientId, date: new Date() });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(dto({ amount: '100.00', currency: 'USD' }), clerkUserId);
+
+      expect(tx.payment.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ amount: '9000000.00', currency: 'LBP' }) }),
+      );
+    });
+
+    it('a payment quoted in LBP for a USD client is converted (÷ rate) before being stored', async () => {
+      const tx = makeTx();
+      mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'USD Client', currency: 'USD' });
+      mockSettingsService.getExchangeRate.mockResolvedValue(90000);
+      tx.payment.create.mockResolvedValue({ id: 'pay-ccy-2', clientId, date: new Date() });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(dto({ amount: '9000000', currency: 'LBP' }), clerkUserId);
+
+      expect(tx.payment.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ amount: '100.00', currency: 'USD' }) }),
+      );
+    });
+
+    it('a payment already quoted in the client\'s own currency is stored unchanged — no conversion, no exchange-rate lookup needed', async () => {
+      const tx = makeTx();
+      mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'USD Client', currency: 'USD' });
+      tx.payment.create.mockResolvedValue({ id: 'pay-ccy-3', clientId, date: new Date() });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(dto({ amount: '250.00', currency: 'USD' }), clerkUserId);
+
+      expect(tx.payment.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ amount: '250.00', currency: 'USD' }) }),
+      );
+      expect(mockSettingsService.getExchangeRate).not.toHaveBeenCalled();
+    });
+
+    it('rejects with RATE_UNAVAILABLE (never $0) when a conversion is required but the exchange rate is zero', async () => {
+      const tx = makeTx();
+      mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'LBP Client', currency: 'LBP' });
+      mockSettingsService.getExchangeRate.mockResolvedValue(0);
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.create(dto({ amount: '100.00', currency: 'USD' }), clerkUserId))
+        .rejects.toMatchObject({ response: { code: 'RATE_UNAVAILABLE' } });
+      expect(tx.payment.create).not.toHaveBeenCalled();
+    });
+
+    it('the CONVERTED amount — not the originally quoted amount — is what gets allocated to invoices (allocateFifo)', async () => {
+      const tx = makeTx();
+      mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'LBP Client', currency: 'LBP' });
+      mockSettingsService.getExchangeRate.mockResolvedValue(90000);
+      tx.payment.create.mockResolvedValue({ id: 'pay-ccy-5', clientId, date: new Date() });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(dto({ amount: '100.00', currency: 'USD' }), clerkUserId);
+
+      expect(mockPaymentAllocationService.allocateFifo).toHaveBeenCalledTimes(1);
+      const [, , , calledAmount] = mockPaymentAllocationService.allocateFifo.mock.calls[0];
+      expect(calledAmount.toString()).toBe('9000000');
+    });
+
+    it('the receiver ledger is credited with the CONVERTED amount, not the originally quoted amount', async () => {
+      const tx = makeTx();
+      const receiverId = 'receiver-ccy-1';
+      mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'LBP Client', currency: 'LBP' });
+      tx.user.findUnique.mockResolvedValue({ id: receiverId, name: 'Receiver' });
+      mockSettingsService.getExchangeRate.mockResolvedValue(90000);
+      tx.payment.create.mockResolvedValue({ id: 'pay-ccy-6', clientId, date: new Date() });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(dto({ amount: '100.00', currency: 'USD', receiverId }), clerkUserId);
+
+      expect(mockLedgerWriteService.creditAccount).toHaveBeenCalledTimes(1);
+      const [, , calledAmount] = mockLedgerWriteService.creditAccount.mock.calls[0];
+      expect(calledAmount.toString()).toBe('9000000');
     });
   });
 });

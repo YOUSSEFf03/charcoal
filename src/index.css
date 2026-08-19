@@ -2367,3 +2367,18 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 /* Empty preferred state */
 .pref-empty { padding: 14px 18px; color: var(--text3); font-size: 12.5px; }
 
+/* ── Print ─────────────────────────────────────────────────────────────
+   App-wide print support. Every window.print() call in the app (Reports'
+   Print Report, ClientDetail's/SupplierDetail's statement Print buttons)
+   previously printed the full page including the sidebar/topbar chrome —
+   there was no print stylesheet anywhere, so "print" always produced a
+   cluttered, unusable page regardless of which button triggered it.
+   .no-print / .print-only are reusable utility classes any page can apply;
+   hiding the sidebar/topbar globally here fixes every existing print button
+   at once instead of duplicating per-page print CSS. */
+@media print {
+  .sidebar, .topbar, .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  body { background: #fff; }
+}
+

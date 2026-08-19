@@ -6,12 +6,13 @@ import RevenueByTypeChart from '../components/RevenueByTypeChart'
 import { useWorkers, useLogWorkerPayment } from '../hooks/useWorkers'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { useClients } from '../hooks/useClients'
-import { useInvoices } from '../hooks/useInvoices'
 import { useRate } from '../context/RateContext'
 import { useToast } from '../context/ToastContext'
 import { roundDp, formatUsd } from '../lib/money'
-import { currentMonthToDateRange } from '../lib/date'
-import { exportSheet } from '../lib/exportXlsx'
+import { currentMonthToDateRange, currentWeekToDateRange } from '../lib/date'
+import { exportExcel, type ExcelColumn } from '../lib/excelExport'
+import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
+import type { Worker } from '../types/api'
 
 type Tab = 'pnl' | 'variance' | 'worker' | 'ledger' | 'stock'
 
@@ -36,6 +37,20 @@ function BarRow({ pct, color, label }: { pct: number; color: string; label: stri
   )
 }
 
+// "Clear / All Time" sends no dateFrom/dateTo at all — matching how the
+// backend already treats an absent date filter (see buildDateFilterWithDefault
+// in reports.service.ts): it does NOT literally scan unbounded history, it
+// falls back to its own existing DEFAULT_LOOKBACK_DAYS (90-day) safety net,
+// same as this page's very first load before any date was ever touched.
+// That's existing, intentional backend behavior (a guard against unfiltered
+// full-table scans) — this button clears the fields exactly as specified,
+// it doesn't invent a way to bypass that guard.
+const DATE_PRESETS = [
+  { label: 'Clear / All Time', range: () => ({ dateFrom: '', dateTo: '' }) },
+  { label: 'This Week', range: currentWeekToDateRange },
+  { label: 'This Month', range: currentMonthToDateRange },
+]
+
 const TAB_NAV = [
   { id: 'pnl' as const,      icon: 'ti-chart-pie',  label: 'P&L' },
   { id: 'variance' as const, icon: 'ti-arrows-diff', label: 'Variance' },
@@ -46,14 +61,17 @@ const TAB_NAV = [
 
 export default function Reports() {
   const [tab, setTab] = useState<Tab>('pnl')
-  const [exportOpen, setExportOpen] = useState(false)
   const [payOpen, setPayOpen] = useState(false)
+  // Finding #16 fix: which worker's card was actually clicked — the shared pay
+  // modal below must read the recipient from this, never from allWorkers[0].
+  const [selectedWorker, setSelectedWorker] = useState<Worker | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [payAmt, setPayAmt] = useState('')
   const [payMethod, setPayMethod] = useState('Cash')
   const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10))
 
   const { showToast } = useToast()
+  const { openExportModal, exportColumnsModal } = useExportColumnsModal()
 
   // Date range drives all report queries. Defaults to current month-to-date —
   // the SAME shared helper Dashboard.tsx uses for its own default — so the two
@@ -75,12 +93,10 @@ export default function Reports() {
   const logWorkerPayment = useLogWorkerPayment()
   const rateCtx = useRate()
   const allWorkers = workersQ.data ?? []
-  const firstWorker = allWorkers[0]
   const bagTypeNameById = new Map((bagTypesQ.data ?? []).map(b => [b.id, b.name]))
 
   // Client ledger tab data
   const clientsQ = useClients({ limit: 50 })
-  const invoicesQ = useInvoices({ limit: 100 })
   const arQ = useArSummary()
 
   // Stock & costs tab data
@@ -99,7 +115,6 @@ export default function Reports() {
     varianceQ.refetch()
     workersQ.refetch()
     clientsQ.refetch()
-    invoicesQ.refetch()
     stockValueQ.refetch()
     containerCostsQ.refetch()
     setTimeout(() => setRefreshing(false), 800)
@@ -109,11 +124,24 @@ export default function Reports() {
     <>
       <Topbar title="Reports">
         <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: mono }}>Rate: {rateCtx.rate} LL/$</span>
-        <button className="btn" onClick={() => setExportOpen(true)}><i className="ti ti-download" style={{ fontSize: 15 }} /> Export PDF</button>
+        <button className="btn" onClick={() => window.print()}><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print Report</button>
       </Topbar>
 
+      {/* Print-only context header — the sidebar/topbar/tab-nav/filter controls
+          are hidden in print (see .no-print / @media print in index.css), so
+          without this, a printout would show the active tab's data with no
+          indication of which report or period it's for. Reuses the same
+          tab/date state already driving the on-screen view — no second
+          calculation, no separate print-specific data source. */}
+      <div className="print-only" style={{ display: 'none', padding: '0 28px', marginTop: 16 }}>
+        <h1 style={{ fontSize: 18, margin: 0 }}>Farah Charcoal — {TAB_NAV.find(t => t.id === tab)?.label} Report</h1>
+        <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
+          Period: {dateFrom || 'All time'} → {dateTo || 'today'}
+        </div>
+      </div>
+
       {/* REPORT NAV */}
-      <div style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '0 28px', display: 'flex', gap: 2, overflowX: 'auto' }}>
+      <div className="no-print" style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '0 28px', display: 'flex', gap: 2, overflowX: 'auto' }}>
         {TAB_NAV.map(t => (
           <div key={t.id} onClick={() => setTab(t.id)} style={{ padding: '12px 16px', fontSize: 13, fontWeight: 500, color: tab === t.id ? 'var(--text)' : 'var(--text3)', cursor: 'pointer', borderBottom: `2px solid ${tab === t.id ? 'var(--text)' : 'transparent'}`, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
             <i className={`ti ${t.icon}`} style={{ fontSize: 14 }} /> {t.label}
@@ -124,17 +152,39 @@ export default function Reports() {
       <div style={{ padding: '24px 28px', flex: 1 }}>
 
         {/* FILTERS */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, padding: '12px 16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', flexWrap: 'wrap' }}>
+        <div className="no-print" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, padding: '12px 16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: mono }}>Period</span>
+          {DATE_PRESETS.map(preset => {
+            const range = preset.range()
+            // Derived from current state on every render, never a separate
+            // "which preset is active" flag — so a manual Date From/To edit
+            // that happens to no longer match any preset's computed range
+            // correctly stops highlighting it, with no stale-state risk.
+            const active = dateFrom === range.dateFrom && dateTo === range.dateTo
+            return (
+              <button
+                key={preset.label}
+                className="btn"
+                style={{
+                  fontSize: 12, padding: '5px 10px',
+                  background: active ? 'var(--accent)' : undefined,
+                  borderColor: active ? 'var(--accent)' : undefined,
+                  color: active ? '#fff' : undefined,
+                }}
+                onClick={() => { setDateFrom(range.dateFrom); setDateTo(range.dateTo) }}
+              >
+                {preset.label}
+              </button>
+            )
+          })}
           <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ padding: '6px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg)', fontSize: 12, color: 'var(--text2)', outline: 'none' }} />
           <span style={{ fontSize: 12, color: 'var(--text3)' }}>→</span>
           <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={{ padding: '6px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg)', fontSize: 12, color: 'var(--text2)', outline: 'none' }} />
-          <select style={{ padding: '6px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg)', fontSize: 12, color: 'var(--text2)', cursor: 'pointer', outline: 'none' }}>
-            <option>All charcoal types</option><option>BBQ Hardwood</option><option>Shisha</option><option>Restaurant Grade</option>
-          </select>
-          <select style={{ padding: '6px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg)', fontSize: 12, color: 'var(--text2)', cursor: 'pointer', outline: 'none' }}>
-            <option>All clients</option><option>Restaurants only</option><option>Wholesale only</option><option>Export only</option>
-          </select>
+          {(tab === 'worker' || tab === 'ledger') && (
+            <span style={{ fontSize: 11, color: 'var(--text3)', fontStyle: 'italic' }}>
+              (this tab shows all-time figures — not scoped to Period)
+            </span>
+          )}
           <div style={{ flex: 1 }} />
           <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={handleRefresh} disabled={refreshing}>
             <i className={`ti ti-refresh${refreshing ? ' spin' : ''}`} style={{ fontSize: 13 }} /> {refreshing ? 'Refreshing…' : 'Refresh'}
@@ -466,7 +516,7 @@ export default function Reports() {
                   {parseFloat(worker.totalOwed) > 0 && (
                     <button
                       style={{ background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 'var(--radius)', padding: '7px 14px', fontSize: 12, fontWeight: 600, fontFamily: "'IBM Plex Sans',sans-serif", cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
-                      onClick={() => setPayOpen(true)}
+                      onClick={() => { setSelectedWorker(worker); setPayOpen(true) }}
                     >
                       <i className="ti ti-cash" style={{ fontSize: 13 }} /> Pay {formatUsd(worker.totalOwed, { decimals: 0 })}
                     </button>
@@ -518,14 +568,23 @@ export default function Reports() {
               // Exports exactly what the table below renders: same rows, same column
               // order (Client, Type, Balance, Status), same "Has balance"/"Clear" labels.
               function exportLedger() {
-                const aoa: unknown[][] = [['Client', 'Type', 'Balance', 'Status']]
-                allClients.forEach(c => {
-                  const bal = parseFloat(c.balance)
-                  aoa.push([c.name, c.type, bal, bal > 0 ? 'Has balance' : 'Clear'])
+                if (allClients.length === 0) { showToast('Nothing to export'); return }
+                const columns: ExcelColumn<(typeof allClients)[number]>[] = [
+                  { key: 'client', header: 'Client', value: c => c.name },
+                  { key: 'type', header: 'Type', value: c => c.type },
+                  { key: 'balance', header: 'Balance', type: 'currency', value: c => parseFloat(c.balance), total: 'sum' },
+                  { key: 'status', header: 'Status', value: c => parseFloat(c.balance) > 0 ? 'Has balance' : 'Clear' },
+                ]
+                openExportModal({
+                  title: 'Client Ledger', columns,
+                  onExport: async selectedColumns => {
+                    await exportExcel({
+                      filename: 'client-ledger', sheetName: 'Client ledger', title: 'Client Ledger',
+                      columns: selectedColumns, rows: allClients,
+                    })
+                    showToast(`Exported ${allClients.length} rows`)
+                  },
                 })
-                if (aoa.length === 1) { showToast('Nothing to export'); return }
-                exportSheet(aoa, 'Client ledger', 'client-ledger')
-                showToast(`Exported ${aoa.length - 1} rows`)
               }
 
               return (
@@ -594,7 +653,7 @@ export default function Reports() {
               <div className="kpi-tile">
                 <div className="kpi-tile-label">Total stock value</div>
                 <div className="kpi-tile-value">{stockValueQ.isLoading ? '…' : formatUsd(stockValueQ.data?.totalValue, { decimals: 0 })}</div>
-                <div className="kpi-tile-sub">{stockValueQ.data?.total ?? 0} open lots</div>
+                <div className="kpi-tile-sub">{stockValueQ.data?.total ?? 0} open lots · current, not scoped to Period</div>
               </div>
               <div className="kpi-tile">
                 <div className="kpi-tile-label">Containers reported</div>
@@ -662,62 +721,17 @@ export default function Reports() {
 
       </div>
 
-      {/* EXPORT PDF MODAL */}
-      {exportOpen && (
-        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setExportOpen(false)}>
-          <div className="modal" style={{ width: 420 }}>
-            <div className="modal-head">
-              <div className="modal-title"><i className="ti ti-download" style={{ fontSize: 14, marginRight: 6 }} />Export report</div>
-              <button className="panel-close-btn" onClick={() => setExportOpen(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">Report</label>
-                <select className="form-input">
-                  <option>P&L — May 2026</option>
-                  <option>Stock value</option>
-                  <option>Variance report</option>
-                  <option>Worker earnings</option>
-                  <option>Client ledger</option>
-                  <option>Container costs</option>
-                  <option>Full report (all tabs)</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Format</label>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {['PDF', 'CSV', 'Excel'].map(f => (
-                    <div key={f} style={{ flex: 1, textAlign: 'center', cursor: 'pointer', padding: '7px 0', borderRadius: 'var(--radius)', border: `1px solid ${f === 'PDF' ? 'var(--text)' : 'var(--border)'}`, background: f === 'PDF' ? 'var(--text)' : 'transparent', color: f === 'PDF' ? '#fff' : 'var(--text2)', fontSize: 13, fontFamily: "'IBM Plex Sans', sans-serif" }}>
-                      {f}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Date range</label>
-                <select className="form-input">
-                  <option>May 2026</option><option>April 2026</option><option>Q1 2026</option><option>All time</option>
-                </select>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn" onClick={() => setExportOpen(false)}>Cancel</button>
-              <button className="btn primary" onClick={() => { setExportOpen(false); showToast('Report exported — pnl_may2026.pdf') }}><i className="ti ti-download" style={{ fontSize: 14 }} /> Export</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* PAY WORKER MODAL */}
-      {payOpen && firstWorker && (
-        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setPayOpen(false)}>
+      {payOpen && selectedWorker && (
+        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && (setPayOpen(false), setSelectedWorker(null))}>
           <div className="modal" style={{ width: 440 }}>
             <div className="modal-head">
               <div>
-                <div className="modal-title">Pay {firstWorker.name}</div>
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Total owed: <strong style={{ color: 'var(--accent2)' }}>{formatUsd(firstWorker.totalOwed, { decimals: 0 })}</strong></div>
+                <div className="modal-title">Pay {selectedWorker.name}</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Total owed: <strong style={{ color: 'var(--accent2)' }}>{formatUsd(selectedWorker.totalOwed, { decimals: 0 })}</strong></div>
               </div>
-              <button className="panel-close-btn" onClick={() => setPayOpen(false)}>✕</button>
+              <button className="panel-close-btn" onClick={() => { setPayOpen(false); setSelectedWorker(null) }}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-group">
@@ -728,7 +742,7 @@ export default function Reports() {
                 <label className="form-label">Amount (USD)</label>
                 <input className="form-input" type="number" placeholder="0.00" value={payAmt} onChange={e => setPayAmt(e.target.value)} />
                 {payAmt && (() => {
-                  const owed = parseFloat(firstWorker.totalOwed)
+                  const owed = parseFloat(selectedWorker.totalOwed)
                   const entered = parseFloat(payAmt)
                   return (
                     <div style={{ marginTop: 6, fontSize: 12, color: entered >= owed ? 'var(--accent)' : 'var(--accent2)', fontFamily: mono }}>
@@ -749,14 +763,14 @@ export default function Reports() {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn" onClick={() => setPayOpen(false)}>Cancel</button>
+              <button className="btn" onClick={() => { setPayOpen(false); setSelectedWorker(null) }}>Cancel</button>
               <button
                 className="btn primary"
                 onClick={() => {
                   if (!payAmt || parseFloat(payAmt) <= 0) return
                   logWorkerPayment.mutate(
-                    { id: firstWorker.id, body: { amount: payAmt, date: payDate, notes: 'Reports payment' } },
-                    { onSuccess: () => { setPayOpen(false); showToast(`Payment logged for ${firstWorker.name}`) } }
+                    { id: selectedWorker.id, body: { amount: payAmt, date: payDate, notes: 'Reports payment' } },
+                    { onSuccess: () => { setPayOpen(false); showToast(`Payment logged for ${selectedWorker.name}`); setSelectedWorker(null) } }
                   )
                 }}
               >
@@ -766,6 +780,8 @@ export default function Reports() {
           </div>
         </div>
       )}
+
+      {exportColumnsModal}
     </>
   )
 }

@@ -7,8 +7,11 @@ import { useReceivers } from '../hooks/useReceivers'
 import { usePayments, useCreatePayment } from '../hooks/usePayments'
 import { useWorkers } from '../hooks/useWorkers'
 import { useUsers } from '../hooks/useUsers'
-import { useFillJobs, useFillJobPriceStats, useCreateFillJob, useConfirmFillPickup } from '../hooks/useFillJobs'
+import { useFillJobs, useFillJobPriceStats, useCreateFillJob, useConfirmFillPickup, useFillJobYtdSummary } from '../hooks/useFillJobs'
 import { useStockExits } from '../hooks/useWarehouse'
+import { useClientLedger } from '../hooks/useReports'
+import { formatUsd } from '../lib/money'
+import { formatDate } from '../lib/date'
 import { api } from '../lib/api'
 
 interface BagSpec {
@@ -58,6 +61,18 @@ export default function FillClientDetail() {
   const createFillJob = useCreateFillJob()
   const confirmPickup = useConfirmFillPickup()
   const createPayment = useCreatePayment()
+
+  // Statement of account — reuses the same client-ledger endpoint/hook the
+  // normal Client Statement uses. Backend folds Fill Client pickups
+  // (StockExit, exitType='client_bags_fill') in as debit entries alongside
+  // payment credits — see ReportsService.getClientLedger(). No separate
+  // balance math here; this is purely a view over what the ledger returns.
+  const ledgerQ = useClientLedger(id ?? '')
+  const statement = ledgerQ.data?.entries ?? []
+  const stmtOpening = parseFloat(ledgerQ.data?.openingBalance ?? '0')
+  const stmtDebitTotal = statement.reduce((s, e) => s + parseFloat(e.debit), 0)
+  const stmtCreditTotal = statement.reduce((s, e) => s + parseFloat(e.credit), 0)
+  const stmtClosing = parseFloat(ledgerQ.data?.balance ?? String(stmtOpening))
 
   // Stock lots for fill job modal charcoal selector
   const stockLotsQ = useQuery({
@@ -188,32 +203,22 @@ export default function FillClientDetail() {
     return result
   }, [bags, stockFromJobs, pickedUpFromJobs, specsFromJobs])
 
-  // YTD stats: cost from fill jobs, revenue from pickup amounts
-  const ytdStats = useMemo(() => {
-    const yearStart = new Date(new Date().getFullYear(), 0, 1)
-    const ytdJobs = fillJobs.filter(fj => new Date(fj.date) >= yearStart)
-    const ytdPickups = pickups.filter(pk => new Date(pk.date) >= yearStart)
-
-    let totalCharcoalKg = 0, totalOutputKg = 0
-    let costYTD = 0, bagsYTD = 0
-
-    for (const fj of ytdJobs) {
-      totalCharcoalKg += parseFloat(fj.totalCharcoalKg)
-      bagsYTD += fj.totalBags
-      costYTD += parseFloat(fj.totalCost)
-      for (const out of fj.bagOutputs) {
-        totalOutputKg += out.size * out.qty
-      }
-    }
-
-    const revenueYTD = ytdPickups.reduce((s, pk) => s + (pk.amount ? parseFloat(pk.amount) : 0), 0)
-    const wasteKg = Math.max(0, totalCharcoalKg - totalOutputKg)
-    const wastePct = totalCharcoalKg > 0 ? (wasteKg / totalCharcoalKg) * 100 : 0
-    const profitYTD = revenueYTD - costYTD
-    const marginYTD = revenueYTD > 0 ? (profitYTD / revenueYTD) * 100 : 0
-
-    return { bagsYTD, wasteKg, wastePct, revenueYTD, profitYTD, marginYTD, hasData: ytdJobs.length > 0 }
-  }, [fillJobs, pickups])
+  // YTD stats: cost from fill jobs, revenue from pickup amounts. Computed
+  // server-side (FillJobsService.getYtdSummary()) — unbounded per client,
+  // not derived from the limit:100-capped fillJobs/pickups lists above,
+  // which would silently undercount for a client with >100 fill jobs or
+  // pickups within the year. Same field names/formulas as before, just
+  // sourced from the unbounded aggregate instead of a client-side reduce.
+  const ytdSummaryQ = useFillJobYtdSummary(id ?? '')
+  const ytdStats = {
+    bagsYTD: ytdSummaryQ.data?.bagsYTD ?? 0,
+    wasteKg: parseFloat(ytdSummaryQ.data?.wasteKg ?? '0'),
+    wastePct: ytdSummaryQ.data?.wastePct ?? 0,
+    revenueYTD: parseFloat(ytdSummaryQ.data?.revenueYTD ?? '0'),
+    profitYTD: parseFloat(ytdSummaryQ.data?.profitYTD ?? '0'),
+    marginYTD: ytdSummaryQ.data?.marginYTD ?? 0,
+    hasData: ytdSummaryQ.data?.hasData ?? false,
+  }
 
   // Modal state
   const updateClient = useUpdateClient()
@@ -276,6 +281,7 @@ export default function FillClientDetail() {
   const [notes, setNotes] = useState({ ar: '', en: '' })
   const [editNotes, setEditNotes] = useState({ ar: '', en: '' })
   const [showNotesEditor, setShowNotesEditor] = useState(false)
+  const [notesSaving, setNotesSaving] = useState(false)
 
   function openEditClient() {
     setEditClientForm({
@@ -320,6 +326,25 @@ export default function FillClientDetail() {
   function openNotesEditor() {
     setEditNotes({ ...notes })
     setShowNotesEditor(true)
+  }
+
+  // Only the English side has a backend home (Client.notes is a single
+  // field) — Arabic stays a local-only UI value, same limitation as before
+  // this fix, not persisted anywhere. See saveEditClient() above for the
+  // same mutation/try-catch/toast convention this mirrors.
+  async function saveNotes() {
+    if (!id || !client) return
+    setNotesSaving(true)
+    try {
+      await updateClient.mutateAsync({ id, body: { notes: editNotes.en.trim() || undefined } })
+      setNotes(editNotes)
+      setShowNotesEditor(false)
+      showToast('Notes saved')
+    } catch (e: any) {
+      showToast(e?.error ?? 'Failed to save notes')
+    } finally {
+      setNotesSaving(false)
+    }
   }
 
   useEffect(() => {
@@ -539,6 +564,68 @@ export default function FillClientDetail() {
         <div style={{ display: 'grid', gridTemplateColumns: '1.65fr 1fr', gap: 14 }}>
           <div className="stack">
 
+            {/* Statement of account — DEBIT / CREDIT / BALANCE only. Pickups
+                (bag movement) and Fill jobs (production) below remain
+                operational detail; this card is the single financial record. */}
+            <div className="card">
+              <div className="card-head">
+                <div className="card-title"><i className="ti ti-file-invoice" /> Statement of account</div>
+              </div>
+              <div className="stmt-summary">
+                <div className="stmt-cell"><div className="l">Opening balance</div><div className="v">{formatUsd(stmtOpening)}</div></div>
+                <div className="stmt-cell"><div className="l">Total debit</div><div className="v amber">{formatUsd(stmtDebitTotal)}</div><div className="s">fill pickups</div></div>
+                <div className="stmt-cell"><div className="l">Total credit</div><div className="v green">{formatUsd(stmtCreditTotal)}</div><div className="s">payments received</div></div>
+                <div className="stmt-cell"><div className="l">Closing balance</div><div className={`v ${stmtClosing > 0 ? 'amber' : stmtClosing < 0 ? 'red' : 'green'}`}>{formatUsd(stmtClosing)}</div><div className="s">{stmtClosing > 0 ? 'owed by client' : stmtClosing < 0 ? 'in credit' : 'settled'}</div></div>
+              </div>
+              {ledgerQ.isLoading && <div className="empty">Loading…</div>}
+              {!ledgerQ.isLoading && (
+                <table className="data-table stmt-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Description</th>
+                      <th className="right">Debit</th>
+                      <th className="right">Credit</th>
+                      <th className="right">Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="opening">
+                      <td className="mono"></td>
+                      <td className="desc">Opening balance</td>
+                      <td className="num"></td><td className="num"></td>
+                      <td className="num">{formatUsd(stmtOpening)}</td>
+                    </tr>
+                    {statement.map((e, i) => {
+                      const debit = parseFloat(e.debit)
+                      const credit = parseFloat(e.credit)
+                      const balance = parseFloat(e.runningBalance)
+                      return (
+                        <tr key={i}>
+                          <td className="mono">{formatDate(e.date, { day: '2-digit' })}</td>
+                          <td className="desc">{e.description}</td>
+                          <td className="num dr">{debit ? formatUsd(debit) : ''}</td>
+                          <td className="num cr">{credit ? formatUsd(credit) : ''}</td>
+                          <td className={`num ${balance < 0 ? 'bal-neg' : 'bal-pos'}`} style={{ fontWeight: 600 }}>{formatUsd(balance)}</td>
+                        </tr>
+                      )
+                    })}
+                    {statement.length === 0 && (
+                      <tr><td colSpan={5} className="empty">No fill pickups or payments recorded yet</td></tr>
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan={2} style={{ textAlign: 'right' }}>Totals</td>
+                      <td className="num dr">{formatUsd(stmtDebitTotal)}</td>
+                      <td className="num cr">{formatUsd(stmtCreditTotal)}</td>
+                      <td className="num">{formatUsd(stmtClosing)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+
             {/* Bags & Pricing */}
             <div className="card">
               <div className="card-head">
@@ -701,7 +788,9 @@ export default function FillClientDetail() {
                 <button className="card-action" onClick={() => setShowPay(true)}><i className="ti ti-plus" style={{ fontSize: 13 }} /> Log payment</button>
               </div>
               <div className="pay-kpis">
-                <div className="pay-kpi"><div className="lbl">Total paid</div><div className="val green">${realPayments.reduce((s, p) => s + parseFloat(p.amount), 0).toFixed(2)}</div></div>
+                {/* Total paid — all time, unbounded (stmtCreditTotal from ledgerQ),
+                    NOT a sum over the limit:100-capped realPayments page. */}
+                <div className="pay-kpi"><div className="lbl">Total paid</div><div className="val green">${stmtCreditTotal.toFixed(2)}</div></div>
                 <div className="pay-kpi"><div className="lbl">Outstanding</div><div className={`val ${clientBalance > 0 ? 'amber' : 'green'}`}>${clientBalance.toFixed(2)}</div></div>
               </div>
               <table className="data-table">
@@ -1579,8 +1668,8 @@ export default function FillClientDetail() {
               <span style={{ fontSize: 11.5, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>visible to your team only</span>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn" onClick={() => setShowNotesEditor(false)}>Cancel</button>
-                <button className="btn green" onClick={() => { setNotes(editNotes); setShowNotesEditor(false); showToast('Notes saved') }}>
-                  <i className="ti ti-check" style={{ fontSize: 15 }} /> Save notes
+                <button className="btn green" disabled={notesSaving} onClick={saveNotes}>
+                  {notesSaving ? <><i className="ti ti-loader-2" style={{ fontSize: 15 }} /> Saving…</> : <><i className="ti ti-check" style={{ fontSize: 15 }} /> Save notes</>}
                 </button>
               </div>
             </div>

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useClients, useClientsCounts, useCreateClient, useAddPhone, useOverdueClients } from '../hooks/useClients'
+import SortHeader, { toggleSort } from '../components/ui/SortHeader'
 import { useCreatePayment } from '../hooks/usePayments'
 import { useOrders } from '../hooks/useOrders'
 import type { Client, ClientType, Currency, PhoneLabel, PaymentMethod } from '../types/api'
@@ -43,6 +44,11 @@ export default function Clients() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [fType, setFType] = useState('All types')
   const [fBalance, setFBalance] = useState('Any balance')
+  const [fActive, setFActive] = useState('All statuses')
+  const [minSales, setMinSales] = useState('')
+  const [maxSales, setMaxSales] = useState('')
+  const [debouncedMinSales, setDebouncedMinSales] = useState('')
+  const [debouncedMaxSales, setDebouncedMaxSales] = useState('')
   const [payMethod, setPayMethod] = useState('Cash')
   const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10))
   const [usdAmt, setUsdAmt] = useState('')
@@ -68,14 +74,49 @@ export default function Clients() {
     return () => clearTimeout(t)
   }, [search])
 
+  // Same 300ms debounce for the sales-range number inputs — avoids firing a
+  // request on every keystroke, mirroring the search field above.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedMinSales(minSales), 300)
+    return () => clearTimeout(t)
+  }, [minSales])
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedMaxSales(maxSales), 300)
+    return () => clearTimeout(t)
+  }, [maxSales])
+
   // Reset to page 1 when filters change.
-  useEffect(() => { setPage(1) }, [debouncedSearch, fType, fBalance])
+  useEffect(() => { setPage(1) }, [debouncedSearch, fType, fBalance, fActive, debouncedMinSales, debouncedMaxSales])
 
   const mappedType = TYPE_LABEL_TO_ENUM[fType]
   const balanceFilter: boolean | undefined =
     fBalance === 'Has balance' ? true :
     fBalance === 'Clear' ? false :
     undefined
+  const activeFilter: boolean | undefined =
+    fActive === 'Active' ? true :
+    fActive === 'Inactive' ? false :
+    undefined
+  const minSalesNum = debouncedMinSales.trim() !== '' && !isNaN(Number(debouncedMinSales)) ? Number(debouncedMinSales) : undefined
+  const maxSalesNum = debouncedMaxSales.trim() !== '' && !isNaN(Number(debouncedMaxSales)) ? Number(debouncedMaxSales) : undefined
+
+  function clearAllFilters() {
+    setSearch('')
+    setFType('All types')
+    setFBalance('Any balance')
+    setFActive('All statuses')
+    setMinSales('')
+    setMaxSales('')
+  }
+
+  // Sort — a real business-decision-free ranking: total sales, total
+  // collected, and order count are directly measurable from existing
+  // accounting data. Deliberately NOT sortable by "Balance": the displayed
+  // Balance column is trueBalance(c) (raw balance + pending uninvoiced
+  // orders, computed client-side below), which the server has no way to
+  // sort by — sorting on the server's raw balance while displaying
+  // trueBalance would silently disagree with what's on screen.
+  const [clientSort, setClientSort] = useState<{ key: 'name' | 'lastOrderDate' | 'avgOrderDays' | 'totalInvoiced' | 'totalCollected' | 'orderCount'; order: 'asc' | 'desc' } | null>(null)
 
   // Live client list — server-side search, type, and balance filtering + pagination.
   const { data: clientsResp, isLoading, isError, refetch } = useClients({
@@ -84,7 +125,12 @@ export default function Clients() {
     limit: 50,
     excludeFillClient: true,
     type: mappedType,
+    isActive: activeFilter,
     hasBalance: fBalance === 'Overdue' ? undefined : balanceFilter,
+    sortBy: clientSort?.key,
+    sortOrder: clientSort?.order,
+    minTotalInvoiced: minSalesNum,
+    maxTotalInvoiced: maxSalesNum,
   })
 
   // Balances tab — full list of all clients with outstanding balance.
@@ -259,6 +305,21 @@ export default function Clients() {
                 <option>Any balance</option>
                 <option>Has balance</option><option>Clear</option><option>Overdue</option>
               </select>
+              <select className="filter-select" value={fActive} onChange={e => setFActive(e.target.value)}>
+                <option>All statuses</option>
+                <option>Active</option><option>Inactive</option>
+              </select>
+              <div className="filter-input" style={{ maxWidth: 100 }}>
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>$</span>
+                <input type="number" placeholder="Min sales" value={minSales} onChange={e => setMinSales(e.target.value)} />
+              </div>
+              <div className="filter-input" style={{ maxWidth: 100 }}>
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>$</span>
+                <input type="number" placeholder="Max sales" value={maxSales} onChange={e => setMaxSales(e.target.value)} />
+              </div>
+              {(search || fType !== 'All types' || fBalance !== 'Any balance' || fActive !== 'All statuses' || minSales || maxSales) && (
+                <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={clearAllFilters}>Clear filters</button>
+              )}
               <div className="filter-sep" />
               <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>{totalCount} clients</span>
             </div>
@@ -266,7 +327,12 @@ export default function Clients() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Client</th><th>Type</th><th>Last order</th><th>Avg order</th>
+                    <SortHeader label="Client" sortKey="name" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} />
+                    <th>Type</th>
+                    <SortHeader label="Last order" sortKey="lastOrderDate" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} />
+                    <SortHeader label="Avg order" sortKey="avgOrderDays" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} />
+                    <SortHeader label="Orders" sortKey="orderCount" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} align="right" />
+                    <SortHeader label="Total invoiced" sortKey="totalInvoiced" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} align="right" />
                     <th>Balance (USD equiv.)</th><th>Currency</th><th>Status</th><th></th>
                   </tr>
                 </thead>
@@ -277,6 +343,8 @@ export default function Clients() {
                       <td><div className="skeleton" style={{ width: 60, height: 16 }} /></td>
                       <td><div className="skeleton" style={{ width: 70, height: 13 }} /></td>
                       <td><div className="skeleton" style={{ width: 50, height: 13 }} /></td>
+                      <td><div className="skeleton" style={{ width: 30, height: 13 }} /></td>
+                      <td><div className="skeleton" style={{ width: 70, height: 13 }} /></td>
                       <td><div className="skeleton" style={{ width: 80, height: 13 }} /></td>
                       <td><div className="skeleton" style={{ width: 40, height: 13 }} /></td>
                       <td><div className="skeleton" style={{ width: 60, height: 16 }} /></td>
@@ -285,7 +353,7 @@ export default function Clients() {
                   ))}
                   {isError && (
                     <tr>
-                      <td colSpan={8} className="empty">
+                      <td colSpan={10} className="empty">
                         Failed to load clients.
                         <div><button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={() => refetch()}>Retry</button></div>
                       </td>
@@ -300,6 +368,8 @@ export default function Clients() {
                       <td><span className={`badge ${typeBadgeClass(c.type)}`}>{c.type}</span></td>
                       <td style={{ color: 'var(--text2)' }}>{formatDate(c.lastOrderDate)}</td>
                       <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>{c.avgOrderDays ? `${Math.round(parseFloat(c.avgOrderDays))} days` : '—'}</td>
+                      <td className="right" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>{c.orderCount ?? '—'}</td>
+                      <td className="right" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>{c.totalInvoiced != null ? formatUsd(c.totalInvoiced, { decimals: 0 }) : '—'}</td>
                       <td>
                         <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: trueBalance(c) > 0 ? (c.isOverdue ? 'var(--red)' : 'var(--accent2)') : 'var(--text)' }}>{formatUsd(String(trueBalance(c)))}</div>
                       </td>
@@ -310,10 +380,10 @@ export default function Clients() {
                   ))}
                   {!isLoading && !isError && displayClients.length === 0 && (
                     <tr>
-                      <td colSpan={8} style={{ textAlign: 'center', padding: '40px 24px', color: 'var(--text3)' }}>
+                      <td colSpan={10} style={{ textAlign: 'center', padding: '40px 24px', color: 'var(--text3)' }}>
                         <i className="ti ti-users" style={{ fontSize: 28, display: 'block', marginBottom: 8 }} />
                         <div>No clients match your search</div>
-                        <button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={() => { setSearch(''); setFType('All types'); setFBalance('Any balance') }}>Clear filters</button>
+                        <button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={clearAllFilters}>Clear filters</button>
                       </td>
                     </tr>
                   )}

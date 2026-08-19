@@ -367,7 +367,10 @@ describe('StockAdjustmentsService', () => {
           }),
           update: fn().mockResolvedValue({ id: adjId }),
         },
-        stockLot: { update: fn().mockResolvedValue({}) },
+        // kgRemaining reflects a plausible post-increment live value (any
+        // non-negative number — this test is about the delta computation, not
+        // the negative-stock guard, which has its own dedicated tests below).
+        stockLot: { update: fn().mockResolvedValue({ kgRemaining: { toString: () => '95.000' } }) },
         packedStock: { update: fn() },
       };
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
@@ -377,6 +380,123 @@ describe('StockAdjustmentsService', () => {
       // delta = 85 − 90 = −5 applied atomically (Decimal string); difference recorded = 85 − 100 = −15.
       expect(tx.stockLot.update.mock.calls[0][0].data.kgRemaining).toEqual({ increment: '-5.000' });
       expect(tx.stockAdjustment.update.mock.calls[0][0].data.difference).toBe('-15.000');
+    });
+
+    // ===================================================================
+    // Negative-stock regression. update()/remove() apply their delta as an
+    // atomic { increment } against the LIVE row — safe from read-modify-write
+    // races — but previously never checked whether the RESULTING live value
+    // stayed >= 0 (or, for packed stock, >= reservedQuantity). Editing/deleting
+    // a correctly-computed delta can still corrupt stock if consumption
+    // happened between the original adjustment and this edit/delete.
+    // ===================================================================
+
+    it('update() rejects an edit that would drive kgRemaining negative, and rolls back (no adjustment-record write survives)', async () => {
+      const adjId = 'adj-neg-1';
+      const lotId = 'lot-neg-1';
+      // Original qtyAfter 90 -> editing down to 10 means delta = 10-90 = -80.
+      // Only 30kg is actually left live (consumed by a sale since the original
+      // adjustment) -> applying -80 would drive kgRemaining to -50.
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: adjId, adjustmentType: 'lot', lotId, packedStockId: null,
+            status: 'approved',
+            qtyBefore: { toString: () => '100.000' },
+            qtyAfter:  { toString: () => '90.000' },
+            difference: { toString: () => '-10.000' },
+          }),
+          update: fn(),
+        },
+        stockLot: { update: fn().mockResolvedValue({ kgRemaining: { toString: () => '-50.000' } }) },
+        packedStock: { update: fn() },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.update(adjId, { qtyAfter: '10.000' })).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      // The adjustment record itself must never be rewritten when the stock
+      // mutation it depends on is rejected — the whole $transaction rolls back.
+      expect(tx.stockAdjustment.update).not.toHaveBeenCalled();
+    });
+
+    it('update() rejects an edit that would drive packed stock below its reservedQuantity', async () => {
+      const adjId = 'adj-neg-2';
+      const psId = 'ps-neg-1';
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: adjId, adjustmentType: 'packed_stock', packedStockId: psId, lotId: null,
+            status: 'approved',
+            qtyBefore: { toString: () => '50' },
+            qtyAfter:  { toString: () => '40' },
+            difference: { toString: () => '-10' },
+          }),
+          update: fn(),
+        },
+        stockLot: { update: fn() },
+        // Post-increment quantity (5) drops below reservedQuantity (8) — some of
+        // those bags are already reserved by an in-flight shipment.
+        packedStock: { update: fn().mockResolvedValue({ quantity: 5, reservedQuantity: 8 }) },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.update(adjId, { qtyAfter: '5' })).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      expect(tx.stockAdjustment.update).not.toHaveBeenCalled();
+    });
+
+    it('remove() rejects a reversal that would drive kgRemaining negative', async () => {
+      const adjId = 'adj-neg-3';
+      const lotId = 'lot-neg-3';
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: adjId, adjustmentType: 'lot', lotId, packedStockId: null,
+            status: 'approved',
+            qtyBefore: { toString: () => '100.000' },
+            difference: { toString: () => '-10.000' }, // reversal = +10
+          }),
+          delete: fn(),
+        },
+        // Live value is only 3kg (heavily consumed since the original adjustment) —
+        // reversing +10 would drive it to -7.
+        stockLot: { update: fn().mockResolvedValue({ kgRemaining: { toString: () => '-7.000' } }) },
+        packedStock: { update: fn() },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.remove(adjId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      // The adjustment record itself must not be deleted when its reversal is rejected.
+      expect(tx.stockAdjustment.delete).not.toHaveBeenCalled();
+    });
+
+    it('update() still succeeds when the post-increment result stays non-negative and above reserved', async () => {
+      const adjId = 'adj-ok-1';
+      const lotId = 'lot-ok-1';
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: adjId, adjustmentType: 'lot', lotId, packedStockId: null,
+            status: 'approved',
+            qtyBefore: { toString: () => '100.000' },
+            qtyAfter:  { toString: () => '90.000' },
+            difference: { toString: () => '-10.000' },
+          }),
+          update: fn().mockResolvedValue({ id: adjId }),
+        },
+        stockLot: { update: fn().mockResolvedValue({ kgRemaining: { toString: () => '15.000' } }) },
+        packedStock: { update: fn() },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.update(adjId, { qtyAfter: '85.000' });
+
+      expect(tx.stockAdjustment.update).toHaveBeenCalledTimes(1);
     });
   });
 

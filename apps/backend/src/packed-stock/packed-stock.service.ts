@@ -120,4 +120,68 @@ export class PackedStockService {
       totalNominalKg: entry.totalNominalKg.toFixed(3),
     }));
   }
+
+  /**
+   * Server-side FIFO draw plan for one bag type — which PackedStock record(s)
+   * (and how much from each) a sale of `quantity` bags should draw from,
+   * oldest batch first.
+   *
+   * Replaces WarehouseSales.tsx's previous client-side computation, which
+   * sorted a limit:200-capped fetch of individual PackedStock records
+   * ascending by createdAt and greedily consumed free quantity (quantity −
+   * reservedQuantity) until the requested amount was satisfied. A bag type
+   * with more than 200 outstanding batches would silently truncate that
+   * fetch and could report "insufficient stock" even when real stock existed
+   * beyond the 200th record.
+   *
+   * This runs the EXACT same ordering/greedy-consumption rule — createdAt
+   * ascending, free = quantity − reservedQuantity — unbounded, scoped to ONE
+   * bag type's outstanding batches (the same "safe unbounded per-entity"
+   * scale profile FillJobsService.getPriceStats() / StockExitsService.
+   * getClientWarehouseSummary() already use elsewhere in this codebase; a
+   * single bag type's live batch count, not the whole table).
+   *
+   * Read-only / advisory: does NOT decrement anything. The actual write-time
+   * decrement + re-validation of each individual record's free quantity
+   * still happens exactly as before, inside StockExitsService.create() /
+   * WalkInSalesService.create()'s own transactions — this only computes
+   * which records the caller should ask those unchanged endpoints to draw
+   * from, so a concurrent sale between planning and submission is still
+   * safely rejected at write time exactly as it always has been.
+   */
+  async getFifoDraw(
+    bagTypeId: string,
+    quantity: number,
+  ): Promise<{
+    draws: { packedStockId: string; quantity: number }[];
+    fulfilled: boolean;
+    requested: number;
+    available: number;
+  }> {
+    const records = await this.prisma.packedStock.findMany({
+      where: { bagTypeId },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, quantity: true, reservedQuantity: true },
+    });
+
+    const draws: { packedStockId: string; quantity: number }[] = [];
+    let remaining = quantity;
+    let available = 0;
+
+    for (const rec of records) {
+      const free = Math.max(0, rec.quantity - rec.reservedQuantity);
+      available += free;
+      if (remaining <= 0 || free <= 0) continue;
+      const take = Math.min(free, remaining);
+      draws.push({ packedStockId: rec.id, quantity: take });
+      remaining -= take;
+    }
+
+    return {
+      draws,
+      fulfilled: remaining <= 0,
+      requested: quantity,
+      available,
+    };
+  }
 }

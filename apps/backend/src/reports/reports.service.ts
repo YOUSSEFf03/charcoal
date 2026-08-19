@@ -174,8 +174,6 @@ export class ReportsService {
   async getProfitLoss(filters: {
     dateFrom?: string;
     dateTo?: string;
-    charcoalType?: string;
-    grade?: string;
     clientId?: string;
   }) {
     const dateFilter = buildDateFilterWithDefault(filters.dateFrom, filters.dateTo);
@@ -896,8 +894,16 @@ export class ReportsService {
     const limit = filters.limit ?? 50;
     const skip  = (page - 1) * limit;
 
+    // packing_sessions.date is a @db.Date column — plain gte/lte, same category
+    // as bagCost/varianceCost in getProfitLoss (see laborPeriodWhere there).
+    // Passing dateFilter wholesale would leak businessGte/businessLt as
+    // unrecognized keys into Prisma's filter validation (see getContainerCosts'
+    // arrivalDate comment for the same footgun) and throw at runtime.
     const where: Prisma.PackingSessionWhereInput = {
-      date: dateFilter,
+      date: {
+        ...(dateFilter.gte ? { gte: dateFilter.gte } : {}),
+        ...(dateFilter.lte ? { lte: dateFilter.lte } : {}),
+      },
       ...(filters.workerId ? { workerId: filters.workerId } : {}),
     };
 
@@ -1200,6 +1206,25 @@ export class ReportsService {
     return map[method] ?? 'Payment';
   }
 
+  /**
+   * Description for a Fill Client pickup debit entry — parses the same
+   * bag-summary JSON `reason` blob FillClientDetail.tsx already parses
+   * client-side (specKey/size/charcoal/qty array), ported rather than
+   * reinvented so the wording stays derived from the existing source data.
+   */
+  private buildFillPickupDescription(reason: string | null): string {
+    if (!reason) return 'Filled bags pickup';
+    try {
+      const items = JSON.parse(reason) as { size?: number; charcoal?: string; qty: number }[];
+      const totalBags = items.reduce((sum, i) => sum + (i.qty ?? 0), 0);
+      if (totalBags === 0) return 'Filled bags pickup';
+      const detail = items.map((i) => `${i.qty}× ${i.size ?? '?'}kg`).join(', ');
+      return `Filled bags pickup — ${totalBags} bags (${detail})`;
+    } catch {
+      return 'Filled bags pickup';
+    }
+  }
+
   private buildProductLineDescription(
     containerNumber: string | null,
     charcoalType: string,
@@ -1236,11 +1261,19 @@ export class ReportsService {
     const client = await this.prisma.client.findUnique({ where: { id: clientId } });
     if (!client) throw new NotFoundException({ error: 'Client not found', code: 'NOT_FOUND' });
 
-    // ── Opening balance — aggregate of all non-cancelled invoices and payments
-    // strictly BEFORE dateFrom.  Zero when no start-date filter is supplied.
+    // ── Opening balance — aggregate of all non-cancelled invoices, Fill Client
+    // pickups, and payments strictly BEFORE dateFrom. Zero when no start-date
+    // filter is supplied.
+    //
+    // Fill Client pickups use the EXACT same filter as
+    // ClientBalanceService.computeBalance() (exitType='client_bags_fill',
+    // amount NOT NULL) — additive only. A normal client never has
+    // exitType='client_bags_fill' rows (see computeBalance()'s doc comment),
+    // so this term is always 0 for them and the pre-existing invoice/payment
+    // opening balance is unchanged.
     let openingBalance = new Decimal(0);
     if (dateFilter?.gte) {
-      const [priorInv, priorPay] = await Promise.all([
+      const [priorInv, priorFillPickups, priorPay] = await Promise.all([
         this.prisma.invoice.aggregate({
           where: {
             clientId,
@@ -1249,12 +1282,22 @@ export class ReportsService {
           },
           _sum: { total: true },
         }),
+        this.prisma.stockExit.aggregate({
+          where: {
+            clientId,
+            exitType: 'client_bags_fill',
+            amount: { not: null },
+            date: { lt: dateFilter.gte },
+          },
+          _sum: { amount: true },
+        }),
         this.prisma.payment.aggregate({
           where: { clientId, date: { lt: dateFilter.gte } },
           _sum: { amount: true },
         }),
       ]);
       openingBalance = new Decimal(priorInv._sum.total?.toString()  ?? '0')
+        .plus(new Decimal(priorFillPickups._sum.amount?.toString() ?? '0'))
         .minus(new Decimal(priorPay._sum.amount?.toString() ?? '0'));
     }
 
@@ -1263,7 +1306,14 @@ export class ReportsService {
     // payment.date is a @db.Date column — plain gte/lte, unchanged, still correct.
     // Neither passes `dateFilter` wholesale (it now also carries businessGte/
     // businessLt, which Prisma would reject as unrecognized filter keys).
-    const [invoices, payments] = await Promise.all([
+    // Fill Client pickups — same filter as ClientBalanceService.computeBalance()
+    // (exitType='client_bags_fill', amount NOT NULL). date is a plain @db.Date
+    // column, same as payment.date, so it uses gte/lte like the payments query
+    // below rather than invoice's businessGte/businessLt DateTime handling.
+    // Additive only: normal clients never have these rows (see computeBalance()'s
+    // doc comment), so this query returns [] for them and existing behavior for
+    // invoices/payments is unchanged.
+    const [invoices, fillPickups, payments] = await Promise.all([
       this.prisma.invoice.findMany({
         where: {
           clientId,
@@ -1272,9 +1322,19 @@ export class ReportsService {
         },
         select: {
           id: true, displayId: true, issuedAt: true, createdAt: true,
-          total: true, source: true, lines: true,
+          total: true, source: true, lines: true, status: true,
         },
         orderBy: { issuedAt: 'asc' },
+      }),
+      this.prisma.stockExit.findMany({
+        where: {
+          clientId,
+          exitType: 'client_bags_fill',
+          amount: { not: null },
+          ...(dateFilter ? { date: { gte: dateFilter.gte, lte: dateFilter.lte } } : {}),
+        },
+        select: { id: true, date: true, amount: true, reason: true },
+        orderBy: { date: 'asc' },
       }),
       this.prisma.payment.findMany({
         where: { clientId, ...(dateFilter ? { date: { gte: dateFilter.gte, lte: dateFilter.lte } } : {}) },
@@ -1284,8 +1344,13 @@ export class ReportsService {
     ]);
 
     type EntryItem =
+      // status: minimum field needed so callers (e.g. ClientDetail's open-invoice
+      // count) can classify each invoice entry without a second, unbounded fetch —
+      // see the ClientDetail invoice-scalability audit. Not used in any balance
+      // math here; the running-balance fold below is unchanged.
       | { kind: 'invoice'; date: Date; id: string; displayId: string | null;
-          total: Decimal; source: string | null; lines: any[] }
+          total: Decimal; source: string | null; lines: any[]; status: string }
+      | { kind: 'fillPickup'; date: Date; id: string; amount: Decimal; reason: string | null }
       | { kind: 'payment'; date: Date; id: string; displayId: string | null;
           amount: Decimal; method: string };
 
@@ -1298,6 +1363,14 @@ export class ReportsService {
         total:     new Decimal(inv.total.toString()),
         source:    inv.source as string | null,
         lines:     (inv.lines ?? []) as any[],
+        status:    inv.status as string,
+      })),
+      ...fillPickups.map((exit) => ({
+        kind:   'fillPickup' as const,
+        date:   exit.date instanceof Date ? exit.date : new Date(exit.date),
+        id:     exit.id,
+        amount: new Decimal(exit.amount!.toString()),
+        reason: exit.reason,
       })),
       ...payments.map((pmt) => ({
         kind:      'payment' as const,
@@ -1309,12 +1382,15 @@ export class ReportsService {
       })),
     ];
 
-    // Chronological; debits before credits on the same timestamp.
+    // Chronological; debits (invoice / fillPickup) before credits (payment) on
+    // the same timestamp — generalized from the original invoice-before-payment
+    // rule so Fill Client pickups sort the same way invoices always have.
+    const isDebit = (kind: EntryItem['kind']) => kind === 'invoice' || kind === 'fillPickup';
     items.sort((a, b) => {
       const diff = a.date.getTime() - b.date.getTime();
       if (diff !== 0) return diff;
-      if (a.kind === 'invoice' && b.kind === 'payment') return -1;
-      if (a.kind === 'payment' && b.kind === 'invoice') return  1;
+      if (isDebit(a.kind) && b.kind === 'payment') return -1;
+      if (a.kind === 'payment' && isDebit(b.kind)) return  1;
       return 0;
     });
 
@@ -1330,6 +1406,22 @@ export class ReportsService {
           displayId:      item.displayId,
           description:    this.buildInvoiceDescription(item.source, item.lines),
           debit:          item.total.toFixed(2),
+          credit:         '0.00',
+          runningBalance: runningBalance.toFixed(2),
+          // Present on invoice entries only — lets a caller derive an
+          // "open invoice" count (status not in paid/cancelled) from this
+          // already-unbounded-per-client list, with no second invoice query.
+          status:         item.status,
+        };
+      } else if (item.kind === 'fillPickup') {
+        runningBalance = runningBalance.plus(item.amount);
+        return {
+          date:           item.date,
+          type:           'fill_pickup' as const,
+          reference:      item.id,
+          displayId:      null,
+          description:    this.buildFillPickupDescription(item.reason),
+          debit:          item.amount.toFixed(2),
           credit:         '0.00',
           runningBalance: runningBalance.toFixed(2),
         };
@@ -1810,17 +1902,42 @@ export class ReportsService {
    * Accessible to owner, accountant, and sales_rep (matches invoice list visibility).
    */
   async getArSummary() {
-    const [invoicedAgg, collectedAgg, outstandingResult, overdueResult] = await Promise.all([
-      // totalInvoiced: sum of all issued/partially_paid/paid invoice totals
-      this.prisma.invoice.aggregate({
-        where: { status: { notIn: ['draft', 'cancelled'] } },
-        _sum: { total: true },
-      }),
+    // Every figure below sums across ALL clients regardless of their individual
+    // Client.currency — Invoice.total and Payment.amount are per-row currency-
+    // tagged (Currency is independently settable per invoice/payment, not forced
+    // to match Client.currency), so a raw SUM() mixes USD and LBP magnitudes as
+    // if they were the same unit (an LBP client's 45,000,000 added straight to a
+    // USD client's 500). Every LBP row is converted to USD here — invoices via
+    // their own issue-time rate snapshot (same BUG-J pattern getProfitLoss
+    // already uses), payments via the current global rate (Payment has no
+    // per-row snapshot column) — before any SUM(), mirroring how every other
+    // multi-currency aggregate in this file (getProfitLoss, getSupplierLedger)
+    // already converts before summing.
+    const rate = new Decimal(await this.settingsService.getExchangeRate());
 
-      // totalCollected: sum of every payment recorded
-      this.prisma.payment.aggregate({
-        _sum: { amount: true },
-      }),
+    const [invoicedAgg, collectedAgg, outstandingResult, overdueResult] = await Promise.all([
+      // totalInvoiced: sum of all issued/partially_paid/paid invoice totals, USD-converted
+      this.prisma.$queryRaw<[{ total_invoiced: string }]>(Prisma.sql`
+        SELECT COALESCE(SUM(
+          CASE WHEN "currency" = 'LBP'
+               THEN "total"::numeric / NULLIF(COALESCE("exchangeRateSnapshot", ${rate.toString()}::numeric), 0)
+               ELSE "total"::numeric
+          END
+        ), 0)::text AS total_invoiced
+        FROM "invoices"
+        WHERE "status" NOT IN ('draft', 'cancelled')
+      `),
+
+      // totalCollected: sum of every payment recorded, USD-converted
+      this.prisma.$queryRaw<[{ total_collected: string }]>(Prisma.sql`
+        SELECT COALESCE(SUM(
+          CASE WHEN "currency" = 'LBP'
+               THEN "amount"::numeric / NULLIF(${rate.toString()}::numeric, 0)
+               ELSE "amount"::numeric
+          END
+        ), 0)::text AS total_collected
+        FROM "payments"
+      `),
 
       // totalOutstanding: computed per-client the same way as ClientBalanceService
       // (CONSTRAINT 15) — invoiced minus ALL of that client's payments, never from
@@ -1831,7 +1948,8 @@ export class ReportsService {
       // old `SUM(total - paidAmount)` therefore overstated outstanding balance by
       // exactly the amount of any unlinked payment. Balances are floored at 0 per
       // client so a credit (over-payment) on one client can't net against — and
-      // hide — another client's genuine balance.
+      // hide — another client's genuine balance. Both subqueries convert LBP rows
+      // to USD (same rule as above) before summing per client.
       // open_count keeps its original, unrelated meaning: invoices not marked paid.
       this.prisma.$queryRaw<[{ total_outstanding: string; open_count: string }]>(Prisma.sql`
         WITH client_balances AS (
@@ -1840,13 +1958,23 @@ export class ReportsService {
             COALESCE(inv.invoiced, 0) - COALESCE(pmt.paid, 0) AS balance
           FROM "clients" c
           LEFT JOIN (
-            SELECT "clientId", SUM("total") AS invoiced
+            SELECT "clientId", SUM(
+              CASE WHEN "currency" = 'LBP'
+                   THEN "total"::numeric / NULLIF(COALESCE("exchangeRateSnapshot", ${rate.toString()}::numeric), 0)
+                   ELSE "total"::numeric
+              END
+            ) AS invoiced
             FROM "invoices"
             WHERE "status" NOT IN ('draft', 'cancelled')
             GROUP BY "clientId"
           ) inv ON inv."clientId" = c.id
           LEFT JOIN (
-            SELECT "clientId", SUM("amount") AS paid
+            SELECT "clientId", SUM(
+              CASE WHEN "currency" = 'LBP'
+                   THEN "amount"::numeric / NULLIF(${rate.toString()}::numeric, 0)
+                   ELSE "amount"::numeric
+              END
+            ) AS paid
             FROM "payments"
             GROUP BY "clientId"
           ) pmt ON pmt."clientId" = c.id
@@ -1856,12 +1984,20 @@ export class ReportsService {
           (SELECT COUNT(*) FROM "invoices" WHERE "status" NOT IN ('paid', 'cancelled', 'draft'))::text AS open_count
       `),
 
-      // totalOverdue + overdue count + oldest overdue age
+      // totalOverdue + overdue count + oldest overdue age. paidAmount is always in
+      // the same currency as that invoice's own total (updated in-place by
+      // PaymentAllocationService in the invoice's own currency), so converting the
+      // combined (total - paidAmount) by the same per-row rate is correct.
       this.prisma.$queryRaw<[{ total_overdue: string; overdue_count: string; oldest_days: string }]>(Prisma.sql`
         SELECT
-          COALESCE(SUM("total" - "paidAmount"), 0)::text                                                  AS total_overdue,
-          COUNT(*)::text                                                                                   AS overdue_count,
-          COALESCE(MAX(GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - "dueDate")) / 86400))), 0)::text     AS oldest_days
+          COALESCE(SUM(
+            CASE WHEN "currency" = 'LBP'
+                 THEN ("total" - "paidAmount")::numeric / NULLIF(COALESCE("exchangeRateSnapshot", ${rate.toString()}::numeric), 0)
+                 ELSE ("total" - "paidAmount")::numeric
+            END
+          ), 0)::text                                                                                       AS total_overdue,
+          COUNT(*)::text                                                                                    AS overdue_count,
+          COALESCE(MAX(GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - "dueDate")) / 86400))), 0)::text      AS oldest_days
         FROM "invoices"
         WHERE "status" IN ('issued', 'partially_paid')
           AND "dueDate" IS NOT NULL
@@ -1870,8 +2006,8 @@ export class ReportsService {
     ]);
 
     return {
-      totalInvoiced:    new Decimal(invoicedAgg._sum.total?.toString()   ?? '0').toFixed(2),
-      totalCollected:   new Decimal(collectedAgg._sum.amount?.toString() ?? '0').toFixed(2),
+      totalInvoiced:    new Decimal(invoicedAgg[0]?.total_invoiced   ?? '0').toFixed(2),
+      totalCollected:   new Decimal(collectedAgg[0]?.total_collected ?? '0').toFixed(2),
       totalOutstanding: new Decimal(outstandingResult[0]?.total_outstanding ?? '0').toFixed(2),
       totalOverdue:     new Decimal(overdueResult[0]?.total_overdue          ?? '0').toFixed(2),
       openInvoiceCount: Number(outstandingResult[0]?.open_count  ?? 0),

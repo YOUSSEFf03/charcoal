@@ -7,7 +7,7 @@ import { useOverdueClients } from '../hooks/useClients'
 import { useContainers } from '../hooks/useContainers'
 import { useProfitLoss, useArSummary, useActivity, useDailyRevenue } from '../hooks/useReports'
 import type { ActivityItem } from '../hooks/useReports'
-import { useWorkers } from '../hooks/useWorkers'
+import { useWorkers, useLogWorkerPayment } from '../hooks/useWorkers'
 import { formatUsd } from '../lib/money'
 import { currentMonthToDateRange } from '../lib/date'
 import DailyRevenueChart from '../components/DailyRevenueChart'
@@ -63,7 +63,8 @@ export default function Dashboard() {
   const [payOpen, setPayOpen] = useState(false)
   const [payAmt, setPayAmt] = useState('')
   const [payMethod, setPayMethod] = useState('Cash')
-  const [toast, setToast] = useState(false)
+  const [toast, setToast] = useState('')
+  const [toastError, setToastError] = useState(false)
 
   // Live dashboard data sources.
   const summaryQ = useWarehouseSummary()
@@ -72,6 +73,7 @@ export default function Dashboard() {
   const portContainersQ = useContainers({ status: 'port' })
   const stockLotsQ = useStockLots({ limit: 5 })
   const workersQ = useWorkers()
+  const logPayment = useLogWorkerPayment()
 
   // Profit & loss for current month-to-date — same shared helper Reports.tsx
   // uses for its own default, so the two pages always open on the same period.
@@ -118,10 +120,40 @@ export default function Dashboard() {
     activityQ.refetch()
   }
 
-  function showToast() {
-    setPayOpen(false)
-    setToast(true)
-    setTimeout(() => setToast(false), 2800)
+  function showToast(msg: string, isError = false) {
+    setToast(msg)
+    setToastError(isError)
+    setTimeout(() => setToast(''), 2800)
+  }
+
+  // Maps the Dashboard's display labels to the backend PaymentMethod enum —
+  // same mapping convention already used in WarehouseSales.tsx/Employees.tsx.
+  const PAY_METHOD_MAP: Record<string, 'cash' | 'whish' | 'omt'> = { Cash: 'cash', Whish: 'whish', OMT: 'omt' }
+  const payAmtNum = parseFloat(payAmt) || 0
+
+  function submitWorkerPayment() {
+    if (!firstWorker || payAmtNum <= 0) return
+    logPayment.mutate(
+      {
+        id: firstWorker.id,
+        body: {
+          amount: payAmtNum.toFixed(2),
+          method: PAY_METHOD_MAP[payMethod] ?? 'cash',
+          date: new Date().toISOString().slice(0, 10),
+        },
+      },
+      {
+        onSuccess: () => {
+          setPayOpen(false)
+          setPayAmt('')
+          setPayMethod('Cash')
+          showToast(`Payment logged for ${firstWorker.name}`)
+        },
+        onError: (err: any) => {
+          showToast(err?.error ?? 'Failed to log payment', true)
+        },
+      },
+    )
   }
 
   // Profit card derived values — sign drives color (green = healthy, red = loss),
@@ -609,8 +641,10 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn" onClick={() => setPayOpen(false)}>Cancel</button>
-              <button className="btn primary" onClick={showToast}><i className="ti ti-check" style={{ fontSize: 14 }} /> Confirm payment</button>
+              <button className="btn" onClick={() => setPayOpen(false)} disabled={logPayment.isPending}>Cancel</button>
+              <button className="btn primary" onClick={submitWorkerPayment} disabled={logPayment.isPending || payAmtNum <= 0}>
+                <i className="ti ti-check" style={{ fontSize: 14 }} /> {logPayment.isPending ? 'Saving…' : 'Confirm payment'}
+              </button>
             </div>
           </div>
         </div>
@@ -619,7 +653,7 @@ export default function Dashboard() {
       {/* TOAST */}
       {toast && (
         <div style={{ position: 'fixed', bottom: 28, left: '50%', transform: 'translateX(-50%)', background: 'var(--text)', color: '#fff', padding: '10px 20px', borderRadius: 'var(--radius-lg)', fontSize: 13, fontWeight: 500, zIndex: 9999, display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.18)' }}>
-          <i className="ti ti-check" style={{ color: 'var(--accent)', fontSize: 15 }} /> Payment logged for {firstWorker?.name ?? 'worker'}
+          <i className={`ti ${toastError ? 'ti-alert-circle' : 'ti-check'}`} style={{ color: toastError ? 'var(--red)' : 'var(--accent)', fontSize: 15 }} /> {toast}
         </div>
       )}
     </>

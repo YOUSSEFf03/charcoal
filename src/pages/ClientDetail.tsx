@@ -1,18 +1,23 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useClient } from '../hooks/useClients'
+import { useClient, useUpdateClient, useAddPhone, useDeactivatePhone } from '../hooks/useClients'
 import { useInvoices } from '../hooks/useInvoices'
 import { useClientLedger } from '../hooks/useReports'
 import { useOrders, useCreateOrder } from '../hooks/useOrders'
 import { useBagTypes } from '../hooks/useBagTypes'
-import { useStockExits } from '../hooks/useWarehouse'
+import { useStockExits, useClientWarehouseSummary } from '../hooks/useWarehouse'
 import { usePayments, useCreatePayment } from '../hooks/usePayments'
 import { useReceivers } from '../hooks/useReceivers'
 import { useWorkers } from '../hooks/useWorkers'
+import { useRate } from '../context/RateContext'
 import { roundDp, formatUsd } from '../lib/money'
 import { formatDate, formatDateTime } from '../lib/date'
-import { exportSheet } from '../lib/exportXlsx'
+import { exportExcel, type ExcelColumn } from '../lib/excelExport'
+import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
+import SortHeader, { toggleSort } from '../components/ui/SortHeader'
+import { api } from '../lib/api'
+import type { Invoice, PaginatedResponse } from '../types/api'
 
 /* ── local edit-form view-model types ── */
 interface Phone { number: string; label: string; meta: string; active: boolean; primary: boolean }
@@ -105,15 +110,54 @@ export default function ClientDetail() {
   // In-page hub navigation.
   const [view, setView] = useState<View>('detail')
 
+  // Invoice table pagination — server-side, 20/page. KPIs (totalInvoiced,
+  // totalPaid, outstanding, openInvoices) do NOT depend on this — they're
+  // sourced from ledgerQ, which is already fetched unbounded per client.
+  const INVOICE_PAGE_SIZE = 20
+  const [invoicePage, setInvoicePage] = useState(1)
+
+  // Warehouse-sales table pagination — server-side, 20/page. KPIs (Purchases
+  // count, Total kg sold, Total amount) do NOT depend on this — they're
+  // sourced from warehouseSummaryQ, a dedicated unbounded-per-client
+  // aggregate (see useClientWarehouseSummary / StockExitsService.
+  // getClientWarehouseSummary()).
+  const WAREHOUSE_PAGE_SIZE = 20
+  const [warehouseSalesPage, setWarehouseSalesPage] = useState(1)
+
+  // Payments table pagination — server-side, 20/page. KPIs (Total received,
+  // Payments count, Last payment) do NOT depend on this — they're sourced
+  // from ledgerQ / paymentsQ.data.total, both already unbounded per client.
+  const PAYMENT_PAGE_SIZE = 20
+  const [paymentPage, setPaymentPage] = useState(1)
+
+  // Invoices/Payments are genuinely server-paginated (20/page), so their
+  // sort has to be applied server-side too — sorting only the currently
+  // loaded page would be misleading (e.g. "highest amount" could miss the
+  // real highest if it's on another page). Declared here, before the query
+  // hooks below, so they can feed straight into useInvoices()/usePayments().
+  const [invoiceSort, setInvoiceSort] = useState<{ key: 'date' | 'amount' | 'paid' | 'status'; order: 'asc' | 'desc' } | null>(null)
+  const [paymentSort, setPaymentSort] = useState<{ key: 'date' | 'amount'; order: 'asc' | 'desc' } | null>(null)
+
   // Live client + related data.
   const clientQ = useClient(cid)
   const ordersQ = useOrders({ clientId: cid, limit: 200 })
-  const invoicesQ = useInvoices({ clientId: cid, limit: 100 })
+  const invoicesQ = useInvoices({
+    clientId: cid, page: invoicePage, limit: INVOICE_PAGE_SIZE,
+    sortBy: invoiceSort?.key, sortOrder: invoiceSort?.order,
+  })
   const ledgerQ = useClientLedger(cid)
-  const warehouseExitsQ = useStockExits({ clientId: cid, limit: 100 })
-  const paymentsQ = usePayments({ clientId: cid, limit: 200 })
+  const warehouseExitsQ = useStockExits({ clientId: cid, page: warehouseSalesPage, limit: WAREHOUSE_PAGE_SIZE })
+  const warehouseSummaryQ = useClientWarehouseSummary(cid)
+  const paymentsQ = usePayments({
+    clientId: cid, page: paymentPage, limit: PAYMENT_PAGE_SIZE,
+    sortBy: paymentSort?.key, sortOrder: paymentSort?.order,
+  })
+  const { rawRate } = useRate()
   const createOrder = useCreateOrder()
   const createPaymentM = useCreatePayment()
+  const updateClient = useUpdateClient()
+  const addPhone = useAddPhone()
+  const deactivatePhone = useDeactivatePhone()
   const bagTypesQ = useBagTypes()
   const bagTypesList = bagTypesQ.data ?? []
   const bagTypeNames = bagTypesList.map(b => b.name)
@@ -135,9 +179,24 @@ export default function ClientDetail() {
     { id: '', name: 'Owner', role: 'owner' },
   ]
 
+  // Reset the invoice table to page 1 whenever the client changes — otherwise
+  // navigating from a client with many invoice pages to one with fewer could
+  // land on a page past the end (empty/stale table).
+  useEffect(() => { setInvoicePage(1) }, [cid])
+  // Same reset for the warehouse-sales table.
+  useEffect(() => { setWarehouseSalesPage(1) }, [cid])
+  // Same reset for the payments table.
+  useEffect(() => { setPaymentPage(1) }, [cid])
+
   const c = clientQ.data
   const invoiceRows = invoicesQ.data?.data ?? []
+  const invoiceTotal = invoicesQ.data?.total ?? invoiceRows.length
+  const invoiceTotalPages = Math.max(1, Math.ceil(invoiceTotal / INVOICE_PAGE_SIZE))
   const paymentRows = paymentsQ.data?.data ?? []
+  const paymentCount = paymentsQ.data?.total ?? paymentRows.length
+  const paymentTotalPages = Math.max(1, Math.ceil(paymentCount / PAYMENT_PAGE_SIZE))
+  const warehouseSalesTotal = warehouseExitsQ.data?.total ?? 0
+  const warehouseSalesTotalPages = Math.max(1, Math.ceil(warehouseSalesTotal / WAREHOUSE_PAGE_SIZE))
 
   // Derive the display view-model from the API client (graceful for missing fields).
   const initials = (c?.name ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase()
@@ -146,12 +205,10 @@ export default function ClientDetail() {
   const daysSinceOrder = c?.lastOrderDate ? Math.round((Date.now() - new Date(c.lastOrderDate).getTime()) / 86400000) : 0
   const activePhones = c?.phones ?? []
   const preferred = (c?.preferredTypes ?? []).map(p => `${p.charcoalType} · ${p.grade}`)
-  const openInvoices = invoiceRows.filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled').length
 
   // Real backend display ID keyed by order id, to resolve the related order of an
   // invoice (invoices carry only orderId).
   const orderDisplayById = new Map((ordersQ.data?.data ?? []).map(o => [o.id, o.displayId]))
-  const invoiceDisplayById = new Map(invoiceRows.map(inv => [inv.id, inv.displayId ?? inv.id.slice(0, 8).toUpperCase()]))
 
   // Invoice rows mapped for the table / Excel export.
   const INVOICES = invoiceRows.map(inv => ({
@@ -173,7 +230,7 @@ export default function ClientDetail() {
     displayId: p.displayId ?? p.id.slice(0, 8),
     method: p.method,
     invId: p.invoiceId,
-    invDisplay: p.invoiceId ? (invoiceDisplayById.get(p.invoiceId) ?? p.invoiceId) : '—',
+    invDisplay: p.invoiceId ? (p.invoice?.displayId ?? p.invoiceId) : '—',
     by: p.receiverName ?? '—',
     ref: p.notes ?? '',
     amount: parseFloat(p.amount),
@@ -197,6 +254,7 @@ export default function ClientDetail() {
       bagTypeName: o.bagType?.name ?? null,
       supplier: o.supplierName ?? null,
       items: `${totalKg.toLocaleString()} kg`,
+      kg: totalKg,
       total: pricePerUnit,
       bagCount,
       orderTotal,
@@ -205,7 +263,36 @@ export default function ClientDetail() {
     }
   })
 
-  // Warehouse-sale rows derived for the sub-view table + export.
+  // Display-only USD amount for a warehouse-sale exit. StockExit.amount is
+  // NULL for invoice-linked registered-client sales (the real price lives on
+  // a specific line of the linked invoice instead — see StockExit.invoiceId
+  // doc comment in schema.prisma) — treating that as $0 was the bug found in
+  // the ClientDetail warehouse-sales audit. Exact same fallback rule as
+  // WarehouseSales.tsx's exitDisplayAmountUsd() — ported, not reinvented, so
+  // the two pages can never disagree. Returns null (not 0) when no price can
+  // be resolved at all, so the table can still distinguish "$0" from "unknown".
+  function exitDisplayAmountUsd(exit: any): number | null {
+    if (exit.amount != null) {
+      const amt = parseFloat(exit.amount)
+      return exit.currency === 'LBP' ? (rawRate > 0 ? amt / rawRate : 0) : amt
+    }
+    if (exit.invoice) {
+      const lines: any[] = exit.invoice.lines ?? []
+      const line = exit.lotId
+        ? (lines.find(l => l.saleUnit === 'KG' && exit.lot && l.description === `${exit.lot.charcoalType} Grade ${exit.lot.grade}`)
+          ?? lines.find(l => l.saleUnit === 'KG'))
+        : lines.find(l => l.bagTypeId === exit.bagTypeId)
+      if (!line) return null
+      const qty = exit.lotId ? (parseFloat(exit.kgQuantity ?? '0') || 0) : (exit.quantity ?? 0)
+      const unitPrice = parseFloat((exit.lotId ? line.pricePerKg : line.pricePerBag) ?? '0') || 0
+      const amt = qty * unitPrice
+      return exit.invoice.currency === 'LBP' ? (rawRate > 0 ? amt / rawRate : 0) : amt
+    }
+    return null
+  }
+
+  // Warehouse-sale rows derived for the sub-view table (export fetches its
+  // own complete-history data separately — see exportWarehouse()).
   const WAREHOUSE = warehousePurchases.map((exit: any) => {
     const isRaw = !!exit.lotId && !exit.packedStockId
     const charcoalLot = isRaw ? exit.lot : exit.packedStock?.lot
@@ -223,7 +310,7 @@ export default function ClientDetail() {
       charcoal: charcoalLot ? `${charcoalLot.charcoalType} · Grade ${charcoalLot.grade}` : '—',
       qty: isRaw ? null : (exit.quantity ?? null),
       kg: kgOut,
-      amount: exit.amount ? parseFloat(exit.amount) : 0,
+      amount: exitDisplayAmountUsd(exit),
       by: exit.loggedBy?.name ?? '—',
     }
   })
@@ -243,10 +330,16 @@ export default function ClientDetail() {
       debit,
       credit,
       balance:     parseFloat(e.runningBalance),
+      // Present on 'invoice' entries only — see openInvoices below.
+      status:      e.status,
     }
   })
   const totalCharged = LEDGER.reduce((s, e) => s + e.debit, 0)
   const totalPaid    = LEDGER.reduce((s, e) => s + e.credit, 0)
+  // Open-invoice count derived from the already-unbounded-per-client ledger —
+  // no second, page-scoped invoice query. Same "open" definition as before
+  // (not paid, not cancelled).
+  const openInvoices = LEDGER.filter(e => e.kind === 'invoice' && e.status !== 'paid' && e.status !== 'cancelled').length
 
   // Cumulative chart points (one per distinct date, at close of day).
   const chartPts = useMemo(() => {
@@ -266,6 +359,7 @@ export default function ClientDetail() {
   }))
 
   const [editOpen, setEditOpen] = useState(false)
+  const [editSaving, setEditSaving] = useState(false)
   const [orderOpen, setOrderOpen] = useState(false)
   const [payModalOpen, setPayModalOpen] = useState(false)
 
@@ -285,8 +379,25 @@ export default function ClientDetail() {
   const [stmtType, setStmtType] = useState<'all' | 'debit' | 'credit'>('all')
   const [stmtQ, setStmtQ] = useState('')
 
+  // Sort state for Orders/Statement — invoiceSort/paymentSort are declared
+  // earlier (before their query hooks; see the block above ordersQ/paymentsQ)
+  // since those two need to feed the backend's sortBy/sortOrder directly.
+  // Orders/Statement sort the already-fully-loaded in-memory array
+  // client-side instead (Orders fetches up to 200 rows in one shot;
+  // Statement's LEDGER is the full unpaginated ledger) — safe and correct
+  // since every matching row is already on the client.
+  type OrderSortKey = 'date' | 'kg' | 'price'
+  type StmtSortKey = 'date' | 'debit' | 'credit' | 'balance'
+  const [orderSort, setOrderSort] = useState<{ key: OrderSortKey; order: 'asc' | 'desc' } | null>(null)
+  const [stmtSort, setStmtSort] = useState<{ key: StmtSortKey; order: 'asc' | 'desc' } | null>(null)
+
   const [toast, setToast] = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
+  // The column-selection modal itself owns the in-flight/disabled UX for
+  // each export now (see useExportColumnsModal below), so a per-export
+  // "am I currently exporting" flag on the trigger button is no longer
+  // needed — the trigger just opens the modal synchronously.
+  const { openExportModal, exportColumnsModal } = useExportColumnsModal()
 
   // Resync the editable view-model once the API client arrives.
   useEffect(() => {
@@ -297,8 +408,10 @@ export default function ClientDetail() {
       phones: c.phones.map(p => ({ number: p.number, label: p.label, meta: p.isActive ? 'active' : 'inactive', active: p.isActive, primary: false })),
       preferred, outstandingBal, openInvoices, daysSinceOrder, avgDays,
     })
+    // openInvoices is now ledger-derived (unbounded per-client), so resync on
+    // ledger entry count rather than the paginated invoice page's row count.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [c?.id, c?.updatedAt, invoiceRows.length])
+  }, [c?.id, c?.updatedAt, ledgerQ.data?.entries?.length ?? 0])
 
   // Sum per-line amounts rounded to cents first, avoiding float accumulation drift.
   const orderSub = orderLines.reduce((s, l) => s + Math.round(l.qty * l.price * 100), 0) / 100
@@ -314,40 +427,217 @@ export default function ClientDetail() {
   function isoToMs(iso: string) { return iso ? new Date(iso + 'T00:00:00').getTime() : null }
 
   function exportOrders() {
-    const aoa: unknown[][] = [['Date', 'Order #', 'Type', 'Charcoal', 'Weight', 'Price/bag', 'Status']]
-    filteredOrders.forEach(o => aoa.push([o.date, o.displayId, o.isBag ? 'Bag' : 'KG', o.char, o.items, `$${o.total.toFixed(2)}`, o.status]))
-    if (aoa.length === 1) { showToast('Nothing to export'); return }
-    exportSheet(aoa, 'Orders', `${cid}-orders`)
-    showToast(`Exported ${aoa.length - 1} rows`)
+    if (filteredOrders.length === 0) { showToast('Nothing to export'); return }
+    const columns: ExcelColumn<(typeof filteredOrders)[number]>[] = [
+      { key: 'date', header: 'Date', type: 'date', value: o => o.rawDate ? new Date(o.rawDate) : null },
+      { key: 'orderNo', header: 'Order #', value: o => o.displayId },
+      { key: 'type', header: 'Type', value: o => o.isBag ? 'Bag' : 'KG' },
+      { key: 'charcoal', header: 'Charcoal', value: o => o.char },
+      { key: 'weight', header: 'Weight', value: o => o.items },
+      { key: 'price', header: 'Price/bag', type: 'currency', value: o => o.total },
+      { key: 'status', header: 'Status', value: o => o.status },
+    ]
+    openExportModal({
+      title: 'Orders', subtitle: client.name, columns,
+      onExport: async selectedColumns => {
+        await exportExcel({
+          filename: `${cid}-orders`, sheetName: 'Orders', title: `Orders — ${client.name}`,
+          columns: selectedColumns, rows: filteredOrders,
+        })
+        showToast(`Exported ${filteredOrders.length} rows`)
+      },
+    })
   }
+  // The on-screen table is paginated (20/page) — export must cover the
+  // client's FULL invoice history, so it fetches its own pages directly
+  // (limit:100 per request) rather than reading the capped table state.
+  const EXPORT_PAGE_SIZE = 100
   function exportInvoices() {
-    const aoa: unknown[][] = [['Issued', 'Invoice #', 'From Order', 'Amount', 'Paid', 'Due', 'Status']]
-    INVOICES.forEach(i => aoa.push([i.date, i.displayId, i.orderDisplay, i.amount, i.paid, i.amount - i.paid, i.status]))
-    if (aoa.length === 1) { showToast('Nothing to export'); return }
-    exportSheet(aoa, 'Invoices', `${cid}-invoices`)
-    showToast(`Exported ${aoa.length - 1} rows`)
+    // Column definitions never depend on the fetched rows, so the picker can
+    // open immediately — the full-history page-fetch loop only runs once the
+    // user actually confirms, so Cancel costs nothing.
+    const columns: ExcelColumn<Invoice>[] = [
+      { key: 'issued', header: 'Issued', type: 'date', value: inv => new Date(inv.issuedAt ?? inv.createdAt) },
+      { key: 'invoiceNo', header: 'Invoice #', value: inv => inv.displayId ?? inv.id.slice(0, 8).toUpperCase() },
+      { key: 'fromOrder', header: 'From Order', value: inv => inv.orderId ? (orderDisplayById.get(inv.orderId) ?? inv.orderId) : null },
+      { key: 'amount', header: 'Amount', type: 'currency', value: inv => parseFloat(inv.total), total: 'sum' },
+      { key: 'paid', header: 'Paid', type: 'currency', value: inv => parseFloat(inv.paidAmount), total: 'sum' },
+      { key: 'due', header: 'Due', type: 'currency', value: inv => parseFloat(inv.total) - parseFloat(inv.paidAmount), total: 'sum' },
+      { key: 'status', header: 'Status', value: inv => inv.status },
+    ]
+    openExportModal({
+      title: 'Invoices', subtitle: client.name, columns,
+      onExport: async selectedColumns => {
+        try {
+          let all: Invoice[] = []
+          let fetchPage = 1
+          let total = Infinity
+          while (all.length < total) {
+            const res = await api.get<PaginatedResponse<Invoice>>('/invoices', {
+              params: { clientId: cid, page: fetchPage, limit: EXPORT_PAGE_SIZE },
+            })
+            const { data, total: resTotal } = res.data
+            total = resTotal
+            if (data.length === 0) break
+            all = all.concat(data)
+            if (all.length >= total) break
+            fetchPage++
+          }
+          if (all.length === 0) { showToast('Nothing to export'); return }
+          await exportExcel({
+            filename: `${cid}-invoices`, sheetName: 'Invoices', title: `Invoices — ${client.name}`,
+            columns: selectedColumns, rows: all,
+          })
+          showToast(`Exported ${all.length} rows`)
+        } catch (e) {
+          console.error('Failed to export invoices:', e)
+          showToast('Failed to export invoices')
+        }
+      },
+    })
+  }
+  // The on-screen table is paginated (20/page) — export must cover the
+  // client's FULL warehouse-sales history, so it fetches its own pages
+  // directly (limit:100 per request) rather than reading the capped table
+  // state. Mirrors exportInvoices()'s page-loop exactly.
+  interface WarehouseExportRow {
+    date: Date | null; bagType: string; charcoal: string
+    qty: number | null; kg: number | null; amount: number; loggedBy: string
   }
   function exportWarehouse() {
-    const aoa: unknown[][] = [['Date', 'Bag type', 'Charcoal', 'Qty', 'Kg sold', 'Amount', 'Logged by']]
-    WAREHOUSE.forEach(w => aoa.push([w.date, w.isRaw ? 'By kg' : (w.bagTypeName ?? '—'), w.charcoal, w.qty ?? '—', w.kg || '—', w.amount || 0, w.by]))
-    if (aoa.length === 1) { showToast('Nothing to export'); return }
-    exportSheet(aoa, 'Warehouse', `${cid}-warehouse`)
-    showToast(`Exported ${aoa.length - 1} rows`)
+    const columns: ExcelColumn<WarehouseExportRow>[] = [
+      { key: 'date', header: 'Date', type: 'date', value: r => r.date },
+      { key: 'bagType', header: 'Bag type', value: r => r.bagType },
+      { key: 'charcoal', header: 'Charcoal', value: r => r.charcoal },
+      { key: 'qty', header: 'Qty', type: 'number', value: r => r.qty },
+      { key: 'kg', header: 'Kg sold', type: 'number', decimals: 2, value: r => r.kg },
+      { key: 'amount', header: 'Amount', type: 'currency', value: r => r.amount, total: 'sum' },
+      { key: 'loggedBy', header: 'Logged by', value: r => r.loggedBy },
+    ]
+    openExportModal({
+      title: 'Warehouse sales', subtitle: client.name, columns,
+      onExport: async selectedColumns => {
+        try {
+          let all: any[] = []
+          let fetchPage = 1
+          let total = Infinity
+          while (all.length < total) {
+            const res = await api.get<{ data: any[]; total: number }>('/stock-exits', {
+              params: { clientId: cid, page: fetchPage, limit: EXPORT_PAGE_SIZE },
+            })
+            const { data, total: resTotal } = res.data
+            total = resTotal
+            if (data.length === 0) break
+            all = all.concat(data)
+            if (all.length >= total) break
+            fetchPage++
+          }
+          if (all.length === 0) { showToast('Nothing to export'); return }
+          const exportRows: WarehouseExportRow[] = all.map(exit => {
+            const isRaw = !!exit.lotId && !exit.packedStockId
+            const charcoalLot = isRaw ? exit.lot : exit.packedStock?.lot
+            const kgOut = isRaw
+              ? parseFloat(exit.kgQuantity ?? '0')
+              : exit.bagType ? parseFloat(exit.bagType.nominalKg) * (exit.quantity ?? 0) : 0
+            return {
+              date: exit.date ? new Date(exit.date) : null,
+              bagType: isRaw ? 'By kg' : (exit.bagType?.name ?? '—'),
+              charcoal: charcoalLot ? `${charcoalLot.charcoalType} · Grade ${charcoalLot.grade}` : '—',
+              qty: isRaw ? null : (exit.quantity ?? null),
+              kg: kgOut || null,
+              amount: exitDisplayAmountUsd(exit) ?? 0,
+              loggedBy: exit.loggedBy?.name ?? '—',
+            }
+          })
+          await exportExcel({
+            filename: `${cid}-warehouse`, sheetName: 'Warehouse', title: `Warehouse sales — ${client.name}`,
+            columns: selectedColumns, rows: exportRows,
+          })
+          showToast(`Exported ${exportRows.length} rows`)
+        } catch (e) {
+          console.error('Failed to export warehouse sales:', e)
+          showToast('Failed to export warehouse sales')
+        }
+      },
+    })
   }
+  // The on-screen table is paginated (20/page) — export must cover the
+  // client's FULL payment history, so it fetches its own pages directly
+  // (limit:100 per request) rather than reading the capped table state.
+  // Mirrors exportInvoices()'s / exportWarehouse()'s page-loop exactly.
   function exportPayments() {
-    const aoa: unknown[][] = [['Receipt #', 'Date', 'Method', 'Invoice', 'Received by', 'Notes', 'Amount']]
-    PAYMENTS.forEach(p => aoa.push([p.displayId, p.date, p.method, p.invDisplay, p.by, p.ref, p.amount]))
-    if (aoa.length === 1) { showToast('Nothing to export'); return }
-    exportSheet(aoa, 'Payments', `${cid}-payments`)
-    showToast(`Exported ${aoa.length - 1} rows`)
+    const columns: ExcelColumn<any>[] = [
+      { key: 'receiptNo', header: 'Receipt #', value: p => p.displayId ?? p.id.slice(0, 8) },
+      { key: 'date', header: 'Date', type: 'date', value: p => p.date ? new Date(p.date) : null },
+      { key: 'method', header: 'Method', value: p => p.method },
+      { key: 'invoice', header: 'Invoice', value: p => p.invoiceId ? (p.invoice?.displayId ?? p.invoiceId) : null },
+      { key: 'receivedBy', header: 'Received by', value: p => p.receiverName ?? '—' },
+      // Deselected by default — the one free-text/optional field among all 7
+      // exports' columns; every transactional column stays checked.
+      { key: 'notes', header: 'Notes', value: p => p.notes ?? null, defaultSelected: false },
+      { key: 'amount', header: 'Amount', type: 'currency', value: p => parseFloat(p.amount), total: 'sum' },
+    ]
+    openExportModal({
+      title: 'Payments', subtitle: client.name, columns,
+      onExport: async selectedColumns => {
+        try {
+          let all: any[] = []
+          let fetchPage = 1
+          let total = Infinity
+          while (all.length < total) {
+            const res = await api.get<PaginatedResponse<any>>('/payments', {
+              params: { clientId: cid, page: fetchPage, limit: EXPORT_PAGE_SIZE },
+            })
+            const { data, total: resTotal } = res.data
+            total = resTotal
+            if (data.length === 0) break
+            all = all.concat(data)
+            if (all.length >= total) break
+            fetchPage++
+          }
+          if (all.length === 0) { showToast('Nothing to export'); return }
+          await exportExcel({
+            filename: `${cid}-payments`, sheetName: 'Payments', title: `Payments — ${client.name}`,
+            columns: selectedColumns, rows: all,
+          })
+          showToast(`Exported ${all.length} rows`)
+        } catch (e) {
+          console.error('Failed to export payments:', e)
+          showToast('Failed to export payments')
+        }
+      },
+    })
   }
   function exportStatement() {
-    const aoa: unknown[][] = [['Date', 'Ref', 'Description', 'Debit', 'Credit', 'Balance']]
-    aoa.push([stmtOpeningDate, '', 'Opening balance', '', '', stmtOpening])
-    stmtFiltered.forEach(e => aoa.push([e.date, e.ref, e.desc, e.debit || '', e.credit || '', e.balance]))
-    if (aoa.length === 2) { showToast('Nothing to export'); return }
-    exportSheet(aoa, 'Statement', `${cid}-statement`)
-    showToast(`Exported ${aoa.length - 2} rows`)
+    if (stmtFiltered.length === 0) { showToast('Nothing to export'); return }
+    const stmtOpeningRawDate = stmtFiltered[0].rawDate ?? (LEDGER[0]?.rawDate ?? new Date().toISOString())
+    type StmtRow = { rawDate: string; ref: string; desc: string; debit: number | null; credit: number | null; balance: number }
+    const rows: StmtRow[] = [
+      { rawDate: stmtOpeningRawDate, ref: '', desc: 'Opening balance', debit: null, credit: null, balance: stmtOpening },
+      ...stmtFiltered.map(e => ({ rawDate: e.rawDate, ref: e.ref, desc: e.desc, debit: e.debit || null, credit: e.credit || null, balance: e.balance })),
+    ]
+    const columns: ExcelColumn<StmtRow>[] = [
+      { key: 'date', header: 'Date', type: 'date', value: r => new Date(r.rawDate) },
+      { key: 'ref', header: 'Ref', value: r => r.ref || null },
+      { key: 'desc', header: 'Description', value: r => r.desc },
+      { key: 'debit', header: 'Debit', type: 'currency', value: r => r.debit, total: 'sum' },
+      { key: 'credit', header: 'Credit', type: 'currency', value: r => r.credit, total: 'sum' },
+      // 'last', not 'sum' — every row's balance is already the running
+      // balance as of that row (from the ledger's authoritative
+      // runningBalance), so the Total row should show the final row's
+      // balance, not Σ(all balances).
+      { key: 'balance', header: 'Balance', type: 'currency', value: r => r.balance, total: 'last' },
+    ]
+    openExportModal({
+      title: 'Client Statement', subtitle: client.name, columns,
+      onExport: async selectedColumns => {
+        await exportExcel({
+          filename: `${cid}-statement`, sheetName: 'Statement', title: `Client Statement — ${client.name}`,
+          columns: selectedColumns, rows, emphasizeRowIndexes: [0],
+        })
+        showToast(`Exported ${stmtFiltered.length} rows`)
+      },
+    })
   }
 
   function openEditModal() {
@@ -377,11 +667,56 @@ export default function ClientDetail() {
     }))
   }
 
-  function saveEdit() {
-    const ini = editForm.name.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]).join('').toUpperCase()
-    setClient({ ...editForm, initials: ini })
-    setEditOpen(false)
-    showToast('Client info updated')
+  // Persists the Edit modal to the real backend. Only fields that actually
+  // exist on the Client entity are sent (see the ClientVM comment at the top
+  // of this file — nameAr/address/limit/notesEn are pure local view-model
+  // fields with no backend column; they were never persisted before this fix
+  // either, and adding backend support for them is out of scope here).
+  // name/type/currency/paymentTerms/notes go through the same PATCH
+  // /clients/:id useUpdateClient() already used correctly by
+  // FillClientDetail.tsx. Phones go through the separate add/deactivate
+  // endpoints (CONSTRAINT 14 — phones are never deleted, only deactivated;
+  // there is no edit-in-place or reactivate endpoint, so those two actions
+  // remain local-only exactly as before, matching existing behavior).
+  async function saveEdit() {
+    if (!cid || !editForm.name.trim()) return
+    setEditSaving(true)
+    try {
+      await updateClient.mutateAsync({
+        id: cid,
+        body: {
+          name: editForm.name.trim(),
+          type: editForm.type as any,
+          currency: editForm.currency as any,
+          paymentTerms: editForm.terms.trim() || undefined,
+          notes: editForm.notesAr.trim() || undefined,
+        },
+      })
+
+      // Phone diff against the untouched pre-edit snapshot (`client.phones`
+      // is never mutated while the modal is open — only `editForm` is).
+      const originalPhones = client.phones
+      const newPhones = editForm.phones.filter(p => !originalPhones.some(op => op.number === p.number))
+      const toDeactivate = originalPhones.filter(op => {
+        if (!op.active) return false
+        const stillPresent = editForm.phones.find(p => p.number === op.number)
+        return !stillPresent || !stillPresent.active
+      })
+
+      await Promise.all([
+        ...newPhones.map(p => addPhone.mutateAsync({ id: cid, body: { number: p.number, label: p.label as any } })),
+        ...toDeactivate.map(op => deactivatePhone.mutateAsync({ id: cid, body: { phoneNumber: op.number } })),
+      ])
+
+      const ini = editForm.name.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]).join('').toUpperCase()
+      setClient({ ...editForm, initials: ini })
+      setEditOpen(false)
+      showToast('Client info updated')
+    } catch (e: any) {
+      showToast(e?.error ?? 'Failed to update client')
+    } finally {
+      setEditSaving(false)
+    }
   }
 
   function addOrderLine() {
@@ -453,14 +788,14 @@ export default function ClientDetail() {
       },
       {
         onSuccess: () => {
+          // No manual refetch() calls here — useCreatePayment()'s onSuccess
+          // (src/hooks/usePayments.ts) already invalidates the client,
+          // client-ledger, invoices, and payments query keys, and React
+          // Query auto-refetches active queries on invalidation.
           setPayModalOpen(false)
           showToast(`Payment ${fmt(amt)} logged`)
           setPayAmt('')
           setPayNote('')
-          clientQ.refetch()
-          ledgerQ.refetch()
-          invoicesQ.refetch()
-          paymentsQ.refetch()
         },
         onError: (err: any) => showToast(err?.error ?? 'Failed to log payment'),
       }
@@ -468,8 +803,9 @@ export default function ClientDetail() {
   }
 
   /* ── derived sub-view data ── */
-  const totalInvoiced = INVOICES.reduce((s, i) => s + i.amount, 0)
-  const totalPaidInv = INVOICES.reduce((s, i) => s + i.paid, 0)
+  // totalCharged/totalPaid (ledger-derived, unbounded per client) are the
+  // KPI source — NOT INVOICES.reduce(...), which would only cover the
+  // current 20-row page.
 
   const filteredOrders = ORDERS.filter(o => {
     if (ordStatus !== 'all' && o.status !== ordStatus) return false
@@ -478,14 +814,37 @@ export default function ClientDetail() {
   })
   const ordDelivered = ORDERS.filter(o => o.status === 'delivered').length
   const ordDraft = ORDERS.filter(o => o.status === 'draft').length
+  // Sorted separately from filteredOrders — exportOrders() reads
+  // filteredOrders directly and must keep exporting the natural (API) order
+  // regardless of how the on-screen table is currently sorted.
+  const sortedOrders = orderSort ? [...filteredOrders].sort((a, b) => {
+    const dir = orderSort.order === 'asc' ? 1 : -1
+    if (orderSort.key === 'date') return dir * ((a.rawDate ? new Date(a.rawDate).getTime() : 0) - (b.rawDate ? new Date(b.rawDate).getTime() : 0))
+    if (orderSort.key === 'kg') return dir * (a.kg - b.kg)
+    return dir * (a.total - b.total)
+  }) : filteredOrders
 
-  const warehouseTotal = WAREHOUSE.reduce((s, w) => s + w.amount, 0)
-  const warehouseKg = WAREHOUSE.reduce((s, w) => s + w.kg, 0)
+  // Complete-history totals — NOT WAREHOUSE.reduce(...), which would only
+  // cover the current 20-row page. Sourced from the dedicated per-client
+  // aggregate (see useClientWarehouseSummary).
+  const warehousePurchasesCount = warehouseSummaryQ.data?.totalCount ?? 0
+  const warehouseKg = parseFloat(warehouseSummaryQ.data?.totalKg ?? '0')
+  const warehouseTotal = parseFloat(warehouseSummaryQ.data?.totalAmount ?? '0')
 
-  const paymentsTotal = PAYMENTS.reduce((s, p) => s + p.amount, 0)
+  // "Total received · all time" — NOT a sum over the paginated PAYMENTS page;
+  // reuses totalPaid, already computed unbounded from ledgerQ above (same
+  // number the Invoices/Statement tabs already show).
+  const paymentsTotal = totalPaid
   let paymentsRun = 0
   const paymentsWithRun = PAYMENTS.map(p => { paymentsRun += p.amount; return { ...p, run: paymentsRun } })
-  const lastPayment = PAYMENTS.length ? PAYMENTS[PAYMENTS.length - 1] : null
+  // "Last payment" — sourced from the full, unbounded, chronologically
+  // ascending-sorted LEDGER (not the paginated PAYMENTS page), so this is
+  // genuinely the most recent payment ever made, not just the oldest one on
+  // the current page.
+  const paymentLedgerEntries = LEDGER.filter(e => e.kind === 'payment')
+  const lastPayment = paymentLedgerEntries.length
+    ? { amount: paymentLedgerEntries[paymentLedgerEntries.length - 1].credit, date: paymentLedgerEntries[paymentLedgerEntries.length - 1].date }
+    : null
 
   // Statement filtering — opening = running balance just before first shown row.
   const stmtFromMs = isoToMs(stmtFrom), stmtToMs = isoToMs(stmtTo)
@@ -505,6 +864,17 @@ export default function ClientDetail() {
   const stmtClosing = stmtFiltered.length ? stmtFiltered[stmtFiltered.length - 1].balance : stmtOpening
   const stmtOpeningDate = stmtFiltered.length ? stmtFiltered[0].date : (LEDGER[0]?.date ?? fmtDate(new Date().toISOString()))
   const stmtPeriod = stmtFiltered.length ? `${stmtFiltered[0].date} — ${stmtFiltered[stmtFiltered.length - 1].date}` : '—'
+  // Table-display-only sort — stmtFiltered itself must stay chronological:
+  // stmtOpening/stmtClosing/stmtPeriod above, and exportStatement()'s Excel
+  // export, all rely on stmtFiltered[0]/[length-1] being the chronologically
+  // first/last row.
+  const sortedStmtRows = stmtSort ? [...stmtFiltered].sort((a, b) => {
+    const dir = stmtSort.order === 'asc' ? 1 : -1
+    if (stmtSort.key === 'date') return dir * ((a.rawDate ? new Date(a.rawDate).getTime() : 0) - (b.rawDate ? new Date(b.rawDate).getTime() : 0))
+    if (stmtSort.key === 'debit') return dir * (a.debit - b.debit)
+    if (stmtSort.key === 'credit') return dir * (a.credit - b.credit)
+    return dir * (a.balance - b.balance)
+  }) : stmtFiltered
   const stmtFilterActive = stmtFrom || stmtTo || stmtType !== 'all' || stmtQ
   function resetStmt() { setStmtFrom(''); setStmtTo(''); setStmtType('all'); setStmtQ('') }
 
@@ -621,17 +991,17 @@ export default function ClientDetail() {
               </button>
               <button className="action-card" onClick={() => setView('invoices')}>
                 <div className="action-ic green"><i className="ti ti-receipt-2" /></div>
-                <div className="action-tx"><span className="t">Invoices</span><span className="s">{INVOICES.length} issued</span></div>
+                <div className="action-tx"><span className="t">Invoices</span><span className="s">{invoiceTotal} issued</span></div>
                 <i className="ti ti-chevron-right chev" />
               </button>
               <button className="action-card" onClick={() => setView('warehouse')}>
                 <div className="action-ic dark"><i className="ti ti-building-warehouse" /></div>
-                <div className="action-tx"><span className="t">Warehouse sales</span><span className="s">{WAREHOUSE.length} purchases</span></div>
+                <div className="action-tx"><span className="t">Warehouse sales</span><span className="s">{warehousePurchasesCount} purchases</span></div>
                 <i className="ti ti-chevron-right chev" />
               </button>
               <button className="action-card" onClick={() => setView('payments')}>
                 <div className="action-ic blue"><i className="ti ti-cash" /></div>
-                <div className="action-tx"><span className="t">All payments</span><span className="s">{PAYMENTS.length} on record</span></div>
+                <div className="action-tx"><span className="t">All payments</span><span className="s">{paymentCount} on record</span></div>
                 <i className="ti ti-chevron-right chev" />
               </button>
             </div>
@@ -751,14 +1121,16 @@ export default function ClientDetail() {
             <div className="card">
               <table className="data-table">
                 <thead><tr>
-                  <th style={{ width: 120 }}>Date</th><th>Order</th><th style={{ width: 60 }}>Type</th>
-                  <th>Weight</th><th className="right" style={{ width: 100 }}>Price/bag</th>
+                  <SortHeader label="Date" sortKey="date" sort={orderSort} onSort={k => toggleSort(orderSort, setOrderSort, k)} width={120} />
+                  <th>Order</th><th style={{ width: 60 }}>Type</th>
+                  <SortHeader label="Weight" sortKey="kg" sort={orderSort} onSort={k => toggleSort(orderSort, setOrderSort, k)} />
+                  <SortHeader label="Price/bag" sortKey="price" sort={orderSort} onSort={k => toggleSort(orderSort, setOrderSort, k)} width={100} align="right" />
                   <th style={{ width: 90 }}>Status</th><th className="right" style={{ width: 90 }}>Actions</th>
                 </tr></thead>
                 <tbody>
                   {ordersQ.isLoading && <tr><td colSpan={7} className="empty">Loading…</td></tr>}
-                  {!ordersQ.isLoading && filteredOrders.length === 0 && <tr><td colSpan={7} className="empty">No orders match this filter</td></tr>}
-                  {filteredOrders.map(o => (
+                  {!ordersQ.isLoading && sortedOrders.length === 0 && <tr><td colSpan={7} className="empty">No orders match this filter</td></tr>}
+                  {sortedOrders.map(o => (
                     <tr key={o.id} style={{ cursor: 'pointer' }} onClick={() => navigate('/orders/' + o.id)}>
                       <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>{o.date}</td>
                       <td>
@@ -793,7 +1165,7 @@ export default function ClientDetail() {
                 <div className="view-title">Invoices</div>
                 <div className="view-sub">
                   <span className="meta-row"><i className="ti ti-user" /> {client.name}</span>
-                  <span className="meta-row"><i className="ti ti-receipt-2" /> {INVOICES.length} issued</span>
+                  <span className="meta-row"><i className="ti ti-receipt-2" /> {invoiceTotal} issued</span>
                 </div>
               </div>
               <div className="stmt-actions">
@@ -803,18 +1175,21 @@ export default function ClientDetail() {
             </div>
 
             <div className="stmt-summary" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
-              <div className="stmt-cell"><div className="l">Issued</div><div className="v">{INVOICES.length}</div><div className="s">invoices</div></div>
-              <div className="stmt-cell"><div className="l">Total billed</div><div className="v amber">{fmt(totalInvoiced)}</div><div className="s">all time</div></div>
-              <div className="stmt-cell"><div className="l">Total paid</div><div className="v green">{fmt(totalPaidInv)}</div><div className="s">collected</div></div>
-              <div className="stmt-cell"><div className="l">Outstanding</div><div className="v">{openInvoices > 0 ? <span style={{ color: 'var(--accent2)' }}>{fmt(totalInvoiced - totalPaidInv)}</span> : fmt(0)}</div><div className="s">{openInvoices} open</div></div>
+              <div className="stmt-cell"><div className="l">Issued</div><div className="v">{invoiceTotal}</div><div className="s">invoices</div></div>
+              <div className="stmt-cell"><div className="l">Total billed</div><div className="v amber">{fmt(totalCharged)}</div><div className="s">all time</div></div>
+              <div className="stmt-cell"><div className="l">Total paid</div><div className="v green">{fmt(totalPaid)}</div><div className="s">collected</div></div>
+              <div className="stmt-cell"><div className="l">Outstanding</div><div className="v">{openInvoices > 0 ? <span style={{ color: 'var(--accent2)' }}>{fmt(totalCharged - totalPaid)}</span> : fmt(0)}</div><div className="s">{openInvoices} open</div></div>
             </div>
 
             <div className="card">
               <table className="data-table">
                 <thead><tr>
-                  <th style={{ width: 120 }}>Issued</th><th>Invoice</th>
-                  <th className="right" style={{ width: 100 }}>Amount</th><th className="right" style={{ width: 100 }}>Paid</th>
-                  <th className="right" style={{ width: 100 }}>Due</th><th style={{ width: 80 }}>Status</th>
+                  <SortHeader label="Issued" sortKey="date" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={120} />
+                  <th>Invoice</th>
+                  <SortHeader label="Amount" sortKey="amount" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={100} align="right" />
+                  <SortHeader label="Paid" sortKey="paid" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={100} align="right" />
+                  <th className="right" style={{ width: 100 }}>Due</th>
+                  <SortHeader label="Status" sortKey="status" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={80} />
                   <th className="right" style={{ width: 70 }}>Actions</th>
                 </tr></thead>
                 <tbody>
@@ -843,6 +1218,19 @@ export default function ClientDetail() {
                   })}
                 </tbody>
               </table>
+              {!invoicesQ.isLoading && INVOICES.length > 0 && invoiceTotalPages > 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
+                  <button className="btn" disabled={invoicePage <= 1} onClick={() => setInvoicePage(p => Math.max(1, p - 1))}>
+                    <i className="ti ti-chevron-left" style={{ fontSize: 14 }} /> Previous
+                  </button>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                    Page {invoicePage} of {invoiceTotalPages}
+                  </span>
+                  <button className="btn" disabled={invoicePage >= invoiceTotalPages} onClick={() => setInvoicePage(p => Math.min(invoiceTotalPages, p + 1))}>
+                    Next <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -855,7 +1243,7 @@ export default function ClientDetail() {
                 <div className="view-title">Warehouse sales</div>
                 <div className="view-sub">
                   <span className="meta-row"><i className="ti ti-user" /> {client.name}</span>
-                  <span className="meta-row"><i className="ti ti-building-warehouse" /> {WAREHOUSE.length} purchases</span>
+                  <span className="meta-row"><i className="ti ti-building-warehouse" /> {warehousePurchasesCount} purchases</span>
                 </div>
               </div>
               <div className="stmt-actions">
@@ -864,7 +1252,7 @@ export default function ClientDetail() {
             </div>
 
             <div className="stmt-summary" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
-              <div className="stmt-cell"><div className="l">Purchases</div><div className="v">{WAREHOUSE.length}</div><div className="s">transactions</div></div>
+              <div className="stmt-cell"><div className="l">Purchases</div><div className="v">{warehousePurchasesCount}</div><div className="s">transactions</div></div>
               <div className="stmt-cell"><div className="l">Total kg sold</div><div className="v">{warehouseKg.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg</div><div className="s">across all grades</div></div>
               <div className="stmt-cell"><div className="l">Total amount</div><div className="v amber">{fmt(warehouseTotal)}</div><div className="s">charged</div></div>
             </div>
@@ -900,6 +1288,19 @@ export default function ClientDetail() {
                   </tr></tfoot>
                 )}
               </table>
+              {!warehouseExitsQ.isLoading && WAREHOUSE.length > 0 && warehouseSalesTotalPages > 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
+                  <button className="btn" disabled={warehouseSalesPage <= 1} onClick={() => setWarehouseSalesPage(p => Math.max(1, p - 1))}>
+                    <i className="ti ti-chevron-left" style={{ fontSize: 14 }} /> Previous
+                  </button>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                    Page {warehouseSalesPage} of {warehouseSalesTotalPages}
+                  </span>
+                  <button className="btn" disabled={warehouseSalesPage >= warehouseSalesTotalPages} onClick={() => setWarehouseSalesPage(p => Math.min(warehouseSalesTotalPages, p + 1))}>
+                    Next <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -916,14 +1317,17 @@ export default function ClientDetail() {
                   <span className="meta-row"><i className="ti ti-currency-dollar" /> {client.currency}</span>
                 </div>
               </div>
-              <div className="stmt-actions">
+              <div className="stmt-actions no-print">
                 <button className="btn" onClick={() => window.print()}><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print</button>
                 <button className="btn-export" onClick={exportStatement}><i className="ti ti-table-export" /> Export Excel</button>
               </div>
             </div>
 
-            {/* Filter bar */}
-            <div className="filter-row">
+            {/* Filter bar — hidden on print (see .no-print in index.css); the
+                view-head above already shows client name + selected period,
+                so nothing period-identifying is lost from the printout. Same
+                fix already applied to SupplierDetail.tsx's Statement view. */}
+            <div className="filter-row no-print">
               <div className="filter-search">
                 <i className="ti ti-search" />
                 <input placeholder="Search description or ref…" value={stmtQ} onChange={e => setStmtQ(e.target.value)} />
@@ -953,11 +1357,15 @@ export default function ClientDetail() {
             <div className="card">
               <table className="data-table stmt-table">
                 <thead><tr>
-                  <th style={{ width: 165 }}>Date &amp; time</th><th style={{ width: 90 }}>Ref</th><th>Description</th>
-                  <th className="right" style={{ width: 120 }}>Debit</th><th className="right" style={{ width: 120 }}>Credit</th>
-                  <th className="right" style={{ width: 130 }}>Balance</th>
+                  <SortHeader label="Date & time" sortKey="date" sort={stmtSort} onSort={k => toggleSort(stmtSort, setStmtSort, k)} width={165} />
+                  <th style={{ width: 90 }}>Ref</th><th>Description</th>
+                  <SortHeader label="Debit" sortKey="debit" sort={stmtSort} onSort={k => toggleSort(stmtSort, setStmtSort, k)} width={120} align="right" />
+                  <SortHeader label="Credit" sortKey="credit" sort={stmtSort} onSort={k => toggleSort(stmtSort, setStmtSort, k)} width={120} align="right" />
+                  <SortHeader label="Balance" sortKey="balance" sort={stmtSort} onSort={k => toggleSort(stmtSort, setStmtSort, k)} width={130} align="right" />
                 </tr></thead>
                 <tbody>
+                  {/* Opening balance always renders first, regardless of sort —
+                      it's a summary anchor for the period, not a transaction row. */}
                   <tr className="opening">
                     <td className="mono">{stmtOpeningDate}</td>
                     <td></td>
@@ -965,7 +1373,7 @@ export default function ClientDetail() {
                     <td className="num"></td><td className="num"></td>
                     <td className="num">{fmt(stmtOpening)}</td>
                   </tr>
-                  {stmtFiltered.map((e, i) => {
+                  {sortedStmtRows.map((e, i) => {
                     return (
                       <tr key={i}>
                         <td className="mono">{fmtDateTime(e.rawDate)}</td>
@@ -1004,7 +1412,7 @@ export default function ClientDetail() {
                 <div className="view-title">All payments</div>
                 <div className="view-sub">
                   <span className="meta-row"><i className="ti ti-user" /> {client.name}</span>
-                  <span className="meta-row"><i className="ti ti-cash" /> {PAYMENTS.length} payments on record</span>
+                  <span className="meta-row"><i className="ti ti-cash" /> {paymentCount} payments on record</span>
                 </div>
               </div>
               <div className="stmt-actions">
@@ -1015,7 +1423,7 @@ export default function ClientDetail() {
 
             <div className="stmt-summary" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
               <div className="stmt-cell"><div className="l">Total received</div><div className="v green">{fmt(paymentsTotal)}</div><div className="s">all time</div></div>
-              <div className="stmt-cell"><div className="l">Payments</div><div className="v">{PAYMENTS.length}</div><div className="s">transactions</div></div>
+              <div className="stmt-cell"><div className="l">Payments</div><div className="v">{paymentCount}</div><div className="s">transactions</div></div>
               <div className="stmt-cell"><div className="l">Last payment</div><div className="v">{lastPayment ? fmt(lastPayment.amount) : '—'}</div><div className="s">{lastPayment ? lastPayment.date : '—'}</div></div>
             </div>
 
@@ -1023,9 +1431,11 @@ export default function ClientDetail() {
               <table className="data-table">
                 <thead><tr>
                   <th style={{ width: 90 }}>Receipt #</th>
-                  <th style={{ width: 130 }}>Date</th><th style={{ width: 90 }}>Method</th>
+                  <SortHeader label="Date" sortKey="date" sort={paymentSort} onSort={k => toggleSort(paymentSort, setPaymentSort, k)} width={130} />
+                  <th style={{ width: 90 }}>Method</th>
                   <th>Invoice / Ref</th><th>Received by</th>
-                  <th className="right" style={{ width: 120 }}>Amount</th><th className="right" style={{ width: 140 }}>Running total</th>
+                  <SortHeader label="Amount" sortKey="amount" sort={paymentSort} onSort={k => toggleSort(paymentSort, setPaymentSort, k)} width={120} align="right" />
+                  <th className="right" style={{ width: 140 }}>Running total</th>
                 </tr></thead>
                 <tbody>
                   {paymentsQ.isLoading && <tr><td colSpan={7} className="empty">Loading…</td></tr>}
@@ -1055,11 +1465,24 @@ export default function ClientDetail() {
                   </tr></tfoot>
                 )}
               </table>
-              {totalInvoiced > 0 && (
+              {!paymentsQ.isLoading && PAYMENTS.length > 0 && paymentTotalPages > 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
+                  <button className="btn" disabled={paymentPage <= 1} onClick={() => setPaymentPage(p => Math.max(1, p - 1))}>
+                    <i className="ti ti-chevron-left" style={{ fontSize: 14 }} /> Previous
+                  </button>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                    Page {paymentPage} of {paymentTotalPages}
+                  </span>
+                  <button className="btn" disabled={paymentPage >= paymentTotalPages} onClick={() => setPaymentPage(p => Math.min(paymentTotalPages, p + 1))}>
+                    Next <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                  </button>
+                </div>
+              )}
+              {totalCharged > 0 && (
                 <div className="pay-kpis">
-                  <div className="pay-kpi"><div className="lbl">Total invoiced</div><div className="val">{fmt(totalInvoiced)}</div></div>
-                  <div className="pay-kpi"><div className="lbl">Total paid</div><div className="val green">{fmt(totalPaidInv)}</div></div>
-                  <div className="pay-kpi"><div className="lbl">Outstanding</div><div className="val amber">{fmt(totalInvoiced - totalPaidInv)}</div></div>
+                  <div className="pay-kpi"><div className="lbl">Total invoiced</div><div className="val">{fmt(totalCharged)}</div></div>
+                  <div className="pay-kpi"><div className="lbl">Total paid</div><div className="val green">{fmt(totalPaid)}</div></div>
+                  <div className="pay-kpi"><div className="lbl">Outstanding</div><div className="val amber">{fmt(totalCharged - totalPaid)}</div></div>
                 </div>
               )}
             </div>
@@ -1150,8 +1573,10 @@ export default function ClientDetail() {
             </div>
             <div className="modal-footer" style={{ justifyContent: 'flex-end' }}>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn" onClick={() => setEditOpen(false)}>Cancel</button>
-                <button className="btn green" onClick={saveEdit}><i className="ti ti-check" style={{ fontSize: 15 }} /> Save changes</button>
+                <button className="btn" onClick={() => setEditOpen(false)} disabled={editSaving}>Cancel</button>
+                <button className="btn green" onClick={saveEdit} disabled={editSaving || !editForm.name.trim()}>
+                  <i className="ti ti-check" style={{ fontSize: 15 }} /> {editSaving ? 'Saving…' : 'Save changes'}
+                </button>
               </div>
             </div>
           </div>
@@ -1308,6 +1733,8 @@ export default function ClientDetail() {
           </div>
         </div>
       )}
+
+      {exportColumnsModal}
 
       {/* Toast */}
       <div className={`toast ${toast ? 'show' : ''}`}>

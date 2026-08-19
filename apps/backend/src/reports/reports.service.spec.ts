@@ -5,6 +5,7 @@ import { ReportsService, DEFAULT_LOOKBACK_DAYS, buildDateFilter, buildDateFilter
 import { ReportsController } from './reports.controller';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
+import { ClientBalanceService } from '../clients/client-balance.service';
 import { RolesGuard } from '../auth/roles.guard';
 import { Reflector } from '@nestjs/core';
 
@@ -1532,6 +1533,58 @@ describe('ReportsService', () => {
       expect(aggCall.where.date?.gte).toBeInstanceOf(Date);
     });
 
+    // Regression: date is a @db.Date column filtered with plain gte/lte, same
+    // category as bagCost/varianceCost in getProfitLoss. buildDateFilterWithDefault()
+    // also returns businessGte/businessLt (Asia/Beirut DateTime boundaries, for
+    // genuine DateTime columns like invoice.issuedAt) — passing that object
+    // wholesale as `date: dateFilter` leaks those as unrecognized keys into
+    // Prisma's PackingSessionWhereInput validation and throws
+    // PrismaClientValidationError at runtime against a real database (the jest
+    // mock here doesn't validate shape, so this only surfaces live — see
+    // getContainerCosts' arrivalDate comment for the same footgun called out
+    // explicitly). where.date must carry ONLY gte/lte, on every call shape:
+    // no dates given (default lookback), dateFrom only, dateTo only, and both.
+    it('never leaks businessGte/businessLt into the Prisma date filter — no dates given (default lookback)', async () => {
+      setupVariance({ sessionCount: 0 });
+      await service.getVariance({});
+      const aggCall = mockPrisma.packingSession.aggregate.mock.calls.at(-1)[0];
+      expect(Object.keys(aggCall.where.date)).toEqual(['gte']);
+    });
+
+    it('never leaks businessGte/businessLt into the Prisma date filter — dateFrom only', async () => {
+      setupVariance({ sessionCount: 0 });
+      await service.getVariance({ dateFrom: '2026-08-01' });
+      const aggCall = mockPrisma.packingSession.aggregate.mock.calls.at(-1)[0];
+      expect(Object.keys(aggCall.where.date).sort()).toEqual(['gte']);
+    });
+
+    it('never leaks businessGte/businessLt into the Prisma date filter — dateTo only', async () => {
+      setupVariance({ sessionCount: 0 });
+      await service.getVariance({ dateTo: '2026-08-17' });
+      const aggCall = mockPrisma.packingSession.aggregate.mock.calls.at(-1)[0];
+      expect(Object.keys(aggCall.where.date).sort()).toEqual(['lte']);
+    });
+
+    it('never leaks businessGte/businessLt into the Prisma date filter — full range, both aggregate and findMany', async () => {
+      setupVariance({ sessionCount: 0 });
+      await service.getVariance({ dateFrom: '2026-08-01', dateTo: '2026-08-17' });
+      const aggCall = mockPrisma.packingSession.aggregate.mock.calls.at(-1)[0];
+      expect(Object.keys(aggCall.where.date).sort()).toEqual(['gte', 'lte']);
+      const findManyCall = mockPrisma.packingSession.findMany.mock.calls.at(-1)[0];
+      expect(Object.keys(findManyCall.where.date).sort()).toEqual(['gte', 'lte']);
+    });
+
+    it('applies both dateFrom and dateTo bounds together with a worker filter', async () => {
+      setupVariance({ sessionCount: 1 });
+
+      await service.getVariance({ dateFrom: '2026-08-01', dateTo: '2026-08-17', workerId: 'w1' });
+
+      const aggCall = mockPrisma.packingSession.aggregate.mock.calls.at(-1)[0];
+      expect(aggCall.where.date.gte).toBeInstanceOf(Date);
+      expect(aggCall.where.date.lte).toBeInstanceOf(Date);
+      expect(aggCall.where.workerId).toBe('w1');
+    });
+
     // ── byCharcoalType — additional, purely-additive full-table breakdown ────
 
     it('reconciles: Σ(byCharcoalType[].totalVarianceKg) equals totalVarianceKg exactly', async () => {
@@ -1651,6 +1704,14 @@ describe('ReportsService', () => {
   // =========================================================================
 
   describe('getClientLedger()', () => {
+    // Default: no Fill Client pickups. Individual tests below override this
+    // when they specifically exercise the client_bags_fill debit path — every
+    // pre-existing invoice/payment-only test is unaffected (0 contribution).
+    beforeEach(() => {
+      mockPrisma.stockExit.findMany.mockResolvedValue([]);
+      mockPrisma.stockExit.aggregate.mockResolvedValue({ _sum: { amount: null } });
+    });
+
     it('runningBalance: invoice $100 then payment $40 → final balance $60', async () => {
       mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD' });
       const invoiceDate = new Date('2024-01-01');
@@ -1829,6 +1890,271 @@ describe('ReportsService', () => {
       expect(result.entries[1].type).toBe('payment');
       expect(result.entries[0].runningBalance).toBe('100.00');
       expect(result.entries[1].runningBalance).toBe('60.00');
+    });
+
+    // ── ClientDetail invoice-scalability audit: status exposed for open-count ──
+    it('status: each invoice entry carries its own status — lets a caller derive an open-invoice count without a second query', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      const d = new Date('2024-08-01');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        { id: 'inv-1', displayId: 'INV-001', issuedAt: d, createdAt: d, total: dec('100.00'), source: 'ORDER', lines: [], status: 'issued' },
+        { id: 'inv-2', displayId: 'INV-002', issuedAt: d, createdAt: d, total: dec('50.00'),  source: 'ORDER', lines: [], status: 'paid' },
+        { id: 'inv-3', displayId: 'INV-003', issuedAt: d, createdAt: d, total: dec('75.00'),  source: 'ORDER', lines: [], status: 'partially_paid' },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-1', {});
+
+      const invoiceEntries = result.entries.filter((e: any) => e.type === 'invoice');
+      expect(invoiceEntries).toHaveLength(3);
+      expect(invoiceEntries.map((e: any) => e.status)).toEqual(['issued', 'paid', 'partially_paid']);
+
+      // Open-invoice count is exactly the derivation a caller (ClientDetail) is
+      // expected to perform: status not in paid/cancelled. draft/cancelled are
+      // already excluded upstream by the where clause, so only 'paid' needs to
+      // be excluded here.
+      const openCount = invoiceEntries.filter((e: any) => e.status !== 'paid' && e.status !== 'cancelled').length;
+      expect(openCount).toBe(2); // issued + partially_paid; paid excluded
+    });
+
+    it('status: payment entries do not carry an invoice status field (undefined, not a stray value)', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'pmt-1', displayId: null, date: new Date('2024-08-02'), amount: dec('10.00'), method: 'cash' },
+      ]);
+
+      const result = await service.getClientLedger('c-1', {});
+
+      expect(result.entries[0].type).toBe('payment');
+      expect((result.entries[0] as any).status).toBeUndefined();
+    });
+
+    it('status: adding the status field does NOT change debit/credit/runningBalance math (accounting untouched)', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      const d = new Date('2024-08-01');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        { id: 'inv-1', displayId: 'INV-001', issuedAt: d, createdAt: d, total: dec('100.00'), source: 'ORDER', lines: [], status: 'partially_paid' },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'pmt-1', displayId: 'PAY-001', date: new Date('2024-08-02'), amount: dec('30.00'), method: 'cash' },
+      ]);
+
+      const result = await service.getClientLedger('c-1', {});
+
+      expect(result.entries[0].debit).toBe('100.00');
+      expect(result.entries[0].credit).toBe('0.00');
+      expect(result.entries[0].runningBalance).toBe('100.00');
+      expect(result.entries[1].runningBalance).toBe('70.00');
+      expect(result.balance).toBe('70.00');
+    });
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Fill Client statement — StockExit(exitType='client_bags_fill',
+    // amount NOT NULL) as debit entries. Same filter as
+    // ClientBalanceService.computeBalance(); additive-only for normal clients.
+    // ─────────────────────────────────────────────────────────────────────
+
+    it('Fill Client: one pickup produces one debit ledger entry', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'fc-1', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        { id: 'exit-1', date: new Date('2024-05-01'), amount: dec('80.00'),
+          reason: JSON.stringify([{ specKey: '5_grade-a', size: 5, charcoal: 'Grade A', qty: 10 }]) },
+      ]);
+
+      const result = await service.getClientLedger('fc-1', {});
+
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0].type).toBe('fill_pickup');
+      expect(result.entries[0].debit).toBe('80.00');
+      expect(result.entries[0].credit).toBe('0.00');
+      expect(result.entries[0].runningBalance).toBe('80.00');
+      expect(result.entries[0].description).toBe('Filled bags pickup — 10 bags (10× 5kg)');
+      expect(result.balance).toBe('80.00');
+    });
+
+    it('Fill Client: one payment (no pickups) produces one credit ledger entry', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'fc-1', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'pmt-1', displayId: null, date: new Date('2024-05-02'), amount: dec('20.00'), method: 'cash' },
+      ]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('fc-1', {});
+
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0].type).toBe('payment');
+      expect(result.entries[0].credit).toBe('20.00');
+      expect(result.balance).toBe('-20.00');
+    });
+
+    it('Fill Client: pickup $80 then payment $30 → running balance $50', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'fc-1', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'pmt-1', displayId: null, date: new Date('2024-05-05'), amount: dec('30.00'), method: 'cash' },
+      ]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        { id: 'exit-1', date: new Date('2024-05-01'), amount: dec('80.00'), reason: null },
+      ]);
+
+      const result = await service.getClientLedger('fc-1', {});
+
+      expect(result.entries).toHaveLength(2);
+      expect(result.entries[0].type).toBe('fill_pickup');
+      expect(result.entries[0].runningBalance).toBe('80.00');
+      expect(result.entries[1].type).toBe('payment');
+      expect(result.entries[1].runningBalance).toBe('50.00');
+      expect(result.balance).toBe('50.00');
+    });
+
+    it('Fill Client opening balance: pickup before dateFrom contributes to openingBalance', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'fc-1', currency: 'USD' });
+      mockPrisma.invoice.aggregate.mockResolvedValue({ _sum: { total: null } });
+      mockPrisma.payment.aggregate.mockResolvedValue({ _sum: { amount: null } });
+      mockPrisma.stockExit.aggregate.mockResolvedValue({ _sum: { amount: dec('80.00') } });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('fc-1', { dateFrom: '2024-06-01' });
+
+      expect(result.openingBalance).toBe('80.00');
+      expect(result.balance).toBe('80.00'); // no period entries, closing = opening
+
+      // Same filter as ClientBalanceService.computeBalance() — exitType +
+      // amount NOT NULL — and bounded to strictly before dateFrom.
+      const aggArgs = mockPrisma.stockExit.aggregate.mock.calls[0][0];
+      expect(aggArgs.where.exitType).toBe('client_bags_fill');
+      expect(aggArgs.where.amount).toEqual({ not: null });
+      expect(aggArgs.where.date.lt).toBeInstanceOf(Date);
+    });
+
+    it('Fill Client date filtering: pickup outside the requested range is excluded from entries but reflected in opening balance', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'fc-1', currency: 'USD' });
+      mockPrisma.invoice.aggregate.mockResolvedValue({ _sum: { total: null } });
+      mockPrisma.payment.aggregate.mockResolvedValue({ _sum: { amount: null } });
+      mockPrisma.stockExit.aggregate.mockResolvedValue({ _sum: { amount: dec('80.00') } });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+      // In-range pickup only — the out-of-range one already left its mark via
+      // the aggregate mock above (openingBalance), not via findMany.
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        { id: 'exit-2', date: new Date('2024-06-15'), amount: dec('25.00'), reason: null },
+      ]);
+
+      const result = await service.getClientLedger('fc-1', { dateFrom: '2024-06-01', dateTo: '2024-06-30' });
+
+      expect(result.openingBalance).toBe('80.00');
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0].debit).toBe('25.00');
+      expect(result.entries[0].runningBalance).toBe('105.00');
+      expect(result.balance).toBe('105.00');
+
+      const findArgs = mockPrisma.stockExit.findMany.mock.calls[0][0];
+      expect(findArgs.where.date.gte).toBeInstanceOf(Date);
+      expect(findArgs.where.date.lte).toBeInstanceOf(Date);
+    });
+
+    it('Fill Client ledger balance agrees with ClientBalanceService.computeBalance() for the same data', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'fc-1', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'pmt-1', displayId: null, date: new Date('2024-05-05'), amount: dec('30.00'), method: 'cash' },
+      ]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        { id: 'exit-1', date: new Date('2024-05-01'), amount: dec('80.00'), reason: null },
+      ]);
+
+      const ledgerResult = await service.getClientLedger('fc-1', {});
+
+      // Same mocked Prisma, same underlying data — computeBalance() reads via
+      // findMany (not aggregate), so it consumes the same stockExit/payment/
+      // invoice findMany mocks already set above.
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      const balanceService = new ClientBalanceService(mockPrisma as any);
+      const computedBalance = await balanceService.computeBalance('fc-1');
+
+      expect(ledgerResult.balance).toBe(computedBalance.toFixed(2));
+      expect(ledgerResult.balance).toBe('50.00');
+    });
+
+    it('Normal Client regression: statement is unaffected — client_bags_fill entries never leak in for a client with only invoices/payments', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-normal', currency: 'USD' });
+      const invDate = new Date('2024-05-01');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        { id: 'inv-1', displayId: 'INV-100', issuedAt: invDate, createdAt: invDate, total: dec('100.00'), source: 'ORDER', lines: [], status: 'issued' },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'pmt-1', displayId: 'PAY-100', date: new Date('2024-05-05'), amount: dec('40.00'), method: 'cash' },
+      ]);
+      // stockExit.findMany defaults to [] via the outer beforeEach — normal
+      // clients genuinely never have client_bags_fill rows in production.
+
+      const result = await service.getClientLedger('c-normal', {});
+
+      expect(result.entries).toHaveLength(2);
+      expect(result.entries.map((e: any) => e.type)).toEqual(['invoice', 'payment']);
+      expect(result.balance).toBe('60.00');
+
+      // The query is still issued (it's unconditional, not client-type-gated),
+      // but scoped to exitType='client_bags_fill' so it can never match a
+      // normal client's rows.
+      const findArgs = mockPrisma.stockExit.findMany.mock.calls[0][0];
+      expect(findArgs.where.exitType).toBe('client_bags_fill');
+    });
+
+    it('Fill Client: multiple pickups all appear as debits, correctly ordered chronologically', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'fc-1', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        { id: 'exit-1', date: new Date('2024-05-01'), amount: dec('50.00'), reason: null },
+        { id: 'exit-2', date: new Date('2024-05-10'), amount: dec('30.00'), reason: null },
+        { id: 'exit-3', date: new Date('2024-05-20'), amount: dec('20.00'), reason: null },
+      ]);
+
+      const result = await service.getClientLedger('fc-1', {});
+
+      expect(result.entries).toHaveLength(3);
+      expect(result.entries.every((e: any) => e.type === 'fill_pickup')).toBe(true);
+      expect(result.entries.map((e: any) => e.runningBalance)).toEqual(['50.00', '80.00', '100.00']);
+      expect(result.balance).toBe('100.00');
+    });
+
+    it('Fill Client: pickup and payment on the same date — debit (pickup) sorts before credit (payment)', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'fc-1', currency: 'USD' });
+      const sameDay = new Date('2024-05-01');
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'pmt-1', displayId: null, date: sameDay, amount: dec('15.00'), method: 'cash' },
+      ]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        { id: 'exit-1', date: sameDay, amount: dec('50.00'), reason: null },
+      ]);
+
+      const result = await service.getClientLedger('fc-1', {});
+
+      expect(result.entries[0].type).toBe('fill_pickup');
+      expect(result.entries[0].runningBalance).toBe('50.00');
+      expect(result.entries[1].type).toBe('payment');
+      expect(result.entries[1].runningBalance).toBe('35.00');
+    });
+
+    it('Fill Client: the stockExit query filters amount NOT NULL — a null-amount client_bags_fill row can never surface as a debit', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'fc-1', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([]);
+
+      await service.getClientLedger('fc-1', {});
+
+      const findArgs = mockPrisma.stockExit.findMany.mock.calls[0][0];
+      expect(findArgs.where.exitType).toBe('client_bags_fill');
+      expect(findArgs.where.amount).toEqual({ not: null });
     });
   });
 
@@ -2249,9 +2575,12 @@ describe('ReportsService', () => {
       totalInvoiced: string; totalCollected: string; totalOutstanding: string;
       openCount: string; totalOverdue: string; overdueCount: string; oldestDays: string;
     }> = {}) {
-      mockPrisma.invoice.aggregate.mockResolvedValueOnce({ _sum: { total: dec(totalInvoiced) } });
-      mockPrisma.payment.aggregate.mockResolvedValueOnce({ _sum: { amount: dec(totalCollected) } });
+      // totalInvoiced and totalCollected are now raw SQL too (currency-conversion
+      // fix — see the getArSummary doc comment), same $queryRaw call as the other
+      // two — mocked in the exact order the service's Promise.all issues them.
       mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ total_invoiced: totalInvoiced }])
+        .mockResolvedValueOnce([{ total_collected: totalCollected }])
         .mockResolvedValueOnce([{ total_outstanding: totalOutstanding, open_count: openCount }])
         .mockResolvedValueOnce([{ total_overdue: totalOverdue, overdue_count: overdueCount, oldest_days: oldestDays }]);
     }
@@ -2309,6 +2638,49 @@ describe('ReportsService', () => {
       expect(result.overdueCount).toBe(2);
       expect(result.oldestOverdueDays).toBe(15);
       expect(result.totalOverdue).toBe('120.00');
+    });
+
+    // -----------------------------------------------------------------------
+    // Currency-mixing regression. Invoice.currency/Payment.currency are set
+    // independently per row (not forced to match Client.currency), so every
+    // aggregate here sums across potentially different currencies. Each SQL
+    // query now converts LBP rows to USD (invoices via exchangeRateSnapshot,
+    // payments via the current global rate) before summing — these tests
+    // assert the exchange rate is actually threaded into every one of the 4
+    // queries, not just resolved and ignored.
+    // -----------------------------------------------------------------------
+
+    it('resolves the exchange rate exactly once and threads it into every one of the 4 AR queries', async () => {
+      mockSettings.getExchangeRate.mockResolvedValueOnce(75000);
+      setupArSummary({ totalInvoiced: '100.00', totalCollected: '100.00', totalOutstanding: '0.00' });
+
+      await service.getArSummary();
+
+      expect(mockSettings.getExchangeRate).toHaveBeenCalledTimes(1);
+      // Every call to $queryRaw must have received the resolved rate as one of
+      // its template values — asserts the rate isn't silently dropped from any
+      // of the 4 queries (e.g. a copy-paste that forgot to interpolate it).
+      expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(4);
+      for (const call of mockPrisma.$queryRaw.mock.calls) {
+        const sqlFragment = call[0];
+        expect(sqlFragment.values.some((v: unknown) => String(v) === '75000')).toBe(true);
+      }
+    });
+
+    it('a USD-converted result correctly reflects a mix of USD and LBP source rows (contract check — actual conversion math is the raw SQL\'s job, verified live)', async () => {
+      // The SQL itself does the CASE/NULLIF conversion; this test only locks in
+      // that the service still reads total_invoiced/total_collected off the
+      // now-raw-SQL result shape (not the old ._sum.total/._sum.amount shape),
+      // so a regression that reverts to Prisma .aggregate() (currency-blind)
+      // would be caught by TypeScript, and a regression that misreads the raw
+      // result shape would be caught here.
+      setupArSummary({ totalInvoiced: '5502.20', totalCollected: '2750.00', totalOutstanding: '2752.20' });
+
+      const result = await service.getArSummary();
+
+      expect(result.totalInvoiced).toBe('5502.20');
+      expect(result.totalCollected).toBe('2750.00');
+      expect(result.totalOutstanding).toBe('2752.20');
     });
   });
 

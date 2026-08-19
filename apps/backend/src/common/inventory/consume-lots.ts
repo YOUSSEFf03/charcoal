@@ -26,6 +26,10 @@ export interface ConsumedLot {
  * Inside the caller's transaction it:
  *   1. AGGREGATES inputs by lotId (duplicate lotIds are summed into one total), so a
  *      lot referenced twice deducts the sum once — no lost update.
+ *   1b. LOCKS every distinct lot row with SELECT ... FOR UPDATE (sorted by id, one
+ *      statement) before reading — mirrors stock-exits.service.ts's row-locking
+ *      pattern so a concurrent consumer of the same lot cannot validate against a
+ *      stale pre-deduction kgRemaining.
  *   2. Fetches each distinct lot (404 if any missing).
  *   3. VALIDATES each aggregated total <= lot.kgRemaining (400 CONSTRAINT_VIOLATION).
  *   4. DEDUCTS with an ATOMIC Prisma `{ decrement }` per distinct lot — never a stale
@@ -52,7 +56,22 @@ export async function consumeLots(
     totalsByLot.set(inp.lotId, prev.plus(new Decimal(inp.kg.toString())));
   }
 
-  const lotIds = [...totalsByLot.keys()];
+  const lotIds = [...totalsByLot.keys()].sort();
+
+  // Step 1b: Lock every distinct target row BEFORE reading — same FOR UPDATE
+  // pattern already used by stock-exits.service.ts / payments.service.ts /
+  // payment-allocation.service.ts, extended to multiple rows in ONE
+  // statement, sorted ascending by id (never locked one-by-one in caller
+  // order) so every transaction that locks stock_lots rows — this one, or a
+  // concurrent packing session / fill job / walk-in sale — acquires them in
+  // the same deterministic order and cannot deadlock against another. Once
+  // held, a concurrent consumer of the same lot is forced to wait until this
+  // transaction commits or rolls back, so the read below can never be stale.
+  if (lotIds.length > 0) {
+    await tx.$queryRaw(
+      Prisma.sql`SELECT id FROM "stock_lots" WHERE id IN (${Prisma.join(lotIds)}) ORDER BY id FOR UPDATE`,
+    );
+  }
 
   // Step 2: Fetch each distinct lot.
   const lots = await tx.stockLot.findMany({ where: { id: { in: lotIds } } });

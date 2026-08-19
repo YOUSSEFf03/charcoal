@@ -467,14 +467,50 @@ describe('WorkersService', () => {
   // =========================================================================
 
   describe('remove()', () => {
-    it('deletes payments and cost entries before deleting the worker', async () => {
+    it('deletes payments and cost entries before deleting the worker when totalOwed is zero', async () => {
       mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      mockAggregates('100.00', '100.00'); // earned 100, paid 100 — zero balance
 
       await service.remove('w1');
 
       expect(mockPrisma.workerPayment.deleteMany).toHaveBeenCalledWith({ where: { workerId: 'w1' } });
       expect(mockPrisma.workerCost.deleteMany).toHaveBeenCalledWith({ where: { workerId: 'w1' } });
       expect(mockPrisma.worker.delete).toHaveBeenCalledWith({ where: { id: 'w1' } });
+    });
+
+    it('OUTSTANDING_BALANCE: rejects deletion when the worker is still owed money, and deletes nothing', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      mockAggregates('500.00', '100.00'); // earned 500, paid 100 — owed 400
+
+      await expect(service.remove('w1')).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'OUTSTANDING_BALANCE' }),
+      });
+
+      expect(mockPrisma.workerPayment.deleteMany).not.toHaveBeenCalled();
+      expect(mockPrisma.workerCost.deleteMany).not.toHaveBeenCalled();
+      expect(mockPrisma.worker.delete).not.toHaveBeenCalled();
+    });
+
+    it('OUTSTANDING_BALANCE: also rejects when the worker was overpaid (negative totalOwed)', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(makeWorker({ id: 'w1' }));
+      mockAggregates('100.00', '250.00'); // earned 100, paid 250 — overpaid by 150
+
+      await expect(service.remove('w1')).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'OUTSTANDING_BALANCE' }),
+      });
+
+      expect(mockPrisma.worker.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws NOT_FOUND before ever computing a balance when the worker does not exist', async () => {
+      mockPrisma.worker.findUnique.mockResolvedValue(null);
+
+      await expect(service.remove('missing')).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'NOT_FOUND' }),
+      });
+
+      expect(mockPrisma.packingSession.aggregate).not.toHaveBeenCalled();
+      expect(mockPrisma.worker.delete).not.toHaveBeenCalled();
     });
   });
 

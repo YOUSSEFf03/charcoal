@@ -12,7 +12,8 @@ describe('FillJobsService', () => {
 
   const mockPrisma = {
     user: { findUnique: fn() },
-    fillJob: { findUnique: fn() },
+    fillJob: { findUnique: fn(), findMany: fn() },
+    stockExit: { aggregate: fn() },
     $transaction: fn(),
   };
 
@@ -29,6 +30,7 @@ describe('FillJobsService', () => {
 
   function makeTx(overrides: Record<string, any> = {}) {
     return {
+      $queryRaw: fn().mockResolvedValue([]),
       stockLot: { findMany: fn(), update: fn(), ...overrides.stockLot },
       fillJob: { create: fn(), ...overrides.fillJob },
       fillJobLot: { createMany: fn(), ...overrides.fillJobLot },
@@ -171,5 +173,120 @@ describe('FillJobsService', () => {
         clerkId,
       ),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  // =========================================================================
+  // getYtdSummary() — server-side port of FillClientDetail.tsx's ytdStats,
+  // unbounded per client (previously computed client-side from two
+  // limit:100-capped queries — see the FillClientDetail scalability audit).
+  // =========================================================================
+
+  describe('getYtdSummary()', () => {
+    const dec = (v: string) => ({ toString: () => v });
+
+    beforeEach(() => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([]);
+      mockPrisma.stockExit.aggregate.mockResolvedValue({ _sum: { amount: null } });
+    });
+
+    it('zero fill jobs and zero pickups → all zeros, hasData false', async () => {
+      const result = await service.getYtdSummary(clientId);
+      expect(result).toEqual({
+        bagsYTD: 0, wasteKg: '0.000', wastePct: 0,
+        revenueYTD: '0.00', costYTD: '0.00', profitYTD: '0.00', marginYTD: 0,
+        hasData: false,
+      });
+    });
+
+    it('single fill job: bagsYTD/costYTD come straight from the scalar columns', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([
+        { totalCharcoalKg: dec('100.000'), totalBags: 40, totalCost: dec('80.00'), bagOutputs: [{ size: 2, qty: 40 }] },
+      ]);
+      const result = await service.getYtdSummary(clientId);
+      expect(result.bagsYTD).toBe(40);
+      expect(result.costYTD).toBe('80.00');
+      expect(result.hasData).toBe(true);
+    });
+
+    it('waste = charcoal in − bag output out, as a percentage of charcoal in', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([
+        // 100 kg charcoal in, 40 bags × 2kg = 80 kg out → 20 kg waste = 20%
+        { totalCharcoalKg: dec('100.000'), totalBags: 40, totalCost: dec('80.00'), bagOutputs: [{ size: 2, qty: 40 }] },
+      ]);
+      const result = await service.getYtdSummary(clientId);
+      expect(result.wasteKg).toBe('20.000');
+      expect(result.wastePct).toBe(20);
+    });
+
+    it('waste never goes negative when output exceeds input (clamped to 0)', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([
+        { totalCharcoalKg: dec('50.000'), totalBags: 40, totalCost: dec('80.00'), bagOutputs: [{ size: 2, qty: 40 }] }, // 80kg out > 50kg in
+      ]);
+      const result = await service.getYtdSummary(clientId);
+      expect(result.wasteKg).toBe('0.000');
+      expect(result.wastePct).toBe(0);
+    });
+
+    it('revenueYTD comes from the pickup StockExit aggregate (amount NOT NULL only)', async () => {
+      mockPrisma.stockExit.aggregate.mockResolvedValue({ _sum: { amount: dec('500.00') } });
+      const result = await service.getYtdSummary(clientId);
+      expect(result.revenueYTD).toBe('500.00');
+    });
+
+    it('the pickup aggregate query excludes amount=null rows — the exact rows FillJobsService.create() itself writes for charcoal-consumption bookkeeping', async () => {
+      await service.getYtdSummary(clientId);
+      const args = mockPrisma.stockExit.aggregate.mock.calls[0][0];
+      expect(args.where.amount).toEqual({ not: null });
+      expect(args.where.exitType).toBe('client_bags_fill');
+      expect(args.where.clientId).toBe(clientId);
+    });
+
+    it('profitYTD = revenueYTD − costYTD; marginYTD = profit / revenue × 100', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([
+        { totalCharcoalKg: dec('100.000'), totalBags: 40, totalCost: dec('80.00'), bagOutputs: [{ size: 2, qty: 40 }] },
+      ]);
+      mockPrisma.stockExit.aggregate.mockResolvedValue({ _sum: { amount: dec('200.00') } });
+      const result = await service.getYtdSummary(clientId);
+      // profit = 200 - 80 = 120; margin = 120/200 * 100 = 60%
+      expect(result.profitYTD).toBe('120.00');
+      expect(result.marginYTD).toBe(60);
+    });
+
+    it('marginYTD is 0 (not NaN/Infinity) when there is no revenue yet, even with cost', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([
+        { totalCharcoalKg: dec('100.000'), totalBags: 40, totalCost: dec('80.00'), bagOutputs: [{ size: 2, qty: 40 }] },
+      ]);
+      const result = await service.getYtdSummary(clientId);
+      expect(result.marginYTD).toBe(0);
+      expect(result.profitYTD).toBe('-80.00');
+    });
+
+    it('multiple fill jobs aggregate correctly across rows (no per-row cap)', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([
+        { totalCharcoalKg: dec('50.000'), totalBags: 20, totalCost: dec('40.00'), bagOutputs: [{ size: 2, qty: 20 }] },
+        { totalCharcoalKg: dec('50.000'), totalBags: 20, totalCost: dec('40.00'), bagOutputs: [{ size: 2, qty: 20 }] },
+        { totalCharcoalKg: dec('50.000'), totalBags: 20, totalCost: dec('40.00'), bagOutputs: [{ size: 2, qty: 20 }] },
+      ]);
+      const result = await service.getYtdSummary(clientId);
+      expect(result.bagsYTD).toBe(60);
+      expect(result.costYTD).toBe('120.00');
+      expect(result.wasteKg).toBe('30.000'); // 150kg in - 120kg out
+    });
+
+    it('both queries are scoped to this clientId and to fill jobs dated from the start of the current calendar year', async () => {
+      await service.getYtdSummary(clientId);
+      const fjArgs = mockPrisma.fillJob.findMany.mock.calls[0][0];
+      const exitArgs = mockPrisma.stockExit.aggregate.mock.calls[0][0];
+      const expectedYearStart = new Date(new Date().getFullYear(), 0, 1);
+      expect(fjArgs.where.clientId).toBe(clientId);
+      expect(fjArgs.where.date).toEqual({ gte: expectedYearStart });
+      expect(exitArgs.where.date).toEqual({ gte: expectedYearStart });
+    });
+
+    it('no artificial cap: neither query passes a take/limit — unbounded per client', async () => {
+      await service.getYtdSummary(clientId);
+      const fjArgs = mockPrisma.fillJob.findMany.mock.calls[0][0];
+      expect(fjArgs.take).toBeUndefined();
+    });
   });
 });

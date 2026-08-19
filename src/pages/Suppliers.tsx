@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useSuppliers, useCreateSupplier } from '../hooks/useSuppliers'
+import { useSuppliers, useCreateSupplier, useUpdateSupplier } from '../hooks/useSuppliers'
 import type { Supplier, ContactPerson, SupplierCharcoalType, CreateSupplierDto } from '../types/api'
 
 // Derive 2-letter initials from a supplier name for the avatar tile.
@@ -21,6 +21,7 @@ export default function Suppliers() {
   const navigate = useNavigate()
   const { data: suppliersResp, isLoading, isError, refetch } = useSuppliers()
   const createSupplier = useCreateSupplier()
+  const updateSupplier = useUpdateSupplier()
   const suppliers = suppliersResp?.data ?? []
   const [panelOpen, setPanelOpen] = useState(false)
   const [panelTab, setPanelTab] = useState<'info' | 'contacts' | 'types' | 'bank' | 'history'>('info')
@@ -33,6 +34,13 @@ export default function Suppliers() {
   // New-supplier form fields wired to useCreateSupplier.
   const [newName, setNewName] = useState('')
   const [newCountry, setNewCountry] = useState('Nigeria')
+  // Edit-supplier form fields, wired to useUpdateSupplier — seeded from the
+  // selected supplier each time the Edit modal is opened (see the Edit button).
+  const [editName, setEditName] = useState('')
+  const [editCountry, setEditCountry] = useState('')
+  const [editLeadTimeDays, setEditLeadTimeDays] = useState('')
+  const [editPaymentTerms, setEditPaymentTerms] = useState('Net 30')
+  const [editNotes, setEditNotes] = useState('')
 
   function showToast(msg: string) {
     setToast(msg)
@@ -61,6 +69,29 @@ export default function Suppliers() {
         showToast('Supplier added')
       },
     })
+  }
+
+  function saveSupplierEdit() {
+    if (!sup || !editName.trim()) return
+    updateSupplier.mutate(
+      {
+        id: sup.id,
+        body: {
+          name: editName.trim(),
+          country: editCountry.trim(),
+          leadTimeDays: editLeadTimeDays.trim() ? parseInt(editLeadTimeDays, 10) : null,
+          paymentTerms: editPaymentTerms,
+          notes: editNotes.trim() || null,
+        },
+      },
+      {
+        onSuccess: () => {
+          setEditModalOpen(false)
+          showToast(`${editName.trim()} updated`)
+        },
+        onError: (err: any) => showToast(err?.error ?? 'Failed to update supplier'),
+      },
+    )
   }
 
   function addTypeRow() {
@@ -326,7 +357,15 @@ export default function Suppliers() {
             </div>
 
             <div className="panel-footer">
-              <button className="panel-btn pbtn-ghost" onClick={() => setEditModalOpen(true)}><i className="ti ti-edit" /> Edit</button>
+              <button className="panel-btn pbtn-ghost" onClick={() => {
+                if (!sup) return
+                setEditName(sup.name)
+                setEditCountry(sup.country)
+                setEditLeadTimeDays(sup.leadTimeDays != null ? String(sup.leadTimeDays) : '')
+                setEditPaymentTerms(sup.paymentTerms ?? 'Net 30')
+                setEditNotes(sup.notes ?? '')
+                setEditModalOpen(true)
+              }}><i className="ti ti-edit" /> Edit</button>
               <button className="panel-btn pbtn-primary" onClick={() => { setPanelOpen(false); navigate('/orders') }}>
                 <i className="ti ti-package" /> New Order
               </button>
@@ -488,22 +527,22 @@ export default function Suppliers() {
             <div className="modal-body">
               <div className="form-group">
                 <label className="form-label">Supplier name</label>
-                <input className="form-input" type="text" defaultValue={sup.name} />
+                <input className="form-input" type="text" value={editName} onChange={e => setEditName(e.target.value)} />
               </div>
               <div className="form-row">
                 <div className="form-group">
                   <label className="form-label">Country</label>
-                  <input className="form-input" type="text" defaultValue={sup.country} />
+                  <input className="form-input" type="text" value={editCountry} onChange={e => setEditCountry(e.target.value)} />
                 </div>
                 <div className="form-group">
                   <label className="form-label">Lead time (days)</label>
-                  <input className="form-input" type="number" defaultValue={sup.leadTimeDays ?? undefined} />
+                  <input className="form-input" type="number" value={editLeadTimeDays} onChange={e => setEditLeadTimeDays(e.target.value)} />
                 </div>
               </div>
               <div className="form-row">
                 <div className="form-group">
                   <label className="form-label">Payment terms</label>
-                  <select className="form-input" defaultValue={sup.paymentTerms ?? 'Net 30'}>
+                  <select className="form-input" value={editPaymentTerms} onChange={e => setEditPaymentTerms(e.target.value)}>
                     <option>Net 30</option><option>Net 45</option><option>Net 60</option><option>Prepaid</option>
                   </select>
                 </div>
@@ -514,13 +553,13 @@ export default function Suppliers() {
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Notes</label>
-                <textarea className="form-input" rows={3} defaultValue={sup.notes ?? ''} dir="auto" style={{ resize: 'vertical' }} />
+                <textarea className="form-input" rows={3} value={editNotes} onChange={e => setEditNotes(e.target.value)} dir="auto" style={{ resize: 'vertical' }} />
               </div>
             </div>
             <div className="modal-footer">
               <button className="btn" onClick={() => setEditModalOpen(false)}>Cancel</button>
-              <button className="btn primary" onClick={() => { setEditModalOpen(false); showToast(`${sup.name} updated`) }}>
-                <i className="ti ti-check" style={{ fontSize: 14 }} /> Save changes
+              <button className="btn primary" disabled={updateSupplier.isPending || !editName.trim()} onClick={saveSupplierEdit}>
+                <i className="ti ti-check" style={{ fontSize: 14 }} /> {updateSupplier.isPending ? 'Saving…' : 'Save changes'}
               </button>
             </div>
           </div>

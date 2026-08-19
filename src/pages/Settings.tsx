@@ -1,10 +1,10 @@
 import React, { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useUsers, useUpdateUserRole, useCreateLocalUser } from '../hooks/useUsers'
+import { useUsers, useUpdateUserRole, useCreateLocalUser, useDeleteLocalUser } from '../hooks/useUsers'
 import { useBagTypes, useCreateBagType, useUpdateBagType, useDeleteBagType } from '../hooks/useBagTypes'
 import { useReceivers } from '../hooks/useReceivers'
 import { useRate } from '../context/RateContext'
-import type { User, Role } from '../types/api'
+import type { User, Role, BagType } from '../types/api'
 
 type Section = 'company' | 'currency' | 'bagtypes' | 'driverrates' | 'receivers' | 'users' | 'preferences' | 'danger'
 
@@ -52,6 +52,7 @@ export default function Settings() {
   const usersQuery = useUsers()
   const updateUserRole = useUpdateUserRole()
   const createLocalUser = useCreateLocalUser()
+  const deleteLocalUser = useDeleteLocalUser()
   const rateCtx = useRate()
   const bagTypesQ = useBagTypes()
   const createBagType = useCreateBagType()
@@ -71,6 +72,8 @@ export default function Settings() {
   const [newBag, setNewBag] = useState({ name: '', nominalKg: '', costPerBag: '', workerRate: '', note: '' })
   const [editedBagRates, setEditedBagRates] = useState<Record<string, string>>({})
   const [showAddBag, setShowAddBag] = useState(false)
+  const [editBagType, setEditBagType] = useState<BagType | null>(null)
+  const [editBagForm, setEditBagForm] = useState({ name: '', nominalKg: '', costPerBag: '', workerRate: '', note: '' })
   const [showAddUser, setShowAddUser] = useState(false)
   const [newUserName, setNewUserName] = useState('')
   const [newUserRole, setNewUserRole] = useState<Role>('driver')
@@ -110,6 +113,46 @@ export default function Settings() {
     Promise.all(changed.map(b =>
       updateBagType.mutateAsync({ id: b.id, body: { workerRate: parseFloat(editedBagRates[b.id] || '0').toFixed(4) } })
     )).then(() => showToast('Worker rates saved'))
+  }
+
+  function openEditBag(b: BagType) {
+    setEditBagForm({
+      name: b.name,
+      nominalKg: String(parseFloat(b.nominalKg)),
+      costPerBag: b.costPerBag ? String(parseFloat(b.costPerBag)) : '',
+      workerRate: b.workerRate ? String(parseFloat(b.workerRate)) : '',
+      note: b.note ?? '',
+    })
+    setEditBagType(b)
+  }
+
+  function saveEditBag() {
+    if (!editBagType || !editBagForm.name.trim() || !editBagForm.nominalKg) return
+    updateBagType.mutate(
+      {
+        id: editBagType.id,
+        body: {
+          name: editBagForm.name.trim(),
+          nominalKg: parseFloat(editBagForm.nominalKg).toFixed(2),
+          costPerBag: editBagForm.costPerBag ? parseFloat(editBagForm.costPerBag).toFixed(4) : '0',
+          workerRate: editBagForm.workerRate ? parseFloat(editBagForm.workerRate).toFixed(4) : '0',
+          note: editBagForm.note.trim() || null,
+        },
+      },
+      {
+        onSuccess: () => {
+          setEditBagType(null)
+          showToast('Bag type updated')
+        },
+        onError: (err: any) => {
+          showToast(
+            err?.code === 'CONFLICT'
+              ? `A bag type named "${editBagForm.name.trim()}" already exists`
+              : err?.error ?? 'Failed to update bag type'
+          )
+        },
+      },
+    )
   }
 
   const inp: React.CSSProperties = { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 13, fontFamily: "'IBM Plex Sans',sans-serif", color: 'var(--text)', outline: 'none', background: 'var(--surface)' }
@@ -236,25 +279,35 @@ export default function Settings() {
                     placeholder="0.000"
                   />
                   <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>{b.note ?? ''}</span>
-                  <button
-                    onClick={() => {
-                      if (!confirm(`Delete bag type "${b.name}"? This cannot be undone.`)) return
-                      deleteBagType.mutate(b.id, {
-                        onSuccess: () => showToast('Bag type deleted'),
-                        onError: (err: any) => {
-                          showToast(
-                            err?.code === 'CONFLICT'
-                              ? `Cannot delete "${b.name}" — it is referenced by existing records (orders, packing, sales, purchases, etc.)`
-                              : err?.error ?? 'Failed to delete bag type'
-                          )
-                        },
-                      })
-                    }}
-                    disabled={deleteBagType.isPending}
-                    style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)' }}
-                  >
-                    <i className="ti ti-trash" style={{ fontSize: 12 }} />
-                  </button>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      onClick={() => openEditBag(b)}
+                      title="Edit bag type"
+                      style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)' }}
+                    >
+                      <i className="ti ti-pencil" style={{ fontSize: 12 }} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (!confirm(`Delete bag type "${b.name}"? This cannot be undone.`)) return
+                        deleteBagType.mutate(b.id, {
+                          onSuccess: () => showToast('Bag type deleted'),
+                          onError: (err: any) => {
+                            showToast(
+                              err?.code === 'CONFLICT'
+                                ? `Cannot delete "${b.name}" — it is referenced by existing records (orders, packing, sales, purchases, etc.)`
+                                : err?.error ?? 'Failed to delete bag type'
+                            )
+                          },
+                        })
+                      }}
+                      disabled={deleteBagType.isPending}
+                      title="Delete bag type"
+                      style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)' }}
+                    >
+                      <i className="ti ti-trash" style={{ fontSize: 12 }} />
+                    </button>
+                  </div>
                 </div>
               ))}
               {!bagTypesQ.isLoading && (bagTypesQ.data ?? []).length === 0 && (
@@ -312,6 +365,38 @@ export default function Settings() {
                       }}
                     >
                       <i className="ti ti-check" style={{ fontSize: 14 }} /> {createBagType.isPending ? 'Adding…' : 'Add bag type'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Edit bag type modal */}
+            {editBagType && (
+              <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setEditBagType(null)}>
+                <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 440, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
+                  <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ fontSize: 15, fontWeight: 600 }}>Edit bag type</div>
+                    <button onClick={() => setEditBagType(null)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }}>✕</button>
+                  </div>
+                  <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div><label style={lbl}>Name</label><input style={inp} value={editBagForm.name} onChange={e => setEditBagForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g. 10kg Bag" /></div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                      <div><label style={lbl}>Nominal kg</label><input style={{ ...inp, fontFamily: "'IBM Plex Mono',monospace" }} type="number" step="0.1" value={editBagForm.nominalKg} onChange={e => setEditBagForm(p => ({ ...p, nominalKg: e.target.value }))} placeholder="10" /></div>
+                      <div><label style={lbl}>Cost/bag ($)</label><input style={{ ...inp, fontFamily: "'IBM Plex Mono',monospace" }} type="number" step="0.01" value={editBagForm.costPerBag} onChange={e => setEditBagForm(p => ({ ...p, costPerBag: e.target.value }))} placeholder="0.40" /></div>
+                      <div><label style={lbl}>Worker rate ($)</label><input style={{ ...inp, fontFamily: "'IBM Plex Mono',monospace" }} type="number" step="0.01" value={editBagForm.workerRate} onChange={e => setEditBagForm(p => ({ ...p, workerRate: e.target.value }))} placeholder="0.12" /></div>
+                    </div>
+                    <div><label style={lbl}>Note (optional)</label><input style={inp} value={editBagForm.note} onChange={e => setEditBagForm(p => ({ ...p, note: e.target.value }))} placeholder="Any notes about this bag type" /></div>
+                  </div>
+                  <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                    <button className="btn" onClick={() => setEditBagType(null)}>Cancel</button>
+                    <button
+                      className="btn"
+                      style={{ background: 'var(--text)', color: '#fff', borderColor: 'var(--text)' }}
+                      disabled={updateBagType.isPending || !editBagForm.name.trim() || !editBagForm.nominalKg}
+                      onClick={saveEditBag}
+                    >
+                      <i className="ti ti-check" style={{ fontSize: 14 }} /> {updateBagType.isPending ? 'Saving…' : 'Save changes'}
                     </button>
                   </div>
                 </div>
@@ -392,7 +477,15 @@ export default function Settings() {
                     <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => setEditReceiver({ ...r })}>
                       <i className="ti ti-edit" style={{ fontSize: 13 }} />
                     </button>
-                    <button className="btn" style={{ fontSize: 12, padding: '5px 10px', background: 'var(--red-bg)', color: 'var(--red)', borderColor: '#fca5a5' }} onClick={() => removeReceiver(r.id)}>
+                    <button className="btn" style={{ fontSize: 12, padding: '5px 10px', background: 'var(--red-bg)', color: 'var(--red)', borderColor: '#fca5a5' }} onClick={() => {
+                      // Additional safety layer only — the backend rejects this
+                      // outright if the receiver still has an outstanding
+                      // UserAccount balance (deleting a receiver cascades away
+                      // their balance and entire cash ledger, so that check is
+                      // mandatory and authoritative, not just this dialog).
+                      if (!confirm(`Remove "${r.name}" as a receiver? This cannot be undone.`)) return
+                      removeReceiver(r.id)
+                    }}>
                       <i className="ti ti-trash" style={{ fontSize: 13 }} />
                     </button>
                   </div>
@@ -623,7 +716,25 @@ export default function Settings() {
             </div>
             <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="btn" onClick={() => setDeleteUserOpen(false)}>Cancel</button>
-              <button className="btn" style={{ background: 'var(--red)', color: '#fff', borderColor: 'var(--red)' }} onClick={() => { setDeleteUserOpen(false); showToast(`${editingUser.name} removed`) }}><i className="ti ti-trash" style={{ fontSize: 14 }} /> Remove user</button>
+              <button
+                className="btn"
+                style={{ background: 'var(--red)', color: '#fff', borderColor: 'var(--red)' }}
+                disabled={deleteLocalUser.isPending}
+                onClick={() => {
+                  deleteLocalUser.mutate(editingUser.id, {
+                    onSuccess: () => {
+                      setDeleteUserOpen(false)
+                      showToast(`${editingUser.name} removed`)
+                      setEditingUser(null)
+                    },
+                    onError: (err: any) => {
+                      showToast(err?.error ?? 'Failed to remove user')
+                    },
+                  })
+                }}
+              >
+                <i className="ti ti-trash" style={{ fontSize: 14 }} /> Remove user
+              </button>
             </div>
           </div>
         </div>

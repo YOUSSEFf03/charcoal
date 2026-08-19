@@ -10,6 +10,7 @@ import { CreateStockExitDto } from './dto/create-stock-exit.dto';
 import Decimal from 'decimal.js';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { UsersService } from '../users/users.service';
+import { SettingsService } from '../settings/settings.service';
 
 // SPEC.md §3.4 — Worker: "Log non-sale exits (samples, internal use)" and
 // "Cannot see: prices, costs, client information". Workers are role-gated
@@ -23,6 +24,7 @@ export class StockExitsService {
     private readonly prisma: PrismaService,
     private readonly ledgerWriteService: LedgerWriteService,
     private readonly usersService: UsersService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   /**
@@ -162,6 +164,272 @@ export class StockExitsService {
   }
 
   /**
+   * Warehouse cash box — cash ACTUALLY COLLECTED from warehouse sales on one
+   * calendar day, from the two places it can legitimately live:
+   *
+   *   A) Anonymous walk-ins — StockExit(exitType='walk_in', invoiceId=null,
+   *      amount NOT NULL). No invoice exists for these (WalkInSalesService's
+   *      own doc comment: "Anonymous walk-ins are out of scope — they
+   *      continue to use POST /stock-exits"), so the exit's own `amount` IS
+   *      the cash collected. Scoped to invoiceId=null (not just clientId)
+   *      per the StockExit.invoiceId doc comment, so it can never overlap
+   *      with case B below even in an edge case where an anonymous-style row
+   *      happens to carry a clientId.
+   *
+   *   B) Registered-client sales — via PaymentAllocation, NOT Payment.invoiceId.
+   *      PaymentAllocation is the authoritative record of how much of which
+   *      Payment applied to which Invoice (see PaymentAllocationService and
+   *      InvoiceCalculatorService.recomputeStatus()'s own doc comment: "a
+   *      client-level payment (Payment.invoiceId null) can be FIFO-split
+   *      across several invoices, so 'payments linked to this invoice via
+   *      invoiceId' undercounts whenever that split happened"). A payment
+   *      made directly against a WAREHOUSE_SALE invoice (WalkInSalesService,
+   *      via allocateDirect) still produces exactly one PaymentAllocation row
+   *      for the full amount — so this single query correctly covers BOTH
+   *      directly-linked payments AND FIFO-split client-level payments (no
+   *      invoiceId at all) that happened to apply part of their amount to an
+   *      open WAREHOUSE_SALE invoice, with no separate path needed for either.
+   *      Ordinary client payments (Order-invoice allocations, or the unapplied
+   *      portion of a client-level payment) never leak in — the Prisma
+   *      relation filter only matches allocation rows whose invoice exists
+   *      AND has source='WAREHOUSE_SALE'.
+   *      PaymentAllocation has no currency of its own — its `amount` is
+   *      always a slice of the parent Payment's own `amount`, so currency
+   *      conversion uses the parent Payment's `currency`, not the invoice's.
+   *      Dated by the parent Payment's `date` (PaymentAllocation.createdAt is
+   *      just an insert timestamp, not the cash-collected date).
+   *
+   * An unpaid warehouse invoice simply has no PaymentAllocation row yet for
+   * that day (contributes 0); a partially-paid one has exactly the amount(s)
+   * actually allocated that day — no separate "unpaid" adjustment needed.
+   *
+   * Both StockExit.date and Payment.date are @db.Date columns — a single
+   * calendar-day gte/lte bound, no timezone conversion (same convention
+   * reports.service.ts already uses for these two columns).
+   *
+   * Currency conversion mirrors getClientWarehouseSummary()'s existing rule —
+   * the single global exchange rate from SettingsService, LBP divided by rate.
+   */
+  async getWarehouseCashSummary(date: string): Promise<{
+    date: string;
+    cashCollected: string;
+    paymentCount: number;
+    anonymousSalesCount: number;
+  }> {
+    const day = new Date(date);
+    const dateFilter = { gte: day, lte: day };
+
+    const rate = new Decimal(await this.settingsService.getExchangeRate());
+    const toUsd = (amount: Decimal, currency: string): Decimal =>
+      currency === 'LBP' ? (rate.gt(0) ? amount.div(rate) : new Decimal(0)) : amount;
+
+    const [anonymousExits, warehouseAllocations] = await Promise.all([
+      this.prisma.stockExit.findMany({
+        where: { exitType: 'walk_in', invoiceId: null, amount: { not: null }, date: dateFilter },
+        select: { amount: true, currency: true },
+      }),
+      this.prisma.paymentAllocation.findMany({
+        where: { invoice: { source: 'WAREHOUSE_SALE' }, payment: { date: dateFilter } },
+        select: { amount: true, paymentId: true, payment: { select: { currency: true } } },
+      }),
+    ]);
+
+    const anonymousUsd = anonymousExits.reduce(
+      (sum, e) => sum.plus(toUsd(new Decimal(e.amount!.toString()), e.currency)),
+      new Decimal(0),
+    );
+    const paymentsUsd = warehouseAllocations.reduce(
+      (sum, a) => sum.plus(toUsd(new Decimal(a.amount.toString()), a.payment.currency)),
+      new Decimal(0),
+    );
+    // One payment can produce multiple allocation rows (FIFO-split across
+    // several warehouse invoices on the same day) — count it once.
+    const distinctPaymentCount = new Set(warehouseAllocations.map((a) => a.paymentId)).size;
+
+    return {
+      date,
+      cashCollected: anonymousUsd.plus(paymentsUsd).toFixed(2),
+      paymentCount: distinctPaymentCount,
+      anonymousSalesCount: anonymousExits.length,
+    };
+  }
+
+  /**
+   * "On account (no amount)" diagnostic — count of today's walk_in StockExit
+   * rows that belong to a registered client, carry no amount of their own
+   * (invoice-linked — see WalkInSalesService), and whose client hasn't
+   * logged ANY payment yet today.
+   *
+   * This is a direct server-side port of WarehouseSales.tsx's previous
+   * client-side computation:
+   *   paidClientIds = Set(todayPayments.map(p => p.clientId))
+   *   onAccount = todayExits.filter(e =>
+   *     e.clientId && !e.amount && !paidClientIds.has(e.clientId)
+   *   ).length
+   * — same definition, same "has this client paid ANYTHING today" heuristic
+   * (not scoped to warehouse-sale invoices, not per-invoice — this is
+   * intentionally the exact existing business meaning, not a redefinition;
+   * see the WarehouseSales scalability audit for the known limitation of
+   * that heuristic, which this fix does not change).
+   *
+   * Both source queries were previously capped at limit:100 (todayExitsQ /
+   * todayPaymentsQ), which could silently undercount this figure on a busy
+   * day. This method runs both unbounded for a single date:
+   *   - distinct paying clientIds today (bounded by how many DISTINCT
+   *     clients pay in one day — small, not a page-cap risk even unbounded)
+   *   - a single stockExit.count() for the actual on-account condition,
+   *     computed entirely in the database.
+   *
+   * Deliberately separate from getWarehouseCashSummary() — that method is
+   * already correct and is not modified here.
+   */
+  async getOnAccountCount(date: string): Promise<{ date: string; onAccountCount: number }> {
+    const day = new Date(date);
+    const dateFilter = { gte: day, lte: day };
+
+    const payingClients = await this.prisma.payment.findMany({
+      where: { date: dateFilter },
+      distinct: ['clientId'],
+      select: { clientId: true },
+    });
+    const payingClientIds = payingClients.map((p) => p.clientId);
+
+    const onAccountCount = await this.prisma.stockExit.count({
+      where: {
+        exitType: 'walk_in',
+        date: dateFilter,
+        clientId: { not: null, notIn: payingClientIds },
+        amount: null,
+      },
+    });
+
+    return { date, onAccountCount };
+  }
+
+  /**
+   * Aggregate ONE client's COMPLETE warehouse-sales history (all exit types,
+   * matching the same unfiltered scope ClientDetail's warehouse-sales tab
+   * already queries) — count, kg, and USD-equivalent amount — without
+   * paginating and without loading every row into Node for the parts that
+   * can be summed in the database.
+   *
+   * totalCount/totalKg are pure DB aggregation (count/sum/groupBy), the same
+   * pattern getWalkInSummary() above already uses for kg (packed bags via
+   * groupBy(bagTypeId) + a small bagType lookup; extended here to also cover
+   * raw-lot kg via a plain SUM(kgQuantity), which getWalkInSummary() doesn't
+   * need since it's bag-sales-only).
+   *
+   * totalAmount is necessarily a hybrid:
+   *  - Rows with an explicit `amount` are SUM'd in the DB, grouped by
+   *    currency (LBP divided by the current exchange rate, same conversion
+   *    reports.service.ts already uses elsewhere).
+   *  - Rows with amount=NULL but an invoiceId — the NORMAL case for a
+   *    registered client's atomic invoice-linked sales (see the
+   *    StockExit.invoiceId doc comment in schema.prisma) — have their real
+   *    price on ONE LINE of the linked invoice's `lines` JSON, not a scalar
+   *    column. That can't be safely summed in SQL without reimplementing
+   *    WarehouseSales.tsx's line-matching rule (exitDisplayAmountUsd()) in
+   *    raw SQL, which risks silently drifting from the canonical logic. This
+   *    subset is instead fetched with a minimal field selection, scoped to
+   *    ONE client — the same "safe unbounded per-entity history" scale
+   *    profile already used by getClientLedger()/computeBalance() — and
+   *    resolved with the EXACT same fallback rule exitDisplayAmountUsd()
+   *    uses, ported here rather than reinvented so the two can never
+   *    disagree. A row whose invoice has no matching line contributes 0 to
+   *    the sum (exitDisplayAmountUsd() returns null there, which the UI
+   *    shows as "—"; for a SUM total, "no known price" and "0" are the same
+   *    thing).
+   */
+  async getClientWarehouseSummary(
+    clientId: string,
+  ): Promise<{ totalCount: number; totalKg: string; totalAmount: string }> {
+    const rate = new Decimal(await this.settingsService.getExchangeRate());
+    const toUsd = (amount: Decimal, currency: string): Decimal =>
+      currency === 'LBP' ? (rate.gt(0) ? amount.div(rate) : new Decimal(0)) : amount;
+    const toNum = (v: unknown): number => {
+      const n = typeof v === 'number' ? v : parseFloat(String(v ?? '0'));
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    const [totalCount, rawKgSum, byBagType, explicitAmountByCurrency, unresolvedExits] = await Promise.all([
+      this.prisma.stockExit.count({ where: { clientId } }),
+      this.prisma.stockExit.aggregate({
+        where: { clientId, lotId: { not: null } },
+        _sum: { kgQuantity: true },
+      }),
+      this.prisma.stockExit.groupBy({
+        by: ['bagTypeId'],
+        where: { clientId, bagTypeId: { not: null }, quantity: { not: null } },
+        _sum: { quantity: true },
+      }),
+      this.prisma.stockExit.groupBy({
+        by: ['currency'],
+        where: { clientId, amount: { not: null } },
+        _sum: { amount: true },
+      }),
+      // Minimal-field, single-client-bounded fetch — only the rows that
+      // genuinely need line-level invoice resolution (see doc comment above).
+      this.prisma.stockExit.findMany({
+        where: { clientId, amount: null, invoiceId: { not: null } },
+        select: {
+          quantity: true,
+          kgQuantity: true,
+          lotId: true,
+          bagTypeId: true,
+          lot: { select: { charcoalType: true, grade: true } },
+          invoice: { select: { lines: true, currency: true } },
+        },
+      }),
+    ]);
+
+    // ── kg: raw-lot SUM(kgQuantity) + packed Σ(quantity × bagType.nominalKg) ──
+    const bagTypeIds = byBagType.map((g) => g.bagTypeId).filter(Boolean) as string[];
+    const bagTypes = bagTypeIds.length
+      ? await this.prisma.bagType.findMany({
+          where: { id: { in: bagTypeIds } },
+          select: { id: true, nominalKg: true },
+        })
+      : [];
+    const nominalKgById = new Map(bagTypes.map((bt) => [bt.id, bt.nominalKg]));
+    const packedKg = byBagType.reduce((sum, g) => {
+      const qty = g._sum.quantity ?? 0;
+      const nomKg = g.bagTypeId ? (nominalKgById.get(g.bagTypeId) ?? new Decimal(0)) : new Decimal(0);
+      return sum.plus(new Decimal(nomKg.toString()).mul(qty));
+    }, new Decimal(0));
+    const totalKg = packedKg.plus(new Decimal(rawKgSum._sum.kgQuantity?.toString() ?? '0'));
+
+    // ── amount: DB-summed explicit amounts (currency-converted) ──
+    const explicitAmount = explicitAmountByCurrency.reduce((sum, g) => {
+      const amt = new Decimal(g._sum.amount?.toString() ?? '0');
+      return sum.plus(toUsd(amt, g.currency));
+    }, new Decimal(0));
+
+    // ── ... plus per-invoice-line resolution for amount=NULL, invoice-linked
+    // rows — exact same matching rule as WarehouseSales.tsx's
+    // exitDisplayAmountUsd(), ported (not reinvented).
+    const unresolvedAmount = unresolvedExits.reduce((sum, exit) => {
+      const lines: any[] = (exit.invoice?.lines as any[]) ?? [];
+      const line = exit.lotId
+        ? (lines.find((l) => l.saleUnit === 'KG' && exit.lot && l.description === `${exit.lot.charcoalType} Grade ${exit.lot.grade}`)
+          ?? lines.find((l) => l.saleUnit === 'KG'))
+        : lines.find((l) => l.bagTypeId === exit.bagTypeId);
+      if (!line) return sum;
+      const qty = exit.lotId ? new Decimal(toNum(exit.kgQuantity)) : new Decimal(exit.quantity ?? 0);
+      const unitPrice = new Decimal(toNum(exit.lotId ? line.pricePerKg : line.pricePerBag));
+      const amt = qty.mul(unitPrice);
+      return sum.plus(toUsd(amt, exit.invoice?.currency ?? 'USD'));
+    }, new Decimal(0));
+
+    const totalAmount = explicitAmount.plus(unresolvedAmount);
+
+    return {
+      totalCount,
+      totalKg: totalKg.toFixed(3),
+      totalAmount: totalAmount.toFixed(2),
+    };
+  }
+
+  /**
    * Update mutable fields on an existing exit (amount, recipient).
    * Identity and audit fields (loggedById, exitType, date) are immutable after creation.
    */
@@ -253,6 +521,13 @@ export class StockExitsService {
       // ── MODE A: Raw lot (by-kg sale) ──────────────────────────────────────
       let exit: any;
       if (dto.lotId && dto.kgQuantity) {
+        // Lock the lot row before reading kgRemaining — mirrors the FOR UPDATE
+        // pattern in payments.service.ts / payment-allocation.service.ts. Two
+        // concurrent exits against the same lot now serialize on this lock:
+        // the second transaction only reads kgRemaining after the first has
+        // committed (or rolled back), so it validates against the true
+        // post-deduction value instead of a stale pre-deduction one.
+        await tx.$queryRaw(Prisma.sql`SELECT id FROM "stock_lots" WHERE id = ${dto.lotId} FOR UPDATE`);
         const lot = await tx.stockLot.findUnique({ where: { id: dto.lotId } });
         if (!lot) throw new NotFoundException({ error: 'Stock lot not found', code: 'NOT_FOUND' });
 
@@ -287,6 +562,12 @@ export class StockExitsService {
             code: 'VALIDATION_ERROR',
           });
         }
+        // Lock the packed-stock row before reading quantity/reservedQuantity —
+        // same FOR UPDATE pattern as the raw-lot path above. Two concurrent
+        // exits against the same packed-stock row serialize on this lock, so
+        // the second transaction's freeQuantity check always reflects the
+        // first transaction's committed decrement.
+        await tx.$queryRaw(Prisma.sql`SELECT id FROM "packed_stocks" WHERE id = ${dto.packedStockId} FOR UPDATE`);
         const packedStock = await tx.packedStock.findUnique({ where: { id: dto.packedStockId } });
         if (!packedStock) throw new NotFoundException({ error: 'Packed stock not found', code: 'NOT_FOUND' });
         // BUG-E (P2): consumers must draw against FREE quantity (quantity − reservedQuantity),
