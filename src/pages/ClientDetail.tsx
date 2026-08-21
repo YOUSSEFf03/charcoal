@@ -8,12 +8,12 @@ import { useOrders, useCreateOrder } from '../hooks/useOrders'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { useStockExits, useClientWarehouseSummary } from '../hooks/useWarehouse'
 import { usePayments, useCreatePayment } from '../hooks/usePayments'
-import { useReceivers } from '../hooks/useReceivers'
-import { useWorkers } from '../hooks/useWorkers'
+import { useCashReceivers } from '../hooks/useUsers'
 import { useRate } from '../context/RateContext'
 import { roundDp, formatUsd } from '../lib/money'
 import { formatDate, formatDateTime } from '../lib/date'
 import { exportExcel, type ExcelColumn } from '../lib/excelExport'
+import { exportStatementPdf } from '../lib/statementPdf'
 import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
 import SortHeader, { toggleSort } from '../components/ui/SortHeader'
 import { api } from '../lib/api'
@@ -165,19 +165,13 @@ export default function ClientDetail() {
     bagTypesList.map(b => [b.name, b.costPerBag ? parseFloat(b.costPerBag) : 0])
   )
   const warehousePurchases = warehouseExitsQ.data?.data ?? []
-  const { receivers: customReceivers } = useReceivers()
-  const workersQ = useWorkers()
-  // Same shape/resolution pattern WarehouseSales.tsx already uses correctly:
-  // receiverId must be a real User ID (payments_receiverId_fkey → users table).
-  // Workers come from the workers table — their IDs are invalid here, so they
-  // stay name-only. Only customReceivers (role='receiver') are real users and
-  // safe to resolve to an ID. 'Owner' has no backing user row here either, so
-  // it also stays a name-only legacy fallback (unchanged from before).
-  const allReceivers = [
-    ...(workersQ.data ?? []).map(w => ({ id: w.id, name: w.name, role: 'worker' })),
-    ...customReceivers,
-    { id: '', name: 'Owner', role: 'owner' },
-  ]
+  // receiverId must be a real User ID (payments_receiverId_fkey → users
+  // table). useCashReceivers() now resolves a real id for every role that can
+  // receive cash (owner/accountant/sales_rep/worker/receiver) — workers have
+  // a linked User via Worker.userId (see the add_worker_user_link migration),
+  // so they no longer stay name-only/unresolvable the way they used to.
+  const receiversQ = useCashReceivers()
+  const allReceivers = receiversQ.data ?? []
 
   // Reset the invoice table to page 1 whenever the client changes — otherwise
   // navigating from a client with many invoice pages to one with fewer could
@@ -640,6 +634,44 @@ export default function ClientDetail() {
     })
   }
 
+  // Downloads the Statement of Account as a PDF, using the exact same
+  // stmtFiltered/stmtOpening/stmtDebit/stmtCredit/stmtClosing figures already
+  // shown on screen and in exportStatement()'s Excel export above — no second
+  // accounting calculation. Unlike the Excel export, this always has the
+  // complete period (stmtFiltered is never a paginated slice), so there's
+  // nothing to fetch first; it downloads directly, no column-picker modal.
+  async function downloadStatementPdf() {
+    const primaryPhone = client.phones.find(p => p.active)?.number ?? client.phones[0]?.number ?? null
+    try {
+      await exportStatementPdf({
+        client: {
+          name: client.name,
+          // Client has no stored address anywhere in this app (not in the
+          // Prisma model, not in the API response) — the edit form's Address
+          // field is local-UI-only and never persisted. Showing '—' here is
+          // honest; inventing a value would not be.
+          address: null,
+          phone: primaryPhone,
+          currency: client.currency,
+        },
+        // Falls back to the actual first/last row date when no explicit
+        // From/To filter is set — same fallback stmtPeriod (shown on screen
+        // just above this table) already uses, so the PDF never shows a bare
+        // "—" for a statement that plainly does cover real dates.
+        from: stmtFrom ? new Date(stmtFrom).toISOString() : (stmtFiltered[0]?.rawDate ?? null),
+        to: stmtTo ? new Date(stmtTo).toISOString() : (stmtFiltered[stmtFiltered.length - 1]?.rawDate ?? null),
+        rows: stmtFiltered.map(e => ({ ref: e.ref, rawDate: e.rawDate, desc: e.desc, debit: e.debit, credit: e.credit, balance: e.balance })),
+        openingBalance: stmtOpening,
+        periodDebitTotal: stmtDebit,
+        periodCreditTotal: stmtCredit,
+        closingBalance: stmtClosing,
+      })
+    } catch (e) {
+      console.error('Failed to export statement PDF:', e)
+      showToast('Failed to export statement PDF')
+    }
+  }
+
   function openEditModal() {
     setEditForm({ ...client, phones: client.phones.map(p => ({ ...p })) })
     setEditOpen(true)
@@ -775,7 +807,7 @@ export default function ClientDetail() {
     // WarehouseSales.tsx) so the ledger actually gets credited — previously
     // this page only ever sent receiverName, which the backend stores for
     // display but never resolves to a ledger-crediting receiver.
-    const receiverId = allReceivers.find(r => r.name === payReceiverName && r.role === 'receiver')?.id
+    const receiverId = allReceivers.find(r => r.name === payReceiverName)?.id
     createPaymentM.mutate(
       {
         clientId: cid,
@@ -1319,6 +1351,7 @@ export default function ClientDetail() {
               </div>
               <div className="stmt-actions no-print">
                 <button className="btn" onClick={() => window.print()}><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print</button>
+                <button className="btn-export" onClick={downloadStatementPdf}><i className="ti ti-download" /> Export PDF</button>
                 <button className="btn-export" onClick={exportStatement}><i className="ti ti-table-export" /> Export Excel</button>
               </div>
             </div>
@@ -1511,13 +1544,16 @@ export default function ClientDetail() {
                 <div className="field">
                   <span className="field-label">Client type</span>
                   <select className="select" value={editForm.type} onChange={e => setEditForm(f => ({ ...f, type: e.target.value }))}>
-                    {['restaurant', 'wholesale', 'retail', 'export', 'shisha'].map(t => <option key={t}>{t}</option>)}
+                    {/* Prisma ClientType enum values (schema.prisma) — the previous list
+                        ('retail', 'shisha', 'EUR' below) didn't exist in the enum and
+                        would 400 on save (@IsEnum(ClientType)/@IsEnum(Currency)). */}
+                    {['restaurant', 'shop', 'wholesale', 'walk_in', 'corporate', 'export'].map(t => <option key={t}>{t}</option>)}
                   </select>
                 </div>
                 <div className="field">
                   <span className="field-label">Currency</span>
                   <select className="select" value={editForm.currency} onChange={e => setEditForm(f => ({ ...f, currency: e.target.value }))}>
-                    {['USD', 'LBP', 'EUR'].map(cc => <option key={cc}>{cc}</option>)}
+                    {['USD', 'LBP'].map(cc => <option key={cc}>{cc}</option>)}
                   </select>
                 </div>
                 <div className="field full">
