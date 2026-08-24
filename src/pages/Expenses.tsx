@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useAllExpenses, useDriverExpenses, useGeneralExpenses, useCreateGeneralExpense, useAllWorkerPayments } from '../hooks/useExpenses'
+import { useAllExpenses, useDriverExpenses, useGeneralExpenses, useCreateGeneralExpense, useDeleteGeneralExpense, useAllWorkerPayments } from '../hooks/useExpenses'
 import { useAllCashHandoverExpenses } from '../hooks/useCashHandover'
-import { useWorkers } from '../hooks/useWorkers'
+import { useWorkers, useLogWorkerPayment } from '../hooks/useWorkers'
 import type { DriverTrip } from '../types/api'
+import { toDateOnlyString } from '../lib/date'
 
 type ETab = 'expenses' | 'employees'
 
@@ -96,6 +97,8 @@ export default function Expenses() {
   } = useGeneralExpenses({ dateFrom: monthDateFrom, dateTo: monthDateTo })
 
   const createExpense = useCreateGeneralExpense()
+  const deleteExpense = useDeleteGeneralExpense()
+  const logWorkerPayment = useLogWorkerPayment()
 
   // Live container expenses
   const {
@@ -133,16 +136,17 @@ export default function Expenses() {
   const [addModalType, setAddModalType] = useState<'recurring' | 'onetime' | null>(null)
   const [newDesc, setNewDesc] = useState('')
   const [newAmt, setNewAmt] = useState('')
-  const [newDate, setNewDate] = useState(new Date().toISOString().slice(0, 10))
+  const [newDate, setNewDate] = useState(toDateOnlyString(new Date()))
   const [newIsRecurring, setNewIsRecurring] = useState(false)
   const [newCategory, setNewCategory] = useState('')
   const [newNotes, setNewNotes] = useState('')
 
   // Pay modal
-  const [payTarget, setPayTarget] = useState<{ name: string; owed: number } | null>(null)
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10))
+  const [payTarget, setPayTarget] = useState<{ name: string; owed: number; workerId?: string } | null>(null)
+  const [payDate, setPayDate] = useState(toDateOnlyString(new Date()))
   const [payAmt, setPayAmt] = useState('')
   const [payMethod, setPayMethod] = useState<'Cash' | 'Whish' | 'OMT'>('Cash')
+  const [payNotes, setPayNotes] = useState('')
 
   // Derived totals
   // "General expenses" — GeneralExpense table only (recurring + one-time).
@@ -186,7 +190,7 @@ export default function Expenses() {
     setAddModalType(type)
     setNewIsRecurring(type === 'recurring')
     setNewDesc(''); setNewAmt(''); setNewNotes(''); setNewCategory('')
-    setNewDate(new Date().toISOString().slice(0, 10))
+    setNewDate(toDateOnlyString(new Date()))
   }
 
   async function saveExpense() {
@@ -202,11 +206,38 @@ export default function Expenses() {
     setAddModalType(null)
   }
 
-  function openPay(name: string, owed: number) {
-    setPayTarget({ name, owed })
+  function openPay(name: string, owed: number, workerId?: string) {
+    setPayTarget({ name, owed, workerId })
     setPayAmt('')
     setPayMethod('Cash')
-    setPayDate(new Date().toISOString().slice(0, 10))
+    setPayNotes('')
+    setPayDate(toDateOnlyString(new Date()))
+  }
+
+  const PAY_METHOD_MAP: Record<'Cash' | 'Whish' | 'OMT', 'cash' | 'whish' | 'omt'> = { Cash: 'cash', Whish: 'whish', OMT: 'omt' }
+
+  function confirmPayment() {
+    if (!payTarget || payAmtNum <= 0) return
+    if (!payTarget.workerId) {
+      // Driver trip expenses have no backend concept of "payment" — they're
+      // recorded costs (DriverTrip.fuelCost/otherExpenses), not a WorkerPayment-
+      // style payable liability. Building that is a product decision, not a
+      // wiring fix, so this must say so rather than silently closing as if paid.
+      window.alert('Recording a driver expense reimbursement isn\'t supported yet.')
+      return
+    }
+    logWorkerPayment.mutate(
+      {
+        id: payTarget.workerId,
+        body: {
+          amount: payAmtNum.toFixed(2),
+          method: PAY_METHOD_MAP[payMethod],
+          date: payDate,
+          notes: payNotes.trim() || undefined,
+        },
+      },
+      { onSuccess: () => setPayTarget(null) },
+    )
   }
 
   const payAmtNum  = parseFloat(payAmt) || 0
@@ -316,7 +347,12 @@ export default function Expenses() {
                       <div className="exp-amount-val">${parseFloat(e.amount).toLocaleString()}</div>
                       <div className="exp-amount-lbl">per month</div>
                     </div>
-                    <button className="exp-del"><i className="ti ti-edit" style={{ fontSize: 12 }} /></button>
+                    {/* No PATCH /general-expenses/:id exists on the backend (only
+                        GET/POST/DELETE) — editing an existing expense isn't possible
+                        yet, so this must not look clickable. */}
+                    <button className="exp-del" disabled style={{ opacity: 0.4, cursor: 'not-allowed' }} title="Editing isn't available yet — delete and re-add instead">
+                      <i className="ti ti-edit" style={{ fontSize: 12 }} />
+                    </button>
                   </div>
                 ))}
                 {!genLoading && !genError && recurring.length === 0 && (
@@ -348,7 +384,13 @@ export default function Expenses() {
                     <div className="exp-amount">
                       <div className="exp-amount-val">${parseFloat(e.amount).toLocaleString()}</div>
                     </div>
-                    <button className="exp-del"><i className="ti ti-x" style={{ fontSize: 12 }} /></button>
+                    <button
+                      className="exp-del"
+                      disabled={deleteExpense.isPending}
+                      onClick={() => { if (confirm(`Delete "${e.description}"?`)) deleteExpense.mutate(e.id) }}
+                    >
+                      <i className="ti ti-x" style={{ fontSize: 12 }} />
+                    </button>
                   </div>
                 ))}
                 {!genLoading && !genError && onetime.length === 0 && (
@@ -575,7 +617,7 @@ export default function Expenses() {
                       </div>
                     </div>
 
-                    <button className="pay-btn green" onClick={() => openPay(worker.name, owed)}>
+                    <button className="pay-btn green" onClick={() => openPay(worker.name, owed, worker.id)}>
                       <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay {worker.name} — ${owed.toFixed(2)} owed
                     </button>
                   </div>
@@ -778,18 +820,12 @@ export default function Expenses() {
               <button className="close-btn" onClick={() => setPayTarget(null)}>✕</button>
             </div>
             <div className="modal-body">
-              <div className="form-row" style={{ marginBottom: 14 }}>
-                <div>
-                  <label className="form-label">Payment date</label>
-                  <input className="form-input" type="date" style={{ margin: 0 }} value={payDate} onChange={e => setPayDate(e.target.value)} />
-                </div>
-                <div>
-                  <label className="form-label">Paid by</label>
-                  <select className="form-input" style={{ margin: 0 }}>
-                    <option>Khalil (owner)</option>
-                    <option>Accountant</option>
-                  </select>
-                </div>
+              <div style={{ marginBottom: 14 }}>
+                {/* No "paid by" field on WorkerPayment — the payment is already
+                    attributed to the authenticated user server-side; there's
+                    nothing for a separate dropdown here to persist. */}
+                <label className="form-label">Payment date</label>
+                <input className="form-input" type="date" style={{ margin: 0 }} value={payDate} onChange={e => setPayDate(e.target.value)} />
               </div>
 
               <label className="form-label">Amount paid</label>
@@ -829,12 +865,12 @@ export default function Expenses() {
               </div>
 
               <label className="form-label">Notes (optional)</label>
-              <input className="form-input" type="text" placeholder="e.g. May wages partial" style={{ marginBottom: 0 }} />
+              <input className="form-input" type="text" placeholder="e.g. May wages partial" style={{ marginBottom: 0 }} value={payNotes} onChange={e => setPayNotes(e.target.value)} />
             </div>
             <div className="modal-footer">
               <button className="btn" onClick={() => setPayTarget(null)}>Cancel</button>
-              <button className="btn green" onClick={() => setPayTarget(null)}>
-                <i className="ti ti-check" style={{ fontSize: 14 }} /> Confirm payment
+              <button className="btn green" onClick={confirmPayment} disabled={logWorkerPayment.isPending || payAmtNum <= 0}>
+                <i className="ti ti-check" style={{ fontSize: 14 }} /> {logWorkerPayment.isPending ? 'Saving…' : 'Confirm payment'}
               </button>
             </div>
           </div>

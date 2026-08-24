@@ -16,7 +16,7 @@ describe('WorkersService', () => {
     workerPayment:     { findUnique: fn(), findMany: fn(), count: fn(), create: fn(), deleteMany: fn(), aggregate: fn(), groupBy: fn() },
     workerCost:        { aggregate: fn(), groupBy: fn(), findMany: fn(), count: fn(), create: fn(), update: fn(), findUnique: fn(), deleteMany: fn() },
     packingSession:    { aggregate: fn(), groupBy: fn() },
-    user:              { findUnique: fn() },
+    user:              { findUnique: fn(), create: fn() },
     $transaction:      fn(),
   };
 
@@ -139,6 +139,57 @@ describe('WorkersService', () => {
       expect(result.data[0].pieceEarned).toBe('0.00');
       expect(result.data[0].costEarned).toBe('100.00');
       expect(result.data[0].totalEarned).toBe('100.00');
+    });
+  });
+
+  // =========================================================================
+  // create() — every worker gets a linked local User so it has a valid
+  // Payment.receiverId to reference (see the 20260821000000_add_worker_
+  // user_link migration).
+  // =========================================================================
+
+  describe('create()', () => {
+    function mockTx() {
+      const tx = {
+        user: { create: fn() },
+        worker: { create: fn() },
+      };
+      mockPrisma.$transaction.mockImplementation((cb: any) => cb(tx));
+      return tx;
+    }
+
+    it('creates a local User (role=worker) and links it via Worker.userId', async () => {
+      const tx = mockTx();
+      const createdUser = { id: 'user-uuid-1', clerkId: 'local_x', email: 'local_x@local.internal', name: 'Ahmed', role: 'worker' };
+      tx.user.create.mockResolvedValue(createdUser);
+      tx.worker.create.mockResolvedValue(makeWorker({ id: 'w-new', name: 'Ahmed' }));
+
+      await service.create({ name: 'Ahmed', phone: '+961-1-111' } as any);
+
+      expect(tx.user.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ name: 'Ahmed', role: 'worker', phone: '+961-1-111' }),
+        }),
+      );
+      expect(tx.worker.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ name: 'Ahmed', userId: 'user-uuid-1' }),
+        }),
+      );
+    });
+
+    it('the linked User and the Worker are created in the SAME transaction — never two independent writes', async () => {
+      const tx = mockTx();
+      tx.user.create.mockResolvedValue({ id: 'user-uuid-2' });
+      tx.worker.create.mockResolvedValue(makeWorker({ id: 'w-new-2' }));
+
+      await service.create({ name: 'Fadi' } as any);
+
+      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+      // worker.create must run against the SAME tx client user.create ran
+      // against, not the top-level mockPrisma — this is the anti-orphan
+      // guarantee (a User is never created without its Worker, or vice versa).
+      expect(mockPrisma.worker.create).not.toHaveBeenCalled();
     });
   });
 

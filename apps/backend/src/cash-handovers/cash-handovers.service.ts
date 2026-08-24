@@ -3,6 +3,7 @@ import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { BalanceQueryService } from '../ledger/balance-query.service';
+import { CreateCashHandoverDto } from './dto/create-cash-handover.dto';
 
 @Injectable()
 export class CashHandoversService {
@@ -12,19 +13,37 @@ export class CashHandoversService {
     private readonly balanceQueryService: BalanceQueryService,
   ) {}
 
-  async findAll(page = 1, limit = 20, dateFrom?: string, dateTo?: string) {
+  async findAll(page = 1, limit = 20, dateFrom?: string, dateTo?: string, search?: string) {
     const skip = (page - 1) * limit;
     const where: any = {};
     if (dateFrom || dateTo) {
+      // date is a @db.Date column (business date, not a timestamp) — plain
+      // gte/lte is the same convention already used for Payment.date
+      // elsewhere in this codebase.
       where.date = {
         ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
         ...(dateTo ? { lte: new Date(dateTo) } : {}),
       };
     }
+    if (search) {
+      // receiverName is the historical snapshot (present on every row, even
+      // if receiverId is null for legacy data) — searching it, not a live
+      // join, matches what a user actually saw at the time. notes is the
+      // only other free-text field on this model. Mirrors the OR/contains/
+      // insensitive pattern InvoicesService.findAll() already uses.
+      where.OR = [
+        { receiverName: { contains: search, mode: 'insensitive' } },
+        { notes: { contains: search, mode: 'insensitive' } },
+      ];
+    }
     const [data, total] = await this.prisma.$transaction([
       this.prisma.cashHandover.findMany({
         where, skip, take: limit,
-        orderBy: { createdAt: 'desc' },
+        // Newest handover first by its actual business date — createdAt is
+        // only a tiebreaker for same-day handovers, so ordering stays
+        // deterministic without letting a backdated/late-entered handover's
+        // insert time override the date the user filters and reads by.
+        orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
         include: {
           loggedBy: { select: { id: true, name: true } },
           receiver: { select: { id: true, name: true } },
@@ -52,19 +71,7 @@ export class CashHandoversService {
     return this.balanceQueryService.getReceiverBalance(receiverId);
   }
 
-  async create(dto: {
-    date: string;
-    receiverId: string;
-    receiverName?: string;
-    expectedAmt: string;
-    handedAmt: string;
-    notes?: string | null;
-    /** Itemized amounts already deducted from the collected cash before handover
-     *  (e.g. gas, parking) — the SAME values the caller used to compute expectedAmt.
-     *  Persisted verbatim as CashHandoverExpense rows so they survive; previously
-     *  this array was calculated client-side only and discarded on submit. */
-    expenses?: { description: string; amount: string }[];
-  }, userId: string) {
+  async create(dto: CreateCashHandoverDto, userId: string) {
     const [logger, receiver] = await Promise.all([
       this.prisma.user.findUnique({ where: { clerkId: userId } }),
       this.prisma.user.findUnique({ where: { id: dto.receiverId } }),

@@ -285,6 +285,10 @@ export class ClientsService {
         type: dto.type,
         currency: dto.currency,
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+        ...(dto.notesEn !== undefined ? { notesEn: dto.notesEn } : {}),
+        ...(dto.nameAr !== undefined ? { nameAr: dto.nameAr } : {}),
+        ...(dto.address !== undefined ? { address: dto.address } : {}),
+        ...(dto.creditLimit !== undefined ? { creditLimit: dto.creditLimit } : {}),
         ...(dto.paymentTerms !== undefined
           ? { paymentTerms: dto.paymentTerms }
           : {}),
@@ -310,6 +314,10 @@ export class ClientsService {
         ...(dto.type !== undefined ? { type: dto.type } : {}),
         ...(dto.currency !== undefined ? { currency: dto.currency } : {}),
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+        ...(dto.notesEn !== undefined ? { notesEn: dto.notesEn } : {}),
+        ...(dto.nameAr !== undefined ? { nameAr: dto.nameAr } : {}),
+        ...(dto.address !== undefined ? { address: dto.address } : {}),
+        ...(dto.creditLimit !== undefined ? { creditLimit: dto.creditLimit } : {}),
         ...(dto.paymentTerms !== undefined ? { paymentTerms: dto.paymentTerms } : {}),
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
       },
@@ -334,7 +342,11 @@ export class ClientsService {
       number: dto.number,
       label: dto.label,
       isActive: true,
-      dateAdded: new Date().toISOString().split('T')[0],
+      // Full timestamp, not truncated to a date-only value — matches how the
+      // frontend already constructs this exact field (Clients.tsx,
+      // FillClients.tsx) and avoids the server-timezone-dependent day-
+      // rollback risk that .split('T')[0] alone would carry.
+      dateAdded: new Date().toISOString(),
     };
 
     const updated = [...phones, newPhone];
@@ -444,8 +456,8 @@ export class ClientsService {
    * CONSTRAINT 15: never reads a stored balance column.
    */
   async getBalance(clientId: string) {
-    await this.findOne(clientId);
+    const client = await this.findOne(clientId);
     const balance = await this.clientBalanceService.computeBalance(clientId);
-    return { balance: balance.toFixed(2) };
+    return { balance: balance.toFixed(2), currency: client.currency };
   }
 }

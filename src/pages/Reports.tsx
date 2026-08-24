@@ -9,7 +9,7 @@ import { useClients } from '../hooks/useClients'
 import { useRate } from '../context/RateContext'
 import { useToast } from '../context/ToastContext'
 import { roundDp, formatUsd } from '../lib/money'
-import { currentMonthToDateRange, currentWeekToDateRange } from '../lib/date'
+import { currentMonthToDateRange, currentWeekToDateRange, toDateOnlyString } from '../lib/date'
 import { exportExcel, type ExcelColumn } from '../lib/excelExport'
 import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
 import type { Worker } from '../types/api'
@@ -68,7 +68,13 @@ export default function Reports() {
   const [refreshing, setRefreshing] = useState(false)
   const [payAmt, setPayAmt] = useState('')
   const [payMethod, setPayMethod] = useState('Cash')
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10))
+  const [payDate, setPayDate] = useState(toDateOnlyString(new Date()))
+  // Maps the on-screen method label to the backend PaymentMethod enum — same
+  // mapping convention used in DriverMobile.tsx/WarehouseSales.tsx/Expenses.tsx.
+  // Final-audit finding: this modal collected a method selection but never
+  // sent it, so every worker payment logged here silently defaulted to
+  // 'cash' regardless of which button was clicked.
+  const PAY_METHOD_MAP: Record<string, 'cash' | 'whish' | 'omt'> = { Cash: 'cash', Whish: 'whish', OMT: 'omt' }
 
   const { showToast } = useToast()
   const { openExportModal, exportColumnsModal } = useExportColumnsModal()
@@ -769,7 +775,7 @@ export default function Reports() {
                 onClick={() => {
                   if (!payAmt || parseFloat(payAmt) <= 0) return
                   logWorkerPayment.mutate(
-                    { id: selectedWorker.id, body: { amount: payAmt, date: payDate, notes: 'Reports payment' } },
+                    { id: selectedWorker.id, body: { amount: payAmt, method: PAY_METHOD_MAP[payMethod] ?? 'cash', date: payDate, notes: 'Reports payment' } },
                     { onSuccess: () => { setPayOpen(false); showToast(`Payment logged for ${selectedWorker.name}`); setSelectedWorker(null) } }
                   )
                 }}

@@ -67,10 +67,15 @@ describe('UsersService.deleteLocal()', () => {
   const mockPrisma = {
     user: { findUnique: fn(), delete: fn() },
     userAccount: { findUnique: fn() },
+    worker: { findUnique: fn() },
   };
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Default: no linked worker, so the pre-existing tests below (written
+    // before the LINKED_TO_WORKER guard existed) keep exercising exactly the
+    // balance/local-user paths they were written for.
+    mockPrisma.worker.findUnique.mockResolvedValue(null);
     service = new UsersService(mockPrisma as any);
   });
 
@@ -133,5 +138,41 @@ describe('UsersService.deleteLocal()', () => {
     await service.deleteLocal('receiver-6');
 
     expect(mockPrisma.userAccount.findUnique).toHaveBeenCalledWith({ where: { userId: 'receiver-6' } });
+  });
+
+  // -------------------------------------------------------------------------
+  // Final-audit regression: a worker's linked account (Worker.userId, see the
+  // 20260821000000_add_worker_user_link migration) has a synthetic clerkId
+  // `local_worker_<id>` — which also starts with 'local_', so it passed the
+  // NOT_LOCAL_USER check and was deletable from the generic "Users & roles"
+  // admin list with no guard. Worker.userId is ON DELETE SET NULL, so this
+  // silently unlinked the worker (no FK error) and reintroduced the exact bug
+  // that migration fixed, with no visible connection in that UI warning the
+  // owner they'd just broken it.
+  // -------------------------------------------------------------------------
+
+  it('rejects deletion of a user linked to a Worker, even with zero balance and a local_ clerkId', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-7', clerkId: 'local_worker_w1' });
+    mockPrisma.worker.findUnique.mockResolvedValue({ id: 'w1', name: 'Hassan Mahmoud', userId: 'user-7' });
+
+    await expect(service.deleteLocal('user-7')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.deleteLocal('user-7')).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'LINKED_TO_WORKER' }),
+    });
+    expect(mockPrisma.worker.findUnique).toHaveBeenCalledWith({ where: { userId: 'user-7' } });
+    // The balance check and the actual delete must never even run once the
+    // worker link is found — deletion is refused outright.
+    expect(mockPrisma.userAccount.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.user.delete).not.toHaveBeenCalled();
+  });
+
+  it('still allows deleting a local user with NO linked worker (e.g. a role=receiver account)', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'receiver-8', clerkId: 'local_abc' });
+    mockPrisma.worker.findUnique.mockResolvedValue(null);
+    mockPrisma.userAccount.findUnique.mockResolvedValue(null);
+    mockPrisma.user.delete.mockResolvedValue({ id: 'receiver-8' });
+
+    await expect(service.deleteLocal('receiver-8')).resolves.toEqual({ id: 'receiver-8' });
+    expect(mockPrisma.user.delete).toHaveBeenCalledWith({ where: { id: 'receiver-8' } });
   });
 });

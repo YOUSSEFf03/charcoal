@@ -21,19 +21,114 @@ const FILL_JOB_INCLUDE = {
 export class FillJobsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(clientId: string, page = 1, limit = 50) {
+  async findAll(clientId: string, page = 1, limit = 50, dateFrom?: string, dateTo?: string) {
     const skip = (page - 1) * limit;
+    const where = {
+      clientId,
+      ...(dateFrom || dateTo
+        ? {
+            date: {
+              ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
+              ...(dateTo ? { lte: new Date(dateTo) } : {}),
+            },
+          }
+        : {}),
+    };
     const [data, total] = await this.prisma.$transaction([
       this.prisma.fillJob.findMany({
-        where: { clientId },
+        where,
         skip,
         take: limit,
         orderBy: { date: 'desc' },
         include: FILL_JOB_INCLUDE,
       }),
-      this.prisma.fillJob.count({ where: { clientId } }),
+      this.prisma.fillJob.count({ where }),
     ]);
     return { data, total, page, limit };
+  }
+
+  /**
+   * Return a single fill job by ID, with the same relations as findAll()'s rows.
+   *
+   * @param id - FillJob UUID
+   * @throws NotFoundException
+   */
+  async findOne(id: string) {
+    const job = await this.prisma.fillJob.findUnique({
+      where: { id },
+      include: FILL_JOB_INCLUDE,
+    });
+    if (!job) {
+      throw new NotFoundException({ error: 'Fill job not found', code: 'NOT_FOUND' });
+    }
+    return job;
+  }
+
+  /**
+   * Net bags currently in the warehouse, PER BAG SPEC (specKey), for one Fill
+   * Client — produced (FillJob.bagOutputs) minus picked up (StockExit
+   * exitType='client_bags_fill', parsed from its JSON `reason`), floored at 0.
+   * Also carries each spec's size/charcoal — the same fields the frontend
+   * bag editor needs to auto-populate a NEW spec the first time it's seen in
+   * fill-job history — so this one unbounded aggregate serves both needs
+   * without the frontend having to separately fetch the complete fill-job
+   * list just to discover specs.
+   *
+   * Unbounded per client (not derived from a page-capped fill-jobs/pickups
+   * list) — the same "safe unbounded per-entity history" scale profile
+   * getYtdSummary() above and getPriceStats() already use, and for the exact
+   * same reason: this is the authoritative source for the Bags & Pricing
+   * "in warehouse" stock column, which must stay correct even once the
+   * client-facing lists it used to be computed from are capped to a small
+   * "recent" page for the overview.
+   */
+  async getNetStock(
+    clientId: string,
+  ): Promise<Record<string, { size: number; charcoal: string; netStock: number }>> {
+    const [jobs, pickups] = await Promise.all([
+      this.prisma.fillJob.findMany({
+        where: { clientId },
+        select: { bagOutputs: true },
+      }),
+      this.prisma.stockExit.findMany({
+        where: { clientId, exitType: 'client_bags_fill' },
+        select: { reason: true },
+      }),
+    ]);
+
+    const produced: Record<string, number> = {};
+    const specMeta: Record<string, { size: number; charcoal: string }> = {};
+    for (const job of jobs) {
+      const outputs = job.bagOutputs as unknown as StoredBagOutput[];
+      for (const out of outputs) {
+        produced[out.specKey] = (produced[out.specKey] ?? 0) + out.qty;
+        specMeta[out.specKey] ??= { size: out.size, charcoal: out.charcoal };
+      }
+    }
+
+    const pickedUp: Record<string, number> = {};
+    for (const pk of pickups) {
+      if (!pk.reason) continue;
+      try {
+        const summary = JSON.parse(pk.reason) as { specKey?: string; qty: number }[];
+        for (const item of summary) {
+          if (!item.specKey) continue;
+          pickedUp[item.specKey] = (pickedUp[item.specKey] ?? 0) + item.qty;
+        }
+      } catch {
+        // Non-JSON reasons (e.g. the "Fill job <id>" charcoal-consumption
+        // exit FillJobsService.create() itself writes) carry no bag summary.
+      }
+    }
+
+    const result: Record<string, { size: number; charcoal: string; netStock: number }> = {};
+    for (const specKey of Object.keys(produced)) {
+      result[specKey] = {
+        ...specMeta[specKey],
+        netStock: Math.max(0, produced[specKey] - (pickedUp[specKey] ?? 0)),
+      };
+    }
+    return result;
   }
 
   /**
@@ -107,6 +202,7 @@ export class FillJobsService {
    */
   async getYtdSummary(clientId: string): Promise<{
     bagsYTD: number;
+    jobCount: number;
     wasteKg: string;
     wastePct: number;
     revenueYTD: string;
@@ -151,6 +247,7 @@ export class FillJobsService {
 
     return {
       bagsYTD,
+      jobCount: fillJobRows.length,
       wasteKg: wasteKg.toFixed(3),
       wastePct: wastePct.toNumber(),
       revenueYTD: revenueYTD.toFixed(2),

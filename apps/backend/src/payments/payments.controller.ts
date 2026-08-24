@@ -49,7 +49,7 @@ export class PaymentsController {
 
   @ApiOperation({ summary: 'Record a new payment' })
   @ApiResponse({ status: 201 })
-  @ApiResponse({ status: 400, description: 'INVALID_STATE or CONSTRAINT_VIOLATION' })
+  @ApiResponse({ status: 400, description: 'INVALID_STATE, CONSTRAINT_VIOLATION, or RECEIVER_REQUIRED (cash/whish/omt with no receiverId)' })
   @ApiResponse({ status: 422, description: 'Validation error' })
   @Post()
   @Roles('owner', 'accountant', 'sales_rep')

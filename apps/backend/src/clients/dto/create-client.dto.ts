@@ -2,6 +2,7 @@ import {
   IsBoolean,
   IsEnum,
   IsNotEmpty,
+  IsNumberString,
   IsOptional,
   IsString,
   IsArray,
@@ -23,10 +24,30 @@ export class CreateClientDto {
   @IsEnum(Currency)
   currency: Currency;
 
-  @ApiProperty({ description: 'Optional notes about the client', required: false, example: 'Prefers evening delivery' })
+  @ApiProperty({ description: 'Optional notes about the client (Arabic)', required: false, example: 'Prefers evening delivery' })
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiProperty({ description: 'Optional notes about the client (English)', required: false, example: 'Prefers evening delivery' })
+  @IsOptional()
+  @IsString()
+  notesEn?: string;
+
+  @ApiProperty({ description: 'Arabic display name', required: false })
+  @IsOptional()
+  @IsString()
+  nameAr?: string;
+
+  @ApiProperty({ description: 'Free-form address — informational only', required: false })
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @ApiProperty({ description: 'Informational credit-limit figure, in the client\'s own currency (decimal string) — display only, not enforced anywhere', required: false, example: '5000.00' })
+  @IsOptional()
+  @IsNumberString()
+  creditLimit?: string;
 
   @ApiProperty({ description: 'Payment terms (e.g. Net 30)', required: false, example: 'Net 30' })
   @IsOptional()

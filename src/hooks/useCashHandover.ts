@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { Payment, PaginatedResponse, CashHandover, CashHandoverExpense } from '../types/api'
 
@@ -76,13 +76,14 @@ export function useReceiverBalance(receiverId: string) {
   })
 }
 
-export function useCashHandovers(params?: { dateFrom?: string; dateTo?: string; limit?: number }) {
+export function useCashHandovers(params?: { dateFrom?: string; dateTo?: string; page?: number; limit?: number; search?: string }) {
   return useQuery({
     queryKey: ['cash-handovers', params ?? {}],
-    queryFn: async () => {
-      const res = await api.get<{ data: CashHandover[]; total: number }>('/cash-handovers', { params })
+    queryFn: async ({ signal }) => {
+      const res = await api.get<PaginatedResponse<CashHandover>>('/cash-handovers', { params, signal })
       return res.data
     },
+    placeholderData: keepPreviousData,
   })
 }
 

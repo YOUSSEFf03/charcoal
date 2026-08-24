@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { BagTypesService } from './bag-types.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -278,6 +278,66 @@ describe('BagTypesService', () => {
         expect(bt).toHaveProperty('costPerBag');
         expect(bt).toHaveProperty('workerRate');
       }
+    });
+  });
+
+  // =========================================================================
+  // Regression: neither CreateBagTypeDto nor UpdateBagTypeDto had any
+  // decorator-level bound on nominalKg/costPerBag/workerRate (unlike sibling
+  // DTOs such as CreateBagPurchaseDto.quantity @Min(1)) — a zero/negative
+  // nominalKg would corrupt every downstream kg computation.
+  // =========================================================================
+  describe('create() — positive-field validation', () => {
+    const validDto = { name: '5kg bag', nominalKg: '5.000', costPerBag: '0.5000', workerRate: '0.1000' };
+
+    it('rejects nominalKg = 0', async () => {
+      await expect(service.create({ ...validDto, nominalKg: '0' } as any)).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.bagType.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects negative nominalKg', async () => {
+      await expect(service.create({ ...validDto, nominalKg: '-5' } as any)).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.bagType.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects negative costPerBag', async () => {
+      await expect(service.create({ ...validDto, costPerBag: '-0.5' } as any)).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.bagType.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects negative workerRate', async () => {
+      await expect(service.create({ ...validDto, workerRate: '-0.1' } as any)).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.bagType.create).not.toHaveBeenCalled();
+    });
+
+    it('allows costPerBag = 0 (free bags are legitimate)', async () => {
+      mockPrisma.bagType.create.mockResolvedValue({ ...bagType, costPerBag: '0' });
+      await expect(service.create({ ...validDto, costPerBag: '0' } as any)).resolves.toBeDefined();
+      expect(mockPrisma.bagType.create).toHaveBeenCalled();
+    });
+
+    it('accepts a fully valid positive dto', async () => {
+      mockPrisma.bagType.create.mockResolvedValue(bagType);
+      await expect(service.create(validDto as any)).resolves.toBeDefined();
+      expect(mockPrisma.bagType.create).toHaveBeenCalled();
+    });
+  });
+
+  describe('update() — positive-field validation', () => {
+    it('rejects nominalKg = 0 on partial update', async () => {
+      await expect(service.update('bt-1', { nominalKg: '0' } as any)).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.bagType.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects negative workerRate on partial update', async () => {
+      await expect(service.update('bt-1', { workerRate: '-1' } as any)).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.bagType.update).not.toHaveBeenCalled();
+    });
+
+    it('allows a partial update touching only unrelated fields', async () => {
+      mockPrisma.bagType.update.mockResolvedValue(bagType);
+      await expect(service.update('bt-1', { note: 'updated note' } as any)).resolves.toBeDefined();
+      expect(mockPrisma.bagType.update).toHaveBeenCalled();
     });
   });
 });

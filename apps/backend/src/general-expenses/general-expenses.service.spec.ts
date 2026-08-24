@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { GeneralExpensesService } from './general-expenses.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -121,6 +121,26 @@ describe('GeneralExpensesService', () => {
       const data = mockPrisma.generalExpense.create.mock.calls[0][0].data;
       expect(data.addedById).toBe('user-1');
       expect(data.isRecurring).toBe(false);
+    });
+
+    // Regression: CreateGeneralExpenseDto.amount is @IsNumberString with no
+    // decorator-level bound (unlike CreateBagPurchaseDto.quantity's @Min(1)),
+    // so a negative or zero amount previously sailed straight through to
+    // Prisma, silently corrupting ReportsService.getProfitLoss().
+    it('rejects a zero amount', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-1' });
+      await expect(
+        service.create({ description: 'Rent', amount: '0.00', date: '2026-08-01' } as any, 'clerk-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.generalExpense.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a negative amount', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-1' });
+      await expect(
+        service.create({ description: 'Rent', amount: '-500.00', date: '2026-08-01' } as any, 'clerk-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.generalExpense.create).not.toHaveBeenCalled();
     });
   });
 });

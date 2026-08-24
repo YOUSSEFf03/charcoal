@@ -1,9 +1,11 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBagTypeDto } from './dto/create-bag-type.dto';
 import { UpdateBagTypeDto } from './dto/update-bag-type.dto';
@@ -26,6 +28,35 @@ export class BagTypesService {
   private maybeStrip(data: any, role?: string): any {
     if (role === 'sales_rep' || role === 'worker') return this.stripCostFields(data);
     return data;
+  }
+
+  // Neither CreateBagTypeDto nor UpdateBagTypeDto had any decorator-level bound
+  // on these decimal-string fields (unlike CreateBagPurchaseDto.quantity's
+  // @Min(1) or FillJob's @Min(0.001) kg fields) — a zero/negative nominalKg
+  // would silently corrupt every downstream kg computation that treats a bag
+  // type as its base unit (order lines, shipment weights, yield %); negative
+  // cost/rate fields are equally nonsensical. Zero is allowed for
+  // costPerBag/workerRate (free bags / unpaid packing are legitimate), only
+  // nominalKg must be strictly positive since it's a physical unit of measure.
+  private validatePositiveFields(dto: { nominalKg?: string; costPerBag?: string; workerRate?: string }): void {
+    if (dto.nominalKg !== undefined && !new Decimal(dto.nominalKg).gt(0)) {
+      throw new BadRequestException({
+        error: 'nominalKg must be greater than zero',
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
+    if (dto.costPerBag !== undefined && new Decimal(dto.costPerBag).lt(0)) {
+      throw new BadRequestException({
+        error: 'costPerBag cannot be negative',
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
+    if (dto.workerRate !== undefined && new Decimal(dto.workerRate).lt(0)) {
+      throw new BadRequestException({
+        error: 'workerRate cannot be negative',
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
   }
 
   /**
@@ -74,6 +105,7 @@ export class BagTypesService {
    * @returns Newly created BagType object
    */
   async create(dto: CreateBagTypeDto) {
+    this.validatePositiveFields(dto);
     try {
       return await this.prisma.bagType.create({
         data: {
@@ -102,6 +134,7 @@ export class BagTypesService {
    */
   async update(id: string, dto: UpdateBagTypeDto) {
     await this.findOne(id);
+    this.validatePositiveFields(dto);
     try {
       return await this.prisma.bagType.update({
         where: { id },

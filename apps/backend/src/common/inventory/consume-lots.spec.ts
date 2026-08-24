@@ -119,4 +119,43 @@ describe('consumeLots — concurrency safety (FOR UPDATE locking)', () => {
     expect(tx.stockLot.update).toHaveBeenCalledWith({ where: { id: 'lot-1' }, data: { kgRemaining: { decrement: '125.000' } } });
     expect(tx.stockLot.update).toHaveBeenCalledWith({ where: { id: 'lot-2' }, data: { kgRemaining: { decrement: '50.000' } } });
   });
+
+  // =========================================================================
+  // Regression: a non-positive aggregated kg would flip the atomic
+  // `{ decrement: total }` above into an INCREMENT (Prisma applies it
+  // literally), silently fabricating raw stock. Neither caller's DTO
+  // enforces this above the primitive today (PackingSessionsService's
+  // LotInputDto.kg has no @Min, unlike FillJobsService's own
+  // FillJobCharcoalInputDto.kg which does) — enforced here instead, at the
+  // one choke point every consumer shares.
+  // =========================================================================
+
+  it('rejects a negative kg input and decrements nothing (would otherwise INCREASE kgRemaining)', async () => {
+    const { tx } = makeTx([{ id: 'lot-1', kgRemaining: '100.000', costPerKg: '2.000' }]);
+
+    await expect(consumeLots(tx, [{ lotId: 'lot-1', kg: '-50.000' }])).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+    });
+    expect(tx.stockLot.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a zero kg input and decrements nothing', async () => {
+    const { tx } = makeTx([{ id: 'lot-1', kgRemaining: '100.000', costPerKg: '2.000' }]);
+
+    await expect(consumeLots(tx, [{ lotId: 'lot-1', kg: '0' }])).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+    });
+    expect(tx.stockLot.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects when duplicate lines for the same lot aggregate to zero net kg (e.g. +50 and -50)', async () => {
+    const { tx } = makeTx([{ id: 'lot-1', kgRemaining: '100.000', costPerKg: '2.000' }]);
+
+    await expect(
+      consumeLots(tx, [{ lotId: 'lot-1', kg: '50.000' }, { lotId: 'lot-1', kg: '-50.000' }]),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+    });
+    expect(tx.stockLot.update).not.toHaveBeenCalled();
+  });
 });

@@ -305,3 +305,90 @@ describe('CashHandoversService — read-path delegation to BalanceQueryService',
     expect(result).toBe(expected);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Money Handover History redesign — findAll() previously had no search
+// param at all, and sorted by createdAt while filtering by the business
+// `date` column (a real, if usually harmless, divergence for a backdated/
+// late-entered handover). This covers the fixed pagination/search/date-
+// filter/ordering contract the redone frontend history table now relies on.
+// ---------------------------------------------------------------------------
+
+describe('CashHandoversService.findAll()', () => {
+  let service: CashHandoversService;
+
+  const mockPrisma = {
+    $transaction: fn(),
+    cashHandover: { findMany: fn(), count: fn() },
+  };
+  const mockLedgerWriteService = { creditAccount: fn(), debitAccount: fn() };
+  const mockBalanceQueryService = { getAllBalances: fn(), getReceiverBalance: fn() };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockPrisma.$transaction.mockResolvedValue([[], 0]);
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        CashHandoversService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: LedgerWriteService, useValue: mockLedgerWriteService },
+        { provide: BalanceQueryService, useValue: mockBalanceQueryService },
+      ],
+    }).compile();
+
+    service = module.get<CashHandoversService>(CashHandoversService);
+  });
+
+  it('returns the paginated shape the frontend history table relies on', async () => {
+    mockPrisma.$transaction.mockResolvedValue([[{ id: 'h1' }], 37]);
+
+    const result = await service.findAll(2, 10);
+
+    expect(result).toEqual({ data: [{ id: 'h1' }], total: 37, page: 2, limit: 10 });
+    const findManyCall = mockPrisma.cashHandover.findMany.mock.calls[0][0];
+    expect(findManyCall).toMatchObject({ skip: 10, take: 10 });
+  });
+
+  it('orders by business date descending, with createdAt descending as a same-day tiebreaker', async () => {
+    await service.findAll(1, 20);
+
+    const findManyCall = mockPrisma.cashHandover.findMany.mock.calls[0][0];
+    expect(findManyCall.orderBy).toEqual([{ date: 'desc' }, { createdAt: 'desc' }]);
+  });
+
+  it('filters by the business date column (not createdAt) for dateFrom/dateTo', async () => {
+    await service.findAll(1, 20, '2026-08-01', '2026-08-31');
+
+    const findManyCall = mockPrisma.cashHandover.findMany.mock.calls[0][0];
+    expect(findManyCall.where.date).toEqual({ gte: new Date('2026-08-01'), lte: new Date('2026-08-31') });
+  });
+
+  it('search matches receiverName OR notes, case-insensitively — not a speculative field', async () => {
+    await service.findAll(1, 20, undefined, undefined, 'walid');
+
+    const findManyCall = mockPrisma.cashHandover.findMany.mock.calls[0][0];
+    expect(findManyCall.where.OR).toEqual([
+      { receiverName: { contains: 'walid', mode: 'insensitive' } },
+      { notes: { contains: 'walid', mode: 'insensitive' } },
+    ]);
+  });
+
+  it('omits the OR search clause entirely when no search term is given', async () => {
+    await service.findAll(1, 20);
+
+    const findManyCall = mockPrisma.cashHandover.findMany.mock.calls[0][0];
+    expect(findManyCall.where.OR).toBeUndefined();
+  });
+
+  it('always includes receiver and loggedBy names, and itemized expenses', async () => {
+    await service.findAll(1, 20);
+
+    const findManyCall = mockPrisma.cashHandover.findMany.mock.calls[0][0];
+    expect(findManyCall.include).toEqual({
+      loggedBy: { select: { id: true, name: true } },
+      receiver: { select: { id: true, name: true } },
+      expenses: true,
+    });
+  });
+});

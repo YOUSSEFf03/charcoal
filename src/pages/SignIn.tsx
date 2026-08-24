@@ -36,7 +36,12 @@ export default function SignIn() {
       const token = await getToken()
       if (token) {
         const payload = JSON.parse(atob(token.split('.')[1]))
-        role = payload?.metadata?.role
+        // Same priority order as the backend's ClerkStrategy.extractRole():
+        // top-level role -> publicMetadata.role -> metadata.role (last resort).
+        // Reading only metadata.role meant a token with role at the top level
+        // or under publicMetadata (the primary, expected case) resolved to
+        // undefined here and always redirected to /dashboard regardless of role.
+        role = payload?.role ?? payload?.publicMetadata?.role ?? payload?.metadata?.role
       }
     } catch {
       role = undefined

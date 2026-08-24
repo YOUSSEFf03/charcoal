@@ -627,6 +627,19 @@ export class ContainersService {
       });
     }
 
+    // A line added after arrival would have no corresponding StockLot (those
+    // are only created by the arrival transition in update()) — its tonnage
+    // would still enter recalculateContainerCosts()'s totalTonnage
+    // denominator, silently diluting expense/discount allocation across the
+    // container's REAL stock lots without ever receiving a share itself.
+    // Mirrors updateProductLine()/removeProductLine()'s identical guard.
+    if (container.status === 'arrived') {
+      throw new BadRequestException({
+        error: 'Cannot add a product line to an arrived container',
+        code: 'CONTAINER_ARRIVED',
+      });
+    }
+
     // Validate supplier
     const supplier = await this.prisma.supplier.findUnique({
       where: { id: dto.supplierId },
@@ -652,7 +665,10 @@ export class ContainersService {
         },
       });
 
-      // Recalculate if arrived (CONSTRAINT 9)
+      // Recalculate if arrived (CONSTRAINT 9) — dead branch now that the guard
+      // above rejects this call entirely on an arrived container; left in
+      // place rather than removed, since it is otherwise correct and this is
+      // a bug-fix pass, not a refactor.
       if (container.status === 'arrived') {
         await this.recalculateContainerCosts(containerId, tx);
       }
@@ -676,6 +692,20 @@ export class ContainersService {
       throw new NotFoundException({
         error: 'Container not found',
         code: 'NOT_FOUND',
+      });
+    }
+
+    // Mirrors removeProductLine()'s guard: once a container has arrived, its
+    // StockLot.kgReceived/kgRemaining are fixed at arrival-time
+    // (paidBags × kgPerBag) and are never re-synced by recalculateContainerCosts
+    // (which only rewrites costPerKg). Editing paidBags/kgPerBag/pricePerTon
+    // here after arrival would recompute cost allocation against a tonnage
+    // that no longer matches the physical stock already received, silently
+    // desyncing costPerKg from the actual kg on hand.
+    if (container.status === 'arrived') {
+      throw new BadRequestException({
+        error: 'Cannot edit a product line on an arrived container',
+        code: 'CONTAINER_ARRIVED',
       });
     }
 

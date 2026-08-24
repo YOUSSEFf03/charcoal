@@ -162,7 +162,7 @@ describe('PaymentsService', () => {
       );
     });
 
-    it('include: requests client, loggedBy, and invoice — invoice select is id/displayId ONLY (no lines/payments/allocations/other heavy relations)', async () => {
+    it('include: requests client, loggedBy, invoice, and receiver — invoice select is id/displayId ONLY (no lines/payments/allocations/other heavy relations), receiver select is id/name ONLY (no email/phone — GET /users/receivers privacy pattern)', async () => {
       await service.findAll(1, 20);
 
       const call = mockPrisma.payment.findMany.mock.calls[0][0];
@@ -170,7 +170,30 @@ describe('PaymentsService', () => {
         client: { select: { id: true, name: true } },
         loggedBy: { select: { id: true, name: true } },
         invoice: { select: { id: true, displayId: true } },
+        receiver: { select: { id: true, name: true } },
       });
+    });
+
+    it('a payment WITH a receiver returns the minimal receiver relation (id/name) directly on the row — Payment History must show the SAME receiver as cash attribution, not a frontend-reconstructed name', async () => {
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'p1', clientId: 'client-42', receiverId: 'user-9', receiver: { id: 'user-9', name: 'Abo Baker' }, amount: '50.00' },
+      ]);
+      mockPrisma.payment.count.mockResolvedValue(1);
+
+      const result = await service.findAll(1, 20);
+
+      expect(result.data[0].receiver).toEqual({ id: 'user-9', name: 'Abo Baker' });
+    });
+
+    it('a payment with no receiver returns receiver: null — unattributed historical payments must still be readable, not crash the list', async () => {
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'p1', clientId: 'client-42', receiverId: null, receiver: null, amount: '50.00' },
+      ]);
+      mockPrisma.payment.count.mockResolvedValue(1);
+
+      const result = await service.findAll(1, 20);
+
+      expect(result.data[0].receiver).toBeNull();
     });
 
     it('total count reflects count(), not data.length, and uses the same where as findMany', async () => {
@@ -205,6 +228,29 @@ describe('PaymentsService', () => {
       const result = await service.findAll(1, 20);
 
       expect(result.data[0].invoice).toEqual({ id: 'inv-1', displayId: 'INV-001' });
+    });
+  });
+
+  describe('findOne()', () => {
+    it('include: requests receiver and allocations→invoice alongside client/invoice/loggedBy — the Fill Client Payment Detail page reads all of these', async () => {
+      mockPrisma.payment.findUnique.mockResolvedValue({ id: 'p1' });
+
+      await service.findOne('p1');
+
+      const call = mockPrisma.payment.findUnique.mock.calls[0][0];
+      expect(call.include).toEqual({
+        client: true,
+        invoice: true,
+        loggedBy: { select: { id: true, name: true } },
+        receiver: { select: { id: true, name: true } },
+        allocations: { include: { invoice: { select: { id: true, displayId: true } } } },
+      });
+    });
+
+    it('throws NotFoundException when the payment does not exist', async () => {
+      mockPrisma.payment.findUnique.mockResolvedValue(null);
+
+      await expect(service.findOne('missing')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 
@@ -403,7 +449,10 @@ describe('PaymentsService', () => {
           clientId,
           amount: '200.00',
           currency: 'USD' as any,
-          method: 'cash' as any,
+          // bank_transfer, not cash — this test is about allocateFifo
+          // delegation and is intentionally receiver-agnostic; a receiver-
+          // required method here would 400 before ever reaching allocation.
+          method: 'bank_transfer' as any,
         },
         clerkUserId,
       );
@@ -430,7 +479,7 @@ describe('PaymentsService', () => {
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
       await service.create(
-        { clientId, amount: '50.00', currency: 'USD' as any, method: 'cash' as any },
+        { clientId, amount: '50.00', currency: 'USD' as any, method: 'bank_transfer' as any },
         clerkUserId,
       );
 
@@ -487,7 +536,7 @@ describe('PaymentsService', () => {
       expect(calledDate).toBe(paymentDate);
     });
 
-    it('does not call LedgerWriteService when no receiver is provided', async () => {
+    it('does not call LedgerWriteService when no receiver is provided (bank_transfer — a receiver-required method here would 400 first, covered separately)', async () => {
       const tx = makeTx();
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-4', clerkId: clerkUserId });
@@ -496,12 +545,12 @@ describe('PaymentsService', () => {
 
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
-      await service.create(baseDto(), clerkUserId);
+      await service.create(baseDto({ method: 'bank_transfer' as any }), clerkUserId);
 
       expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
     });
 
-    it('does not call LedgerWriteService when only a legacy receiverName (no receiverId) is provided — matching original behavior', async () => {
+    it('does not call LedgerWriteService when only a legacy receiverName (no receiverId) is provided — matching original behavior (bank_transfer, where a receiver is never required)', async () => {
       const tx = makeTx();
 
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-user-5', clerkId: clerkUserId });
@@ -510,7 +559,7 @@ describe('PaymentsService', () => {
 
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
-      await service.create(baseDto({ receiverName: 'Walk-in cashier' }), clerkUserId);
+      await service.create(baseDto({ method: 'bank_transfer' as any, receiverName: 'Walk-in cashier' }), clerkUserId);
 
       expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
       expect(tx.payment.create.mock.calls[0][0].data.receiverName).toBe('Walk-in cashier');
@@ -623,6 +672,95 @@ describe('PaymentsService', () => {
   });
 
   // =========================================================================
+  // RECEIVER_REQUIRED — a cash/whish/omt payment must not silently lose WHO
+  // RECEIVED IT. bank_transfer (and cheque) are exempt — see
+  // RECEIVER_REQUIRED_METHODS' doc comment in payments.service.ts.
+  // =========================================================================
+
+  describe('create() — receiver requirement (cash/whish/omt)', () => {
+    const clientId = 'client-uuid-recv';
+    const receiverId = 'receiver-uuid-recv';
+    const clerkUserId = 'clerk-user-recv';
+    const userId = 'db-user-recv';
+
+    function dto(overrides: Record<string, any> = {}) {
+      return {
+        clientId,
+        amount: '40.00',
+        currency: 'USD' as any,
+        method: 'cash' as any,
+        ...overrides,
+      };
+    }
+
+    function setUp() {
+      const tx = makeTx();
+      mockPrisma.user.findUnique.mockResolvedValue({ id: userId, clerkId: clerkUserId });
+      tx.client.findUnique.mockResolvedValue({ id: clientId, name: 'Receiver Test Client', currency: 'USD' });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      return tx;
+    }
+
+    it.each(['cash', 'whish', 'omt'])(
+      'rejects a %s payment with no receiverId (BadRequestException, code RECEIVER_REQUIRED) — before tx.payment.create()',
+      async (method) => {
+        const tx = setUp();
+
+        await expect(service.create(dto({ method: method as any }), clerkUserId)).rejects.toThrow(BadRequestException);
+        await expect(service.create(dto({ method: method as any }), clerkUserId)).rejects.toMatchObject({
+          response: expect.objectContaining({ code: 'RECEIVER_REQUIRED' }),
+        });
+        expect(tx.payment.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects a cash payment that has only a legacy receiverName, no receiverId — a free-text name is not a valid receiver', async () => {
+      const tx = setUp();
+
+      await expect(
+        service.create(dto({ receiverName: 'Someone at the door' }), clerkUserId),
+      ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'RECEIVER_REQUIRED' }) });
+      expect(tx.payment.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts a cash payment with a valid receiverId', async () => {
+      const tx = setUp();
+      tx.user.findUnique.mockResolvedValue({ id: receiverId, name: 'Abo Baker' });
+      tx.payment.create.mockResolvedValue({ id: 'pay-recv-ok', clientId, amount: '40.00', date: new Date() });
+
+      const result = await service.create(dto({ receiverId }), clerkUserId);
+
+      expect(result.id).toBe('pay-recv-ok');
+      expect(tx.payment.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ receiverId }) }),
+      );
+    });
+
+    it.each(['bank_transfer', 'cheque'])(
+      'does NOT require a receiver for %s — succeeds with no receiverId at all',
+      async (method) => {
+        const tx = setUp();
+        tx.payment.create.mockResolvedValue({ id: 'pay-no-recv-ok', clientId, amount: '40.00', date: new Date() });
+
+        const result = await service.create(dto({ method: method as any }), clerkUserId);
+
+        expect(result.id).toBe('pay-no-recv-ok');
+        expect(tx.payment.create).toHaveBeenCalled();
+      },
+    );
+
+    it('an invalid (nonexistent) receiverId is still rejected via validateCashCapable, even though it satisfies the presence check', async () => {
+      const tx = setUp();
+      mockUsersService.validateCashCapable.mockRejectedValue(
+        new NotFoundException({ error: 'Receiver not found', code: 'NOT_FOUND' }),
+      );
+
+      await expect(service.create(dto({ receiverId: 'does-not-exist' }), clerkUserId)).rejects.toBeInstanceOf(NotFoundException);
+      expect(tx.payment.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
   // create() — currency conversion (mirrors WalkInSalesService.toClientCurrency).
   // Regression coverage for: a payment quoted in a currency other than the
   // target client's own currency must be converted before being stored —
@@ -641,7 +779,11 @@ describe('PaymentsService', () => {
         clientId,
         amount: '100.00',
         currency: 'USD' as any,
-        method: 'cash' as any,
+        // bank_transfer, not cash — this describe block is about currency
+        // conversion arithmetic and is intentionally receiver-agnostic; the
+        // one test below that DOES care about receiver crediting passes
+        // receiverId explicitly (crediting is unconditional on method).
+        method: 'bank_transfer' as any,
         ...overrides,
       };
     }

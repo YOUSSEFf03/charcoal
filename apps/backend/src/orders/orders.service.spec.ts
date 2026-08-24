@@ -113,7 +113,31 @@ function makeDeliveryTx(
     },
     clientOrder: {
       update: fn().mockResolvedValue({ id: 'updated-order', status: 'delivered' }),
-      findUnique: fn().mockResolvedValue(orderFixture ?? null),
+      // markDelivered()'s lock+recheck read passes `include` (needs status/
+      // shipments/bagType); its "already delivered by a concurrent caller"
+      // scalar-only re-fetch does not (`include` absent) — distinguish the two
+      // so both call shapes get a fixture matching what the real query returns.
+      findUnique: fn().mockImplementation(async (args: any) => {
+        if (args?.include) {
+          return {
+            id: orderFixture?.id ?? args.where.id,
+            status: 'confirmed', // not yet delivered — every fixture above except the dedicated "already delivered" test
+            bagTypeId: orderFixture?.bagTypeId ?? null,
+            totalKgRequested: orderFixture?.totalKgRequested ?? '0',
+            bagType: orderFixture?.bagType ?? null,
+            shipments: shipRows.map((s) => ({ id: s.id, status: s.status })),
+          };
+        }
+        return orderFixture ? { ...orderFixture, status: 'delivered' } : null;
+      }),
+    },
+    // Resolves the human-readable name for drainPackedStockDirect()'s
+    // insufficient-stock error message. These markDelivered() tests only
+    // assert on `code`/side effects, never the message text (that's covered
+    // directly in shipments.service.spec.ts) — a generic fixture name is enough
+    // to keep the call from throwing on `tx.bagType` being undefined.
+    bagType: {
+      findUnique: fn().mockImplementation(async (args: any) => ({ id: args.where.id, name: 'Test Bag Type' })),
     },
   };
   return tx;
@@ -552,6 +576,45 @@ describe('OrdersService', () => {
       expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
     });
 
+    // -----------------------------------------------------------------------
+    // CONCURRENCY: the outer idempotency check above reads a snapshot taken
+    // BEFORE the transaction opens — two near-simultaneous calls can both
+    // pass it (both see "not yet delivered"). This is the race a mocked unit
+    // test *can* prove deterministically: simulate the in-transaction,
+    // lock-protected re-read landing on "already delivered" (as it would for
+    // the second of two concurrent callers, once unblocked from the row lock
+    // behind the first caller's now-committed transaction) and assert the
+    // drain/write path is never reached a second time. The real-Postgres
+    // proof that two ACTUAL concurrent transactions serialize on the lock
+    // this depends on lives in
+    // test/order-delivery-concurrency.integration-spec.ts.
+    // -----------------------------------------------------------------------
+    it('CONCURRENT RACE (direct-drain path): if the lock-protected in-tx re-read finds the order already delivered, nothing is drained or written a second time', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(noShipOrder('bt-10', '100', '10'));
+      const tx = makeDeliveryTx(
+        [{ id: 'ps-1', bagTypeId: 'bt-10', quantity: 50, reservedQuantity: 0, createdAt: new Date('2024-01-01') }],
+        [], [],
+      );
+      // Override the default makeDeliveryTx fixture: the in-tx re-read (the
+      // `include`-shaped call) returns 'delivered' — as if a concurrent call
+      // already committed while this call was blocked on the row lock — and
+      // the scalar-only re-fetch that follows returns the finalized row.
+      const finalOrder = { id: orderId, status: 'delivered', bagTypeId: 'bt-10', totalKgRequested: '100', bagType: { nominalKg: '10' } };
+      tx.clientOrder.findUnique = fn().mockImplementation(async (args: any) => (args?.include ? { ...finalOrder } : finalOrder));
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      const result = await service.markDelivered(orderId, clerkUserId);
+
+      expect(result).toMatchObject({ id: orderId, status: 'delivered' });
+      expect(mockPackedStockService.getFifoDraw).not.toHaveBeenCalled();
+      expect(tx.stockExit.create).not.toHaveBeenCalled();
+      expect(tx.clientOrder.update).not.toHaveBeenCalled(); // no second status write
+      expect(tx._packed[0].quantity).toBe(50); // unchanged — no drain
+      // Invoice creation is still attempted after the transaction settles —
+      // createFromOrder() is independently idempotent/race-safe (see its own tests).
+      expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, undefined, true);
+    });
+
     it('KG order (no bagTypeId), no shipment: order still transitions to delivered with no packed-stock deduction attempted', async () => {
       const kgOrder = orderWith([]);
       (kgOrder as any).bagTypeId = null;
@@ -654,7 +717,7 @@ describe('OrdersService', () => {
 
     it('successful creation: passes through all provided fields and returns the created order', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(dbUser);
-      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', lastOrderDate: null, avgOrderDays: null });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null });
       const createdOrder = { id: 'order-new-1', ...baseDto };
       mockPrisma.clientOrder.create.mockResolvedValue(createdOrder);
       mockPrisma.client.update.mockResolvedValue({ id: 'client-1' });
@@ -698,6 +761,21 @@ describe('OrdersService', () => {
       expect(mockPrisma.clientOrder.create).not.toHaveBeenCalled();
     });
 
+    it('currency mismatch: rejects with CONSTRAINT_VIOLATION when dto.currency differs from the client\'s own currency, and never opens a transaction', async () => {
+      // baseDto.currency is 'USD'; the client is LBP — every downstream balance
+      // calculation assumes an order's (and its eventual invoice's) currency
+      // always matches the client's, since Payment.amount is always stored in
+      // the client's own currency (PaymentsService).
+      mockPrisma.user.findUnique.mockResolvedValue(dbUser);
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'LBP', lastOrderDate: null, avgOrderDays: null });
+
+      await expect(service.create(baseDto as CreateOrderDto, userId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      expect(mockPrisma.clientOrder.create).not.toHaveBeenCalled();
+    });
+
     it('authenticated user not found: throws NotFoundException before ever checking the client', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
 
@@ -708,7 +786,7 @@ describe('OrdersService', () => {
 
     it('first order: client has no lastOrderDate — avgOrderDays is not written, only lastOrderDate', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(dbUser);
-      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', lastOrderDate: null, avgOrderDays: null });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null });
       mockPrisma.clientOrder.create.mockResolvedValue({ id: 'order-new-2' });
       mockPrisma.client.update.mockResolvedValue({ id: 'client-1' });
 
@@ -725,7 +803,7 @@ describe('OrdersService', () => {
         // lastOrderDate was 10 days before "now"; prior rolling average was 6 days.
         const lastOrderDate = new Date('2026-06-26T00:00:00.000Z');
         mockPrisma.user.findUnique.mockResolvedValue(dbUser);
-        mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', lastOrderDate, avgOrderDays: 6 });
+        mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate, avgOrderDays: 6 });
         mockPrisma.clientOrder.create.mockResolvedValue({ id: 'order-new-3' });
         mockPrisma.client.update.mockResolvedValue({ id: 'client-1' });
 
@@ -742,7 +820,7 @@ describe('OrdersService', () => {
 
     it('transaction: creates the order and updates the client together in one $transaction call', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(dbUser);
-      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', lastOrderDate: null, avgOrderDays: null });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null });
       mockPrisma.clientOrder.create.mockResolvedValue({ id: 'order-new-4' });
       mockPrisma.client.update.mockResolvedValue({ id: 'client-1' });
 
@@ -756,7 +834,7 @@ describe('OrdersService', () => {
 
     it('transaction: if the client-update half fails, create() rejects (order creation does not stand alone)', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(dbUser);
-      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', lastOrderDate: null, avgOrderDays: null });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null });
       mockPrisma.clientOrder.create.mockResolvedValue({ id: 'order-new-5' });
       mockPrisma.client.update.mockRejectedValue(new Error('DB write failed'));
 
@@ -858,6 +936,191 @@ describe('OrdersService', () => {
       const result = await service.findAll(1, 20);
 
       expect(result).toEqual({ data: [], total: 0, page: 1, limit: 20 });
+    });
+  });
+
+  // =========================================================================
+  // findDeliveryQueue() — its OWN pagination/search/filter/sort, entirely
+  // independent of findAll()'s order-history listing.
+  // =========================================================================
+
+  describe('findDeliveryQueue()', () => {
+    beforeEach(() => {
+      mockPrisma.clientOrder.findMany.mockResolvedValue([]);
+      mockPrisma.clientOrder.count.mockResolvedValue(0);
+    });
+
+    it('pagination: page 2 with limit 10 skips the first 10 rows, independent of any other query', async () => {
+      await service.findDeliveryQueue(2, 10);
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 10, take: 10 }),
+      );
+    });
+
+    it('default status filter: draft, confirmed, and partially_delivered ONLY — never delivered/invoiced/paid', async () => {
+      await service.findDeliveryQueue(1, 10);
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { status: { in: ['draft', 'confirmed', 'partially_delivered'] } },
+        }),
+      );
+      expect(mockPrisma.clientOrder.count).toHaveBeenCalledWith({
+        where: { status: { in: ['draft', 'confirmed', 'partially_delivered'] } },
+      });
+    });
+
+    it('status filter: narrows to a single queue-eligible status when given', async () => {
+      await service.findDeliveryQueue(1, 10, undefined, undefined, 'partially_delivered' as OrderStatus);
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { status: { in: ['partially_delivered'] } } }),
+      );
+    });
+
+    it('status filter: a non-queue status (e.g. delivered) is ignored — falls back to the full queue set rather than ever returning delivered orders', async () => {
+      await service.findDeliveryQueue(1, 10, undefined, undefined, 'delivered' as OrderStatus);
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { status: { in: ['draft', 'confirmed', 'partially_delivered'] } },
+        }),
+      );
+    });
+
+    it('driver filter: adds driverId to the where clause', async () => {
+      await service.findDeliveryQueue(1, 10, undefined, 'driver-1');
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            status: { in: ['draft', 'confirmed', 'partially_delivered'] },
+            driverId: 'driver-1',
+          },
+        }),
+      );
+    });
+
+    it('search filter: case-insensitive client-name contains clause, same pattern as findAll()', async () => {
+      await service.findDeliveryQueue(1, 10, 'acme');
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            client: { name: { contains: 'acme', mode: 'insensitive' } },
+          }),
+        }),
+      );
+    });
+
+    it('default sort: createdAt ascending (oldest waiting first) — no priority field exists, so this is the queue default', async () => {
+      await service.findDeliveryQueue(1, 10);
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'asc' } }),
+      );
+    });
+
+    it('sortBy=createdAt, sortOrder=desc: newest order first', async () => {
+      await service.findDeliveryQueue(1, 10, undefined, undefined, undefined, 'createdAt', 'desc');
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'desc' } }),
+      );
+    });
+
+    it('sortBy=client: sorts by the related client name', async () => {
+      await service.findDeliveryQueue(1, 10, undefined, undefined, undefined, 'client');
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { client: { name: 'asc' } } }),
+      );
+    });
+
+    it('sortBy=weight: sorts by totalKgRequested', async () => {
+      await service.findDeliveryQueue(1, 10, undefined, undefined, undefined, 'weight', 'desc');
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { totalKgRequested: 'desc' } }),
+      );
+    });
+
+    it('sortBy=status: sorts by the status column', async () => {
+      await service.findDeliveryQueue(1, 10, undefined, undefined, undefined, 'status');
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { status: 'asc' } }),
+      );
+    });
+
+    it('an unrecognized sortBy value falls back to the default (createdAt asc)', async () => {
+      await service.findDeliveryQueue(1, 10, undefined, undefined, undefined, 'priority');
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'asc' } }),
+      );
+    });
+
+    it('select stays minimal: no shipments/invoices/bagLines/orderBagLines — only what a delivery card needs, driver included', async () => {
+      await service.findDeliveryQueue(1, 10);
+
+      const call = mockPrisma.clientOrder.findMany.mock.calls[0][0];
+      expect(call.select).toEqual({
+        id: true,
+        displayId: true,
+        clientId: true,
+        client: { select: { id: true, name: true } },
+        charcoalType: true,
+        grade: true,
+        totalKgRequested: true,
+        bagTypeId: true,
+        bagType: { select: { id: true, name: true, nominalKg: true } },
+        status: true,
+        createdAt: true,
+        driverId: true,
+        driver: { select: { id: true, name: true } },
+      });
+    });
+
+    it('count() always runs with the SAME where filter as findMany() — total reflects the filtered queue, not the whole table', async () => {
+      mockPrisma.clientOrder.findMany.mockResolvedValue([{ id: 'o1' }]);
+      mockPrisma.clientOrder.count.mockResolvedValue(1);
+
+      const result = await service.findDeliveryQueue(1, 10, undefined, 'driver-1');
+
+      expect(result.total).toBe(1);
+      expect(mockPrisma.clientOrder.count).toHaveBeenCalledWith({
+        where: {
+          status: { in: ['draft', 'confirmed', 'partially_delivered'] },
+          driverId: 'driver-1',
+        },
+      });
+    });
+
+    it('combined filters: driverId + status + search all apply together', async () => {
+      const data = [{ id: 'o1' }];
+      mockPrisma.clientOrder.findMany.mockResolvedValue(data);
+      mockPrisma.clientOrder.count.mockResolvedValue(1);
+
+      const result = await service.findDeliveryQueue(1, 10, 'acme', 'driver-1', 'draft' as OrderStatus);
+
+      expect(mockPrisma.clientOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            status: { in: ['draft'] },
+            driverId: 'driver-1',
+            client: { name: { contains: 'acme', mode: 'insensitive' } },
+          },
+        }),
+      );
+      expect(result).toEqual({ data, total: 1, page: 1, limit: 10 });
+    });
+
+    it('empty results: returns an empty data array with total 0 — the "all caught up" case', async () => {
+      const result = await service.findDeliveryQueue(1, 10);
+
+      expect(result).toEqual({ data: [], total: 0, page: 1, limit: 10 });
     });
   });
 
@@ -1078,6 +1341,7 @@ describe('OrdersService', () => {
 
     it('draft order: every allowed and protected field can be updated together in a single call', async () => {
       mockPrisma.clientOrder.findUnique.mockResolvedValue(orderWith('draft'));
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-2', currency: 'LBP' });
       const fullDto = {
         clientId: 'client-2',
         charcoalType: 'hardwood',
@@ -1098,6 +1362,36 @@ describe('OrdersService', () => {
         where: { id: 'order-uuid-upd' },
         data: fullDto,
       });
+    });
+
+    it('draft order: switching clientId to a client with a different currency, without also updating currency, is rejected', async () => {
+      // orderWith('draft')'s currency defaults to undefined (i.e. stays whatever
+      // the fixture's currency field is) — set it explicitly to 'USD' so the
+      // mismatch against the new client (LBP) is the only thing under test.
+      mockPrisma.clientOrder.findUnique.mockResolvedValue({ ...orderWith('draft'), currency: 'USD' });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-lbp', currency: 'LBP' });
+
+      await expect(
+        service.update('order-uuid-upd', { clientId: 'client-lbp' } as UpdateOrderDto),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      expect(mockPrisma.clientOrder.update).not.toHaveBeenCalled();
+    });
+
+    it('draft order: changing currency alone to something other than the order\'s own client currency is rejected', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue({
+        ...orderWith('draft'),
+        currency: 'USD',
+        client: { id: 'client-uuid-upd', currency: 'USD' },
+      });
+
+      await expect(
+        service.update('order-uuid-upd', { currency: 'LBP' } as UpdateOrderDto),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      expect(mockPrisma.clientOrder.update).not.toHaveBeenCalled();
     });
   });
 

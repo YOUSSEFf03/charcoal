@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PackingSessionsService } from './packing-sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ClerkUser } from '../auth/clerk.strategy';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function fn(): any { return jest.fn(); }
@@ -56,6 +57,7 @@ describe('PackingSessionsService', () => {
       packedStock: { create: fn(), createMany: fn(), deleteMany: fn(), ...overrides.packedStock },
       stockExit: { count: fn(), ...overrides.stockExit },
       stockAdjustment: { count: fn(), ...overrides.stockAdjustment },
+      shipmentReservation: { count: fn(), ...overrides.shipmentReservation },
     };
   }
 
@@ -570,6 +572,11 @@ describe('PackingSessionsService', () => {
     const bagType5kg  = '550e8400-e29b-41d4-a716-446655440102';
     const lotId       = '550e8400-e29b-41d4-a716-446655440103';
     const userId      = 'clerk-user-1';
+    // Ownership check (added alongside the IDOR fix) only restricts role 'worker' —
+    // these tests exercise update() business logic, not the ownership guard itself
+    // (see the dedicated 'ownership guard' describe block below), so an 'owner'
+    // caller (which always bypasses the check) preserves their original intent.
+    const ownerCaller: ClerkUser = { userId, role: 'owner' };
     const sessionId   = 'session-uuid-update';
 
     // A single-bag-type existing session: 10 bags @ historical rate 0.10 = sessionEarnings 1.00.
@@ -596,6 +603,7 @@ describe('PackingSessionsService', () => {
       tx.packingSession.findUnique.mockResolvedValue(existing);
       tx.stockExit.count.mockResolvedValue(0);
       tx.stockAdjustment.count.mockResolvedValue(0);
+      tx.shipmentReservation.count.mockResolvedValue(0);
       tx.stockLot.update.mockResolvedValue({});
       tx.stockLot.findMany.mockResolvedValue([
         { id: lotId, kgRemaining: { toString: () => '1000.000' }, costPerKg: { toString: () => '0.300' } },
@@ -616,7 +624,7 @@ describe('PackingSessionsService', () => {
     it('preserves sessionEarnings when only varianceNote is edited — reproduces and fixes the reported bug', async () => {
       const tx = setupTx(existingSession());
 
-      await service.updatePackingSession(sessionId, { varianceNote: 'unrelated edit' }, userId);
+      await service.updatePackingSession(sessionId, { varianceNote: 'unrelated edit' }, ownerCaller);
 
       const data = tx.packingSession.update.mock.calls[0][0].data;
       expect(data.sessionEarnings).toBe('1.00'); // NOT 2.00 — current rate (0.20) must not apply
@@ -626,7 +634,7 @@ describe('PackingSessionsService', () => {
     it('preserves sessionEarnings when only notes is edited', async () => {
       const tx = setupTx(existingSession());
 
-      await service.updatePackingSession(sessionId, { notes: 'unrelated note' }, userId);
+      await service.updatePackingSession(sessionId, { notes: 'unrelated note' }, ownerCaller);
 
       expect(tx.packingSession.update.mock.calls[0][0].data.sessionEarnings).toBe('1.00');
     });
@@ -634,7 +642,7 @@ describe('PackingSessionsService', () => {
     it('preserves sessionEarnings when only workerEntityId is edited', async () => {
       const tx = setupTx(existingSession());
 
-      await service.updatePackingSession(sessionId, { workerEntityId: 'worker-2' }, userId);
+      await service.updatePackingSession(sessionId, { workerEntityId: 'worker-2' }, ownerCaller);
 
       const data = tx.packingSession.update.mock.calls[0][0].data;
       expect(data.sessionEarnings).toBe('1.00');
@@ -651,7 +659,7 @@ describe('PackingSessionsService', () => {
     it('Integrity 4: a legacy session with workerEntityId=NULL remains fully editable — unrelated-field edit does not touch it', async () => {
       const tx = setupTx(existingSession({ workerEntityId: null }));
 
-      await service.updatePackingSession(sessionId, { varianceNote: 'unrelated edit' }, userId);
+      await service.updatePackingSession(sessionId, { varianceNote: 'unrelated edit' }, ownerCaller);
 
       const data = tx.packingSession.update.mock.calls[0][0].data;
       expect(data.workerEntityId).toBeNull(); // never fabricated
@@ -666,7 +674,7 @@ describe('PackingSessionsService', () => {
 
       let caught: any;
       try {
-        await service.updatePackingSession(sessionId, { workerEntityId: 'bogus-worker-id' }, userId);
+        await service.updatePackingSession(sessionId, { workerEntityId: 'bogus-worker-id' }, ownerCaller);
       } catch (e) { caught = e; }
 
       expect(caught).toBeInstanceOf(NotFoundException);
@@ -678,7 +686,7 @@ describe('PackingSessionsService', () => {
     it('Integrity 6: explicitly clearing workerEntityId (empty string) on update remains a supported correction, no existence check runs', async () => {
       const tx = setupTx(existingSession({ workerEntityId: 'worker-1' }));
 
-      await service.updatePackingSession(sessionId, { workerEntityId: '' }, userId);
+      await service.updatePackingSession(sessionId, { workerEntityId: '' }, ownerCaller);
 
       const data = tx.packingSession.update.mock.calls[0][0].data;
       expect(data.workerEntityId).toBeNull();
@@ -698,7 +706,7 @@ describe('PackingSessionsService', () => {
       });
       const tx = setupTx(existing);
 
-      await service.updatePackingSession(sessionId, { notes: 'touch unrelated field' }, userId);
+      await service.updatePackingSession(sessionId, { notes: 'touch unrelated field' }, ownerCaller);
 
       expect(tx.packingSession.update.mock.calls[0][0].data.sessionEarnings).toBe('7.60');
     });
@@ -712,7 +720,7 @@ describe('PackingSessionsService', () => {
       await service.updatePackingSession(
         sessionId,
         { bagsOutput: [{ bagTypeId: bagType10kg, qty: 60 }], lotInputs: [{ lotId, kg: '600.000' }] },
-        userId,
+        ownerCaller,
       );
 
       const data = tx.packingSession.update.mock.calls[0][0].data;
@@ -729,7 +737,7 @@ describe('PackingSessionsService', () => {
           bagsOutput: [{ bagTypeId: bagType10kg, qty: 10 }, { bagTypeId: bagType5kg, qty: 4 }],
           lotInputs: [{ lotId, kg: '120.000' }], // 10×10kg + 4×5kg = 120 kg out
         },
-        userId,
+        ownerCaller,
       );
 
       const data = tx.packingSession.update.mock.calls[0][0].data;
@@ -750,7 +758,7 @@ describe('PackingSessionsService', () => {
       await service.updatePackingSession(
         sessionId,
         { bagsOutput: [{ bagTypeId: bagType10kg, qty: 10 }] },
-        userId,
+        ownerCaller,
       );
 
       const data = tx.packingSession.update.mock.calls[0][0].data;
@@ -764,11 +772,70 @@ describe('PackingSessionsService', () => {
       });
       const tx = setupTx(legacyExisting);
 
-      await service.updatePackingSession(sessionId, { notes: 'unrelated' }, userId);
+      await service.updatePackingSession(sessionId, { notes: 'unrelated' }, ownerCaller);
 
       const data = tx.packingSession.update.mock.calls[0][0].data;
       expect(data.sessionEarnings).toBe('1.00');
       expect(data.bagsOutput).toEqual([{ bagTypeId: bagType10kg, qty: 10 }]); // untouched, not backfilled
+    });
+
+    // =========================================================================
+    // IDOR regression: PATCH /packing-sessions/:id is @Roles('owner', 'worker').
+    // Without an ownership check, any authenticated worker could edit another
+    // worker's session — reversing/reapplying its lot deductions, packed stock,
+    // and earnings. Mirrors the same check findOne() already has.
+    // =========================================================================
+
+    // =========================================================================
+    // Regression: ShipmentReservation.packedStockId has no ON DELETE cascade
+    // (schema.prisma) — without this check, editing a session whose output
+    // bags are currently reserved for a pending shipment would fall through to
+    // packedStock.deleteMany() and hit a raw P2003 foreign-key violation
+    // instead of this same clean EDIT_BLOCKED response the exit/adjustment
+    // checks already give.
+    // =========================================================================
+
+    it('EDIT_BLOCKED: rejects the update when this session\'s packed stock has a pending shipment reservation, and mutates no stock', async () => {
+      const tx = setupTx(existingSession({ packedStocks: [{ id: 'ps-reserved-1' }] }));
+      tx.shipmentReservation.count.mockResolvedValue(1);
+
+      await expect(
+        service.updatePackingSession(sessionId, { notes: 'trying to edit a reserved session' }, ownerCaller),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'EDIT_BLOCKED' }),
+      });
+      expect(tx.shipmentReservation.count).toHaveBeenCalledWith({ where: { packedStockId: { in: ['ps-reserved-1'] } } });
+      expect(tx.stockLot.update).not.toHaveBeenCalled();
+      expect(tx.packingSession.update).not.toHaveBeenCalled();
+      expect(tx.packedStock.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('ownership guard: throws ForbiddenException(FORBIDDEN) when a worker updates another worker\'s session, and never writes', async () => {
+      const tx = setupTx(existingSession({ workerId: 'db-worker-owner-of-session' }));
+      tx.user.findUnique.mockResolvedValue({ id: 'db-worker-caller', clerkId: 'clerk-worker-caller' });
+
+      const workerCaller: ClerkUser = { userId: 'clerk-worker-caller', role: 'worker' };
+
+      await expect(
+        service.updatePackingSession(sessionId, { notes: 'trying to edit someone else\'s session' }, workerCaller),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'FORBIDDEN' }),
+      });
+      expect(tx.packingSession.update).not.toHaveBeenCalled();
+      expect(tx.stockLot.update).not.toHaveBeenCalled();
+    });
+
+    it('ownership guard: a worker CAN update their own session', async () => {
+      const tx = setupTx(existingSession({ workerId: 'db-worker-self' }));
+      tx.user.findUnique.mockResolvedValue({ id: 'db-worker-self', clerkId: 'clerk-worker-self' });
+
+      const workerCaller: ClerkUser = { userId: 'clerk-worker-self', role: 'worker' };
+
+      await service.updatePackingSession(sessionId, { notes: 'my own edit' }, workerCaller);
+
+      expect(tx.packingSession.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: sessionId } }),
+      );
     });
   });
 

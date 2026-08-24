@@ -63,6 +63,28 @@ export class UsersController {
     return this.usersService.findAll(page, limit, roleEnum);
   }
 
+  /**
+   * Minimal, unbounded list of every user who can be a cash payment
+   * receiver (owner/accountant/sales_rep/worker/receiver — not driver, whose
+   * cash-on-delivery collection is auto-attributed to ClientOrder.driverId,
+   * never manually picked — see shipments.service.ts PR 10.1). Deliberately
+   * NOT gated to owner like the rest of this controller: every page that logs
+   * a payment (Payment, Invoices, ClientDetail, WarehouseSales) has no role
+   * restriction of its own, so an accountant/sales_rep/worker picking a
+   * receiver there would otherwise 403 fetching this list — id/name/role
+   * only, never the full User row (email/phone stay owner-only via GET /users).
+   *
+   * IMPORTANT: must come before GET /:id so Nest does not treat "receivers"
+   * as a UUID route param.
+   */
+  @ApiOperation({ summary: 'Minimal id/name/role list of every cash-capable user, unbounded — for payment "received by" pickers' })
+  @ApiResponse({ status: 200, description: 'Success' })
+  @Get('receivers')
+  @Roles('owner', 'accountant', 'sales_rep', 'worker', 'receiver')
+  findReceivers() {
+    return this.usersService.findReceivers();
+  }
+
   @ApiOperation({ summary: 'Get a user by ID' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })

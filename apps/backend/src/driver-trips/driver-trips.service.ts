@@ -172,9 +172,22 @@ export class DriverTripsService {
    * @param userId - Clerk user ID (for ownership check)
    */
   async startTrip(id: string, userId: string) {
-    await this.prisma.driverTrip.findUniqueOrThrow({ where: { id } }).catch(() => {
+    const trip = await this.prisma.driverTrip.findUnique({ where: { id } });
+    if (!trip) {
       throw new NotFoundException({ error: 'Trip not found', code: 'NOT_FOUND' });
-    });
+    }
+
+    // Same ownership check as update() — a driver may only start their own trip.
+    // POST /driver-trips/:id/start is @Roles('driver', 'owner'), so without this
+    // check any authenticated driver could start (and, via completeTrip, record
+    // fuel/expenses against) a trip assigned to a different driver.
+    const caller = await this.prisma.user.findUnique({ where: { clerkId: userId } });
+    if (caller && caller.role === 'driver' && trip.driverId !== caller.id) {
+      throw new ForbiddenException({
+        error: 'Drivers can only start their own trips',
+        code: 'FORBIDDEN',
+      });
+    }
 
     return this.prisma.driverTrip.update({
       where: { id },
@@ -190,9 +203,22 @@ export class DriverTripsService {
    * @param userId - Clerk user ID
    */
   async completeTrip(id: string, dto: CompleteDriverTripDto, userId: string) {
-    await this.prisma.driverTrip.findUniqueOrThrow({ where: { id } }).catch(() => {
+    const trip = await this.prisma.driverTrip.findUnique({ where: { id } });
+    if (!trip) {
       throw new NotFoundException({ error: 'Trip not found', code: 'NOT_FOUND' });
-    });
+    }
+
+    // Same ownership check as update()/startTrip() — a driver may only complete
+    // their own trip. Without this, any authenticated driver (POST
+    // /driver-trips/:id/complete is @Roles('driver', 'owner')) could record
+    // fuel cost and other expenses against a trip assigned to a different driver.
+    const caller = await this.prisma.user.findUnique({ where: { clerkId: userId } });
+    if (caller && caller.role === 'driver' && trip.driverId !== caller.id) {
+      throw new ForbiddenException({
+        error: 'Drivers can only complete their own trips',
+        code: 'FORBIDDEN',
+      });
+    }
 
     // BUG-M (P5): persist the currency of fuelCost and embed a per-item currency on each
     // otherExpenses element (default USD) so P&L can convert LBP fuel/incidentals to USD.

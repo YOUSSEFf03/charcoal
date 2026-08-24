@@ -175,6 +175,7 @@ model User {
   workerCostsLogged        WorkerCost[]       @relation("WorkerCostLoggedBy")
   account                  UserAccount?
   cashHolder               CashHolder?
+  workerEntity              Worker?           @relation("WorkerUser")
 
   @@map("users")
 }
@@ -520,6 +521,8 @@ model StockAdjustment {
 model Client {
   id             String        @id @default(uuid())
   name           String
+  /// Arabic display name — shown under `name` on ClientDetail's hero header.
+  nameAr         String?
   type           ClientType
   currency       Currency
   phones         Json          @default("[]")
@@ -527,7 +530,15 @@ model Client {
   avgOrderDays   Decimal?      @db.Decimal(10, 2)
   lastOrderDate  DateTime?     @db.Date
   paymentTerms   String?
+  /// Free-form address — informational only, never used in any calculation.
+  address        String?
+  /// Informational credit-limit figure (client's own currency) — display
+  /// only; no order/invoice logic reads or enforces this anywhere.
+  creditLimit    Decimal?      @db.Decimal(10, 2)
+  /// Arabic notes.
   notes          String?
+  /// English notes — separate from `notes` (Arabic) rather than one bilingual field.
+  notesEn        String?
   isActive       Boolean       @default(true)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
@@ -810,6 +821,14 @@ model Worker {
   costs           WorkerCost[]
   packingSessions PackingSession[]
   fillJobs        FillJob[]
+  /// Links this packing-cost entity to a real, authenticated User account so
+  /// the worker can be selected as a cash payment receiver (Payment.receiverId
+  /// is a User FK, not a Worker FK — see users.service.ts's validateCashCapable
+  /// doc comment: "any user can be a ledger holder"). Nullable + unique: set at
+  /// Worker creation time going forward (WorkersService.create()); existing
+  /// workers are backfilled by this migration.
+  userId          String?          @unique
+  user            User?            @relation("WorkerUser", fields: [userId], references: [id])
 
   @@map("workers")
 }

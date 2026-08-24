@@ -378,6 +378,33 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     expect(tx.invoice.create).not.toHaveBeenCalled();
   });
 
+  // =========================================================================
+  // Regression: WalkInKgLineDto.kgQuantity is @IsNumberString() with no
+  // positivity bound. A negative value passes the `.gt(available)`
+  // insufficient-stock check below (a negative number is never greater than
+  // a positive one) and would then flip `available.minus(requested)` into an
+  // INCREASE of kgRemaining — fabricating raw stock from a "sale" while also
+  // producing a negative invoice line (kgQuantity × pricePerKg).
+  // =========================================================================
+
+  it('Phase 4 — KG sale: rejects a negative kgQuantity (would otherwise INCREASE lot.kgRemaining)', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+    mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+    settings.getExchangeRate.mockResolvedValue(89550);
+    const tx = makeTx();
+    tx.stockLot.findUnique.mockResolvedValue({ id: lotId, kgRemaining: { toString: () => '100.000' } });
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    await expect(
+      service.create(kgDto({ kgLines: [{ lotId, kgQuantity: '-50.000', description: 'x', pricePerKg: '2.50', currency: 'USD' }] }), clerkId),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+    });
+    expect(tx.stockLot.update).not.toHaveBeenCalled();
+    expect(tx.stockExit.create).not.toHaveBeenCalled();
+    expect(tx.invoice.create).not.toHaveBeenCalled();
+  });
+
   it('Phase 4 — KG sale: amount=null so P&L walk-in aggregate does not double-count', async () => {
     mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
     mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });

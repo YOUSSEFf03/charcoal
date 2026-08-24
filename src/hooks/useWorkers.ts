@@ -28,7 +28,12 @@ export function useWorkers() {
   return useQuery({
     queryKey: ['workers', {}],
     queryFn: async () => {
-      const res = await api.get<{ data: Worker[] }>('/workers')
+      // limit:100 (the server's MAX_PAGE_LIMIT — see pagination.pipes.ts) rather
+      // than the endpoint's own default of 20. Every caller of this hook (payment/
+      // invoice receiver pickers, Employees list, Dashboard) treats the result as
+      // "all workers" with no pagination UI of its own, so silently truncating at
+      // the default page size hid real workers once a shop had more than 20.
+      const res = await api.get<{ data: Worker[] }>('/workers', { params: { limit: 100 } })
       return res.data.data
     },
   })

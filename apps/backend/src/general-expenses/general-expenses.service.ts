@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateGeneralExpenseDto } from './dto/create-general-expense.dto';
 
@@ -87,6 +88,20 @@ export class GeneralExpensesService {
   async create(dto: CreateGeneralExpenseDto, clerkUserId: string) {
     const user = await this.prisma.user.findUnique({ where: { clerkId: clerkUserId } });
     if (!user) throw new UnauthorizedException({ error: 'User not found', code: 'UNAUTHORIZED' });
+
+    // Unlike CreatePaymentDto (also @IsNumberString with no decorator-level
+    // bound), amount here has no legitimate negative/zero use — a general
+    // expense is never a credit/refund, so a stray "-500" or "0" would
+    // silently corrupt GeneralExpensesService.findAll()'s consumer,
+    // ReportsService.getProfitLoss(). Mirrors PaymentsService.create()'s
+    // same Decimal-based guard for the same DTO shape.
+    if (!new Decimal(dto.amount).gt(0)) {
+      throw new BadRequestException({
+        message: 'Expense amount must be greater than zero',
+        error: 'Expense amount must be greater than zero',
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
 
     return this.prisma.generalExpense.create({
       data: {

@@ -14,6 +14,8 @@
 // ~1MB isn't part of the main bundle — it only loads when a user actually
 // clicks an Export button.
 
+import { toDateOnlyString } from './date'
+
 const BRAND_FILL = 'FF1D6B4A' // matches --accent in src/index.css
 const BRAND_TEXT = 'FFFFFFFF'
 const EMPHASIS_FILL = 'FFF3F4F6'
@@ -281,7 +283,7 @@ export async function exportExcel<Row>(config: ExcelExportConfig<Row>): Promise<
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `${config.filename}-${new Date().toISOString().slice(0, 10)}.xlsx`
+  a.download = `${config.filename}-${toDateOnlyString(new Date())}.xlsx`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)

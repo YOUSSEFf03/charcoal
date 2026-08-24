@@ -1,10 +1,9 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type {
   Invoice,
   InvoiceDetail,
   CreateInvoiceDto,
-  IssueInvoiceDto,
   PaginatedResponse,
 } from '../types/api'
 
@@ -33,10 +32,23 @@ const invoicesKey = (params?: InvoicesQuery) => ['invoices', params ?? {}] as co
 export function useInvoices(params?: InvoicesQuery) {
   return useQuery({
     queryKey: invoicesKey(params),
-    queryFn: async () => {
-      const res = await api.get<PaginatedResponse<Invoice>>('/invoices', { params })
+    queryFn: async ({ signal }) => {
+      // signal: an in-flight request for a stale search term / page is aborted
+      // as soon as a newer one supersedes it (React Query passes a fresh
+      // AbortSignal per query-key change) — forwarded to axios so the
+      // superseded request is actually cancelled on the wire, not just
+      // ignored client-side once it resolves.
+      const res = await api.get<PaginatedResponse<Invoice>>('/invoices', { params, signal })
       return res.data
     },
+    // Keeps the previous page's rows on screen (instead of blanking to a
+    // skeleton) while a new search term or page number is loading — the
+    // search itself was already debounced+server-paginated, but with no
+    // placeholderData every keystroke's new query key had zero cached data
+    // to show yet, so the table flashed empty on every search edit even
+    // though the underlying request was fast. This is what actually made
+    // the search feel slow.
+    placeholderData: keepPreviousData,
   })
 }
 
@@ -77,15 +89,17 @@ export function useCreateInvoice() {
 }
 
 /**
- * Issue a draft invoice (status -> issued, stamps issuedAt).
- * @returns mutation accepting { id, body?: IssueInvoiceDto }
+ * Issue a draft invoice (status -> issued, stamps issuedAt with the current
+ * date and the live settings exchange rate). The backend route takes no
+ * body at all (InvoicesController's issue() has no @Body() parameter).
+ * @returns mutation accepting { id }
  * POST /invoices/:id/issue
  */
 export function useIssueInvoice() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, body }: { id: string; body?: IssueInvoiceDto }) => {
-      const res = await api.post<Invoice>(`/invoices/${id}/issue`, body ?? {})
+    mutationFn: async ({ id }: { id: string }) => {
+      const res = await api.post<Invoice>(`/invoices/${id}/issue`)
       return res.data
     },
     onSuccess: (_data, { id }) => {

@@ -8,13 +8,32 @@ import { useContainers } from '../hooks/useContainers'
 import { useProfitLoss, useArSummary, useActivity, useDailyRevenue } from '../hooks/useReports'
 import type { ActivityItem } from '../hooks/useReports'
 import { useWorkers, useLogWorkerPayment } from '../hooks/useWorkers'
+import { useMe } from '../hooks/useMe'
 import { formatUsd } from '../lib/money'
-import { currentMonthToDateRange } from '../lib/date'
+import { currentMonthToDateRange, toDateOnlyString } from '../lib/date'
 import DailyRevenueChart from '../components/DailyRevenueChart'
 
 function fmtKg(value?: string | null) {
   const n = value != null ? parseFloat(value) : NaN
   return Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'
+}
+
+// The backend's response interceptor (lib/api.ts) normalizes every failed
+// request to { status, error, code, details }. A query that failed because
+// the signed-in role isn't allowed on that endpoint (RolesGuard) always
+// carries code 'FORBIDDEN' — used to tell "you can't see this" apart from a
+// real failure (network/server error), which previously both rendered as
+// the same blank/empty state with no indication anything was wrong.
+function isForbidden(q: { isError: boolean; error: unknown }): boolean {
+  return q.isError && (q.error as { code?: string } | null)?.code === 'FORBIDDEN'
+}
+
+function RoleRestricted({ text }: { text: string }) {
+  return (
+    <div className="empty" style={{ padding: '20px 18px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+      <i className="ti ti-lock" style={{ marginRight: 6 }} />{text}
+    </div>
+  )
 }
 
 function timeAgo(ts: string): string {
@@ -94,7 +113,14 @@ export default function Dashboard() {
   const activityItems = activityQ.data ?? []
 
   const loading = summaryQ.isLoading || activeOrdersQ.isLoading || overdueQ.isLoading || portContainersQ.isLoading
-  const anyError = summaryQ.isError || activeOrdersQ.isError || overdueQ.isError || portContainersQ.isError
+  // FORBIDDEN failures are excluded here — retrying can never fix a role
+  // restriction, so they get their own inline "not available for your role"
+  // treatment per-tile instead of triggering the page-wide Retry banner.
+  const anyError =
+    (summaryQ.isError && !isForbidden(summaryQ)) ||
+    (activeOrdersQ.isError && !isForbidden(activeOrdersQ)) ||
+    (overdueQ.isError && !isForbidden(overdueQ)) ||
+    (portContainersQ.isError && !isForbidden(portContainersQ))
 
   const summary = summaryQ.data
   const overdueClients = overdueQ.data ?? []
@@ -139,7 +165,7 @@ export default function Dashboard() {
         body: {
           amount: payAmtNum.toFixed(2),
           method: PAY_METHOD_MAP[payMethod] ?? 'cash',
-          date: new Date().toISOString().slice(0, 10),
+          date: toDateOnlyString(new Date()),
         },
       },
       {
@@ -192,9 +218,11 @@ export default function Dashboard() {
             </div>
             {loading
               ? <div className="skeleton" style={{ width: '70%', height: 24, marginBottom: 4 }} />
+              : isForbidden(summaryQ)
+              ? <div className="kpi-value" style={{ fontSize: 13, color: 'var(--text3)' }}><i className="ti ti-lock" /> restricted</div>
               : <div className="kpi-value">{fmtKg(summary?.totalRawKg)}<span style={{ fontSize: 14, fontWeight: 400, color: 'var(--text3)' }}> kg</span></div>}
             <div className="kpi-sub">
-              <span>{summary?.lotCount ?? 0} open lots</span>
+              <span>{isForbidden(summaryQ) ? 'not available for your role' : `${summary?.lotCount ?? 0} open lots`}</span>
             </div>
           </div>
           <div className="kpi" style={{ animationDelay: '0.10s' }}>
@@ -204,10 +232,13 @@ export default function Dashboard() {
             </div>
             {loading
               ? <div className="skeleton" style={{ width: '40%', height: 24, marginBottom: 4 }} />
+              : isForbidden(overdueQ)
+              ? <div className="kpi-value" style={{ fontSize: 13, color: 'var(--text3)' }}><i className="ti ti-lock" /> restricted</div>
               : <div className="kpi-value">{overdueClients.length}</div>}
             <div className="kpi-sub">
-              <span className="kpi-delta delta-warn">CRM alert</span>
-              <span>past payment terms</span>
+              {isForbidden(overdueQ)
+                ? <span>not available for your role</span>
+                : <><span className="kpi-delta delta-warn">CRM alert</span><span>past payment terms</span></>}
             </div>
           </div>
           <div className="kpi" style={{ animationDelay: '0.15s' }}>
@@ -217,9 +248,11 @@ export default function Dashboard() {
             </div>
             {loading
               ? <div className="skeleton" style={{ width: '40%', height: 24, marginBottom: 4 }} />
+              : isForbidden(activeOrdersQ)
+              ? <div className="kpi-value" style={{ fontSize: 13, color: 'var(--text3)' }}><i className="ti ti-lock" /> restricted</div>
               : <div className="kpi-value">{activeOrderCount}</div>}
             <div className="kpi-sub">
-              <span>confirmed, awaiting delivery</span>
+              <span>{isForbidden(activeOrdersQ) ? 'not available for your role' : 'confirmed, awaiting delivery'}</span>
             </div>
           </div>
           <div className="kpi" style={{ animationDelay: '0.20s' }}>
@@ -229,9 +262,11 @@ export default function Dashboard() {
             </div>
             {loading
               ? <div className="skeleton" style={{ width: '40%', height: 24, marginBottom: 4 }} />
+              : isForbidden(portContainersQ)
+              ? <div className="kpi-value" style={{ fontSize: 13, color: 'var(--text3)' }}><i className="ti ti-lock" /> restricted</div>
               : <div className="kpi-value" style={{ color: 'var(--accent)' }}>{portContainers.length}</div>}
             <div className="kpi-sub">
-              <span>awaiting clearance</span>
+              <span>{isForbidden(portContainersQ) ? 'not available for your role' : 'awaiting clearance'}</span>
             </div>
           </div>
         </div>
@@ -281,7 +316,10 @@ export default function Dashboard() {
                     </tr>
                   )
                 })}
-                {!stockLotsQ.isLoading && (stockLotsQ.data?.data ?? []).length === 0 && (
+                {isForbidden(stockLotsQ) && (
+                  <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}><i className="ti ti-lock" style={{ marginRight: 6 }} />Not available for your role</td></tr>
+                )}
+                {!stockLotsQ.isLoading && !isForbidden(stockLotsQ) && (stockLotsQ.data?.data ?? []).length === 0 && (
                   <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}>No open lots</td></tr>
                 )}
               </tbody>
@@ -295,7 +333,10 @@ export default function Dashboard() {
               <button className="card-action" onClick={() => navigate('/orders')}>Manage</button>
             </div>
             {inDeliveryQ.isLoading && <div className="empty">Loading…</div>}
-            {!inDeliveryQ.isLoading && inDeliveryOrders.length === 0 && (
+            {isForbidden(inDeliveryQ) && (
+              <RoleRestricted text="In-delivery orders are not available for your role." />
+            )}
+            {!inDeliveryQ.isLoading && !isForbidden(inDeliveryQ) && inDeliveryOrders.length === 0 && (
               <div className="empty" style={{ padding: '20px 18px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
                 No orders in delivery
               </div>
@@ -399,67 +440,85 @@ export default function Dashboard() {
               <button className="card-action" onClick={() => navigate('/reports')}>Full report</button>
             </div>
             <div className="profit-block">
-              <div className="section-title">Profitability</div>
+              {/* Profit-loss/daily-revenue are owner-only server-side (ReportsController
+                  @Roles('owner')) — everything below this point besides Cash Flow used to
+                  silently render as '—' with no indication it wasn't actually zero. */}
+              {isForbidden(plQ) ? (
+                <RoleRestricted text="Profitability is only visible to Owner accounts." />
+              ) : (
+                <>
+                  <div className="section-title">Profitability</div>
 
-              <div className="profit-main">
-                <div>
-                  <div className="profit-period">
-                    Gross Profit
-                    <i
-                      className="ti ti-info-circle info-icon"
-                      title="Accrual basis. Revenue is recognized when invoices are issued. Cash collection is displayed separately."
-                    />
+                  <div className="profit-main">
+                    <div>
+                      <div className="profit-period">
+                        Gross Profit
+                        <i
+                          className="ti ti-info-circle info-icon"
+                          title="Accrual basis. Revenue is recognized when invoices are issued. Cash collection is displayed separately."
+                        />
+                      </div>
+                      <div className={`profit-value ${profitSignCls}`}>{plQ.isLoading ? '—' : formatUsd(plQ.data?.grossProfit, { decimals: 0 })}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="profit-period" style={{ justifyContent: 'flex-end' }}>Gross Margin</div>
+                      <div className={`profit-margin ${profitSignCls}`}>
+                        {plQ.isLoading ? '—' : marginText}
+                      </div>
+                    </div>
                   </div>
-                  <div className={`profit-value ${profitSignCls}`}>{plQ.isLoading ? '—' : formatUsd(plQ.data?.grossProfit, { decimals: 0 })}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div className="profit-period" style={{ justifyContent: 'flex-end' }}>Gross Margin</div>
-                  <div className={`profit-margin ${profitSignCls}`}>
-                    {plQ.isLoading ? '—' : marginText}
+
+                  <div className="profit-breakdown">
+                    <div className="pb-item"><div className="pb-label">Revenue</div><div className="pb-value">{plQ.isLoading ? '—' : formatUsd(plQ.data?.revenue, { decimals: 0 })}</div></div>
+                    <div className="pb-item">
+                      <div className="pb-label">
+                        COGS
+                        <i className="ti ti-info-circle info-icon" title="Direct charcoal material cost of goods sold." />
+                      </div>
+                      <div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.cogs, { decimals: 0 })}</div>
+                    </div>
+                    <div className="pb-item"><div className="pb-label">Packaging</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.bagCost, { decimals: 0 })}</div></div>
+                    <div className="pb-item"><div className="pb-label">Variance</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.varianceCost, { decimals: 0 })}</div></div>
+                    <div className="pb-item"><div className="pb-label">Delivery</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.deliveryCost, { decimals: 0 })}</div></div>
                   </div>
-                </div>
-              </div>
 
-              <div className="profit-breakdown">
-                <div className="pb-item"><div className="pb-label">Revenue</div><div className="pb-value">{plQ.isLoading ? '—' : formatUsd(plQ.data?.revenue, { decimals: 0 })}</div></div>
-                <div className="pb-item">
-                  <div className="pb-label">
-                    COGS
-                    <i className="ti ti-info-circle info-icon" title="Direct charcoal material cost of goods sold." />
-                  </div>
-                  <div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.cogs, { decimals: 0 })}</div>
-                </div>
-                <div className="pb-item"><div className="pb-label">Packaging</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.bagCost, { decimals: 0 })}</div></div>
-                <div className="pb-item"><div className="pb-label">Variance</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.varianceCost, { decimals: 0 })}</div></div>
-                <div className="pb-item"><div className="pb-label">Delivery</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.deliveryCost, { decimals: 0 })}</div></div>
-              </div>
+                  <div className="section-divider" style={{ margin: 0 }} />
+                </>
+              )}
 
-              <div className="section-divider" style={{ margin: 0 }} />
-
+              {/* Cash Flow (ar-summary) has its own, broader role set
+                  (owner/accountant/sales_rep) — kept independent of the Profitability
+                  block above so a sales_rep who can't see P&L still sees this. */}
               <div>
                 <div className="section-title">Cash Flow</div>
-                <div className="profit-breakdown">
-                  <div className="pb-item">
-                    <div className="pb-label">
-                      Cash Collected
-                      <i className="ti ti-info-circle info-icon" title="Money actually received during the selected period." />
+                {isForbidden(arQ) ? (
+                  <RoleRestricted text="Cash Flow is not available for your role." />
+                ) : (
+                  <div className="profit-breakdown">
+                    <div className="pb-item">
+                      <div className="pb-label">
+                        Cash Collected
+                        <i className="ti ti-info-circle info-icon" title="Money actually received during the selected period." />
+                      </div>
+                      <div className="pb-value green">{isForbidden(plQ) ? '—' : plQ.isLoading ? '—' : formatUsd(plQ.data?.cashCollected, { decimals: 0 })}</div>
                     </div>
-                    <div className="pb-value green">{plQ.isLoading ? '—' : formatUsd(plQ.data?.cashCollected, { decimals: 0 })}</div>
-                  </div>
-                  <div className="pb-item">
-                    <div className="pb-label">
-                      Outstanding Receivables
-                      <i className="ti ti-info-circle info-icon" title="Total unpaid invoice balances still owed by customers." />
+                    <div className="pb-item">
+                      <div className="pb-label">
+                        Outstanding Receivables
+                        <i className="ti ti-info-circle info-icon" title="Total unpaid invoice balances still owed by customers." />
+                      </div>
+                      <div className="pb-value amber">{arQ.isLoading ? '—' : formatUsd(arQ.data?.totalOutstanding, { decimals: 0 })}</div>
                     </div>
-                    <div className="pb-value amber">{arQ.isLoading ? '—' : formatUsd(arQ.data?.totalOutstanding, { decimals: 0 })}</div>
                   </div>
-                </div>
+                )}
               </div>
 
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace", paddingBottom: 6 }}>daily revenue — {now.toLocaleString('en-US', { month: 'long' }).toLowerCase()}</div>
-                <DailyRevenueChart data={dailyRevenueQ.data?.data} isLoading={dailyRevenueQ.isLoading} height={70} />
-              </div>
+              {!isForbidden(plQ) && (
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace", paddingBottom: 6 }}>daily revenue — {now.toLocaleString('en-US', { month: 'long' }).toLowerCase()}</div>
+                  <DailyRevenueChart data={dailyRevenueQ.data?.data} isLoading={dailyRevenueQ.isLoading} height={70} />
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -483,7 +542,10 @@ export default function Dashboard() {
                 </div>
               ))
             )}
-            {!activityQ.isLoading && activityItems.length === 0 && (
+            {isForbidden(activityQ) && (
+              <RoleRestricted text="Activity log is not available for your role." />
+            )}
+            {!activityQ.isLoading && !isForbidden(activityQ) && activityItems.length === 0 && (
               <div className="empty" style={{ padding: '20px 18px', color: 'var(--text3)', fontSize: 13 }}>No activity yet</div>
             )}
             {!activityQ.isLoading && activityItems.slice(0, 5).map(item => (
@@ -503,7 +565,10 @@ export default function Dashboard() {
                 <div className="skeleton" style={{ width: '30%', height: 14 }} />
               </div>
             )}
-            {!workersQ.isLoading && !firstWorker && (
+            {isForbidden(workersQ) && (
+              <RoleRestricted text="Worker payroll is only visible to Owner accounts." />
+            )}
+            {!workersQ.isLoading && !isForbidden(workersQ) && !firstWorker && (
               <div className="empty">No workers yet</div>
             )}
             {!workersQ.isLoading && firstWorker && (

@@ -17,6 +17,35 @@ const usersKey = (params?: UsersQuery) => ['users', params ?? {}] as const
  * @returns React Query result of PaginatedResponse<User>
  * GET /users
  */
+/** A minimal user row — GET /users/receivers never returns email/phone. */
+export interface CashReceiver {
+  id: string
+  name: string
+  role: Role
+}
+
+/**
+ * Every user who can be a cash payment receiver (owner/accountant/sales_rep/
+ * worker/receiver), unbounded, id/name/role only. Unlike useUsers(), this is
+ * NOT owner-only — every page that logs a payment (Payment, Invoices,
+ * ClientDetail, WarehouseSales) has no role restriction of its own, and a
+ * worker now has a real linked User (see the add_worker_user_link migration),
+ * so this is the single source of truth for "received by" pickers — replaces
+ * the old pattern of combining useWorkers() + useReceivers() + a hardcoded
+ * fake "Owner" option, which only ever resolved a real id for the
+ * role='receiver' subset.
+ * GET /users/receivers
+ */
+export function useCashReceivers() {
+  return useQuery({
+    queryKey: ['users', 'receivers'],
+    queryFn: async () => {
+      const res = await api.get<CashReceiver[]>('/users/receivers')
+      return res.data
+    },
+  })
+}
+
 export function useUsers(params?: UsersQuery) {
   return useQuery({
     queryKey: usersKey(params),

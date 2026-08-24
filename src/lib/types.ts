@@ -115,6 +115,9 @@ export interface ContactPerson {
 export interface SupplierCharcoalType {
   type: string;
   grade: string;
+  // Free-form JSON on the backend (charcoalTypes?: unknown[], no shape
+  // validation) — price is optional reference pricing, not enforced anywhere.
+  price?: string;
 }
 
 export interface BankDetails {
@@ -144,8 +147,8 @@ export interface BagsOutputLine {
 }
 
 export interface TripOtherExpense {
-  description: string; // AR
-  amount: number;
+  label: string;
+  amount: string; // Decimal
   /** BUG-M: currency of this expense amount; defaults USD when omitted. */
   currency?: Currency;
 }
@@ -417,7 +420,9 @@ export interface UpdateContainerDto {
   number?: string;
   supplierId?: string;
   status?: ContainerStatus;
-  arrivalDate?: string;
+  // No arrivalDate — the backend always server-stamps this
+  // (UpdateContainerDto = PartialType(CreateContainerDto), which has no such
+  // field either); it is never accepted from the client.
   notes?: string | null;
 }
 
@@ -660,6 +665,7 @@ export interface Client {
   id: string;
   displayId?: string; // human-readable reference code, e.g. "C-001"
   name: string; // AR
+  nameAr: string | null;
   type: ClientType;
   currency: Currency;
   phones: ClientPhone[];
@@ -667,7 +673,10 @@ export interface Client {
   avgOrderDays: string | null; // Decimal (computed)
   lastOrderDate: string | null; // ISO date (computed)
   paymentTerms: string | null;
+  address: string | null;
+  creditLimit: string | null; // Decimal — informational only, not enforced
   notes: string | null; // AR
+  notesEn: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -685,12 +694,16 @@ export interface Client {
 
 export interface CreateClientDto {
   name: string;
+  nameAr?: string | null;
   type: ClientType;
   currency: Currency;
   phones?: ClientPhone[];
   preferredTypes?: ClientPreferredType[];
   paymentTerms?: string | null;
+  address?: string | null;
+  creditLimit?: string | null; // Decimal string
   notes?: string | null;
+  notesEn?: string | null;
 }
 
 export type UpdateClientDto = Partial<CreateClientDto> & { isActive?: boolean };
@@ -770,6 +783,16 @@ export interface ClientOrderListItem extends ClientOrderBase {
   bagType: { id: string; name: string; nominalKg: string } | null;
 }
 
+/**
+ * GET /orders/delivery-queue — orders.service.ts findDeliveryQueue()'s
+ * minimal select: same shape as ClientOrderListItem plus the driver
+ * relation (id/name only), which the queue cards show but the plain order
+ * list does not fetch.
+ */
+export interface DeliveryQueueOrderItem extends ClientOrderListItem {
+  driver: { id: string; name: string } | null;
+}
+
 /** POST /orders — orders.service.ts create() include: { client: {id,name}, orderBagLines: true } (no bagType relation) */
 export interface ClientOrderCreated extends ClientOrderBase {
   client: Pick<Client, 'id' | 'name'>;
@@ -805,15 +828,26 @@ export interface CreateOrderDto {
   supplierName?: string;
 }
 
+/**
+ * PATCH /orders/:id — orders.service.ts update(). All fields optional.
+ * clientId/pricePerBag/currency/totalKgRequested/bagTypeId are only
+ * writable while the order is still 'draft' (OrdersService.update()'s
+ * lockedFields guard) — the caller must omit them entirely for a non-draft
+ * order, since the backend rejects the KEY being present at all, even with
+ * an unchanged value, not just an actual change.
+ */
 export interface UpdateOrderDto {
+  clientId?: string;
   charcoalType?: string;
   grade?: string;
   totalKgRequested?: string;
   bagTypeId?: string | null;
   pricePerBag?: string;
+  currency?: Currency;
   bagLines?: CreateOrderBagLineDto[];
   notes?: string | null;
-  supplierName?: string;
+  driverId?: string | null;
+  supplierName?: string | null;
 }
 
 export interface UpdateOrderStatusDto {
@@ -856,8 +890,10 @@ export interface CreateShipmentBagDto {
 export interface CreateShipmentDto {
   orderId: string;
   address: string;
+  nominalKg: string; // Decimal
+  tripId?: string;
   bags: CreateShipmentBagDto[];
-  notes?: string | null;
+  notes?: string;
 }
 
 export interface UpdateShipmentDto {
@@ -992,7 +1028,10 @@ export interface Invoice {
 }
 
 export interface InvoiceDetail extends Invoice {
-  client: Pick<Client, 'id' | 'name' | 'type' | 'currency'>;
+  client: Pick<Client, 'id' | 'name' | 'type' | 'currency' | 'phones'>;
+  /** Source reference — null for a WAREHOUSE_SALE invoice (Invoice.source);
+   * present for an ORDER invoice. Minimal projection, not the full order. */
+  order: { id: string; displayId?: string; status: string } | null;
   /** Only payments directly linked to this invoice at creation time (Payment.invoiceId). */
   payments: Payment[];
   /** Complete picture of what's actually been applied to this invoice, including
@@ -1032,11 +1071,6 @@ export interface UpdateInvoiceDto {
   dueDate?: string | null;
 }
 
-/** PATCH /invoices/:id/issue — moves draft -> issued, sets issuedAt. */
-export interface IssueInvoiceDto {
-  issuedAt?: string; // defaults to now
-  dueDate?: string | null;
-}
 
 // ----------------------------------------------------------------------------
 // PAYMENTS
@@ -1057,6 +1091,12 @@ export interface Payment {
   notes: string | null;
   receiverId: string | null;
   receiverName: string | null;
+  /** Authoritative receiver relation — id/name only (no email/phone). Present on
+   * both GET /payments (list) and GET /payments/:id. Prefer this over the
+   * denormalized receiverName string, which is only a display fallback. */
+  receiver?: { id: string; name: string } | null;
+  /** Only present on GET /payments/:id. How this payment's amount was actually applied across invoice(s). */
+  allocations?: { id: string; amount: string; invoiceId: string; invoice: { id: string; displayId: string | null } }[];
   createdAt: string;
 }
 
@@ -1132,13 +1172,18 @@ export interface CashHandoverExpense {
 export interface CashHandover {
   id: string;
   date: string; // YYYY-MM-DD
+  // The historical name snapshot (always present, even for legacy rows with
+  // no receiverId) — receiver below is the live User relation, included by
+  // GET /cash-handovers but previously missing from this type entirely.
   receiverName: string;
   receiverId: string | null;
+  receiver: { id: string; name: string } | null;
   expectedAmt: string; // Decimal — collected minus itemized expenses
   handedAmt: string; // Decimal
   difference: string; // Decimal — handedAmt - expectedAmt
   notes: string | null;
   loggedById: string;
+  loggedBy: { id: string; name: string };
   createdAt: string;
   expenses: CashHandoverExpense[];
 }

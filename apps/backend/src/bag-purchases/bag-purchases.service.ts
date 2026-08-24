@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBagPurchaseDto } from './dto/create-bag-purchase.dto';
 
@@ -54,7 +55,15 @@ export class BagPurchasesService {
   /**
    * Create a new bag purchase record with user and bag type validation.
    *
-   * @param dto - Bag purchase creation data including bagTypeId, quantity, unitCost, totalCost, date, and notes
+   * totalCost is always computed server-side as quantity × unitCost — never
+   * accepted from the client. Same principle as InvoiceCalculatorService
+   * .computeLines() (qty × price, never a client-supplied line/invoice
+   * total): trusting an independently-submitted total invites drift from the
+   * two inputs that actually determine it, and the current BagPurchases.tsx
+   * UI has no discount/adjustment concept that would ever make the two
+   * legitimately differ.
+   *
+   * @param dto - Bag purchase creation data including bagTypeId, quantity, unitCost, date, and notes
    * @param clerkUserId - Clerk user ID of the authenticated user creating the record
    * @returns Newly created BagPurchase object with bagType included
    * @throws NotFoundException - If clerkUserId has no matching database user or if bagTypeId does not exist
@@ -77,12 +86,14 @@ export class BagPurchasesService {
       });
     }
 
+    const totalCost = new Decimal(dto.quantity).mul(dto.unitCost).toFixed(2);
+
     return this.prisma.bagPurchase.create({
       data: {
         bagTypeId: dto.bagTypeId,
         quantity: dto.quantity,
         unitCost: dto.unitCost,
-        totalCost: dto.totalCost,
+        totalCost,
         // BUG-L (P5): capture cost currency so P&L can convert LBP bag purchases.
         // Defaults USD (column default) when omitted.
         ...(dto.currency ? { currency: dto.currency } : {}),

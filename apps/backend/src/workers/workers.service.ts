@@ -131,14 +131,36 @@ export class WorkersService {
     return { ...worker, ...totals };
   }
 
+  /**
+   * Every worker is created with a linked, local (non-Clerk) User account —
+   * same synthetic-account convention as UsersService.createLocal() — so the
+   * worker has a real receiverId a Payment can reference. Without this, a
+   * cash payment collected by a worker had no valid User id to credit, and
+   * the frontend receiver picker silently dropped it (see the
+   * 20260821000000_add_worker_user_link migration for the full history and
+   * the backfill of workers that pre-date this).
+   */
   async create(dto: CreateWorkerDto) {
-    return this.prisma.worker.create({
-      data: {
-        name: dto.name,
-        ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
-        ratesPerBagType: (dto.ratesPerBagType ?? []) as unknown as Prisma.InputJsonValue,
-        ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const syntheticClerkId = `local_${crypto.randomUUID()}`;
+      const user = await tx.user.create({
+        data: {
+          clerkId: syntheticClerkId,
+          email: `${syntheticClerkId}@local.internal`,
+          name: dto.name,
+          role: 'worker',
+          ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+        },
+      });
+      return tx.worker.create({
+        data: {
+          name: dto.name,
+          ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+          ratesPerBagType: (dto.ratesPerBagType ?? []) as unknown as Prisma.InputJsonValue,
+          ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+          userId: user.id,
+        },
+      });
     });
   }
 

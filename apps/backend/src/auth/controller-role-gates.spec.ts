@@ -10,6 +10,10 @@ import { PackedStockController } from '../packed-stock/packed-stock.controller';
 import { PackedStockService } from '../packed-stock/packed-stock.service';
 import { WarehouseController } from '../warehouse/warehouse.controller';
 import { WarehouseService } from '../warehouse/warehouse.service';
+import { UsersController } from '../users/users.controller';
+import { UsersService } from '../users/users.service';
+import { CashHandoversController } from '../cash-handovers/cash-handovers.controller';
+import { CashHandoversService } from '../cash-handovers/cash-handovers.service';
 
 // ---------------------------------------------------------------------------
 // Regression coverage for a real, reachable authorization gap found during
@@ -161,5 +165,98 @@ describe('WarehouseController — role enforcement', () => {
   });
   it('getSummary: accountant → passes', () => {
     expect(rolesGuard.canActivate(mockContext(WarehouseController, 'accountant', 'getSummary'))).toBe(true);
+  });
+});
+
+describe('UsersController — role enforcement (GET /users/receivers method-level override)', () => {
+  let rolesGuard: RolesGuard;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [UsersController],
+      providers: [
+        { provide: UsersService, useValue: {} },
+        Reflector,
+        RolesGuard,
+      ],
+    }).compile();
+
+    rolesGuard = new RolesGuard(module.get<Reflector>(Reflector));
+  });
+
+  // The controller class carries @Roles('owner') — findAll must still inherit
+  // that, since it exposes full User rows (email/phone).
+  it('findAll: accountant → ForbiddenException (inherits the class-level owner-only gate)', () => {
+    expect(() => rolesGuard.canActivate(mockContext(UsersController, 'accountant', 'findAll'))).toThrow(ForbiddenException);
+  });
+  it('findAll: owner → passes', () => {
+    expect(rolesGuard.canActivate(mockContext(UsersController, 'owner', 'findAll'))).toBe(true);
+  });
+
+  // findReceivers has its own @Roles() that must override the class-level
+  // owner-only default — every page that logs a payment (Payment, Invoices,
+  // ClientDetail, WarehouseSales) has no role restriction of its own, so an
+  // accountant/sales_rep/worker/receiver picking a receiver there would
+  // otherwise 403 fetching this list.
+  it('findReceivers: accountant → passes (method-level override)', () => {
+    expect(rolesGuard.canActivate(mockContext(UsersController, 'accountant', 'findReceivers'))).toBe(true);
+  });
+  it('findReceivers: sales_rep → passes', () => {
+    expect(rolesGuard.canActivate(mockContext(UsersController, 'sales_rep', 'findReceivers'))).toBe(true);
+  });
+  it('findReceivers: worker → passes', () => {
+    expect(rolesGuard.canActivate(mockContext(UsersController, 'worker', 'findReceivers'))).toBe(true);
+  });
+  it('findReceivers: receiver → passes', () => {
+    expect(rolesGuard.canActivate(mockContext(UsersController, 'receiver', 'findReceivers'))).toBe(true);
+  });
+  it('findReceivers: owner → passes', () => {
+    expect(rolesGuard.canActivate(mockContext(UsersController, 'owner', 'findReceivers'))).toBe(true);
+  });
+  // Drivers collect cash-on-delivery auto-attributed to ClientOrder.driverId
+  // (shipments.service.ts PR 10.1) — never manually pick a receiver — so
+  // driver is deliberately excluded from this list's role set.
+  it('findReceivers: driver → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext(UsersController, 'driver', 'findReceivers'))).toThrow(ForbiddenException);
+  });
+});
+
+// Money Handover History redesign — confirms the class-level @Roles('owner',
+// 'accountant') gate (unchanged by this task) actually holds for findAll,
+// since the frontend history table's own error-state test relies on a real
+// 403 being reachable for every other role.
+describe('CashHandoversController — role enforcement', () => {
+  let rolesGuard: RolesGuard;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [CashHandoversController],
+      providers: [
+        { provide: CashHandoversService, useValue: {} },
+        Reflector,
+        RolesGuard,
+      ],
+    }).compile();
+
+    rolesGuard = new RolesGuard(module.get<Reflector>(Reflector));
+  });
+
+  it('findAll: owner → passes', () => {
+    expect(rolesGuard.canActivate(mockContext(CashHandoversController, 'owner', 'findAll'))).toBe(true);
+  });
+  it('findAll: accountant → passes', () => {
+    expect(rolesGuard.canActivate(mockContext(CashHandoversController, 'accountant', 'findAll'))).toBe(true);
+  });
+  it('findAll: sales_rep → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext(CashHandoversController, 'sales_rep', 'findAll'))).toThrow(ForbiddenException);
+  });
+  it('findAll: worker → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext(CashHandoversController, 'worker', 'findAll'))).toThrow(ForbiddenException);
+  });
+  it('findAll: driver → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext(CashHandoversController, 'driver', 'findAll'))).toThrow(ForbiddenException);
+  });
+  it('findAll: receiver → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext(CashHandoversController, 'receiver', 'findAll'))).toThrow(ForbiddenException);
   });
 });

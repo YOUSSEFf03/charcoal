@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { InvoicesService } from './invoices.service';
@@ -184,14 +185,29 @@ describe('InvoicesService', () => {
       );
     });
 
-    it('search filter: adds a case-insensitive client-name contains clause', async () => {
+    it('search filter: matches by client name OR invoice number (displayId), both case-insensitive', async () => {
       await service.findAll(1, 20, undefined, undefined, undefined, undefined, 'acme');
 
       expect(mockPrisma.invoice.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { client: { name: { contains: 'acme', mode: 'insensitive' } } },
+          where: {
+            OR: [
+              { client: { name: { contains: 'acme', mode: 'insensitive' } } },
+              { displayId: { contains: 'acme', mode: 'insensitive' } },
+            ],
+          },
         }),
       );
+    });
+
+    it('search filter: a query matching an invoice number ("SI-0042") is still ORed against client name, not exclusive', async () => {
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, 'SI-0042');
+
+      const call = mockPrisma.invoice.findMany.mock.calls[0][0];
+      expect(call.where.OR).toEqual([
+        { client: { name: { contains: 'SI-0042', mode: 'insensitive' } } },
+        { displayId: { contains: 'SI-0042', mode: 'insensitive' } },
+      ]);
     });
 
     it('dateFrom/dateTo filter: adds a createdAt range to the where clause', async () => {
@@ -212,7 +228,10 @@ describe('InvoicesService', () => {
       const call = mockPrisma.invoice.findMany.mock.calls[0][0];
       expect(call.where.clientId).toBe('client-42');
       expect(call.where.status).toBe('draft');
-      expect(call.where.client).toEqual({ name: { contains: 'acme', mode: 'insensitive' } });
+      expect(call.where.OR).toEqual([
+        { client: { name: { contains: 'acme', mode: 'insensitive' } } },
+        { displayId: { contains: 'acme', mode: 'insensitive' } },
+      ]);
       expect(call.where.createdAt.gte).toEqual(new Date('2026-01-01'));
       expect(call.where.createdAt.lte).toEqual(new Date('2026-01-31'));
       expect(result).toEqual({ data, total: 1, page: 1, limit: 20 });
@@ -245,6 +264,74 @@ describe('InvoicesService', () => {
 
       const call = mockPrisma.invoice.findMany.mock.calls[0][0];
       expect(call.include).toEqual({ client: { select: { id: true, name: true } } });
+    });
+  });
+
+  // =========================================================================
+  // findOne() — the single authoritative source for both the Invoice Detail
+  // page and the print/PDF view (InvoicePrint.tsx). Previously had zero direct
+  // test coverage, including for the balanceDue computation added earlier.
+  // =========================================================================
+
+  describe('findOne()', () => {
+    function makeInvoice(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'inv-1',
+        displayId: 'SI-0042',
+        orderId: 'order-1',
+        clientId: 'client-1',
+        lines: [],
+        subtotal: '100.00',
+        total: '100.00',
+        currency: 'USD',
+        status: 'issued',
+        paidAmount: '40.00',
+        exchangeRateSnapshot: null,
+        issuedAt: new Date('2026-01-01'),
+        dueDate: new Date('2026-01-15'),
+        createdAt: new Date('2026-01-01'),
+        updatedAt: new Date('2026-01-01'),
+        client: { id: 'client-1', name: 'Acme', type: 'restaurant', currency: 'USD', phones: [] },
+        order: { id: 'order-1', displayId: 'SO-0010', status: 'delivered' },
+        payments: [],
+        allocations: [],
+        ...overrides,
+      };
+    }
+
+    it('throws NotFoundException when the invoice does not exist', async () => {
+      mockPrisma.invoice.findUnique.mockResolvedValue(null);
+      await expect(service.findOne('missing')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('computes balanceDue = total - paidAmount', async () => {
+      mockPrisma.invoice.findUnique.mockResolvedValue(makeInvoice({ total: '100.00', paidAmount: '40.00' }));
+      const result = await service.findOne('inv-1');
+      expect(result.balanceDue).toBe('60.00');
+    });
+
+    it('the client select is a precise projection — id/name/type/currency/phones only, matching InvoiceDetail\'s declared type (no notes/paymentTerms/computed balance leak)', async () => {
+      mockPrisma.invoice.findUnique.mockResolvedValue(makeInvoice());
+      await service.findOne('inv-1');
+
+      const call = mockPrisma.invoice.findUnique.mock.calls[0][0];
+      expect(call.include.client).toEqual({
+        select: { id: true, name: true, type: true, currency: true, phones: true },
+      });
+    });
+
+    it('includes a minimal order projection (id/displayId/status) for the invoice\'s source reference', async () => {
+      mockPrisma.invoice.findUnique.mockResolvedValue(makeInvoice());
+      await service.findOne('inv-1');
+
+      const call = mockPrisma.invoice.findUnique.mock.calls[0][0];
+      expect(call.include.order).toEqual({ select: { id: true, displayId: true, status: true } });
+    });
+
+    it('a WAREHOUSE_SALE invoice (order: null) still resolves without throwing', async () => {
+      mockPrisma.invoice.findUnique.mockResolvedValue(makeInvoice({ orderId: null, order: null }));
+      const result = await service.findOne('inv-1');
+      expect(result.order).toBeNull();
     });
   });
 
@@ -617,6 +704,45 @@ describe('InvoicesService', () => {
       });
     });
 
+    it('draft invoice: changing currency alone to something other than its own client currency is rejected', async () => {
+      const invoiceId = 'inv-uuid-6';
+
+      mockPrisma.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'draft',
+        currency: 'USD',
+        client: { id: 'client-1', name: 'Client A', currency: 'USD' },
+        payments: [],
+      });
+
+      await expect(
+        service.update(invoiceId, { currency: 'LBP' as any }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      expect(mockPrisma.invoice.update).not.toHaveBeenCalled();
+    });
+
+    it('draft invoice: switching clientId to a client with a different currency, without also updating currency, is rejected', async () => {
+      const invoiceId = 'inv-uuid-7';
+
+      mockPrisma.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'draft',
+        currency: 'USD',
+        client: { id: 'client-1', name: 'Client A', currency: 'USD' },
+        payments: [],
+      });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-lbp', currency: 'LBP' });
+
+      await expect(
+        service.update(invoiceId, { clientId: 'client-lbp' } as any),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      expect(mockPrisma.invoice.update).not.toHaveBeenCalled();
+    });
+
     it('succeeds and calls invoice.update when invoice is draft', async () => {
       const invoiceId = 'inv-uuid-5';
 
@@ -749,10 +875,30 @@ describe('InvoicesService', () => {
   // =========================================================================
 
   describe('create()', () => {
+    it('currency mismatch: rejects with CONSTRAINT_VIOLATION when dto.currency differs from the client\'s own currency, and never creates the invoice', async () => {
+      // Every downstream balance calculation assumes an invoice's currency
+      // always matches its client's — Payment.amount is always stored in the
+      // client's own currency (PaymentsService), so a mismatched invoice
+      // currency would compare unlike units when paidAmount/status is recomputed.
+      const clientId = 'client-mismatch-1';
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Test', currency: 'LBP' });
+
+      await expect(
+        service.create({
+          clientId,
+          lines: [{ bagTypeId: 'bt-1', bagTypeName: '2kg', qty: 1, pricePerBag: '1.00' }],
+          currency: 'USD' as any,
+        }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      expect(mockPrisma.invoice.create).not.toHaveBeenCalled();
+    });
+
     it('CONSTRAINT 10: succeeds with pricePerBag="999.99" — no price cap validation', async () => {
       const clientId = 'client-uuid-1';
 
-      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'BigClient' });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'BigClient', currency: 'USD' });
 
       mockCalculator.computeLines.mockReturnValue({
         lines: [
@@ -801,7 +947,7 @@ describe('InvoicesService', () => {
       const clientId = 'client-uuid-2';
       const orderId = 'order-uuid-1';
 
-      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Test' });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Test', currency: 'USD' });
       mockPrisma.clientOrder.findUnique.mockResolvedValue({ id: orderId });
       mockCalculator.computeLines.mockReturnValue({ lines: [], subtotal: '0.00' });
       mockCalculator.computeTotal.mockReturnValue('0.00');
@@ -824,7 +970,7 @@ describe('InvoicesService', () => {
     it('Phase 2 — source is WAREHOUSE_SALE when orderId is absent', async () => {
       const clientId = 'client-uuid-3';
 
-      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Test' });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Test', currency: 'USD' });
       mockCalculator.computeLines.mockReturnValue({ lines: [], subtotal: '0.00' });
       mockCalculator.computeTotal.mockReturnValue('0.00');
       mockPrisma.invoice.create.mockResolvedValue({ id: 'inv-wh', clientId, status: 'draft', source: 'WAREHOUSE_SALE', client: { id: clientId, name: 'Test' } });
@@ -1097,6 +1243,84 @@ describe('InvoicesService', () => {
       expect(txMock.invoice.findFirst).toHaveBeenCalled();
       expect(txMock.invoice.create).toHaveBeenCalled();
       expect(mockPrisma.clientOrder.findUnique).not.toHaveBeenCalled();
+    });
+
+    // -----------------------------------------------------------------------
+    // Concurrent-delivery race: two near-simultaneous createFromOrder() calls
+    // for the same order can both pass the `existing` findFirst check before
+    // either commits its create() — only one create() wins the
+    // invoices_orderId_unique_active partial unique index, the other gets a
+    // P2002. This must resolve to the winner's invoice, never an unhandled
+    // 500 (Prisma.PrismaClientKnownRequestError is not an HttpException, so
+    // an uncaught one falls through to the global filter's generic 500).
+    // -----------------------------------------------------------------------
+    function p2002() {
+      return new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`orderId`)', {
+        code: 'P2002',
+        clientVersion: 'test',
+      });
+    }
+
+    it('concurrent-delivery race: create() hits P2002 → returns the winner\'s invoice instead of throwing', async () => {
+      const winner = { id: 'winner-inv', orderId, status: 'issued' };
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(kgOrder);
+      // First findFirst (the `existing` idempotency check) races and loses: null.
+      // Second findFirst (the post-P2002 recovery lookup) finds the winner.
+      mockPrisma.invoice.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(winner);
+      mockCalculator.computeLines.mockReturnValue({ lines: [], subtotal: '0.00' });
+      mockCalculator.computeTotal.mockReturnValue('0.00');
+      mockPrisma.invoice.create.mockRejectedValue(p2002());
+
+      const result = await service.createFromOrder(orderId);
+
+      expect(result).toBe(winner);
+      expect(mockPrisma.invoice.findFirst).toHaveBeenCalledTimes(2);
+    });
+
+    it('concurrent-delivery race with tx: the P2002 recovery lookup uses the same tx client, not this.prisma', async () => {
+      const winner = { id: 'winner-inv-tx', orderId, status: 'issued' };
+      const txMock = {
+        clientOrder: { findUnique: jest.fn() as any },
+        invoice: { findFirst: jest.fn() as any, create: jest.fn() as any },
+      };
+      txMock.clientOrder.findUnique.mockResolvedValue(kgOrder);
+      txMock.invoice.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(winner);
+      txMock.invoice.create.mockRejectedValue(p2002());
+      mockCalculator.computeLines.mockReturnValue({ lines: [], subtotal: '0.00' });
+      mockCalculator.computeTotal.mockReturnValue('0.00');
+
+      const result = await service.createFromOrder(orderId, txMock as any);
+
+      expect(result).toBe(winner);
+      expect(mockPrisma.invoice.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.invoice.create).not.toHaveBeenCalled();
+    });
+
+    it('P2002 with no matching invoice actually found (not the race) is rethrown, not swallowed', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(kgOrder);
+      mockPrisma.invoice.findFirst
+        .mockResolvedValueOnce(null) // `existing` check
+        .mockResolvedValueOnce(null); // post-P2002 recovery lookup finds nothing — this P2002 wasn't the order-race
+      mockCalculator.computeLines.mockReturnValue({ lines: [], subtotal: '0.00' });
+      mockCalculator.computeTotal.mockReturnValue('0.00');
+      const err = p2002();
+      mockPrisma.invoice.create.mockRejectedValue(err);
+
+      await expect(service.createFromOrder(orderId)).rejects.toBe(err);
+    });
+
+    it('a non-P2002 error from create() is never swallowed — unexpected failures still throw', async () => {
+      mockPrisma.clientOrder.findUnique.mockResolvedValue(kgOrder);
+      mockPrisma.invoice.findFirst.mockResolvedValue(null);
+      mockCalculator.computeLines.mockReturnValue({ lines: [], subtotal: '0.00' });
+      mockCalculator.computeTotal.mockReturnValue('0.00');
+      mockPrisma.invoice.create.mockRejectedValue(new Error('DB connection lost'));
+
+      await expect(service.createFromOrder(orderId)).rejects.toThrow('DB connection lost');
+      // Only the one `existing` check — no second findFirst call for a non-P2002 error.
+      expect(mockPrisma.invoice.findFirst).toHaveBeenCalledTimes(1);
     });
   });
 });

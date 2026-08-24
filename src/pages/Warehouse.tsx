@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useStockExits, useLotMaterialFlow } from '../hooks/useWarehouse'
+import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useApproveStockAdjustment, useRejectStockAdjustment, useStockExits, useLotMaterialFlow, useAvailableStockLots } from '../hooks/useWarehouse'
+import type { StockLot } from '../types/api'
 import { usePackingSessions } from '../hooks/usePacking'
 import { useSuppliers } from '../hooks/useSuppliers'
-import { usePhysicalCount, useSubmitPhysicalCount } from '../hooks/useReports'
-import { formatDate } from '../lib/date'
+import { formatDate, toDateOnlyString } from '../lib/date'
 
 type WTab = 'raw' | 'packed' | 'adj'
 
@@ -29,9 +29,6 @@ export default function Warehouse() {
   const [tab, setTab] = useState<WTab>('raw')
   const [lotPanelOpen, setLotPanelOpen] = useState(false)
   const [selectedLot, setSelectedLot] = useState<LotVM | null>(null)
-  const [countModalOpen, setCountModalOpen] = useState(false)
-  const [countValues, setCountValues] = useState<Record<string, string>>({})
-  const [countError, setCountError] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'depleted'>('all')
   const [filterSearch, setFilterSearch] = useState('')
   const [adjModalOpen, setAdjModalOpen] = useState(false)
@@ -42,6 +39,11 @@ export default function Warehouse() {
   const [toast, setToast] = useState('')
 
   const stockLotsQ = useStockLots({ limit: 100 })
+  // Unbounded (no 100-lot page cap) — feeds only the "New stock adjustment" lot
+  // selector, which (unlike the main table above) must never hide an older lot
+  // that still has real kgRemaining just because it isn't among the 100
+  // most-recently-received (same fix as WarehouseSales' KG-sale picker).
+  const availableLotsQ = useAvailableStockLots()
   const packedQ = usePackedStockSummary()
   const sessionsQ = usePackingSessions({ limit: 100 })
   const summaryQ = useWarehouseSummary()
@@ -51,8 +53,8 @@ export default function Warehouse() {
   const createAdj = useCreateStockAdjustment()
   const updateAdj = useUpdateStockAdjustment()
   const deleteAdj = useDeleteStockAdjustment()
-  const physicalCountQ = usePhysicalCount()
-  const submitCount = useSubmitPhysicalCount()
+  const approveAdj = useApproveStockAdjustment()
+  const rejectAdj = useRejectStockAdjustment()
   const [editAdj, setEditAdj] = useState<any>(null)
   const [editAdjQty, setEditAdjQty] = useState('')
   const [editAdjReason, setEditAdjReason] = useState('')
@@ -65,6 +67,25 @@ export default function Warehouse() {
   const sessions = sessionsQ.data?.data ?? []
 
   const lots: LotVM[] = stockLots.map(l => {
+    const received = parseFloat(l.kgReceived)
+    const remaining = parseFloat(l.kgRemaining)
+    return {
+      id: l.id,
+      displayId: l.displayId,
+      createdAt: l.createdAt ?? l.dateReceived,
+      supplier: supplierNameById.get(l.supplierId) ?? l.supplierId,
+      arrival: fmtDate(l.dateReceived),
+      rawKg: received,
+      remainKg: remaining,
+      costPerKg: l.costPerKg != null ? parseFloat(l.costPerKg) : 0,
+      status: remaining > 0 ? 'active' : 'depleted',
+      charcoalType: l.charcoalType ?? '—',
+      grade: l.grade ?? '—',
+      source: l.source ?? 'direct',
+    }
+  })
+
+  const adjustmentLots: LotVM[] = (availableLotsQ.data ?? []).map((l: StockLot) => {
     const received = parseFloat(l.kgReceived)
     const remaining = parseFloat(l.kgRemaining)
     return {
@@ -124,43 +145,6 @@ export default function Warehouse() {
   // shown in the panel — including Remaining — reflects the latest data, never a stale one.
   const liveLot = selectedLot ? (lotById.get(selectedLot.id) ?? selectedLot) : null
 
-  function getCountDiff(id: string, systemQty: number) {
-    const val = parseFloat(countValues[id] || '')
-    if (isNaN(val)) return null
-    return val - systemQty
-  }
-
-  function closeCountModal() {
-    setCountModalOpen(false)
-    setCountValues({})
-    setCountError('')
-  }
-
-  function submitPhysicalCount() {
-    const items: { packedStockId: string; actualQuantity: number }[] = []
-    for (const [packedStockId, raw] of Object.entries(countValues)) {
-      if (raw.trim() === '') continue
-      const n = Number(raw)
-      if (!Number.isInteger(n) || n < 0) {
-        setCountError('Counted quantities must be whole numbers ≥ 0')
-        return
-      }
-      items.push({ packedStockId, actualQuantity: n })
-    }
-    if (items.length === 0) {
-      setCountError('Enter at least one counted quantity')
-      return
-    }
-    setCountError('')
-    submitCount.mutate({ items }, {
-      onSuccess: (res: any) => {
-        closeCountModal()
-        showToast(`Physical count submitted — ${res?.adjustmentsCreated ?? 0} adjustment(s) created`)
-      },
-      onError: (err: any) => setCountError(err?.error ?? 'Failed to submit count'),
-    })
-  }
-
   const packedCards = packedSummary.map(p => ({
     size: p.bagTypeName,
     bags: p.totalBags,
@@ -170,6 +154,14 @@ export default function Warehouse() {
   const totalPackedKg = packedCards.reduce((s, c) => s + c.totalKg, 0) || 1
 
   const adjustments = adjQ.data?.data ?? []
+  // Lots with at least one APPROVED adjustment — pending/rejected ones never
+  // touched kgRemaining, so they don't earn the "Adjusted" badge on the raw-
+  // lots table. Bounded by adjQ's own 100-row page, same as the Adjustments
+  // tab itself — a lot whose only adjustment fell off that page won't show
+  // the badge, matching what the Adjustments tab would show for it too.
+  const adjustedLotIds = new Set(
+    adjustments.filter((a: any) => a.adjustmentType === 'lot' && a.status === 'approved' && a.lotId).map((a: any) => a.lotId),
+  )
 
   const tabCounts = {
     raw: lots.filter(l => l.status === 'active').length,
@@ -180,9 +172,6 @@ export default function Warehouse() {
   return (
     <>
       <Topbar title="Warehouse">
-        <button className="btn danger" onClick={() => { setCountValues({}); setCountError(''); setCountModalOpen(true) }}>
-          <i className="ti ti-clipboard-check" style={{ fontSize: 15 }} /> Physical count
-        </button>
         <button className="btn primary">
           <i className="ti ti-tools" style={{ fontSize: 15 }} /> New packing session
         </button>
@@ -318,7 +307,18 @@ export default function Warehouse() {
                           </span>
                         </td>
                         <td>
-                          <div style={{ fontWeight: 500 }}>{lot.charcoalType}</div>
+                          <div style={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {lot.charcoalType}
+                            {adjustedLotIds.has(lot.id) && (
+                              <span
+                                className="badge badge-amber"
+                                style={{ fontSize: 10, padding: '1px 6px' }}
+                                title="This lot has at least one approved stock adjustment"
+                              >
+                                <i className="ti ti-adjustments" style={{ fontSize: 10 }} /> Adjusted
+                              </span>
+                            )}
+                          </div>
                           <div style={{ fontSize: 11, color: 'var(--text3)' }}>Grade {lot.grade}</div>
                         </td>
                         <td style={{ color: 'var(--text2)' }}>{lot.supplier}</td>
@@ -475,22 +475,65 @@ export default function Warehouse() {
                     <i className={`ti ti-${isLoss ? 'minus' : 'plus'}`} style={{ color: isLoss ? 'var(--red)' : 'var(--accent)' }} />
                   </div>
                   <div className="adj-body">
-                    <strong>
+                    <strong style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {a.adjustmentType === 'lot'
                         ? `${a.lot?.charcoalType ?? 'Lot'} · Grade ${a.lot?.grade ?? '—'}`
                         : `Packed stock`}
+                      {a.status === 'pending' && (
+                        <span className="badge badge-amber" style={{ fontSize: 10, padding: '1px 6px' }}>
+                          Pending approval
+                        </span>
+                      )}
+                      {a.status === 'rejected' && (
+                        <span className="badge badge-gray" style={{ fontSize: 10, padding: '1px 6px' }}>
+                          Rejected
+                        </span>
+                      )}
                     </strong>
                     <div className="adj-meta">
                       {new Date(a.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
                       {' · '}Before: {parseFloat(a.qtyBefore).toLocaleString()} kg
                       {' · '}After: {parseFloat(a.qtyAfter).toLocaleString()} kg
                       {a.reason && ` · ${a.reason}`}
+                      {a.status === 'pending' && ` · submitted by ${a.countedBy?.name ?? 'unknown'} — stock not yet changed`}
                     </div>
                   </div>
                   <div className="adj-diff" style={{ color: isLoss ? 'var(--red)' : 'var(--accent)', marginRight: 8 }}>
                     {diff > 0 ? '+' : ''}{diff.toFixed(0)} kg
                   </div>
                   <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                    {a.status === 'pending' && (
+                      <>
+                        <button
+                          className="btn"
+                          style={{ padding: '4px 8px', fontSize: 12, background: 'var(--accent-bg)', color: 'var(--accent)', borderColor: 'var(--accent)' }}
+                          disabled={approveAdj.isPending}
+                          onClick={() => approveAdj.mutate(a.id, {
+                            onSuccess: () => showToast('Adjustment approved — stock updated'),
+                            onError: (err: any) => showToast(err?.error ?? 'Failed to approve adjustment'),
+                          })}
+                          title="Approve — applies the stock change now"
+                        >
+                          <i className="ti ti-check" style={{ fontSize: 13 }} />
+                        </button>
+                        <button
+                          className="btn"
+                          style={{ padding: '4px 8px', fontSize: 12, background: 'var(--red-bg)', color: 'var(--red)', borderColor: '#fca5a5' }}
+                          disabled={rejectAdj.isPending}
+                          onClick={() => {
+                            if (confirm('Reject this adjustment? It will be discarded with no stock change.')) {
+                              rejectAdj.mutate(a.id, {
+                                onSuccess: () => showToast('Adjustment rejected'),
+                                onError: (err: any) => showToast(err?.error ?? 'Failed to reject adjustment'),
+                              })
+                            }
+                          }}
+                          title="Reject — discards it, no stock change"
+                        >
+                          <i className="ti ti-x" style={{ fontSize: 13 }} />
+                        </button>
+                      </>
+                    )}
                     <button
                       className="btn"
                       style={{ padding: '4px 8px', fontSize: 12 }}
@@ -508,7 +551,7 @@ export default function Warehouse() {
                       style={{ padding: '4px 8px', fontSize: 12, background: 'var(--red-bg)', color: 'var(--red)', borderColor: '#fca5a5' }}
                       disabled={deleteAdj.isPending}
                       onClick={() => {
-                        if (confirm('Delete this adjustment? The stock quantity will be reversed.')) {
+                        if (confirm(a.status === 'approved' ? 'Delete this adjustment? The stock quantity will be reversed.' : 'Delete this adjustment?')) {
                           deleteAdj.mutate(a.id, { onSuccess: () => showToast('Adjustment deleted') })
                         }
                       }}
@@ -822,17 +865,18 @@ export default function Warehouse() {
                         <td colSpan={4} style={{ padding: '10px 18px', fontWeight: 600, fontSize: 13 }}>Total</td>
                         <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700 }}>
                           {(() => {
-                            const data = lotExitsQ.data?.data ?? []
-                            const kg = data.reduce((s: number, e: any) => {
-                              if (e.lotId) return s + parseFloat(e.kgQuantity ?? '0')
-                              return s + (e.bagType ? parseFloat(e.bagType.nominalKg) * (e.quantity ?? 0) : 0)
-                            }, 0)
+                            // Unbounded server totals (lotFlowQ), not a reduce over the
+                            // page-limited lotExitsQ list — a lot with more than 200
+                            // exits would otherwise silently undercount here.
+                            const flow = lotFlowQ.data
+                            if (!flow) return '—'
+                            const kg = parseFloat(flow.rawMaterialExitsKg) + parseFloat(flow.packedBagSalesKg)
                             return `${kg.toFixed(1)} kg`
                           })()}
                         </td>
                         <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent)' }}>
                           {(() => {
-                            const total = (lotExitsQ.data?.data ?? []).reduce((s: number, e: any) => s + (e.amount ? parseFloat(e.amount) : 0), 0)
+                            const total = parseFloat(lotFlowQ.data?.totalExitAmount ?? '0')
                             return total > 0 ? `$${total.toFixed(2)}` : '—'
                           })()}
                         </td>
@@ -858,7 +902,7 @@ export default function Warehouse() {
 
       {/* New adjustment modal */}
       {adjModalOpen && (() => {
-        const activeLots = lots.filter(l => l.status === 'active')
+        const activeLots = adjustmentLots.filter(l => l.status === 'active')
         const selectedAdjLot = activeLots.find(l => l.id === adjLotId)
         const qtyAfterNum = parseFloat(adjQtyAfter)
         const diff = selectedAdjLot && !isNaN(qtyAfterNum) ? qtyAfterNum - selectedAdjLot.remainKg : null
@@ -941,12 +985,16 @@ export default function Warehouse() {
                         qtyBefore: lot.remainKg.toFixed(3),
                         qtyAfter: parseFloat(adjQtyAfter).toFixed(3),
                         reason: adjReason.trim(),
-                        date: new Date().toISOString().slice(0, 10),
+                        date: toDateOnlyString(new Date()),
                       },
                       {
-                        onSuccess: () => {
+                        onSuccess: (res: any) => {
                           setAdjModalOpen(false)
-                          showToast('Adjustment logged')
+                          showToast(
+                            res?.status === 'pending'
+                              ? 'Adjustment submitted — awaiting owner approval, stock not yet changed'
+                              : 'Adjustment logged — stock updated',
+                          )
                         },
                         onError: (err: any) => setAdjError(err?.error ?? 'Failed to save'),
                       }
@@ -1037,84 +1085,6 @@ export default function Warehouse() {
         </div>
       )}
 
-      {/* Physical count modal */}
-      {countModalOpen && (
-        <div className="modal-overlay open" onClick={closeCountModal}>
-          <div
-            className="modal"
-            style={{ width: 500, maxHeight: '80vh', overflowY: 'auto' }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="modal-head">
-              <div>
-                <div className="modal-title">Physical stock count</div>
-                <div className="modal-sub">Enter counted bag quantities — differences will create stock adjustments</div>
-              </div>
-              <button className="panel-close" onClick={closeCountModal}>✕</button>
-            </div>
-            <div className="modal-body">
-              {physicalCountQ.isLoading && (
-                <div style={{ fontSize: 13, color: 'var(--text3)', padding: '8px 0' }}>Loading packed stock…</div>
-              )}
-              {!physicalCountQ.isLoading && (physicalCountQ.data?.packedStock.length ?? 0) === 0 && (
-                <div style={{ fontSize: 13, color: 'var(--text3)', padding: '8px 0' }}>No packed stock to count.</div>
-              )}
-              {physicalCountQ.data?.packedStock.map(group => (
-                <div key={group.bagTypeId} style={{ marginBottom: 14 }}>
-                  <div style={{ fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
-                    {group.bagTypeName}
-                  </div>
-                  {group.items.map(item => {
-                    const diff = getCountDiff(item.packedStockId, item.quantity)
-                    const lot = lotById.get(item.lotId)
-                    return (
-                      <div key={item.packedStockId} className="count-row">
-                        <div className="count-name">
-                          {lot ? `${lot.charcoalType} · Grade ${lot.grade}` : 'Unknown lot'}
-                          <div style={{ fontSize: 11, color: 'var(--text3)' }} title={item.packedStockId}>
-                            {lot ? lot.supplier : '—'} · lot {lot?.displayId ?? item.lotId.slice(0, 8).toUpperCase()}
-                          </div>
-                        </div>
-                        <div className="count-system">System: {item.quantity.toLocaleString()} bags</div>
-                        <input
-                          type="number"
-                          className="count-input"
-                          placeholder="0"
-                          value={countValues[item.packedStockId] || ''}
-                          onChange={e => setCountValues(prev => ({ ...prev, [item.packedStockId]: e.target.value }))}
-                        />
-                        <div
-                          className="count-diff"
-                          style={{
-                            color: diff === null
-                              ? 'var(--text3)'
-                              : diff === 0
-                              ? 'var(--accent)'
-                              : diff < 0
-                              ? 'var(--red)'
-                              : 'var(--accent2)',
-                          }}
-                        >
-                          {diff === null ? '—' : diff === 0 ? '✓' : diff > 0 ? `+${diff}` : diff}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              ))}
-              {countError && (
-                <div style={{ fontSize: 12.5, color: 'var(--red)', marginTop: 10 }}>{countError}</div>
-              )}
-            </div>
-            <div className="modal-footer">
-              <button className="btn" onClick={closeCountModal}>Cancel</button>
-              <button className="btn primary" onClick={submitPhysicalCount} disabled={submitCount.isPending}>
-                {submitCount.isPending ? 'Submitting…' : 'Submit count'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   )
 }

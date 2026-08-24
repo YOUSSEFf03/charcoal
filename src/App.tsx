@@ -23,6 +23,7 @@ import SignIn from './pages/SignIn'
 import ClientDetail from './pages/ClientDetail'
 import OrderDetail from './pages/OrderDetail'
 import NewOrder from './pages/NewOrder'
+import EditOrder from './pages/EditOrder'
 import ContainerDetail from './pages/ContainerDetail'
 import NewContainer from './pages/NewContainer'
 import SupplierDetail from './pages/SupplierDetail'
@@ -30,7 +31,15 @@ import Balances from './pages/Balances'
 import Payment from './pages/Payment'
 import FillClients from './pages/FillClients'
 import FillClientDetail from './pages/FillClientDetail'
+import FillClientStatement from './pages/FillClientStatement'
+import FillClientPickups from './pages/FillClientPickups'
+import FillClientPickupDetail from './pages/FillClientPickupDetail'
+import FillClientFillJobs from './pages/FillClientFillJobs'
+import FillClientFillJobDetail from './pages/FillClientFillJobDetail'
+import FillClientPayments from './pages/FillClientPayments'
+import FillClientPaymentDetail from './pages/FillClientPaymentDetail'
 import InvoicePrint from './pages/InvoicePrint'
+import InvoiceDetail from './pages/InvoiceDetail'
 
 // Small helper so each protected element reads cleanly below.
 const Guard = ({ children, allowedRoles }: { children: ReactNode; allowedRoles?: string[] }) => (
@@ -66,11 +75,13 @@ export default function App() {
           {/* Orders */}
           <Route path="/orders" element={<Guard><Orders /></Guard>} />
           <Route path="/orders/new" element={<Guard><NewOrder /></Guard>} />
+          <Route path="/orders/:id/edit" element={<Guard><EditOrder /></Guard>} />
           <Route path="/orders/:id" element={<Guard><OrderDetail /></Guard>} />
           <Route path="/delivery" element={<Navigate to="/orders" replace />} />
 
           {/* Invoices */}
           <Route path="/invoices" element={<Guard><Invoices /></Guard>} />
+          <Route path="/invoices/:id" element={<Guard><InvoiceDetail /></Guard>} />
           <Route path="/payment" element={<Guard><Payment /></Guard>} />
           <Route path="/payments" element={<Navigate to="/invoices" replace />} />
 
@@ -81,6 +92,20 @@ export default function App() {
           {/* Fill clients */}
           <Route path="/fill-clients" element={<Guard><FillClients /></Guard>} />
           <Route path="/fill-clients/:id" element={<Guard><FillClientDetail /></Guard>} />
+          {/*
+            Dedicated Fill Client history/detail pages — matches the role set
+            already enforced by their underlying data endpoints
+            (ReportsService.getClientLedger, FillJobsController, PaymentsController,
+            StockExitsController: all @Roles('owner', 'accountant', 'sales_rep')),
+            unlike the overview above which has no role restriction of its own.
+          */}
+          <Route path="/fill-clients/:id/statement" element={<Guard allowedRoles={['owner', 'accountant', 'sales_rep']}><FillClientStatement /></Guard>} />
+          <Route path="/fill-clients/:id/pickups" element={<Guard allowedRoles={['owner', 'accountant', 'sales_rep']}><FillClientPickups /></Guard>} />
+          <Route path="/fill-clients/:clientId/pickups/:pickupId" element={<Guard allowedRoles={['owner', 'accountant', 'sales_rep']}><FillClientPickupDetail /></Guard>} />
+          <Route path="/fill-clients/:id/fill-jobs" element={<Guard allowedRoles={['owner', 'accountant', 'sales_rep']}><FillClientFillJobs /></Guard>} />
+          <Route path="/fill-clients/:clientId/fill-jobs/:jobId" element={<Guard allowedRoles={['owner', 'accountant', 'sales_rep']}><FillClientFillJobDetail /></Guard>} />
+          <Route path="/fill-clients/:id/payments" element={<Guard allowedRoles={['owner', 'accountant', 'sales_rep']}><FillClientPayments /></Guard>} />
+          <Route path="/fill-clients/:clientId/payments/:paymentId" element={<Guard allowedRoles={['owner', 'accountant', 'sales_rep']}><FillClientPaymentDetail /></Guard>} />
 
           {/* Suppliers */}
           <Route path="/suppliers" element={<Guard><Suppliers /></Guard>} />
@@ -94,16 +119,21 @@ export default function App() {
           {/* Finance */}
           <Route path="/balances" element={<Guard><Balances /></Guard>} />
           <Route path="/cash-handover" element={<Guard><CashHandover /></Guard>} />
-          <Route path="/expenses" element={<Guard><Expenses /></Guard>} />
+          {/* Matches backend GeneralExpensesController's @Roles('owner', 'accountant') */}
+          <Route path="/expenses" element={<Guard allowedRoles={['owner', 'accountant']}><Expenses /></Guard>} />
 
           {/* Other */}
-          <Route path="/employees" element={<Guard><Employees /></Guard>} />
+          {/* Matches backend WorkersController's controller-level @Roles('owner') */}
+          <Route path="/employees" element={<Guard allowedRoles={['owner']}><Employees /></Guard>} />
           <Route path="/warehouse" element={<Guard><Warehouse /></Guard>} />
           <Route path="/warehouse-sales" element={<Guard><WarehouseSales /></Guard>} />
           <Route path="/packing" element={<Guard><Packing /></Guard>} />
-          <Route path="/bag-purchases" element={<Guard><BagPurchases /></Guard>} />
+          {/* Bag purchases — matches BagPurchasesController's @Roles('owner', 'accountant') */}
+          <Route path="/bag-purchases" element={<Guard allowedRoles={['owner', 'accountant']}><BagPurchases /></Guard>} />
           <Route path="/reports" element={<Guard><Reports /></Guard>} />
-          <Route path="/settings" element={<Guard><Settings /></Guard>} />
+          {/* Matches backend UsersController's controller-level @Roles('owner') — Settings' core
+              content (team/user management) depends entirely on owner-only endpoints. */}
+          <Route path="/settings" element={<Guard allowedRoles={['owner']}><Settings /></Guard>} />
         </Route>
 
         {/* Catch-all — redirect unknown paths to sign-in */}

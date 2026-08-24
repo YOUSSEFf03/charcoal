@@ -34,6 +34,22 @@ export function usePayments(params?: PaymentsQuery) {
 }
 
 /**
+ * Single payment by ID — Fill Client Payment Detail page. Includes receiver
+ * and allocations→invoice (PaymentsService.findOne()'s widened include).
+ * GET /payments/:id
+ */
+export function usePayment(id: string) {
+  return useQuery({
+    queryKey: ['payments', 'detail', id],
+    queryFn: async () => {
+      const res = await api.get<Payment>(`/payments/${id}`)
+      return res.data
+    },
+    enabled: Boolean(id),
+  })
+}
+
+/**
  * Record a payment.
  * Side effects: updates invoice.paidAmount + invoice.status, recalculates
  * client.balance.

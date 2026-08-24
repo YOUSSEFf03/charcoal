@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -194,6 +195,20 @@ export class SuppliersService {
     const user = await this.prisma.user.findUnique({ where: { clerkId: clerkUserId } });
     if (!user) throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
     await this.findOne(supplierId);
+
+    // CreateSupplierPaymentDto.amount is @IsNumberString with no
+    // decorator-level bound, and unlike PaymentsService.create() (the
+    // client-payment sibling of this exact DTO shape), this method had no
+    // service-level check either — a zero/negative amount would silently
+    // corrupt the supplier's totalSpentUsd/outstandingUsd aggregates.
+    if (!new Decimal(body.amount).gt(0)) {
+      throw new BadRequestException({
+        message: 'Payment amount must be greater than zero',
+        error: 'Payment amount must be greater than zero',
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
+
     return this.prisma.supplierPayment.create({
       data: {
         supplierId,

@@ -45,6 +45,7 @@ function client(id: string, overrides: Partial<Client> = {}): Client {
   return {
     id,
     name: id,
+    nameAr: null,
     type: 'restaurant',
     currency: 'USD',
     phones: [],
@@ -52,7 +53,10 @@ function client(id: string, overrides: Partial<Client> = {}): Client {
     avgOrderDays: null,
     lastOrderDate: null,
     paymentTerms: null,
+    address: null,
+    creditLimit: null,
     notes: null,
+    notesEn: null,
     isActive: true,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',

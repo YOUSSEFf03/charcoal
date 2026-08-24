@@ -79,11 +79,25 @@ export async function consumeLots(
 
   const result: ConsumedLot[] = [];
 
-  // Step 3: Validate each aggregated total <= kgRemaining.
+  // Step 3: Validate each aggregated total is positive and <= kgRemaining.
   for (const [lotId, total] of totalsByLot) {
     const lot = lotMap.get(lotId);
     if (!lot) {
       throw new NotFoundException({ error: `Stock lot not found: ${lotId}`, code: 'NOT_FOUND' });
+    }
+    // A non-positive aggregated total would flip Step 4's atomic
+    // `{ decrement: total }` below into an INCREMENT (Prisma applies the
+    // decrement literally) — silently fabricating raw stock from a
+    // packing session or fill job whose lotInputs[].kg was zero/negative.
+    // No caller (LotInputDto here has no @Min — see the positivity-gap
+    // audit) currently enforces this above the primitive, so it is
+    // enforced here, at the single choke point every consumer shares.
+    if (!total.gt(0)) {
+      throw new BadRequestException({
+        message: `kgUsed for lot ${lotId} must be greater than zero (got ${total.toFixed(3)})`,
+        error: 'kgUsed must be greater than zero',
+        code: 'CONSTRAINT_VIOLATION',
+      });
     }
     if (total.gt(lot.kgRemaining.toString())) {
       throw new BadRequestException({

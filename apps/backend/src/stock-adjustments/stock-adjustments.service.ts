@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto';
+import { UpdateStockAdjustmentDto } from './dto/update-stock-adjustment.dto';
 
 @Injectable()
 export class StockAdjustmentsService {
@@ -299,7 +300,7 @@ export class StockAdjustmentsService {
    * Update an existing adjustment: reverses the original qty change, applies
    * the new qtyAfter, and updates the record. Only reason or qtyAfter can change.
    */
-  async update(id: string, dto: { qtyAfter?: string; reason?: string }) {
+  async update(id: string, dto: UpdateStockAdjustmentDto) {
     return this.prisma.$transaction(async (tx) => {
       const adj = await tx.stockAdjustment.findUnique({ where: { id } });
       if (!adj) throw new NotFoundException({ error: 'Adjustment not found', code: 'NOT_FOUND' });

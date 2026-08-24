@@ -7,7 +7,7 @@ import { useSupplierLedger } from '../hooks/useReports'
 import { exportExcel, type ExcelColumn } from '../lib/excelExport'
 import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
 import { formatUsd } from '../lib/money'
-import { formatDate } from '../lib/date'
+import { formatDate, toDateOnlyString } from '../lib/date'
 
 type View = 'detail' | 'statement'
 
@@ -74,7 +74,7 @@ export default function SupplierDetail() {
   const [payAmt, setPayAmt] = useState('')
   const [payMethod, setPayMethod] = useState('bank_transfer')
   const [payCurrency, setPayCurrency] = useState('USD')
-  const [payDate, setPayDateVal] = useState(new Date().toISOString().slice(0, 10))
+  const [payDate, setPayDateVal] = useState(toDateOnlyString(new Date()))
   const [payRef, setPayRef] = useState('')
   const [toast, setToast] = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()

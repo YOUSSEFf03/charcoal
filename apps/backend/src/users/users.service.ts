@@ -31,6 +31,22 @@ export class UsersService {
     return { data, total, page, limit };
   }
 
+  /**
+   * Minimal, unbounded id/name/role list for payment "received by" pickers —
+   * see UsersController.findReceivers()'s doc comment for why this exists
+   * separately from findAll() and why it's accessible to more roles.
+   */
+  async findReceivers() {
+    return this.prisma.user.findMany({
+      where: {
+        deletedAt: null,
+        role: { in: ['owner', 'accountant', 'sales_rep', 'worker', 'receiver'] },
+      },
+      select: { id: true, name: true, role: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
   async findOne(id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
@@ -91,6 +107,24 @@ export class UsersService {
       throw new BadRequestException({
         error: 'Cannot delete a Clerk-linked user from here. Remove them in Clerk.',
         code: 'NOT_LOCAL_USER',
+      });
+    }
+
+    // A worker's linked account (Worker.userId, synthetic clerkId
+    // `local_worker_<workerId>` — see the 20260821000000_add_worker_user_link
+    // migration) also starts with 'local_', so it would otherwise pass the
+    // check above and be deletable from this generic "Users & roles" admin
+    // list. Worker.userId is ON DELETE SET NULL, so deleting it here would
+    // silently unlink the worker (no FK error) and reintroduce the exact bug
+    // that migration fixed — the worker becomes unselectable as a payment
+    // receiver again, with no visible connection in this UI to warn the owner
+    // they just broke it. Deleting the worker (which cleans up its own
+    // payments/costs first) is the only sanctioned way to remove this account.
+    const linkedWorker = await this.prisma.worker.findUnique({ where: { userId: id } });
+    if (linkedWorker) {
+      throw new BadRequestException({
+        error: `Cannot delete this account — it is linked to worker "${linkedWorker.name}". Delete the worker instead (Employees page).`,
+        code: 'LINKED_TO_WORKER',
       });
     }
 

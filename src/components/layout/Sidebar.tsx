@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { useMe } from '../../hooks/useMe'
 
 interface NavItemProps {
   to: string
@@ -36,6 +37,15 @@ export default function Sidebar() {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
+  const meQ = useMe()
+  const me = meQ.data
+  // Mirrors App.tsx's route-level allowedRoles (which themselves mirror the
+  // backend @Roles decorators) so the nav never advertises a page that will
+  // just redirect the user straight back out.
+  const canSeeExpenses = !me || ['owner', 'accountant'].includes(me.role)
+  const canSeeEmployees = !me || me.role === 'owner'
+  const canSeeSettings = !me || me.role === 'owner'
+  const canSeeBagPurchases = !me || ['owner', 'accountant'].includes(me.role)
 
   useEffect(() => {
     function handle(e: MouseEvent) {
@@ -71,7 +81,7 @@ export default function Sidebar() {
         <NavItem to="/containers" icon="ti-ship" label="Containers" prefix />
         <NavItem to="/warehouse" icon="ti-building-warehouse" label="Warehouse" />
         <NavItem to="/packing" icon="ti-tools" label="Packing" />
-        <NavItem to="/bag-purchases" icon="ti-shopping-cart" label="Bag purchases" />
+        {canSeeBagPurchases && <NavItem to="/bag-purchases" icon="ti-shopping-cart" label="Bag purchases" />}
       </div>
 
       {/* Sales */}
@@ -89,15 +99,15 @@ export default function Sidebar() {
         <NavItem to="/balances" icon="ti-credit-card" label="Balances" />
         <NavItem to="/invoices" icon="ti-receipt" label="Invoices" />
         <NavItem to="/cash-handover" icon="ti-wallet" label="Cash handover" />
-        <NavItem to="/expenses" icon="ti-receipt-tax" label="Expenses" />
+        {canSeeExpenses && <NavItem to="/expenses" icon="ti-receipt-tax" label="Expenses" />}
       </div>
 
       {/* Setup */}
       <div className="sidebar-section">
         <div className="sidebar-section-label">Setup</div>
-        <NavItem to="/employees" icon="ti-id-badge" label="Employees" />
+        {canSeeEmployees && <NavItem to="/employees" icon="ti-id-badge" label="Employees" />}
         <NavItem to="/suppliers" icon="ti-building-store" label="Suppliers" prefix />
-        <NavItem to="/settings" icon="ti-settings" label="Settings" />
+        {canSeeSettings && <NavItem to="/settings" icon="ti-settings" label="Settings" />}
       </div>
 
       {/* User */}
@@ -106,17 +116,19 @@ export default function Sidebar() {
           {menuOpen && (
             <div style={{ position: 'absolute', bottom: '100%', left: 0, right: 0, marginBottom: 4, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', boxShadow: '0 4px 16px rgba(0,0,0,0.1)', overflow: 'hidden', zIndex: 20 }}>
               <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>Khalil Abi Nader</div>
-                <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>owner · khalil</div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{me?.name ?? '—'}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>{me?.role ?? '—'}</div>
               </div>
-              <div
-                onClick={() => { setMenuOpen(false); navigate('/settings') }}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', fontSize: 13, color: 'var(--text2)', cursor: 'pointer' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')}
-                onMouseLeave={e => (e.currentTarget.style.background = '')}
-              >
-                <i className="ti ti-settings" style={{ fontSize: 14, color: 'var(--text3)' }} /> Account settings
-              </div>
+              {canSeeSettings && (
+                <div
+                  onClick={() => { setMenuOpen(false); navigate('/settings') }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', fontSize: 13, color: 'var(--text2)', cursor: 'pointer' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = '')}
+                >
+                  <i className="ti ti-settings" style={{ fontSize: 14, color: 'var(--text3)' }} /> Account settings
+                </div>
+              )}
               <div
                 onClick={() => { setMenuOpen(false); navigate('/sign-in') }}
                 style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', fontSize: 13, color: 'var(--red)', cursor: 'pointer', borderTop: '1px solid var(--border)' }}
@@ -128,10 +140,10 @@ export default function Sidebar() {
             </div>
           )}
           <div className="user-row" style={{ cursor: 'pointer' }} onClick={() => setMenuOpen(o => !o)}>
-            <div className="avatar">KA</div>
+            <div className="avatar">{me?.name ? me.name.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() : '—'}</div>
             <div>
-              <div className="user-name">Khalil Abi Nader</div>
-              <div className="user-role">owner</div>
+              <div className="user-name">{me?.name ?? (meQ.isLoading ? 'Loading…' : '—')}</div>
+              <div className="user-role">{me?.role ?? ''}</div>
             </div>
             <i className="ti ti-chevron-up" style={{ fontSize: 13, color: 'var(--text3)', marginLeft: 'auto', transform: menuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
           </div>

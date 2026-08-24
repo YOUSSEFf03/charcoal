@@ -2,6 +2,7 @@ import { Body, Controller, Get, ParseUUIDPipe, Post, Query, Param } from '@nestj
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { CashHandoversService } from './cash-handovers.service';
+import { CreateCashHandoverDto } from './dto/create-cash-handover.dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ClerkUser } from '../auth/clerk.strategy';
@@ -20,8 +21,9 @@ export class CashHandoversController {
     @Query('limit', new ParseLimitPipe(20)) limit: number,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('search') search?: string,
   ) {
-    return this.service.findAll(page, limit, dateFrom, dateTo);
+    return this.service.findAll(page, limit, dateFrom, dateTo, search);
   }
 
   @ApiOperation({ summary: 'All users with balance > 0 — sorted by balance desc. Three aggregation queries.' })
@@ -39,15 +41,7 @@ export class CashHandoversController {
   @ApiOperation({ summary: 'Log a cash handover' })
   @Post()
   create(
-    @Body() dto: {
-      date: string;
-      receiverId: string;
-      receiverName?: string;
-      expectedAmt: string;
-      handedAmt: string;
-      notes?: string | null;
-      expenses?: { description: string; amount: string }[];
-    },
+    @Body() dto: CreateCashHandoverDto,
     @CurrentUser() user: ClerkUser,
   ) {
     return this.service.create(dto, user.userId);

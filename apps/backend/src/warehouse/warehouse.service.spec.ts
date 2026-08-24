@@ -145,6 +145,44 @@ describe('WarehouseService — material flow (anti-double-count)', () => {
     });
   });
 
+  describe('totalExitAmount — unbounded $ total, not a reduce over a page-limited exit list', () => {
+    it('sums StockExit.amount across BOTH raw-material and packed-bag exits for the lot', async () => {
+      mockPrisma.packingSessionLot.findMany.mockResolvedValue([]);
+      mockPrisma.stockExit.groupBy.mockResolvedValue([
+        { lotId: 'LOT-Y', _sum: { kgQuantity: '300.000', amount: '450.00' } },
+      ]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        { quantity: 5, amount: '80.00', bagType: { nominalKg: '10.000' }, packedStock: { lotId: 'LOT-Y' } },
+        { quantity: 3, amount: '50.00', bagType: { nominalKg: '10.000' }, packedStock: { lotId: 'LOT-Y' } },
+      ]);
+      mockPrisma.stockLot.findUnique.mockResolvedValue({
+        id: 'LOT-Y', charcoalType: 'Oak', grade: 'A', kgReceived: '20000.000', kgRemaining: '19570.000',
+      });
+
+      const flow = await service.getLotMaterialFlow('LOT-Y');
+
+      // 450.00 (raw exits) + 80.00 + 50.00 (packed-bag exits) = 580.00 — this must be the
+      // authoritative total regardless of how many individual StockExit rows exist, since
+      // the frontend's "Sales & exits" table only ever fetches a 200-row page.
+      expect(flow.totalExitAmount).toBe('580.00');
+    });
+
+    it('handles missing amount (null on some exit rows) without NaN', async () => {
+      mockPrisma.packingSessionLot.findMany.mockResolvedValue([]);
+      mockPrisma.stockExit.groupBy.mockResolvedValue([
+        { lotId: 'LOT-Z', _sum: { kgQuantity: '100.000', amount: null } },
+      ]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([]);
+      mockPrisma.stockLot.findUnique.mockResolvedValue({
+        id: 'LOT-Z', charcoalType: 'Oak', grade: 'A', kgReceived: '1000.000', kgRemaining: '900.000',
+      });
+
+      const flow = await service.getLotMaterialFlow('LOT-Z');
+
+      expect(flow.totalExitAmount).toBe('0.00');
+    });
+  });
+
   describe('TEST 7 — lot-level StockAdjustment (Finding B)', () => {
     it('no adjustment: lotAdjustmentsKg is 0.000 and reconciliation holds without it', async () => {
       mockPrisma.packingSessionLot.findMany.mockResolvedValue([]);

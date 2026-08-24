@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useInvoices, useIssueInvoice, useCancelInvoice } from '../hooks/useInvoices'
 import { usePayments, useCreatePayment } from '../hooks/usePayments'
 import { useClients } from '../hooks/useClients'
 import { useArSummary } from '../hooks/useReports'
+import { useCashReceivers } from '../hooks/useUsers'
 import type { Invoice, InvoiceStatus, PaymentMethod } from '../types/api'
 import { useRate } from '../context/RateContext'
 import { roundDp, formatUsd } from '../lib/money'
-import { formatDate } from '../lib/date'
+import { formatDate, toDateOnlyString, currentMonthToDateRange } from '../lib/date'
 
 function statusBadge(status: string) {
   if (status === 'paid') return <span className="badge badge-green">Paid</span>
@@ -29,17 +31,29 @@ function methodBadge(method: string) {
 function fmtMoney(value?: string | null) { return formatUsd(value, { decimals: 2, symbol: false, fallback: '0' }) }
 function fmtDate(iso?: string | null) { return formatDate(iso) }
 
+// The Log Payment modal's pill labels don't all lowercase to a valid
+// PaymentMethod enum value — Prisma/CreatePaymentDto's enum is
+// 'bank_transfer', not 'bank', so a plain .toLowerCase() on the 'Bank' pill
+// produced a value @IsEnum(PaymentMethod) always rejects with a 422,
+// meaning a user could never actually submit a bank-transfer payment here.
+const PAY_METHOD_TO_ENUM: Record<string, PaymentMethod> = {
+  Cash: 'cash',
+  Whish: 'whish',
+  OMT: 'omt',
+  Bank: 'bank_transfer',
+}
+
 export default function Invoices() {
+  const navigate = useNavigate()
   const [tab, setTab] = useState<'invoices' | 'payments' | 'outstanding'>('invoices')
-  const [panelOpen, setPanelOpen] = useState(false)
-  const [panelTab, setPanelTab] = useState<'invoice' | 'payments'>('invoice')
   const [payModalOpen, setPayModalOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
-  const [printOpen, setPrintOpen] = useState(false)
   const [toast, setToast] = useState('')
   const [payMethod, setPayMethod] = useState('Cash')
   const [usdAmt, setUsdAmt] = useState('')
   const [lbpAmt, setLbpAmt] = useState('')
+  const [payNotes, setPayNotes] = useState('')
+  const [payReceiverName, setPayReceiverName] = useState('')
   const [statusFilter, setStatusFilter] = useState('All status')
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -55,16 +69,17 @@ export default function Invoices() {
     return () => clearTimeout(t)
   }, [search])
 
-  // Compute ISO date bounds from the date-range selector.
+  // Compute ISO date bounds from the date-range selector. toDateOnlyString
+  // (local calendar-day parts) — never toISOString().slice(0,10), which
+  // converts to UTC first and silently rolls the date back a day in a
+  // timezone ahead of UTC (Beirut, UTC+3), e.g. "This month" opening on 31
+  // July instead of 1 August.
   const today = new Date()
   const { dateFrom, dateTo } = (() => {
-    if (dateRange === 'This month') return {
-      dateFrom: new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10),
-      dateTo: today.toISOString().slice(0, 10),
-    }
+    if (dateRange === 'This month') return currentMonthToDateRange()
     if (dateRange === 'Last month') return {
-      dateFrom: new Date(today.getFullYear(), today.getMonth() - 1, 1).toISOString().slice(0, 10),
-      dateTo: new Date(today.getFullYear(), today.getMonth(), 0).toISOString().slice(0, 10),
+      dateFrom: toDateOnlyString(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
+      dateTo: toDateOnlyString(new Date(today.getFullYear(), today.getMonth(), 0)),
     }
     if (dateRange === 'Custom') return { dateFrom: customFrom || undefined, dateTo: customTo || undefined }
     return { dateFrom: undefined, dateTo: undefined }
@@ -109,6 +124,21 @@ export default function Invoices() {
   const cancelInvoice = useCancelInvoice()
   const { rawRate, rate: fmtRate } = useRate()
 
+  // receiverId must be a real User ID (payments_receiverId_fkey) so the
+  // payment credits that user's cash-handover ledger. See Payment.tsx's
+  // matching comment — useCashReceivers() replaces the old combination of
+  // useWorkers() (wrong FK) + useReceivers() + a fake hardcoded "Owner".
+  const receiversQ = useCashReceivers()
+  const allReceivers = receiversQ.data ?? []
+  const resolvedPayReceiverId = allReceivers.find(r => r.name === payReceiverName)?.id
+  // Bank transfer lands directly in the company account — no person holds
+  // custody of the cash, so (per CASH_MANAGEMENT_FINAL_BLUEPRINT.md's "a
+  // bank_transfer payment never touches the cash ledger") it's the one
+  // method here exempt from the receiver requirement. Cash/Whish/OMT are all
+  // personal-custody methods — same rule PaymentsService.create() enforces
+  // server-side (RECEIVER_REQUIRED_METHODS).
+  const receiverRequired = payMethod !== 'Bank'
+
   const invoiceRows = invoicesQ.data?.data ?? []
   const paymentRows = paymentsQ.data?.data ?? []
   const outstandingRows = outstandingQ.data?.data ?? []
@@ -145,32 +175,34 @@ export default function Invoices() {
   const invoicePaid = activeInvoice ? parseFloat(activeInvoice.paidAmount) : 0
   const invoiceRemaining = roundDp(invoiceBalance - invoicePaid, 2)
 
-  function openPanel(inv: Invoice) {
-    setActiveInvoice(inv)
-    setPanelTab('invoice')
-    setPanelOpen(true)
-  }
-
   function submitPayment() {
     if (!activeInvoice) return
     const usd = parseFloat(usdAmt) || 0
     const lbp = parseFloat(lbpAmt) || 0
     const total = roundDp(usd + (rawRate > 0 ? lbp / rawRate : 0), 2)
     if (total <= 0) return
+    if (receiverRequired && !resolvedPayReceiverId) {
+      showToast('Receiver is required.')
+      return
+    }
     createPayment.mutate(
       {
         clientId: activeInvoice.clientId,
         invoiceId: activeInvoice.id,
         amount: total.toFixed(2),
         currency: 'USD',
-        method: payMethod.toLowerCase() as PaymentMethod,
-        date: new Date().toISOString().slice(0, 10),
+        method: PAY_METHOD_TO_ENUM[payMethod] ?? (payMethod.toLowerCase() as PaymentMethod),
+        date: toDateOnlyString(new Date()),
+        notes: payNotes || null,
+        ...(resolvedPayReceiverId ? { receiverId: resolvedPayReceiverId } : payReceiverName ? { receiverName: payReceiverName } : {}),
       },
       {
         onSuccess: () => {
           setPayModalOpen(false)
           setUsdAmt('')
           setLbpAmt('')
+          setPayNotes('')
+          setPayReceiverName('')
           showToast(`Payment logged for ${activeInvoiceDisplay}`)
         },
       },
@@ -186,8 +218,6 @@ export default function Invoices() {
   let recvBarClass = 'total-recv-bar none'
   if (pct >= 100) recvBarClass = 'total-recv-bar ok'
   else if (pct > 0) recvBarClass = 'total-recv-bar short'
-
-  const paidPct = invoiceBalance > 0 ? Math.round((invoicePaid / invoiceBalance) * 100) : 0
 
   return (
     <>
@@ -264,7 +294,7 @@ export default function Invoices() {
                 <i className="ti ti-search" />
                 <input
                   type="text"
-                  placeholder="Search client name…"
+                  placeholder="Search invoice # or client name…"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                 />
@@ -340,7 +370,7 @@ export default function Invoices() {
                   const paid = parseFloat(inv.paidAmount)
                   const p = total > 0 ? Math.round((paid / total) * 100) : 0
                   return (
-                    <tr key={inv.id} onClick={() => openPanel(inv)} style={{ cursor: 'pointer' }}>
+                    <tr key={inv.id} onClick={() => navigate(`/invoices/${inv.id}`)} style={{ cursor: 'pointer' }}>
                       <td><span className="mono" title={inv.id}>{inv.displayId ?? inv.id}</span></td>
                       <td>{clientNameById.get(inv.clientId) ?? '—'}</td>
                       <td>{fmtDate(inv.issuedAt ?? inv.createdAt)}</td>
@@ -404,15 +434,16 @@ export default function Invoices() {
                   <th>LBP</th>
                   <th>Total (USD)</th>
                   <th>Method</th>
+                  <th>Receiver</th>
                   <th>Logged by</th>
                 </tr>
               </thead>
               <tbody>
                 {paymentsQ.isLoading && [0, 1, 2].map(i => (
-                  <tr key={i}><td colSpan={9}><div className="skeleton" style={{ width: '100%', height: 18 }} /></td></tr>
+                  <tr key={i}><td colSpan={10}><div className="skeleton" style={{ width: '100%', height: 18 }} /></td></tr>
                 ))}
                 {paymentsQ.isError && (
-                  <tr><td colSpan={9} className="empty">Failed to load payments.<div><button className="btn" style={{ marginTop: 10 }} onClick={() => paymentsQ.refetch()}>Retry</button></div></td></tr>
+                  <tr><td colSpan={10} className="empty">Failed to load payments.<div><button className="btn" style={{ marginTop: 10 }} onClick={() => paymentsQ.refetch()}>Retry</button></div></td></tr>
                 )}
                 {!paymentsQ.isLoading && !paymentsQ.isError && paymentRows.map(p => {
                   const amt = parseFloat(p.amount)
@@ -426,12 +457,15 @@ export default function Invoices() {
                       <td><span className="mono" style={{ color: 'var(--text2)' }}>{p.currency === 'LBP' ? `LL ${amt.toLocaleString()}` : '—'}</span></td>
                       <td><strong>${p.currency === 'USD' ? fmtMoney(p.amount) : (rawRate > 0 ? amt / rawRate : 0).toFixed(2)}</strong></td>
                       <td>{methodBadge(p.method)}</td>
+                      {/* receiver (authoritative relation, same value cash attribution
+                          uses) over receiverName (denormalized, goes stale on rename). */}
+                      <td style={{ color: 'var(--text2)', fontSize: '0.83rem' }}>{p.receiver?.name ?? p.receiverName ?? '—'}</td>
                       <td style={{ color: 'var(--text2)', fontSize: '0.83rem' }}>{p.loggedBy?.name ?? p.loggedById}</td>
                     </tr>
                   )
                 })}
                 {!paymentsQ.isLoading && !paymentsQ.isError && paymentRows.length === 0 && (
-                  <tr><td colSpan={9} className="empty">No payments recorded.</td></tr>
+                  <tr><td colSpan={10} className="empty">No payments recorded.</td></tr>
                 )}
               </tbody>
             </table>
@@ -481,7 +515,7 @@ export default function Invoices() {
                     const paid = parseFloat(inv.paidAmount)
                     const daysOver = inv.dueDate ? Math.max(0, Math.round((Date.now() - new Date(inv.dueDate).getTime()) / 86400000)) : 0
                     return (
-                      <tr key={inv.id}>
+                      <tr key={inv.id} onClick={() => navigate(`/invoices/${inv.id}`)} style={{ cursor: 'pointer' }}>
                         <td><span className="mono" title={inv.id}>{inv.displayId ?? inv.id}</span></td>
                         <td>{clientNameById.get(inv.clientId) ?? '—'}</td>
                         <td>
@@ -494,7 +528,7 @@ export default function Invoices() {
                         <td><strong style={{ color: daysOver > 0 ? 'var(--red)' : 'var(--accent2)' }}>${(total - paid).toLocaleString()}</strong></td>
                         <td>{statusBadge(inv.status)}</td>
                         <td>
-                          <button className="btn btn-sm btn-ghost" onClick={() => { setActiveInvoice(inv); setPayModalOpen(true) }}>
+                          <button className="btn btn-sm btn-ghost" onClick={e => { e.stopPropagation(); setActiveInvoice(inv); setPayModalOpen(true) }}>
                             <i className="ti ti-cash" /> Pay
                           </button>
                         </td>
@@ -524,172 +558,9 @@ export default function Invoices() {
         )}
       </div>
 
-      {/* Invoice Panel */}
-      {panelOpen && (
-        <div className="panel-overlay" onClick={() => setPanelOpen(false)}>
-          <div className="inv-panel" onClick={e => e.stopPropagation()}>
-            <div className="panel-head">
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span className="mono" style={{ fontWeight: 700, fontSize: '1.05rem' }} title={activeInvoice?.id}>{activeInvoiceDisplay}</span>
-                  {activeInvoice && statusBadge(activeInvoice.status)}
-                </div>
-                <div style={{ color: 'var(--text2)', fontSize: '0.83rem', marginTop: 3 }}>{activeInvoice ? clientNameById.get(activeInvoice.clientId) ?? '—' : ''} · {fmtDate(activeInvoice?.issuedAt ?? activeInvoice?.createdAt)}</div>
-              </div>
-              <button className="btn btn-ghost" onClick={() => setPanelOpen(false)}>
-                <i className="ti ti-x" />
-              </button>
-            </div>
-
-            <div className="panel-tabs">
-              <button className={`panel-tab${panelTab === 'invoice' ? ' active' : ''}`} onClick={() => setPanelTab('invoice')}>Invoice</button>
-              <button className={`panel-tab${panelTab === 'payments' ? ' active' : ''}`} onClick={() => setPanelTab('payments')}>Payments</button>
-            </div>
-
-            <div className="panel-body">
-              {panelTab === 'invoice' && (
-                <>
-                  {/* Balance Bar */}
-                  <div className="balance-bar">
-                    <div className="bb-row">
-                      <span className="bb-mono">${invoicePaid.toLocaleString()} paid</span>
-                      <span className="bb-mono" style={{ color: 'var(--red)' }}>${invoiceRemaining.toLocaleString()} remaining</span>
-                    </div>
-                    <div className="bb-progress">
-                      <div className="bb-fill" style={{ width: `${paidPct}%` }} />
-                    </div>
-                    <div className="bb-labels">
-                      <span style={{ color: 'var(--accent)' }}>{paidPct}% collected</span>
-                      <span>Total: ${invoiceBalance.toLocaleString()}</span>
-                    </div>
-                  </div>
-
-                  {/* Invoice Preview */}
-                  <div className="inv-preview">
-                    <div className="inv-lines-head">
-                      <span>Item</span><span>Qty</span><span>Unit</span><span>Total</span>
-                    </div>
-                    {(activeInvoice?.lines ?? []).map((line, i) => (
-                      <div className="inv-line" key={i}>
-                        {line.saleUnit === 'KG' ? (
-                          <>
-                            <span>{line.description}</span>
-                            <span>{line.kgQuantity} kg</span>
-                            <span>${Number(line.pricePerKg).toFixed(2)}/kg</span>
-                            <span>${Number(line.lineTotal).toFixed(2)}</span>
-                          </>
-                        ) : (
-                          <>
-                            <span>{line.bagTypeName ?? line.bagTypeId}</span>
-                            <span>{line.qty} bags</span>
-                            <span>${Number(line.pricePerBag).toFixed(2)}</span>
-                            <span>${Number(line.lineTotal).toFixed(2)}</span>
-                          </>
-                        )}
-                      </div>
-                    ))}
-                    <div className="inv-totals">
-                      <div className="inv-line">
-                        <span style={{ color: 'var(--text2)' }}>Subtotal</span>
-                        <span /><span />
-                        <span>${Number(activeInvoice?.subtotal ?? 0).toFixed(2)}</span>
-                      </div>
-                      <div className="inv-line" style={{ fontWeight: 600 }}>
-                        <span>Total</span>
-                        <span /><span />
-                        <span>${Number(activeInvoice?.total ?? 0).toFixed(2)}</span>
-                      </div>
-                      <div className="inv-line" style={{ color: 'var(--accent)' }}>
-                        <span>Paid</span>
-                        <span /><span />
-                        <span>${Number(activeInvoice?.paidAmount ?? 0).toFixed(2)}</span>
-                      </div>
-                      <div className="inv-line" style={{ color: 'var(--red)', fontWeight: 700 }}>
-                        <span>Remaining</span>
-                        <span /><span />
-                        <span>${invoiceRemaining.toFixed(2)}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="panel-section" style={{ marginTop: 16 }}>
-                    <div className="panel-row">
-                      <span className="panel-section-label">Due Date</span>
-                      <span>
-                        {activeInvoice?.dueDate
-                          ? fmtDate(activeInvoice.dueDate)
-                          : '—'}
-                      </span>
-                    </div>
-                    <div className="panel-row">
-                      <span className="panel-section-label">Issued</span>
-                      <span>{fmtDate(activeInvoice?.issuedAt ?? activeInvoice?.createdAt)}</span>
-                    </div>
-                    <div className="panel-row">
-                      <span className="panel-section-label">Currency</span>
-                      <span>{activeInvoice?.currency ?? '—'}</span>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {panelTab === 'payments' && (
-                <div className="panel-section">
-                  {(() => {
-                    const invPayments = paymentRows.filter(p => p.invoiceId === activeInvoice?.id)
-                    if (invPayments.length === 0) {
-                      return (
-                        <div style={{ color: 'var(--text3)', textAlign: 'center', padding: '32px 0', fontSize: '0.87rem' }}>
-                          <i className="ti ti-cash" style={{ fontSize: '2rem', display: 'block', marginBottom: 8 }} />
-                          No payments yet
-                        </div>
-                      )
-                    }
-                    return (
-                      <>
-                        <div style={{ color: 'var(--text3)', textAlign: 'center', padding: '12px 0', fontSize: '0.87rem', marginBottom: 8 }}>
-                          <i className="ti ti-cash" style={{ fontSize: '1.5rem', display: 'block', marginBottom: 4 }} />
-                          {invPayments.length} payment{invPayments.length !== 1 ? 's' : ''} logged
-                        </div>
-                        {invPayments.map(p => (
-                          <div key={p.id} className="pay-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
-                            <div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span className="mono" style={{ fontWeight: 500, fontSize: '0.9rem' }}>${Number(p.amount).toFixed(2)}</span>
-                                {p.displayId && <span className="mono" style={{ fontSize: '0.78rem', color: 'var(--text3)' }}>{p.displayId}</span>}
-                              </div>
-                              <div style={{ fontSize: '0.78rem', color: 'var(--text2)', marginTop: 2 }}>
-                                {fmtDate(p.date)} · {p.method}{p.receiverName ? ` · ${p.receiverName}` : ''}
-                              </div>
-                            </div>
-                            {methodBadge(p.method)}
-                          </div>
-                        ))}
-                      </>
-                    )
-                  })()}
-                </div>
-              )}
-            </div>
-
-            <div className="panel-footer">
-              <button className="panel-btn pbtn-ghost" onClick={() => setPrintOpen(true)}><i className="ti ti-printer" /> Print</button>
-              {activeInvoice && activeInvoice.status !== 'cancelled' && activeInvoice.status !== 'paid' && parseFloat(activeInvoice.paidAmount) === 0 && (
-                <button className="panel-btn pbtn-ghost" onClick={() => { if (activeInvoice) cancelInvoice.mutate(activeInvoice.id, { onSuccess: () => { setPanelOpen(false); showToast(`${activeInvoiceDisplay} cancelled`) }, onError: (err: any) => showToast(err?.error ?? 'Failed to cancel invoice') }) }} disabled={cancelInvoice.isPending}>
-                  <i className="ti ti-ban" /> Cancel invoice
-                </button>
-              )}
-              <button className="panel-btn pbtn-green" onClick={() => setPayModalOpen(true)}>
-                <i className="ti ti-cash" /> Log Payment
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Log Payment Modal */}
       {payModalOpen && (
-        <div className="modal-overlay" onClick={() => setPayModalOpen(false)}>
+        <div className="modal-overlay open" onClick={() => setPayModalOpen(false)}>
           <div className="modal" style={{ width: 460 }} onClick={e => e.stopPropagation()}>
             <div className="modal-head">
               <div>
@@ -770,13 +641,33 @@ export default function Invoices() {
               </div>
 
               <div className="form-group">
+                <label className="form-label">
+                  Received by {receiverRequired && <span style={{ color: 'var(--red)' }}>*</span>}
+                  {!receiverRequired && <span style={{ color: 'var(--text3)', fontWeight: 400 }}> (optional for bank transfer)</span>}
+                </label>
+                <select className="form-input" value={payReceiverName} onChange={e => setPayReceiverName(e.target.value)}>
+                  <option value="">— select receiver —</option>
+                  {allReceivers.map(r => <option key={r.id || r.name} value={r.name}>{r.name}</option>)}
+                </select>
+                {receiverRequired && !resolvedPayReceiverId && (
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Receiver is required.</div>
+                )}
+              </div>
+
+              <div className="form-group">
                 <label className="form-label">Notes (optional)</label>
-                <input type="text" className="form-input" placeholder="e.g. partial payment, check #1234…" />
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. partial payment, check #1234…"
+                  value={payNotes}
+                  onChange={e => setPayNotes(e.target.value)}
+                />
               </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-ghost" onClick={() => setPayModalOpen(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={submitPayment} disabled={createPayment.isPending || usdNum <= 0}>
+              <button className="btn btn-primary" onClick={submitPayment} disabled={createPayment.isPending || usdNum <= 0 || (receiverRequired && !resolvedPayReceiverId)}>
                 <i className="ti ti-check" /> {createPayment.isPending ? 'Saving…' : 'Confirm Payment'}
               </button>
             </div>
@@ -824,42 +715,6 @@ export default function Invoices() {
             <div className="modal-footer">
               <button className="btn" onClick={() => setExportOpen(false)}>Cancel</button>
               <button className="btn primary" onClick={() => { setExportOpen(false); showToast('Export ready — invoices_may2026.pdf') }}><i className="ti ti-download" style={{ fontSize: 14 }} /> Export</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* PRINT MODAL */}
-      {printOpen && (
-        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setPrintOpen(false)}>
-          <div className="modal" style={{ width: 440 }}>
-            <div className="modal-head">
-              <div>
-                <div className="modal-title"><i className="ti ti-printer" style={{ fontSize: 14, marginRight: 6 }} />Print invoice</div>
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>INV-0334 · Tyre Catering Group</div>
-              </div>
-              <button className="panel-close-btn" onClick={() => setPrintOpen(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="receipt" style={{ fontSize: 13 }}>
-                <div className="receipt-title">FARAH CHARCOAL</div>
-                <div className="receipt-sub">Tax Invoice</div>
-                <hr className="receipt-divider" />
-                <div className="receipt-row"><span>Invoice #</span><span>INV-0334</span></div>
-                <div className="receipt-row"><span>Date</span><span>May 12, 2026</span></div>
-                <div className="receipt-row"><span>Due</span><span style={{ color: 'var(--red)' }}>May 26, 2026 (overdue)</span></div>
-                <div className="receipt-row"><span>Client</span><span>Tyre Catering Group</span></div>
-                <hr className="receipt-divider" />
-                <div className="receipt-row"><span>Restaurant Grade A × 140 bags</span><span>$3,780</span></div>
-                <hr className="receipt-divider" />
-                <div className="receipt-row total"><span>TOTAL</span><span>$3,780.00</span></div>
-                <div className="receipt-row" style={{ color: 'var(--accent)' }}><span>PAID</span><span>$1,000.00</span></div>
-                <div className="receipt-row" style={{ color: 'var(--red)', fontWeight: 700 }}><span>REMAINING</span><span>$2,780.00</span></div>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn" onClick={() => setPrintOpen(false)}>Cancel</button>
-              <button className="btn primary" onClick={() => { setPrintOpen(false); showToast('Printing INV-0334…') }}><i className="ti ti-printer" style={{ fontSize: 14 }} /> Print</button>
             </div>
           </div>
         </div>

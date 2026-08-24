@@ -14,11 +14,11 @@
 export * from '../lib/types'
 
 import type {
-  CreateShipmentBagDto,
   TripOtherExpense,
   WorkerRate,
   PackedStockSummary,
   Currency,
+  PaymentMethod,
 } from '../lib/types'
 
 // ----------------------------------------------------------------------------
@@ -85,6 +85,10 @@ export interface LotMaterialFlow {
    *  PackedStock.quantity only — never StockLot.kgRemaining. Kept separate so the UI never
    *  presents it as additional raw-material consumption. */
   packedBagSalesKg: string // Decimal
+  /** Σ StockExit.amount across every exit counted in rawMaterialExitsKg/packedBagSalesKg —
+   *  the unbounded, authoritative $ total for this lot's exits (never reduce over a
+   *  page-limited exit list for this figure). */
+  totalExitAmount: string // Decimal
   /** HISTORICAL total output — Σ per-session kgOutputTotal shares (see LotFlowSession). */
   packedOutput: string // Decimal
   /** CURRENT total on-hand PackedStock kg for this lot, across all its batches.
@@ -169,10 +173,10 @@ export interface LogActualWeightDto {
  * TODO: verify against Swagger.
  */
 export interface ConfirmDeliveryDto {
-  deliveredAt?: string
-  actualKg?: string
-  paymentAmount?: string // optional cash-on-delivery payment
-  notes?: string | null
+  notes?: string
+  paymentAmount?: string // optional cash-on-delivery payment (decimal string)
+  paymentMethod?: PaymentMethod
+  paymentDate?: string // ISO 8601
 }
 
 /**
@@ -180,9 +184,7 @@ export interface ConfirmDeliveryDto {
  * TODO: verify against Swagger.
  */
 export interface LogReturnDto {
-  bags: CreateShipmentBagDto[]
-  reason?: string | null
-  notes?: string | null
+  notes?: string
 }
 
 /**

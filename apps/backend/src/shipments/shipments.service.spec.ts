@@ -40,7 +40,7 @@ interface ResRow {
  * Supports createShipment, confirmDelivery, and cancelShipment against the same store so
  * a full reserve → deliver/cancel lifecycle can be exercised across multiple shipments.
  */
-function makeStore(rows: PsRow[]) {
+function makeStore(rows: PsRow[], bagTypes: Array<{ id: string; name: string }> = []) {
   const packed: PsRow[] = rows.map((r) => ({ ...r }));
   const reservations: ResRow[] = [];
   const createdShipments = new Map<string, any>();
@@ -116,6 +116,14 @@ function makeStore(rows: PsRow[]) {
     // PR 10.1: receiver resolution for a COD payment collected at delivery.
     user: { findUnique: fn().mockResolvedValue({ name: 'Test Driver' }) },
     client: { findUnique: fn().mockResolvedValue({ name: 'Test Client' }) },
+    // Resolves the human-readable name for drainPackedStockDirect()'s
+    // insufficient-stock error message — returns null (triggering that
+    // method's generic fallback wording) unless a test seeds bagTypes.
+    bagType: {
+      findUnique: fn().mockImplementation(async (args: any) =>
+        bagTypes.find((b) => b.id === args.where.id) ?? null,
+      ),
+    },
   };
 
   // Helper to fetch a shipment view with its reservations + bags for confirm/cancel.
@@ -369,7 +377,7 @@ describe('ShipmentsService', () => {
         .mockResolvedValueOnce(tx._shipmentView(b.id, 'loaded', [{ bagTypeId, quantity: 30 }], 'oB'))
         .mockResolvedValueOnce({ id: b.id, bags: [] });
 
-      await service.confirmDelivery(b.id, {} as any, 'clerk');
+      await service.confirmDelivery(b.id, {} as any, { userId: 'clerk', role: 'owner' });
 
       // Physical quantity dropped by B's 30 → 70. Reserved dropped by ONLY B's 30 → 40.
       expect(tx._packed[0].quantity).toBe(70);
@@ -429,7 +437,7 @@ describe('ShipmentsService', () => {
         .mockResolvedValueOnce(tx._shipmentView(a.id, 'loaded', [{ bagTypeId, quantity: 40 }], 'oA'))
         .mockResolvedValueOnce({ id: a.id, bags: [] });
 
-      await service.confirmDelivery(a.id, {} as any, 'clerk');
+      await service.confirmDelivery(a.id, {} as any, { userId: 'clerk', role: 'owner' });
 
       // Old row drained to 0/0; new row (B's) completely untouched.
       const oldRow = tx._packed.find((p: any) => p.id === 'ps-old')!;
@@ -500,7 +508,7 @@ describe('ShipmentsService', () => {
         .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 7 }], 'order-uuid-confirm'))
         .mockResolvedValueOnce({ id: s.id, bags: [] });
 
-      await service.confirmDelivery(s.id, {} as any, userId);
+      await service.confirmDelivery(s.id, {} as any, { userId, role: 'owner' });
 
       // First row fully drained (5/5 → 0/0), second drained by 2 (10/2 → 8/0).
       const r1 = tx._packed.find((p: any) => p.id === 'stock-id-1')!;
@@ -518,6 +526,59 @@ describe('ShipmentsService', () => {
       expect(exitCalls).toHaveLength(2);
       exitCalls.forEach((call: any[]) => expect(call[0].data.loggedById).toBe(internalUserId));
 
+      expect(tx.shipment.update.mock.calls[0][0].data.status).toBe('delivered');
+    });
+
+    // =========================================================================
+    // IDOR regression: POST /shipments/:id/confirm-delivery is @Roles('driver',
+    // 'owner'). Without an ownership check, any authenticated driver could
+    // confirm delivery — draining stock, issuing an invoice, and crediting a
+    // cash ledger — for a shipment whose order is assigned to a different driver.
+    // =========================================================================
+
+    it('ownership guard: throws ForbiddenException(FORBIDDEN) when a driver confirms delivery of another driver\'s shipment, and drains nothing', async () => {
+      const bagTypeId = 'bag-type-idor-1';
+      const tx = makeStore([
+        { id: 'stock-idor-1', bagTypeId, quantity: 5, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+      ]);
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-driver-caller', clerkId: 'clerk-driver-caller' });
+      tx.user.findUnique.mockResolvedValue({ id: 'db-driver-caller', clerkId: 'clerk-driver-caller' });
+
+      const s = await service.createShipment({ orderId: 'order-idor-1', address: 'a', nominalKg: '1', bags: [{ bagTypeId, quantity: 5 }] } as any, 'clerk-driver-caller');
+      // Shipment's order is assigned to a DIFFERENT driver than the caller.
+      tx.shipment.findUnique.mockResolvedValueOnce(
+        tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 5 }], 'order-idor-1', 'db-other-driver'),
+      );
+
+      await expect(
+        service.confirmDelivery(s.id, {} as any, { userId: 'clerk-driver-caller', role: 'driver' }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'FORBIDDEN' }),
+      });
+      expect(tx.shipment.update).not.toHaveBeenCalled();
+      expect(tx.stockExit.create).not.toHaveBeenCalled();
+      const r1 = tx._packed.find((p: any) => p.id === 'stock-idor-1')!;
+      expect(r1.reservedQuantity).toBe(5); // reservation untouched
+    });
+
+    it('ownership guard: a driver CAN confirm delivery of their own assigned shipment', async () => {
+      const bagTypeId = 'bag-type-idor-2';
+      const tx = makeStore([
+        { id: 'stock-idor-2', bagTypeId, quantity: 5, reservedQuantity: 0, createdAt: new Date('2024-01-01') },
+      ]);
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-driver-self', clerkId: 'clerk-driver-self' });
+      tx.user.findUnique.mockResolvedValue({ id: 'db-driver-self', clerkId: 'clerk-driver-self' });
+
+      const s = await service.createShipment({ orderId: 'order-idor-2', address: 'a', nominalKg: '1', bags: [{ bagTypeId, quantity: 5 }] } as any, 'clerk-driver-self');
+      tx.shipment.findUnique
+        .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 5 }], 'order-idor-2', 'db-driver-self'))
+        .mockResolvedValueOnce({ id: s.id, bags: [] });
+
+      await expect(
+        service.confirmDelivery(s.id, {} as any, { userId: 'clerk-driver-self', role: 'driver' }),
+      ).resolves.toBeDefined();
       expect(tx.shipment.update.mock.calls[0][0].data.status).toBe('delivered');
     });
 
@@ -545,7 +606,7 @@ describe('ShipmentsService', () => {
       // Single shipment → allDelivered = true (makeStore default)
       tx.shipment.findMany.mockResolvedValueOnce([{ status: 'delivered' }]);
 
-      await service.confirmDelivery(s.id, {} as any, userId);
+      await service.confirmDelivery(s.id, {} as any, { userId, role: 'owner' });
 
       expect(mockInvoices.createFromOrder).toHaveBeenCalledTimes(1);
       // Must pass the transaction client (atomic) and autoIssue=true (immediate issue).
@@ -574,7 +635,7 @@ describe('ShipmentsService', () => {
       // Simulate a second sibling shipment still pending — allDelivered = false.
       tx.shipment.findMany.mockResolvedValueOnce([{ status: 'delivered' }, { status: 'pending' }]);
 
-      await service.confirmDelivery(s.id, {} as any, userId);
+      await service.confirmDelivery(s.id, {} as any, { userId, role: 'owner' });
 
       expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
     });
@@ -606,7 +667,7 @@ describe('ShipmentsService', () => {
         .mockResolvedValueOnce({ id: s1.id, bags: [] });
       tx.shipment.findMany.mockResolvedValueOnce([{ status: 'delivered' }, { status: 'pending' }]);
 
-      await service.confirmDelivery(s1.id, {} as any, userId);
+      await service.confirmDelivery(s1.id, {} as any, { userId, role: 'owner' });
       expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
 
       // --- Second delivery (s2): all delivered → invoice created ---
@@ -615,7 +676,7 @@ describe('ShipmentsService', () => {
         .mockResolvedValueOnce({ id: s2.id, bags: [] });
       tx.shipment.findMany.mockResolvedValueOnce([{ status: 'delivered' }, { status: 'delivered' }]);
 
-      await service.confirmDelivery(s2.id, {} as any, userId);
+      await service.confirmDelivery(s2.id, {} as any, { userId, role: 'owner' });
       expect(mockInvoices.createFromOrder).toHaveBeenCalledTimes(1);
       expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, tx, true);
     });
@@ -646,7 +707,7 @@ describe('ShipmentsService', () => {
         .mockResolvedValueOnce({ id: s.id, bags: [] });
       tx.shipment.findMany.mockResolvedValueOnce([{ status: 'delivered' }]);
 
-      await service.confirmDelivery(s.id, {} as any, userId);
+      await service.confirmDelivery(s.id, {} as any, { userId, role: 'owner' });
 
       // The tx object is forwarded verbatim so the invoice row is written inside the
       // same $transaction as the stock drain — this is the guarantee that keeps the
@@ -687,7 +748,7 @@ describe('ShipmentsService', () => {
         tx.user.findUnique.mockResolvedValue({ name: 'Driver Dan' });
         tx.client.findUnique.mockResolvedValue({ name: 'Acme Client' });
 
-        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, userId);
+        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, { userId, role: 'owner' });
 
         expect(mockUsersService.validateCashCapable).toHaveBeenCalledWith(driverId);
         const payArg = tx.payment.create.mock.calls[0][0].data;
@@ -718,7 +779,7 @@ describe('ShipmentsService', () => {
         tx.user.findUnique.mockResolvedValue({ name: 'Driver Dan' });
         tx.client.findUnique.mockResolvedValue({ name: 'Acme Client' });
 
-        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, userId);
+        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, { userId, role: 'owner' });
 
         expect(mockPaymentAllocationService.allocateFifo).toHaveBeenCalledTimes(1);
         const [calledTx, calledClientId, calledPaymentId, calledAmount] =
@@ -739,7 +800,7 @@ describe('ShipmentsService', () => {
           .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId)) // no driverId
           .mockResolvedValueOnce({ id: s.id, bags: [] });
 
-        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, userId);
+        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, { userId, role: 'owner' });
 
         expect(tx.payment.create).toHaveBeenCalledTimes(1);
         const payArg = tx.payment.create.mock.calls[0][0].data;
@@ -759,11 +820,72 @@ describe('ShipmentsService', () => {
           .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId, driverId))
           .mockResolvedValueOnce({ id: s.id, bags: [] });
 
-        await service.confirmDelivery(s.id, {} as any, userId); // no paymentAmount/paymentMethod
+        await service.confirmDelivery(s.id, {} as any, { userId, role: 'owner' }); // no paymentAmount/paymentMethod
 
         expect(tx.payment.create).not.toHaveBeenCalled();
         expect(mockPaymentAllocationService.allocateFifo).not.toHaveBeenCalled();
         expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
+      });
+
+      it('duplicate/retried confirm-delivery on an ALREADY-delivered shipment does not create a second payment, allocation, or ledger credit (end-to-end business-flow audit regression)', async () => {
+        // Simulates a driver on a flaky connection whose first confirm-delivery
+        // request already succeeded server-side (shipment status is already
+        // 'delivered') but the response never arrived, so they retry with the
+        // same payment fields. Without this guard this used to create a SECOND
+        // Payment/FIFO-allocation/ledger-credit for the same real-world delivery.
+        const { tx, bagTypeId, orderId, userId } = setUpDelivery();
+        const s = await service.createShipment(
+          { orderId, address: 'a', nominalKg: '20', bags: [{ bagTypeId, quantity: 20 }] } as any,
+          userId,
+        );
+        tx.shipment.findUnique
+          .mockResolvedValueOnce(tx._shipmentView(s.id, 'delivered', [{ bagTypeId, quantity: 20 }], orderId, driverId))
+          .mockResolvedValueOnce({ id: s.id, bags: [] });
+        tx.user.findUnique.mockResolvedValue({ name: 'Driver Dan' });
+        tx.client.findUnique.mockResolvedValue({ name: 'Acme Client' });
+
+        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, { userId, role: 'owner' });
+
+        expect(tx.payment.create).not.toHaveBeenCalled();
+        expect(mockPaymentAllocationService.allocateFifo).not.toHaveBeenCalled();
+        expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
+      });
+
+      // -----------------------------------------------------------------------
+      // CONCURRENCY: the test above proves the SEQUENTIAL retry case (the
+      // shipment is already 'delivered' by the time this call reads it). For
+      // two callers racing at almost the same instant, both would read the
+      // SAME pre-commit 'not delivered' status without a lock serializing
+      // them first — see the real-Postgres proof in
+      // test/order-delivery-concurrency.integration-spec.ts (CONFIRM-DELIVERY
+      // RACE), which fails with an uncaught Prisma P2025 ("Record to delete
+      // does not exist") when this lock is removed. This test only proves the
+      // lock is acquired BEFORE the shipment is read, which is what makes
+      // that serialization possible in the first place.
+      // -----------------------------------------------------------------------
+      it('locks the shipment row via FOR UPDATE before reading it, so a concurrent confirmDelivery() call serializes behind this one', async () => {
+        const { tx, bagTypeId, orderId, userId } = setUpDelivery();
+        const s = await service.createShipment(
+          { orderId, address: 'a', nominalKg: '20', bags: [{ bagTypeId, quantity: 20 }] } as any,
+          userId,
+        );
+        tx.shipment.findUnique
+          .mockResolvedValueOnce(tx._shipmentView(s.id, 'loaded', [{ bagTypeId, quantity: 20 }], orderId, driverId))
+          .mockResolvedValueOnce({ id: s.id, bags: [] });
+
+        const callOrder: string[] = [];
+        const originalQueryRaw = tx.$queryRaw;
+        tx.$queryRaw = fn().mockImplementation(async (...args: any[]) => { callOrder.push('lock'); return originalQueryRaw(...args); });
+        const originalFindUnique = tx.shipment.findUnique;
+        tx.shipment.findUnique = fn().mockImplementation(async (...args: any[]) => { callOrder.push('read'); return originalFindUnique(...args); });
+
+        await service.confirmDelivery(s.id, {} as any, { userId, role: 'owner' });
+
+        expect(callOrder[0]).toBe('lock');
+        expect(callOrder[1]).toBe('read');
+        const lockCall = tx.$queryRaw.mock.calls[0][0] as any;
+        expect(lockCall.sql).toContain('FOR UPDATE');
+        expect(lockCall.sql).toContain('shipments');
       });
 
       it('rejects a nonexistent/soft-deleted driver with NotFoundException BEFORE tx.payment.create(), with no side effects', async () => {
@@ -779,7 +901,7 @@ describe('ShipmentsService', () => {
         );
 
         await expect(
-          service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, userId),
+          service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, { userId, role: 'owner' }),
         ).rejects.toBeInstanceOf(NotFoundException);
 
         expect(mockUsersService.validateCashCapable).toHaveBeenCalledWith(driverId);
@@ -811,7 +933,7 @@ describe('ShipmentsService', () => {
         });
         mockLedgerWriteService.creditAccount.mockImplementation(async () => { callOrder.push('creditAccount'); });
 
-        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, userId);
+        await service.confirmDelivery(s.id, { paymentAmount: '150.00', paymentMethod: 'cash' } as any, { userId, role: 'owner' });
 
         expect(callOrder).toEqual(['validate', 'payment.create', 'creditAccount']);
       });
@@ -903,6 +1025,48 @@ describe('ShipmentsService', () => {
       expect(tx._packed[0]).toMatchObject({ quantity: 5 }); // unchanged
     });
 
+    // Regression for the bug reported after the "Internal Server Error"
+    // mislabeling fix: the insufficient-stock message must show the real,
+    // human-readable BagType name — never the raw bagTypeId UUID — and must
+    // still carry the available/requested figures and CONSTRAINT_VIOLATION/400.
+    it('insufficient stock: error message uses the real BagType name, not the raw bagTypeId', async () => {
+      const bagTypeId = 'dbc70e64-de92-4a91-a4c1-93afefb835ba';
+      const tx = makeStore(
+        [{ id: 'ps-1', bagTypeId, quantity: 0, reservedQuantity: 0, createdAt: new Date('2024-01-01') }],
+        [{ id: bagTypeId, name: '1.8 Bag Jēzor' }],
+      );
+      mockPackedStockService.getFifoDraw.mockResolvedValue({
+        draws: [], fulfilled: false, requested: 100, available: 0,
+      });
+
+      const err = await service.drainPackedStockDirect(tx, bagTypeId, 100, orderId, userId).catch((e) => e);
+      expect(err.response).toMatchObject({
+        code: 'CONSTRAINT_VIOLATION',
+        error: 'Insufficient packed stock for "1.8 Bag Jēzor" — available: 0, requested: 100.',
+      });
+      expect(err.response.error).toContain('1.8 Bag Jēzor');
+      expect(err.response.error).toContain('available: 0');
+      expect(err.response.error).toContain('requested: 100');
+      expect(err.response.error).not.toContain(bagTypeId);
+      expect(err.response.error).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      expect(err.getStatus()).toBe(400);
+    });
+
+    it('insufficient stock: falls back to a generic label (never the UUID) when the BagType cannot be resolved', async () => {
+      const bagTypeId = 'bt-deleted';
+      const tx = makeStore([{ id: 'ps-1', bagTypeId, quantity: 0, reservedQuantity: 0, createdAt: new Date('2024-01-01') }]); // no bagTypes seeded — findUnique resolves null
+      mockPackedStockService.getFifoDraw.mockResolvedValue({
+        draws: [], fulfilled: false, requested: 10, available: 0,
+      });
+
+      await expect(service.drainPackedStockDirect(tx, bagTypeId, 10, orderId, userId)).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'CONSTRAINT_VIOLATION',
+          error: 'Insufficient packed stock for the requested bag type — available: 0, requested: 10.',
+        }),
+      });
+    });
+
     it('quantity <= 0 is a no-op — does not even call getFifoDraw', async () => {
       const tx = makeStore([{ id: 'ps-1', bagTypeId: 'bt-1', quantity: 10, reservedQuantity: 0, createdAt: new Date('2024-01-01') }]);
 
@@ -946,7 +1110,7 @@ describe('ShipmentsService', () => {
       const shipmentBags = includeDeliveredBags ? [{ bagTypeId: 'bag-d5-1', quantity: 4 }] : [];
       return {
         shipment: {
-          findUnique: fn().mockResolvedValue({ id: 'ship-return-guard', orderId: 'order-guard', status: shipmentStatus, bags: shipmentBags }),
+          findUnique: fn().mockResolvedValue({ id: 'ship-return-guard', orderId: 'order-guard', status: shipmentStatus, bags: shipmentBags, order: { driverId: null } }),
           update: fn().mockResolvedValue({ id: 'ship-return-guard', status: 'returned' }),
           findMany: fn().mockResolvedValue([{ status: 'returned' }]),
         },
@@ -955,13 +1119,14 @@ describe('ShipmentsService', () => {
           update: fn().mockResolvedValue({}),
         },
         clientOrder: { update: fn().mockResolvedValue({}) },
+        user: { findUnique: fn() },
       };
     }
 
     it('D1: rejects a pending shipment with INVALID_TRANSITION and mutates no stock', async () => {
       const tx = makeReturnTx('pending');
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
-      await expect(service.logReturn('ship-return-guard', {} as any, 'clerk-1')).rejects.toMatchObject({
+      await expect(service.logReturn('ship-return-guard', {} as any, { userId: 'clerk-1', role: 'owner' })).rejects.toMatchObject({
         response: expect.objectContaining({ code: 'INVALID_TRANSITION' }),
       });
       expect(tx.packedStock.update).not.toHaveBeenCalled();
@@ -971,7 +1136,7 @@ describe('ShipmentsService', () => {
     it('D4: rejects a cancelled shipment with INVALID_TRANSITION', async () => {
       const tx = makeReturnTx('cancelled');
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
-      await expect(service.logReturn('ship-return-guard', {} as any, 'clerk-1')).rejects.toMatchObject({
+      await expect(service.logReturn('ship-return-guard', {} as any, { userId: 'clerk-1', role: 'owner' })).rejects.toMatchObject({
         response: expect.objectContaining({ code: 'INVALID_TRANSITION' }),
       });
     });
@@ -979,10 +1144,113 @@ describe('ShipmentsService', () => {
     it('D5: succeeds for a delivered shipment and restores stock + sets status returned', async () => {
       const tx = makeReturnTx('delivered', true);
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
-      await expect(service.logReturn('ship-return-guard', {} as any, 'clerk-1')).resolves.not.toThrow();
+      await expect(service.logReturn('ship-return-guard', {} as any, { userId: 'clerk-1', role: 'owner' })).resolves.not.toThrow();
       expect(tx.packedStock.update).toHaveBeenCalledTimes(1);
       expect(tx.packedStock.update.mock.calls[0][0]).toMatchObject({ where: { id: 'ps-guard-1' }, data: { quantity: { increment: 4 } } });
       expect(tx.shipment.update.mock.calls[0][0]).toMatchObject({ data: expect.objectContaining({ status: 'returned' }) });
+    });
+
+    // =========================================================================
+    // IDOR regression: POST /shipments/:id/return is @Roles('driver', 'owner').
+    // Without an ownership check, any authenticated driver could log a return
+    // — restoring packed stock — for a shipment whose order is assigned to a
+    // different driver.
+    // =========================================================================
+
+    it('ownership guard: throws ForbiddenException(FORBIDDEN) when a driver logs a return for another driver\'s shipment, and mutates no stock', async () => {
+      const tx = makeReturnTx('delivered', true);
+      tx.shipment.findUnique.mockResolvedValue({
+        id: 'ship-return-guard', orderId: 'order-guard', status: 'delivered',
+        bags: [{ bagTypeId: 'bag-d5-1', quantity: 4 }], order: { driverId: 'db-other-driver' },
+      });
+      tx.user.findUnique.mockResolvedValue({ id: 'db-driver-caller', clerkId: 'clerk-driver-caller' });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(
+        service.logReturn('ship-return-guard', {} as any, { userId: 'clerk-driver-caller', role: 'driver' }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'FORBIDDEN' }),
+      });
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.shipment.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // updateActualWeight() — IDOR regression: PATCH /shipments/:id/actual-weight
+  // (and its alias PATCH /shipments/:id) are @Roles('driver', 'owner').
+  // Without an ownership check, any authenticated driver could overwrite the
+  // recorded weight of a shipment whose order is assigned to a different driver.
+  // =========================================================================
+
+  describe('updateActualWeight() — ownership guard', () => {
+    it('throws ForbiddenException(FORBIDDEN) when a driver updates another driver\'s shipment weight, and never writes', async () => {
+      mockPrisma.shipment.findUnique.mockResolvedValue({ id: 'ship-weight-1', order: { driverId: 'db-other-driver' } });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-driver-caller', clerkId: 'clerk-driver-caller' });
+
+      await expect(
+        service.updateActualWeight('ship-weight-1', { actualKg: '123.000' } as any, { userId: 'clerk-driver-caller', role: 'driver' }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'FORBIDDEN' }),
+      });
+      expect(mockPrisma.shipment.update).not.toHaveBeenCalled();
+    });
+
+    it('allows a driver to update the weight of their own assigned shipment', async () => {
+      mockPrisma.shipment.findUnique.mockResolvedValue({ id: 'ship-weight-2', order: { driverId: 'db-driver-self' } });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-driver-self', clerkId: 'clerk-driver-self' });
+      mockPrisma.shipment.update.mockResolvedValue({ id: 'ship-weight-2', actualKg: '123.000' });
+
+      await expect(
+        service.updateActualWeight('ship-weight-2', { actualKg: '123.000' } as any, { userId: 'clerk-driver-self', role: 'driver' }),
+      ).resolves.toMatchObject({ actualKg: '123.000' });
+    });
+
+    it('allows an owner caller to update any shipment\'s weight without an ownership check', async () => {
+      mockPrisma.shipment.findUnique.mockResolvedValue({ id: 'ship-weight-3', order: { driverId: 'some-driver' } });
+      mockPrisma.shipment.update.mockResolvedValue({ id: 'ship-weight-3', actualKg: '99.000' });
+
+      await expect(
+        service.updateActualWeight('ship-weight-3', { actualKg: '99.000' } as any, { userId: 'clerk-owner-1', role: 'owner' }),
+      ).resolves.toMatchObject({ actualKg: '99.000' });
+      expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // getReceipt() — IDOR regression: GET /shipments/:id/receipt is
+  // @Roles('driver', 'owner', 'sales_rep'). Without an ownership check, any
+  // authenticated driver could read another driver's delivery receipt —
+  // including the client's name and address.
+  // =========================================================================
+
+  describe('getReceipt() — ownership guard', () => {
+    it('throws ForbiddenException(FORBIDDEN) when a driver requests another driver\'s shipment receipt', async () => {
+      mockPrisma.shipment.findUnique.mockResolvedValue({
+        id: 'ship-receipt-1', address: 'a', nominalKg: '1', actualKg: null, status: 'delivered',
+        deliveredAt: null, notes: null, bags: [],
+        order: { driverId: 'db-other-driver', client: { id: 'c1', name: 'Client' } },
+      });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-driver-caller', clerkId: 'clerk-driver-caller' });
+
+      await expect(
+        service.getReceipt('ship-receipt-1', { userId: 'clerk-driver-caller', role: 'driver' }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'FORBIDDEN' }),
+      });
+    });
+
+    it('allows a driver to view the receipt for their own assigned shipment', async () => {
+      mockPrisma.shipment.findUnique.mockResolvedValue({
+        id: 'ship-receipt-2', address: 'a', nominalKg: '1', actualKg: null, status: 'delivered',
+        deliveredAt: null, notes: null, bags: [],
+        order: { driverId: 'db-driver-self', client: { id: 'c1', name: 'Client' } },
+      });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-driver-self', clerkId: 'clerk-driver-self' });
+
+      await expect(
+        service.getReceipt('ship-receipt-2', { userId: 'clerk-driver-self', role: 'driver' }),
+      ).resolves.toMatchObject({ shipment: expect.objectContaining({ id: 'ship-receipt-2' }) });
     });
   });
 });

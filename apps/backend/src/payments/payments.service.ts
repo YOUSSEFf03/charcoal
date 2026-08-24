@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, PaymentMethod } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentAllocationService } from '../invoices/payment-allocation.service';
@@ -11,6 +11,28 @@ import { CreatePaymentDto } from './dto/create-payment.dto';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { UsersService } from '../users/users.service';
 import { SettingsService } from '../settings/settings.service';
+
+/**
+ * Methods where cash/value physically passes through a person before it
+ * reaches the business — CASH_MANAGEMENT_FINAL_BLUEPRINT.md §2 ("a
+ * bank_transfer payment never [touches the cash ledger]"). A payment with one
+ * of these methods MUST name a real User receiver so it credits that
+ * receiver's ledger (LedgerWriteService.creditAccount) and is reconcilable in
+ * Cash Handover — a `cash`/`whish`/`omt` payment with no receiver is
+ * unattributed money, invisible to reconciliation.
+ * `bank_transfer` (lands directly in the company account) and `cheque`
+ * (deposited, not held by a person) are deliberately excluded — same
+ * "no personal custody" reasoning the blueprint applies to bank_transfer.
+ * Every current client-payment UI (Payment, ClientDetail, FillClientDetail,
+ * Invoices) only ever offers a subset of this list, so this is the same rule
+ * already implied by "receiver is always shown as a field" — now enforced
+ * server-side, not just by UI convention.
+ */
+const RECEIVER_REQUIRED_METHODS: PaymentMethod[] = [
+  PaymentMethod.cash,
+  PaymentMethod.whish,
+  PaymentMethod.omt,
+];
 
 @Injectable()
 export class PaymentsService {
@@ -81,6 +103,13 @@ export class PaymentsService {
           // payment with no invoiceId (unapplied/client-level payment) simply
           // has invoice: null here — same as today's behavior, not changed.
           invoice: { select: { id: true, displayId: true } },
+          // Same minimal id/name shape findOne() already returns — never
+          // email/phone (GET /users/receivers' privacy pattern). A single
+          // Prisma `include` on the paginated query, not a per-row lookup —
+          // no N+1. Payment History must show the SAME authoritative
+          // receiver used by cash attribution (LedgerWriteService), not a
+          // frontend-reconstructed name.
+          receiver: { select: { id: true, name: true } },
         },
       }),
       this.prisma.payment.count({ where }),
@@ -102,6 +131,8 @@ export class PaymentsService {
         client: true,
         invoice: true,
         loggedBy: { select: { id: true, name: true } },
+        receiver: { select: { id: true, name: true } },
+        allocations: { include: { invoice: { select: { id: true, displayId: true } } } },
       },
     });
 
@@ -122,8 +153,10 @@ export class PaymentsService {
    * Step 3: Validate amount > 0
    * Step 4: If invoiceId — lock it (FOR UPDATE), validate status is issued or
    *         partially_paid, validate client match
-   * Step 5: Create payment record with loggedById = user.id (NEVER from dto)
-   * Step 6: If invoiceId — allocateDirect (full amount, that one invoice);
+   * Step 5: If method is cash/whish/omt — require a valid receiverId
+   *         (RECEIVER_REQUIRED_METHODS); receiverName alone is not enough
+   * Step 6: Create payment record with loggedById = user.id (NEVER from dto)
+   * Step 7: If invoiceId — allocateDirect (full amount, that one invoice);
    *         else — allocateFifo (split across the client's open invoices,
    *         oldest first)
    * CONSTRAINT 15: Client.balance is NEVER written — always computed by ClientBalanceService
@@ -211,6 +244,22 @@ export class PaymentsService {
             code: 'CONSTRAINT_VIOLATION',
           });
         }
+      }
+
+      // A payment must not silently lose WHO RECEIVED IT — cash/whish/omt are
+      // personal-custody methods (see RECEIVER_REQUIRED_METHODS' doc comment),
+      // so a real User receiver is mandatory for them at this, the single
+      // creation path every "Log Payment" UI funnels through. Enforced here
+      // — not only via frontend validation — so no client of this API can
+      // create an unattributed cash payment. `receiverName` alone (a free-
+      // text label, not a validated User) does NOT satisfy this: it existed
+      // as a legacy display fallback, never as proof of a real receiver.
+      if (RECEIVER_REQUIRED_METHODS.includes(dto.method) && !dto.receiverId) {
+        throw new BadRequestException({
+          message: 'Receiver is required for cash, Whish, and OMT payments',
+          error: 'Receiver is required for cash, Whish, and OMT payments',
+          code: 'RECEIVER_REQUIRED',
+        });
       }
 
       // Resolve receiver: if a receiverId is provided, look up the name for the string field too

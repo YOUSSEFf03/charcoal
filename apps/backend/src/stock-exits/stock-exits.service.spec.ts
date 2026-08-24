@@ -739,6 +739,18 @@ describe('StockExitsService', () => {
       expect(call.where).toEqual({ clientId: 'client-1' });
     });
 
+    it('hasAmount=true adds amount:{not:null} — excludes the internal charcoal-consumption bookkeeping exit (non-JSON reason, amount null) FillJobsService.create() writes, from a Fill Client pickups list', async () => {
+      await service.findAll(1, 20, 'client_bags_fill' as any, undefined, undefined, 'client-1', undefined, true);
+      const call = mockPrisma.stockExit.findMany.mock.calls[0][0];
+      expect(call.where).toEqual({ exitType: 'client_bags_fill', clientId: 'client-1', amount: { not: null } });
+    });
+
+    it('hasAmount omitted (default): no amount filter — unchanged behavior for every other caller of this endpoint', async () => {
+      await service.findAll(1, 20, 'client_bags_fill' as any, undefined, undefined, 'client-1');
+      const call = mockPrisma.stockExit.findMany.mock.calls[0][0];
+      expect(call.where.amount).toBeUndefined();
+    });
+
     it('date filter: dateFrom/dateTo map to where.date.gte/lte', async () => {
       await service.findAll(1, 20, undefined, '2026-01-01', '2026-01-31');
       const call = mockPrisma.stockExit.findMany.mock.calls[0][0];

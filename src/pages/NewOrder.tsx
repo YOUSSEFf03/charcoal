@@ -8,6 +8,7 @@ import { useCreateOrder } from '../hooks/useOrders'
 import { useUsers } from '../hooks/useUsers'
 import type { Client, StockLot } from '../types/api'
 import { roundDp } from '../lib/money'
+import { toDateOnlyString } from '../lib/date'
 
 type StockLotFull = StockLot & { supplier?: { id: string; name: string } }
 
@@ -67,7 +68,7 @@ export default function NewOrder() {
   }
 
   // ── Shared form fields ────────────────────────────────────────────────────
-  const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10))
+  const [orderDate, setOrderDate] = useState(toDateOnlyString(new Date()))
   const [driverId, setDriverId] = useState('')
   const [notes, setNotes] = useState('')
 
@@ -376,7 +377,7 @@ export default function NewOrder() {
                 <span style={{ marginLeft: 10, fontSize: 11.5, color: 'var(--text3)' }}>
                   {orderMode === 'bag'
                     ? 'Select packed bag types to deliver'
-                    : 'Sell raw charcoal by weight from stock lots'}
+                    : 'Sell raw charcoal by weight — pick a lot to prefill type, grade, price & supplier'}
                 </span>
               </div>
 
@@ -439,7 +440,7 @@ export default function NewOrder() {
                       >
                         <div>
                           <span className="lbl" style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4, display: 'block' }}>
-                            Charcoal type
+                            Charcoal lot
                           </span>
                           <select
                             style={{ width: '100%', padding: '9px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 13, background: 'var(--surface)', outline: 'none', fontFamily: "'IBM Plex Sans',sans-serif" }}

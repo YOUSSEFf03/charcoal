@@ -71,6 +71,7 @@ export default function InvoicePrint() {
           <span style={{ fontFamily: "'IBM Plex Mono', monospace" }} title={invoice.id}>{invoice.displayId ?? invoice.id}</span>
         </div>
         <div className="receipt-row"><span>Date</span><span>{formattedDate}</span></div>
+        {invoice.dueDate && <div className="receipt-row"><span>Due</span><span>{new Date(invoice.dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>}
         <div className="receipt-row"><span>Client</span><span>{invoice.client.name}</span></div>
         <hr className="receipt-divider" />
         {invoice.lines.map((line, i) => (
@@ -86,6 +87,12 @@ export default function InvoicePrint() {
         <hr className="receipt-divider" />
         <div className="receipt-row total"><span>TOTAL</span><span>{Number(invoice.total).toFixed(2)} {invoice.currency}</span></div>
         <div className="receipt-row" style={{ color: 'var(--accent)' }}><span>PAID</span><span>{Number(invoice.paidAmount).toFixed(2)} {invoice.currency}</span></div>
+        {/* balanceDue — same field the Invoice Detail page shows, computed
+            once by InvoicesService.findOne() so the two views can never
+            silently disagree on what's still owed. */}
+        <div className="receipt-row" style={{ color: Number(invoice.balanceDue) > 0 ? 'var(--red)' : 'var(--accent)', fontWeight: 700 }}>
+          <span>BALANCE DUE</span><span>{Number(invoice.balanceDue).toFixed(2)} {invoice.currency}</span>
+        </div>
         <div className="receipt-sig">
           <div className="receipt-sig-line">Client signature</div>
         </div>

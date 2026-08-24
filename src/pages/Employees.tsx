@@ -12,6 +12,7 @@ import {
 } from '../hooks/useWorkers'
 import { useWorkerPackingSessionsHistory } from '../hooks/usePacking'
 import { useToast } from '../context/ToastContext'
+import { toDateOnlyString } from '../lib/date'
 import type { Worker, WorkerCostCategory, PaymentMethod } from '../types/api'
 
 type View = 'list' | 'worker'
@@ -100,7 +101,7 @@ export default function Employees() {
   const [earnModalOpen, setEarnModalOpen] = useState(false)
   const [earnAmt, setEarnAmt]             = useState('')
   const [earnCategory, setEarnCategory]   = useState<WorkerCostCategory>('daily_wage')
-  const [earnDate, setEarnDate]           = useState(() => new Date().toISOString().slice(0, 10))
+  const [earnDate, setEarnDate]           = useState(() => toDateOnlyString(new Date()))
   const [earnNotes, setEarnNotes]         = useState('')
 
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all')
@@ -156,7 +157,7 @@ export default function Employees() {
           amount: payAmtNum.toFixed(2),
           method: payMethod,
           referenceNumber: payReference || null,
-          date: new Date().toISOString().slice(0, 10),
+          date: toDateOnlyString(new Date()),
         },
       },
       {
@@ -181,7 +182,7 @@ export default function Employees() {
       {
         onSuccess: async () => {
           setEarnModalOpen(false)
-          setEarnAmt(''); setEarnCategory('daily_wage'); setEarnDate(new Date().toISOString().slice(0, 10)); setEarnNotes('')
+          setEarnAmt(''); setEarnCategory('daily_wage'); setEarnDate(toDateOnlyString(new Date())); setEarnNotes('')
           await refetchSelectedWorker()
         },
       },

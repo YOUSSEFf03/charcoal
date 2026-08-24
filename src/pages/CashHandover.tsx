@@ -1,9 +1,9 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import Topbar from '../components/layout/Topbar'
 import { useDailyPayments, useCashHandovers, useCreateCashHandover, useReceiverBalance, useAllBalances } from '../hooks/useCashHandover'
 import { useStockExits } from '../hooks/useWarehouse'
 import { formatUsd } from '../lib/money'
-import { formatDate } from '../lib/date'
+import { formatDate, toDateOnlyString, currentMonthToDateRange } from '../lib/date'
 
 function fmt2(n: number) { return formatUsd(n, { decimals: 2 }) }
 function fmt0(n: number) { return formatUsd(n, { decimals: 0 }) }
@@ -12,7 +12,7 @@ function fmtDate(iso: string) { return formatDate(iso) }
 interface Expense { id: number; desc: string; amount: number }
 
 export default function CashHandover() {
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10))
+  const [selectedDate, setSelectedDate] = useState(toDateOnlyString(new Date()))
   const [selectedReceiver, setSelectedReceiver] = useState('')
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [nextExpId, setNextExpId] = useState(1)
@@ -23,10 +23,68 @@ export default function CashHandover() {
   const [toast, setToast] = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
 
+  // Handover history — filters are independent of the reconciliation day
+  // picker above (selectedDate): previously history silently reused
+  // selectedDate to derive "current month", so changing the reconciliation
+  // day for today's handover also silently changed which past handovers the
+  // history table showed. Same search/date-range/pagination architecture as
+  // the Invoices page.
+  const HISTORY_PAGE_SIZE = 20
+  const [historySearch, setHistorySearch] = useState('')
+  const [debouncedHistorySearch, setDebouncedHistorySearch] = useState('')
+  const [historyDateRange, setHistoryDateRange] = useState('This month')
+  const [historyCustomFrom, setHistoryCustomFrom] = useState('')
+  const [historyCustomTo, setHistoryCustomTo] = useState('')
+  const [historyPage, setHistoryPage] = useState(1)
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedHistorySearch(historySearch), 300)
+    return () => clearTimeout(t)
+  }, [historySearch])
+
+  // toDateOnlyString (local calendar-day parts), never toISOString().slice(0,10)
+  // — the latter converts to UTC first and silently rolls the date back by
+  // one day for a timezone ahead of UTC (Beirut, UTC+3), e.g. "This month"
+  // opening on 31 July instead of 1 August. Reuses the same helper (and, for
+  // "This month", the exact same currentMonthToDateRange()) already used
+  // elsewhere in the app for this identical calculation.
+  const historyToday = new Date()
+  const { dateFrom: historyDateFrom, dateTo: historyDateTo } = (() => {
+    if (historyDateRange === 'This month') return currentMonthToDateRange()
+    if (historyDateRange === 'Last month') return {
+      dateFrom: toDateOnlyString(new Date(historyToday.getFullYear(), historyToday.getMonth() - 1, 1)),
+      dateTo: toDateOnlyString(new Date(historyToday.getFullYear(), historyToday.getMonth(), 0)),
+    }
+    if (historyDateRange === 'Custom') return { dateFrom: historyCustomFrom || undefined, dateTo: historyCustomTo || undefined }
+    return { dateFrom: undefined, dateTo: undefined }
+  })()
+
+  // Any server-side filter change must land back on page 1 — otherwise a
+  // user on page 3 of "All time" could apply a filter with only 1 matching
+  // page and see an empty page 3 instead of their results.
+  useEffect(() => { setHistoryPage(1) }, [debouncedHistorySearch, historyDateRange, historyCustomFrom, historyCustomTo])
+
+  function resetHistoryFilters() {
+    setHistorySearch('')
+    setHistoryDateRange('All time')
+    setHistoryCustomFrom('')
+    setHistoryCustomTo('')
+  }
+
   // Live data
   const paymentsQ = useDailyPayments(selectedDate)
   const exitsQ = useStockExits({ dateFrom: selectedDate, dateTo: selectedDate, exitType: 'walk_in', limit: 200 })
-  const historyQ = useCashHandovers({ dateFrom: selectedDate.slice(0, 7) + '-01', limit: 50 })
+  const historyQ = useCashHandovers({
+    search: debouncedHistorySearch || undefined,
+    dateFrom: historyDateFrom,
+    dateTo: historyDateTo,
+    page: historyPage,
+    limit: HISTORY_PAGE_SIZE,
+  })
+  const historyRows = historyQ.data?.data ?? []
+  const historyTotal = historyQ.data?.total ?? 0
+  const historyTotalPages = Math.max(1, Math.ceil(historyTotal / HISTORY_PAGE_SIZE))
+  const historyFilterActive = historySearch !== '' || historyDateRange !== 'All time'
   const allBalancesQ = useAllBalances()
   const allBalances = allBalancesQ.data ?? []
   const createHandover = useCreateCashHandover()
@@ -453,16 +511,54 @@ export default function CashHandover() {
             <div className="card">
               <div className="card-head">
                 <div className="card-title"><i className="ti ti-history" /> All handovers</div>
+                <span className="badge badge-gray">{historyQ.isLoading ? '…' : historyTotal} total</span>
               </div>
-              {historyQ.isLoading && <div className="empty">Loading…</div>}
-              {!historyQ.isLoading && (historyQ.data?.data ?? []).length === 0 && (
-                <div className="empty">No handovers recorded yet.</div>
-              )}
+
+              <div className="filters" style={{ padding: '0 18px 14px' }}>
+                <div className="filter-input">
+                  <i className="ti ti-search" />
+                  <input
+                    type="text"
+                    placeholder="Search receiver or notes…"
+                    value={historySearch}
+                    onChange={e => setHistorySearch(e.target.value)}
+                  />
+                </div>
+                <select className="filter-select" value={historyDateRange} onChange={e => setHistoryDateRange(e.target.value)}>
+                  <option>All time</option>
+                  <option>This month</option>
+                  <option>Last month</option>
+                  <option>Custom</option>
+                </select>
+                {historyDateRange === 'Custom' && (
+                  <>
+                    <input
+                      type="date"
+                      className="filter-select"
+                      value={historyCustomFrom}
+                      onChange={e => setHistoryCustomFrom(e.target.value)}
+                      style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}
+                    />
+                    <input
+                      type="date"
+                      className="filter-select"
+                      value={historyCustomTo}
+                      onChange={e => setHistoryCustomTo(e.target.value)}
+                      style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}
+                    />
+                  </>
+                )}
+                {historyFilterActive && (
+                  <button className="btn" style={{ fontSize: 12 }} onClick={resetHistoryFilters}>Clear</button>
+                )}
+              </div>
+
               <table className="data-table">
                 <thead>
                   <tr>
                     <th>Date</th>
                     <th>Receiver</th>
+                    <th>Logged by</th>
                     <th style={{ textAlign: 'right' }}>Expected</th>
                     <th style={{ textAlign: 'right' }}>Handed over</th>
                     <th style={{ textAlign: 'right' }}>Difference</th>
@@ -471,13 +567,26 @@ export default function CashHandover() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(historyQ.data?.data ?? []).map((h: any) => {
+                  {historyQ.isLoading && [0, 1, 2].map(i => (
+                    <tr key={i}><td colSpan={8}><div className="skeleton" style={{ width: '100%', height: 18 }} /></td></tr>
+                  ))}
+                  {historyQ.isError && (
+                    <tr><td colSpan={8} className="empty">
+                      Failed to load handover history.
+                      <div><button className="btn" style={{ marginTop: 10 }} onClick={() => historyQ.refetch()}>Retry</button></div>
+                    </td></tr>
+                  )}
+                  {!historyQ.isLoading && !historyQ.isError && historyRows.map(h => {
                     const d = parseFloat(h.difference)
                     const hExpenses = h.expenses ?? []
                     return (
                       <tr key={h.id}>
                         <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>{fmtDate(h.date)}</td>
-                        <td style={{ fontWeight: 500 }}>{h.receiverName}</td>
+                        {/* receiver is the live User relation (falls back to
+                            the receiverName snapshot for legacy rows with no
+                            receiverId) — never a hardcoded/frontend-only name. */}
+                        <td style={{ fontWeight: 500 }}>{h.receiver?.name ?? h.receiverName}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{h.loggedBy?.name ?? '—'}</td>
                         <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace" }}>{fmt2(parseFloat(h.expectedAmt))}</td>
                         <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>{fmt2(parseFloat(h.handedAmt))}</td>
                         <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", color: Math.abs(d) < 0.01 ? 'var(--accent)' : d < 0 ? 'var(--red)' : 'var(--accent2)' }}>
@@ -486,14 +595,33 @@ export default function CashHandover() {
                         <td style={{ fontSize: 12, color: 'var(--text3)' }}>
                           {hExpenses.length === 0
                             ? '—'
-                            : hExpenses.map((e: any) => `${e.description} ${fmt2(parseFloat(e.amount))}`).join(', ')}
+                            : hExpenses.map(e => `${e.description} ${fmt2(parseFloat(e.amount))}`).join(', ')}
                         </td>
                         <td style={{ fontSize: 12, color: 'var(--text3)' }}>{h.notes ?? '—'}</td>
                       </tr>
                     )
                   })}
+                  {!historyQ.isLoading && !historyQ.isError && historyRows.length === 0 && (
+                    <tr><td colSpan={8} className="empty">
+                      {historyFilterActive ? 'No handovers match this filter.' : 'No handovers recorded yet.'}
+                    </td></tr>
+                  )}
                 </tbody>
               </table>
+
+              {!historyQ.isLoading && !historyQ.isError && historyRows.length > 0 && historyTotalPages > 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
+                  <button className="btn" disabled={historyPage <= 1} onClick={() => setHistoryPage(p => Math.max(1, p - 1))}>
+                    <i className="ti ti-chevron-left" style={{ fontSize: 14 }} /> Previous
+                  </button>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                    Page {historyPage} of {historyTotalPages}
+                  </span>
+                  <button className="btn" disabled={historyPage >= historyTotalPages} onClick={() => setHistoryPage(p => Math.min(historyTotalPages, p + 1))}>
+                    Next <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}

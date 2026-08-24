@@ -17,12 +17,17 @@ function colorOf(idx: number) {
 
 type NewTypeRow = { name: string; grade: string; price: string }
 
+const SUPPLIERS_PAGE_SIZE = 20
+
 export default function Suppliers() {
   const navigate = useNavigate()
-  const { data: suppliersResp, isLoading, isError, refetch } = useSuppliers()
+  const [page, setPage] = useState(1)
+  const { data: suppliersResp, isLoading, isError, refetch } = useSuppliers({ page, limit: SUPPLIERS_PAGE_SIZE })
   const createSupplier = useCreateSupplier()
   const updateSupplier = useUpdateSupplier()
   const suppliers = suppliersResp?.data ?? []
+  const supplierTotal = suppliersResp?.total ?? suppliers.length
+  const supplierTotalPages = Math.max(1, Math.ceil(supplierTotal / SUPPLIERS_PAGE_SIZE))
   const [panelOpen, setPanelOpen] = useState(false)
   const [panelTab, setPanelTab] = useState<'info' | 'contacts' | 'types' | 'bank' | 'history'>('info')
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null)
@@ -34,6 +39,16 @@ export default function Suppliers() {
   // New-supplier form fields wired to useCreateSupplier.
   const [newName, setNewName] = useState('')
   const [newCountry, setNewCountry] = useState('Nigeria')
+  const [newLeadTimeDays, setNewLeadTimeDays] = useState('')
+  const [newPaymentTerms, setNewPaymentTerms] = useState('Net 30')
+  const [newContactName, setNewContactName] = useState('')
+  const [newContactRole, setNewContactRole] = useState('')
+  const [newContactPhone, setNewContactPhone] = useState('')
+  const [newBankName, setNewBankName] = useState('')
+  const [newBankBranch, setNewBankBranch] = useState('')
+  const [newBankAccount, setNewBankAccount] = useState('')
+  const [newBankSwift, setNewBankSwift] = useState('')
+  const [newNotes, setNewNotes] = useState('')
   // Edit-supplier form fields, wired to useUpdateSupplier — seeded from the
   // selected supplier each time the Edit modal is opened (see the Edit button).
   const [editName, setEditName] = useState('')
@@ -55,17 +70,44 @@ export default function Suppliers() {
 
   function submitNewSupplier() {
     if (!newName.trim()) return
+    const bankDetails = newBankName.trim() || newBankBranch.trim() || newBankAccount.trim() || newBankSwift.trim()
+      ? {
+          bank_name: newBankName.trim(),
+          branch: newBankBranch.trim(),
+          account_number: newBankAccount.trim(),
+          iban: newBankAccount.trim(),
+          swift: newBankSwift.trim(),
+        }
+      : undefined
     const body: CreateSupplierDto = {
       name: newName.trim(),
       country: newCountry,
       charcoalTypes: typeRows
         .filter(r => r.name.trim())
-        .map<SupplierCharcoalType>(r => ({ type: r.name.trim(), grade: r.grade })),
+        .map<SupplierCharcoalType>(r => ({ type: r.name.trim(), grade: r.grade, ...(r.price.trim() ? { price: r.price.trim() } : {}) })),
+      leadTimeDays: newLeadTimeDays.trim() ? parseInt(newLeadTimeDays, 10) : undefined,
+      paymentTerms: newPaymentTerms,
+      contactPersons: newContactName.trim()
+        ? [{ name: newContactName.trim(), role: newContactRole.trim(), phone: newContactPhone.trim() }]
+        : undefined,
+      bankDetails,
+      notes: newNotes.trim() || undefined,
     }
     createSupplier.mutate(body, {
       onSuccess: () => {
         setNewModalOpen(false)
         setNewName('')
+        setNewLeadTimeDays('')
+        setNewPaymentTerms('Net 30')
+        setNewContactName('')
+        setNewContactRole('')
+        setNewContactPhone('')
+        setNewBankName('')
+        setNewBankBranch('')
+        setNewBankAccount('')
+        setNewBankSwift('')
+        setNewNotes('')
+        setTypeRows([{ name: '', grade: 'Premium', price: '' }])
         showToast('Supplier added')
       },
     })
@@ -204,6 +246,18 @@ export default function Suppliers() {
               <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px 24px', color: 'var(--text3)' }}>
                 <i className="ti ti-truck" style={{ fontSize: 28, display: 'block', marginBottom: 8 }} />
                 <div>No suppliers yet</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!isLoading && !isError && supplierTotal > 0 && (
+          <div style={{ padding: '10px 4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, color: 'var(--text3)' }}>Page {page} of {supplierTotalPages} · {supplierTotal} total</span>
+            {supplierTotalPages > 1 && (
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>← Prev</button>
+                <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => setPage(p => Math.min(supplierTotalPages, p + 1))} disabled={page >= supplierTotalPages}>Next →</button>
               </div>
             )}
           </div>
@@ -401,24 +455,16 @@ export default function Suppliers() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Lead Time (days)</label>
-                  <input type="number" className="form-input" placeholder="14" />
+                  <input type="number" className="form-input" placeholder="14" value={newLeadTimeDays} onChange={e => setNewLeadTimeDays(e.target.value)} />
                 </div>
                 <div className="form-group">
                   <label className="form-label">Payment Terms</label>
-                  <select className="form-input">
+                  <select className="form-input" value={newPaymentTerms} onChange={e => setNewPaymentTerms(e.target.value)}>
                     <option>Net 30</option>
                     <option>Net 45</option>
                     <option>Net 60</option>
                     <option>Prepaid</option>
                   </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Email</label>
-                  <input type="email" className="form-input" placeholder="supplier@example.com" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Phone</label>
-                  <input type="tel" className="form-input" placeholder="+963 11 555 0000" />
                 </div>
               </div>
 
@@ -459,15 +505,15 @@ export default function Suppliers() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
                 <div className="form-group">
                   <label className="form-label">Name</label>
-                  <input type="text" className="form-input" placeholder="Full name" />
+                  <input type="text" className="form-input" placeholder="Full name" value={newContactName} onChange={e => setNewContactName(e.target.value)} />
                 </div>
                 <div className="form-group">
                   <label className="form-label">Role</label>
-                  <input type="text" className="form-input" placeholder="e.g. Owner" />
+                  <input type="text" className="form-input" placeholder="e.g. Owner" value={newContactRole} onChange={e => setNewContactRole(e.target.value)} />
                 </div>
                 <div className="form-group">
                   <label className="form-label">Phone</label>
-                  <input type="tel" className="form-input" placeholder="+963 …" />
+                  <input type="tel" className="form-input" placeholder="+963 …" value={newContactPhone} onChange={e => setNewContactPhone(e.target.value)} />
                 </div>
               </div>
 
@@ -480,19 +526,19 @@ export default function Suppliers() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div className="form-group">
                   <label className="form-label">Bank Name</label>
-                  <input type="text" className="form-input" placeholder="Bank of Syria" />
+                  <input type="text" className="form-input" placeholder="Bank of Syria" value={newBankName} onChange={e => setNewBankName(e.target.value)} />
                 </div>
                 <div className="form-group">
                   <label className="form-label">Branch</label>
-                  <input type="text" className="form-input" placeholder="Damascus Main" />
+                  <input type="text" className="form-input" placeholder="Damascus Main" value={newBankBranch} onChange={e => setNewBankBranch(e.target.value)} />
                 </div>
                 <div className="form-group" style={{ gridColumn: 'span 2' }}>
                   <label className="form-label">Account Number / IBAN</label>
-                  <input type="text" className="form-input mono" placeholder="SY12 0000 0000 0000 …" />
+                  <input type="text" className="form-input mono" placeholder="SY12 0000 0000 0000 …" value={newBankAccount} onChange={e => setNewBankAccount(e.target.value)} />
                 </div>
                 <div className="form-group">
                   <label className="form-label">SWIFT Code</label>
-                  <input type="text" className="form-input mono" placeholder="BKSYSYDA" />
+                  <input type="text" className="form-input mono" placeholder="BKSYSYDA" value={newBankSwift} onChange={e => setNewBankSwift(e.target.value)} />
                 </div>
               </div>
 
@@ -500,7 +546,7 @@ export default function Suppliers() {
 
               <div className="form-group">
                 <label className="form-label">Notes</label>
-                <textarea className="form-input" rows={3} placeholder="Any additional notes…" dir="auto" style={{ resize: 'vertical' }} />
+                <textarea className="form-input" rows={3} placeholder="Any additional notes…" dir="auto" style={{ resize: 'vertical' }} value={newNotes} onChange={e => setNewNotes(e.target.value)} />
               </div>
             </div>
             <div className="modal-footer" style={{ position: 'sticky', bottom: 0, background: 'var(--surface)' }}>

@@ -303,8 +303,14 @@ export class PackingSessionsService {
    * correction. Whenever a non-empty value IS being set, it must reference a real Worker.
    *
    * Blocked if packed stock from this session has been used in stock exits or adjustments.
+   *
+   * Ownership: same rule as findOne() — a caller with role 'worker' may only update a
+   * session they themselves logged (session.workerId === their own User.id). This
+   * endpoint is @Roles('owner', 'worker'); without this check any authenticated worker
+   * could edit another worker's session — reversing/reapplying its lot deductions,
+   * packed stock, and earnings.
    */
-  async updatePackingSession(id: string, dto: UpdatePackingSessionDto, userId: string) {
+  async updatePackingSession(id: string, dto: UpdatePackingSessionDto, currentUser: ClerkUser) {
     return this.prisma.$transaction(async (tx) => {
       // Fetch existing session with junction lots and packed stocks
       const existing = await tx.packingSession.findUnique({
@@ -313,14 +319,26 @@ export class PackingSessionsService {
       });
       if (!existing) throw new NotFoundException({ error: 'Packing session not found', code: 'NOT_FOUND' });
 
-      // Block if packed stock has downstream records
+      if (currentUser.role === 'worker') {
+        const caller = await tx.user.findUnique({ where: { clerkId: currentUser.userId } });
+        if (!caller || existing.workerId !== caller.id) {
+          throw new ForbiddenException({ error: 'Access denied to this packing session', code: 'FORBIDDEN' });
+        }
+      }
+
+      // Block if packed stock has downstream records. ShipmentReservation.packedStockId
+      // has no ON DELETE cascade (see schema.prisma) — without this check, a session
+      // whose output bags are currently reserved for a pending shipment would hit a raw
+      // P2003 foreign-key violation from packedStock.deleteMany() below instead of this
+      // same clean EDIT_BLOCKED response.
       const packedStockIds = existing.packedStocks.map(ps => ps.id);
       if (packedStockIds.length > 0) {
         const exitCount = await tx.stockExit.count({ where: { packedStockId: { in: packedStockIds } } });
         const adjCount  = await tx.stockAdjustment.count({ where: { packedStockId: { in: packedStockIds } } });
-        if (exitCount > 0 || adjCount > 0) {
+        const resCount  = await tx.shipmentReservation.count({ where: { packedStockId: { in: packedStockIds } } });
+        if (exitCount > 0 || adjCount > 0 || resCount > 0) {
           throw new BadRequestException({
-            message: 'Cannot update: packed stock from this session has stock exits or adjustments referencing it',
+            message: 'Cannot update: packed stock from this session has stock exits, adjustments, or a pending shipment reservation referencing it',
             error: 'EDIT_BLOCKED',
             code: 'EDIT_BLOCKED',
           });

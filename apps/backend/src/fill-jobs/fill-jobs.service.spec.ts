@@ -12,8 +12,8 @@ describe('FillJobsService', () => {
 
   const mockPrisma = {
     user: { findUnique: fn() },
-    fillJob: { findUnique: fn(), findMany: fn() },
-    stockExit: { aggregate: fn() },
+    fillJob: { findUnique: fn(), findMany: fn(), count: fn() },
+    stockExit: { aggregate: fn(), findMany: fn() },
     $transaction: fn(),
   };
 
@@ -192,10 +192,19 @@ describe('FillJobsService', () => {
     it('zero fill jobs and zero pickups → all zeros, hasData false', async () => {
       const result = await service.getYtdSummary(clientId);
       expect(result).toEqual({
-        bagsYTD: 0, wasteKg: '0.000', wastePct: 0,
+        bagsYTD: 0, jobCount: 0, wasteKg: '0.000', wastePct: 0,
         revenueYTD: '0.00', costYTD: '0.00', profitYTD: '0.00', marginYTD: 0,
         hasData: false,
       });
+    });
+
+    it('jobCount reflects the number of fill-job rows this year, independent of bagsYTD', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([
+        { totalCharcoalKg: dec('50.000'), totalBags: 20, totalCost: dec('40.00'), bagOutputs: [{ size: 2, qty: 20 }] },
+        { totalCharcoalKg: dec('50.000'), totalBags: 20, totalCost: dec('40.00'), bagOutputs: [{ size: 2, qty: 20 }] },
+      ]);
+      const result = await service.getYtdSummary(clientId);
+      expect(result.jobCount).toBe(2);
     });
 
     it('single fill job: bagsYTD/costYTD come straight from the scalar columns', async () => {
@@ -287,6 +296,120 @@ describe('FillJobsService', () => {
       await service.getYtdSummary(clientId);
       const fjArgs = mockPrisma.fillJob.findMany.mock.calls[0][0];
       expect(fjArgs.take).toBeUndefined();
+    });
+  });
+
+  // =========================================================================
+  // findAll() — date filtering (Fill Client Fill Jobs dedicated page)
+  // =========================================================================
+
+  describe('findAll() — date filtering', () => {
+    beforeEach(() => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([]);
+      mockPrisma.fillJob.count.mockResolvedValue(0);
+      mockPrisma.$transaction.mockImplementation((arr: Promise<unknown>[]) => Promise.all(arr));
+    });
+
+    it('with neither dateFrom nor dateTo, the where clause has no date key', async () => {
+      await service.findAll(clientId, 1, 50);
+      const args = mockPrisma.fillJob.findMany.mock.calls[0][0];
+      expect(args.where).toEqual({ clientId });
+    });
+
+    it('dateFrom/dateTo both map to gte/lte on the date column, scoped to clientId', async () => {
+      await service.findAll(clientId, 1, 50, '2026-08-01', '2026-08-31');
+
+      const args = mockPrisma.fillJob.findMany.mock.calls[0][0];
+      expect(args.where).toEqual({
+        clientId,
+        date: { gte: new Date('2026-08-01'), lte: new Date('2026-08-31') },
+      });
+      // count() must use the SAME where — otherwise totalPages would be wrong for a filtered period.
+      expect(mockPrisma.fillJob.count).toHaveBeenCalledWith({ where: args.where });
+    });
+
+    it('dateFrom only: gte with no lte', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([]);
+      mockPrisma.fillJob.count.mockResolvedValue(0);
+      mockPrisma.$transaction.mockImplementation((arr: Promise<unknown>[]) => Promise.all(arr));
+
+      await service.findAll(clientId, 1, 50, '2026-08-01');
+
+      const args = mockPrisma.fillJob.findMany.mock.calls[0][0];
+      expect(args.where.date).toEqual({ gte: new Date('2026-08-01') });
+    });
+  });
+
+  // =========================================================================
+  // findOne()
+  // =========================================================================
+
+  describe('findOne()', () => {
+    it('returns the job with the same include shape as findAll()', async () => {
+      mockPrisma.fillJob.findUnique.mockResolvedValue({ id: 'fj-1' });
+      const result = await service.findOne('fj-1');
+      expect(result).toEqual({ id: 'fj-1' });
+      const args = mockPrisma.fillJob.findUnique.mock.calls[0][0];
+      expect(args.include).toHaveProperty('workerEntity');
+      expect(args.include).toHaveProperty('fillJobLots');
+    });
+
+    it('throws NotFoundException when the fill job does not exist', async () => {
+      mockPrisma.fillJob.findUnique.mockResolvedValue(null);
+      await expect(service.findOne('missing')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  // =========================================================================
+  // getNetStock() — Bags & Pricing "in warehouse" stock, unbounded per client.
+  // Replaces the client-side stockFromJobs/pickedUpFromJobs reduce that used
+  // to run over the (now display-capped) fill-jobs/pickups overview lists.
+  // =========================================================================
+
+  describe('getNetStock()', () => {
+    it('produced minus picked up, per specKey — plus the spec\'s size/charcoal for auto-discovery', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([
+        { bagOutputs: [{ specKey: '2_charcoalA', size: 2, charcoal: 'charcoalA', qty: 40 }] },
+        { bagOutputs: [{ specKey: '2_charcoalA', size: 2, charcoal: 'charcoalA', qty: 10 }] },
+      ]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        { reason: JSON.stringify([{ specKey: '2_charcoalA', qty: 15 }]) },
+      ]);
+
+      const result = await service.getNetStock(clientId);
+      expect(result).toEqual({ '2_charcoalA': { size: 2, charcoal: 'charcoalA', netStock: 35 } }); // 40 + 10 - 15
+    });
+
+    it('floors at 0 — never returns a negative net stock', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([{ bagOutputs: [{ specKey: 'k', size: 1, charcoal: 'c', qty: 5 }] }]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        { reason: JSON.stringify([{ specKey: 'k', qty: 999 }]) },
+      ]);
+
+      const result = await service.getNetStock(clientId);
+      expect(result.k.netStock).toBe(0);
+    });
+
+    it('a non-JSON reason (the charcoal-consumption exit FillJobsService.create() itself writes) is ignored, not thrown', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([{ bagOutputs: [{ specKey: 'k', size: 1, charcoal: 'c', qty: 5 }] }]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([{ reason: 'Fill job abc-123' }]);
+
+      const result = await service.getNetStock(clientId);
+      expect(result.k.netStock).toBe(5);
+    });
+
+    it('both queries are scoped to this clientId, unbounded (no take/limit)', async () => {
+      mockPrisma.fillJob.findMany.mockResolvedValue([]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([]);
+
+      await service.getNetStock(clientId);
+
+      const fjArgs = mockPrisma.fillJob.findMany.mock.calls[0][0];
+      const exitArgs = mockPrisma.stockExit.findMany.mock.calls[0][0];
+      expect(fjArgs.where).toEqual({ clientId });
+      expect(fjArgs.take).toBeUndefined();
+      expect(exitArgs.where).toEqual({ clientId, exitType: 'client_bags_fill' });
+      expect(exitArgs.take).toBeUndefined();
     });
   });
 });

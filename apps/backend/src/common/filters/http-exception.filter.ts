@@ -52,6 +52,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
           details = { fields: body.message };
         } else if (typeof body.message === 'string') {
           message = body.message;
+        } else if (typeof body.error === 'string') {
+          // Handler threw `{ error, code }` without a `message` key (a real,
+          // widespread pattern in this codebase — see e.g.
+          // ShipmentsService's NotFoundException/BadRequestException throws).
+          // Without this fallback, `message` stays the hardcoded default
+          // 'Internal server error' even for a well-formed, controlled 400 —
+          // the exact bug that made a legitimate "insufficient packed stock"
+          // business error surface to the user as an unqualified "Internal
+          // Server Error" toast.
+          message = body.error;
         }
 
         if (typeof body.code === 'string') {

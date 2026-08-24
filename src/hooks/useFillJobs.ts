@@ -51,12 +51,56 @@ export interface CreateFillJobDto {
   notes?: string
 }
 
-export function useFillJobs(clientId: string) {
+export interface FillJobsQuery {
+  page?: number
+  limit?: number
+  dateFrom?: string
+  dateTo?: string
+}
+
+export function useFillJobs(clientId: string, params?: FillJobsQuery) {
   return useQuery({
-    queryKey: ['fill-jobs', clientId],
+    queryKey: ['fill-jobs', clientId, params ?? {}],
     queryFn: async () => {
-      const res = await api.get<{ data: FillJob[]; total: number }>('/fill-jobs', {
-        params: { clientId, limit: 100 },
+      const res = await api.get<{ data: FillJob[]; total: number; page: number; limit: number }>('/fill-jobs', {
+        params: { clientId, limit: 100, ...params },
+      })
+      return res.data
+    },
+    enabled: Boolean(clientId),
+  })
+}
+
+/**
+ * Single fill job by ID — Fill Job Detail page.
+ * GET /fill-jobs/:id
+ */
+export function useFillJob(id: string) {
+  return useQuery({
+    queryKey: ['fill-jobs', 'detail', id],
+    queryFn: async () => {
+      const res = await api.get<FillJob>(`/fill-jobs/${id}`)
+      return res.data
+    },
+    enabled: Boolean(id),
+  })
+}
+
+/**
+ * Net bags currently in the warehouse per bag spec (specKey) for one Fill
+ * Client — produced minus picked up, computed server-side, unbounded per
+ * client. Authoritative source for the Bags & Pricing "in warehouse" column;
+ * NOT derived from the (display-capped) useFillJobs/useStockExits lists.
+ * GET /fill-jobs/net-stock
+ */
+export interface FillJobNetStockEntry { size: number; charcoal: string; netStock: number }
+
+export function useFillJobNetStock(clientId: string) {
+  return useQuery({
+    queryKey: ['fill-jobs', 'net-stock', clientId],
+    queryFn: async () => {
+      const res = await api.get<Record<string, FillJobNetStockEntry>>('/fill-jobs/net-stock', {
+        params: { clientId },
       })
       return res.data
     },
@@ -87,6 +131,7 @@ export function useFillJobPriceStats(clientId: string) {
  */
 export interface FillJobYtdSummary {
   bagsYTD: number
+  jobCount: number
   wasteKg: string
   wastePct: number
   revenueYTD: string

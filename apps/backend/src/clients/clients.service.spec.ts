@@ -131,6 +131,130 @@ describe('ClientsService — deactivatePhone()', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Regression coverage for the "client edit doesn't save" bug: nameAr/address/
+// creditLimit/notesEn previously had no Client columns at all — the edit
+// modal would appear to save them (local state updated immediately) but they
+// silently reverted to blank on the very next refetch. Migration
+// add_client_profile_fields added real columns; these tests lock in that
+// create()/update() actually forward them to Prisma.
+// ---------------------------------------------------------------------------
+describe('ClientsService — create()/update() profile fields (nameAr/address/creditLimit/notesEn)', () => {
+  let service: ClientsService;
+
+  const mockPrisma = {
+    client: {
+      findUnique: fn(),
+      create: fn(),
+      update: fn(),
+    },
+  };
+
+  const mockBalanceService = { computeBalance: fn() };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ClientsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: ClientBalanceService, useValue: mockBalanceService },
+      ],
+    }).compile();
+
+    service = module.get<ClientsService>(ClientsService);
+  });
+
+  it('create() forwards nameAr/address/creditLimit/notesEn to Prisma when provided', async () => {
+    mockPrisma.client.create.mockResolvedValue({ id: 'new-client' });
+
+    await service.create({
+      name: 'Acme Trading Co.',
+      type: 'wholesale' as any,
+      currency: 'USD' as any,
+      nameAr: 'أكمي',
+      address: '123 Main St',
+      creditLimit: '5000.00',
+      notesEn: 'VIP client',
+    });
+
+    const createCall = mockPrisma.client.create.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(createCall.data).toMatchObject({
+      nameAr: 'أكمي',
+      address: '123 Main St',
+      creditLimit: '5000.00',
+      notesEn: 'VIP client',
+    });
+  });
+
+  it('create() omits nameAr/address/creditLimit/notesEn entirely when not provided (not sent as null)', async () => {
+    mockPrisma.client.create.mockResolvedValue({ id: 'new-client' });
+
+    await service.create({ name: 'Acme Trading Co.', type: 'wholesale' as any, currency: 'USD' as any });
+
+    const createCall = mockPrisma.client.create.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(createCall.data).not.toHaveProperty('nameAr');
+    expect(createCall.data).not.toHaveProperty('address');
+    expect(createCall.data).not.toHaveProperty('creditLimit');
+    expect(createCall.data).not.toHaveProperty('notesEn');
+  });
+
+  it('update() forwards nameAr/address/creditLimit/notesEn to Prisma when provided — the exact fields the Edit Client modal now sends', async () => {
+    mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1' });
+    mockBalanceService.computeBalance.mockResolvedValue(new Decimal(0));
+    mockPrisma.client.update.mockResolvedValue({ id: 'client-1' });
+
+    await service.update('client-1', {
+      nameAr: 'أكمي',
+      address: '123 Main St',
+      creditLimit: '5000.00',
+      notesEn: 'VIP client',
+    });
+
+    const updateCall = mockPrisma.client.update.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(updateCall.data).toMatchObject({
+      nameAr: 'أكمي',
+      address: '123 Main St',
+      creditLimit: '5000.00',
+      notesEn: 'VIP client',
+    });
+  });
+
+  it('update() can clear nameAr/address/creditLimit/notesEn by sending null, not just omit them', async () => {
+    mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1' });
+    mockBalanceService.computeBalance.mockResolvedValue(new Decimal(0));
+    mockPrisma.client.update.mockResolvedValue({ id: 'client-1' });
+
+    await service.update('client-1', {
+      nameAr: null as any,
+      address: null as any,
+      creditLimit: null as any,
+      notesEn: null as any,
+    });
+
+    const updateCall = mockPrisma.client.update.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(updateCall.data.nameAr).toBeNull();
+    expect(updateCall.data.address).toBeNull();
+    expect(updateCall.data.creditLimit).toBeNull();
+    expect(updateCall.data.notesEn).toBeNull();
+  });
+
+  it('update() leaves nameAr/address/creditLimit/notesEn untouched when omitted from the DTO', async () => {
+    mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1' });
+    mockBalanceService.computeBalance.mockResolvedValue(new Decimal(0));
+    mockPrisma.client.update.mockResolvedValue({ id: 'client-1' });
+
+    await service.update('client-1', { name: 'New Name' });
+
+    const updateCall = mockPrisma.client.update.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(updateCall.data).not.toHaveProperty('nameAr');
+    expect(updateCall.data).not.toHaveProperty('address');
+    expect(updateCall.data).not.toHaveProperty('creditLimit');
+    expect(updateCall.data).not.toHaveProperty('notesEn');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ClientBalanceService tests
 // ---------------------------------------------------------------------------
 

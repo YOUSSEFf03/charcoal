@@ -8,7 +8,7 @@ import { useOrders } from '../hooks/useOrders'
 import type { Client, ClientType, Currency, PhoneLabel, PaymentMethod } from '../types/api'
 import { useRate } from '../context/RateContext'
 import { roundDp, formatUsd } from '../lib/money'
-import { formatDate } from '../lib/date'
+import { formatDate, toDateOnlyString } from '../lib/date'
 
 type ClientTab = 'all' | 'alerts' | 'debit'
 
@@ -50,7 +50,7 @@ export default function Clients() {
   const [debouncedMinSales, setDebouncedMinSales] = useState('')
   const [debouncedMaxSales, setDebouncedMaxSales] = useState('')
   const [payMethod, setPayMethod] = useState('Cash')
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10))
+  const [payDate, setPayDate] = useState(toDateOnlyString(new Date()))
   const [usdAmt, setUsdAmt] = useState('')
   const [lbpAmt, setLbpAmt] = useState('')
   const rateCtx = useRate()
@@ -247,7 +247,7 @@ export default function Clients() {
           setPayModalOpen(false)
           setUsdAmt('')
           setLbpAmt('')
-          setPayDate(new Date().toISOString().slice(0, 10))
+          setPayDate(toDateOnlyString(new Date()))
           showToast(`Payment logged for ${activeClient.name}`)
         },
       },

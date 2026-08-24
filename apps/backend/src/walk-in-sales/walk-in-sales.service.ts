@@ -182,6 +182,17 @@ export class WalkInSalesService {
         }
         const requested  = new Decimal(kg.kgQuantity);
         const available  = new Decimal(lot.kgRemaining.toString());
+        // WalkInKgLineDto.kgQuantity is @IsNumberString() with no positivity
+        // bound. A non-positive value would pass the `.gt(available)` check
+        // below and then flip `available.minus(requested)` into an INCREASE
+        // of kgRemaining — fabricating raw stock from a "sale" while also
+        // producing a negative invoice line (kgQuantity × pricePerKg).
+        if (!requested.gt(0)) {
+          throw new BadRequestException({
+            error: `kgQuantity must be greater than zero (got ${requested.toFixed(3)})`,
+            code: 'CONSTRAINT_VIOLATION',
+          });
+        }
         if (requested.gt(available)) {
           throw new BadRequestException({
             error: `Insufficient raw stock — available: ${available.toFixed(3)} kg, requested: ${requested.toFixed(3)} kg`,

@@ -289,13 +289,30 @@ export function useOnAccountCount(date: string) {
 }
 
 /** List stock exits (sales log). GET /stock-exits */
-export function useStockExits(params?: { exitType?: string; dateFrom?: string; dateTo?: string; page?: number; limit?: number; clientId?: string; lotId?: string }) {
+export function useStockExits(params?: { exitType?: string; dateFrom?: string; dateTo?: string; page?: number; limit?: number; clientId?: string; lotId?: string; hasAmount?: boolean }) {
   return useQuery({
     queryKey: ['stock-exits', params ?? {}],
     queryFn: async () => {
       const res = await api.get<{ data: any[]; total: number; page: number; limit: number }>('/stock-exits', { params })
       return res.data
     },
+  })
+}
+
+/**
+ * Single stock exit by ID — Fill Client Pickup Detail page (StockExit rows
+ * with exitType='client_bags_fill' ARE the "pickup" record; there is no
+ * separate Pickup model).
+ * GET /stock-exits/:id
+ */
+export function useStockExit(id: string) {
+  return useQuery({
+    queryKey: ['stock-exits', 'detail', id],
+    queryFn: async () => {
+      const res = await api.get<any>(`/stock-exits/${id}`)
+      return res.data
+    },
+    enabled: Boolean(id),
   })
 }
 
@@ -416,7 +433,9 @@ export function useDeleteStockAdjustment() {
   })
 }
 
-/** Create a stock adjustment. POST /stock-adjustments */
+/** Create a stock adjustment. POST /stock-adjustments
+ *  Owner: applied immediately (status 'approved'). Accountant/worker: recorded
+ *  as 'pending' — no stock change until an owner calls useApproveStockAdjustment(). */
 export function useCreateStockAdjustment() {
   const qc = useQueryClient()
   return useMutation({
@@ -438,6 +457,40 @@ export function useCreateStockAdjustment() {
       qc.invalidateQueries({ queryKey: ['warehouse', 'summary'] })
       qc.invalidateQueries({ queryKey: ['warehouse', 'lot-material-flow'] })
       qc.invalidateQueries({ queryKey: ['warehouse', 'container-material-flow'] })
+    },
+  })
+}
+
+/** Approve a pending stock adjustment (owner only) — applies the atomic delta now.
+ *  POST /stock-adjustments/:id/approve */
+export function useApproveStockAdjustment() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await api.post(`/stock-adjustments/${id}/approve`)
+      return res.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['stock-adjustments'] })
+      qc.invalidateQueries({ queryKey: ['stock-lots'] })
+      qc.invalidateQueries({ queryKey: ['warehouse', 'summary'] })
+      qc.invalidateQueries({ queryKey: ['warehouse', 'lot-material-flow'] })
+      qc.invalidateQueries({ queryKey: ['warehouse', 'container-material-flow'] })
+    },
+  })
+}
+
+/** Reject a pending stock adjustment (owner only) — discards it, no stock change.
+ *  POST /stock-adjustments/:id/reject */
+export function useRejectStockAdjustment() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await api.post(`/stock-adjustments/${id}/reject`)
+      return res.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['stock-adjustments'] })
     },
   })
 }

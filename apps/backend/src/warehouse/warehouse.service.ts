@@ -39,6 +39,12 @@ interface LotFlowAggregate {
    *  StockLot.kgRemaining — that ledger is raw material only. Kept separate from
    *  rawMaterialExits so the UI can never present it as additional raw consumption. */
   packedBagSales: Decimal;
+  /** Σ StockExit.amount across every raw-material AND finished-goods exit counted in
+   *  rawMaterialExits/packedBagSales above — the authoritative, unbounded $ total for
+   *  this lot's "Sales & exits" table, so the UI never has to reduce over a
+   *  page-limited exit list (which undercounts once a lot has more exits than fit
+   *  on one page). */
+  totalExitAmount: Decimal;
   /** HISTORICAL total output — Σ per-session kgOutputTotal shares. See LotFlowSession. */
   packedOutput: Decimal;
   /** CURRENT total on-hand PackedStock kg for this lot, across all its batches. Informational
@@ -120,7 +126,7 @@ export class WarehouseService {
       this.prisma.stockExit.groupBy({
         by: ['lotId'],
         where: { lotId: { in: lotIds } },
-        _sum: { kgQuantity: true },
+        _sum: { kgQuantity: true, amount: true },
       }),
       // Packed-bag exits reach this lot only via packedStock.lotId — StockExit.lotId is
       // null for these rows (see doc comment above). Filtered server-side via the relation.
@@ -159,16 +165,22 @@ export class WarehouseService {
     const rawExitByLot = new Map(
       rawExitSums.map((r) => [r.lotId as string, new Decimal(r._sum.kgQuantity?.toString() ?? '0')]),
     );
+    const rawExitAmountByLot = new Map(
+      rawExitSums.map((r) => [r.lotId as string, new Decimal(r._sum.amount?.toString() ?? '0')]),
+    );
     const lotAdjustmentByLot = new Map(
       lotAdjustmentSums.map((r) => [r.lotId as string, new Decimal(r._sum.difference?.toString() ?? '0')]),
     );
 
     const packedBagSalesByLot = new Map<string, Decimal>();
+    const packedBagSalesAmountByLot = new Map<string, Decimal>();
     for (const e of packedBagExits) {
       const lotId = e.packedStock?.lotId;
       if (!lotId) continue;
       const kg = e.bagType ? new Decimal(e.bagType.nominalKg.toString()).mul(e.quantity ?? 0) : new Decimal(0);
       packedBagSalesByLot.set(lotId, (packedBagSalesByLot.get(lotId) ?? new Decimal(0)).plus(kg));
+      const amount = new Decimal(e.amount?.toString() ?? '0');
+      packedBagSalesAmountByLot.set(lotId, (packedBagSalesAmountByLot.get(lotId) ?? new Decimal(0)).plus(amount));
     }
 
     const sessionLotsByLot = new Map<string, typeof sessionLots>();
@@ -238,6 +250,8 @@ export class WarehouseService {
         lotAdjustments: lotAdjustmentByLot.get(lotId) ?? new Decimal(0),
         rawMaterialExits: rawExitByLot.get(lotId) ?? new Decimal(0),
         packedBagSales: packedBagSalesByLot.get(lotId) ?? new Decimal(0),
+        totalExitAmount: (rawExitAmountByLot.get(lotId) ?? new Decimal(0))
+          .plus(packedBagSalesAmountByLot.get(lotId) ?? new Decimal(0)),
         sessions,
       });
     }
@@ -270,6 +284,7 @@ export class WarehouseService {
       lotAdjustmentsKg: f.lotAdjustments.toFixed(3),
       rawMaterialExitsKg: f.rawMaterialExits.toFixed(3),
       packedBagSalesKg: f.packedBagSales.toFixed(3),
+      totalExitAmount: f.totalExitAmount.toFixed(2),
       packedOutput: f.packedOutput.toFixed(3),
       currentPackedStockKg: f.currentPackedStock.toFixed(3),
       waste: f.waste.toFixed(3),

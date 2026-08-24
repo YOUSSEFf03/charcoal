@@ -25,10 +25,6 @@ export class CreateBagPurchaseDto {
   @IsNumberString()
   unitCost: string;
 
-  @ApiProperty({ description: 'Total cost (decimal string)', example: '4250.00' })
-  @IsNumberString()
-  totalCost: string;
-
   /**
    * BUG-L (P5): currency of unitCost/totalCost. Defaults USD when omitted.
    * P&L converts LBP bag cost to USD using the stored rate.

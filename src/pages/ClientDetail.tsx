@@ -11,9 +11,10 @@ import { usePayments, useCreatePayment } from '../hooks/usePayments'
 import { useCashReceivers } from '../hooks/useUsers'
 import { useRate } from '../context/RateContext'
 import { roundDp, formatUsd } from '../lib/money'
-import { formatDate, formatDateTime } from '../lib/date'
+import { formatDate, formatDateTime, toDateOnlyString } from '../lib/date'
 import { exportExcel, type ExcelColumn } from '../lib/excelExport'
-import { exportStatementPdf } from '../lib/statementPdf'
+import { buildStatementPdf, exportStatementPdf, statementPdfFilename, type StatementPdfConfig } from '../lib/statementPdf'
+import { toWhatsAppDigits } from '../lib/phone'
 import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
 import SortHeader, { toggleSort } from '../components/ui/SortHeader'
 import { api } from '../lib/api'
@@ -225,7 +226,10 @@ export default function ClientDetail() {
     method: p.method,
     invId: p.invoiceId,
     invDisplay: p.invoiceId ? (p.invoice?.displayId ?? p.invoiceId) : '—',
-    by: p.receiverName ?? '—',
+    // receiver (authoritative relation, same value cash attribution uses)
+    // takes priority over receiverName (a denormalized display string set at
+    // creation time — goes stale if the receiver's name is later edited).
+    by: p.receiver?.name ?? p.receiverName ?? '—',
     ref: p.notes ?? '',
     amount: parseFloat(p.amount),
   }))
@@ -346,8 +350,9 @@ export default function ClientDetail() {
 
   // Editable client view-model (seeded from the API client).
   const [client, setClient] = useState<ClientVM>(() => ({
-    name: c?.name ?? '', nameAr: '', initials, type: c?.type ?? 'restaurant', currency: c?.currency ?? 'USD',
-    address: '', terms: c?.paymentTerms ?? '', limit: 0, notesAr: c?.notes ?? '', notesEn: '',
+    name: c?.name ?? '', nameAr: c?.nameAr ?? '', initials, type: c?.type ?? 'restaurant', currency: c?.currency ?? 'USD',
+    address: c?.address ?? '', terms: c?.paymentTerms ?? '', limit: c?.creditLimit ? parseFloat(c.creditLimit) : 0,
+    notesAr: c?.notes ?? '', notesEn: c?.notesEn ?? '',
     phones: activePhones.map(p => ({ number: p.number, label: p.label, meta: p.isActive ? 'active' : 'inactive', active: p.isActive, primary: false })),
     preferred, outstandingBal, openInvoices, daysSinceOrder, avgDays,
   }))
@@ -359,11 +364,12 @@ export default function ClientDetail() {
 
   const [editForm, setEditForm] = useState({ ...client })
   const [orderLines, setOrderLines] = useState([{ id: _olid++, bag: '', char: 'BBQ Hardwood · A', qty: 0, price: 0 }])
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10))
+  const [payDate, setPayDate] = useState(toDateOnlyString(new Date()))
   const [payMethod, setPayMethod] = useState('cash')
   const [payAmt, setPayAmt] = useState('')
   const [payNote, setPayNote] = useState('')
   const [payReceiverName, setPayReceiverName] = useState('')
+  const resolvedPayReceiverId = allReceivers.find(r => r.name === payReceiverName)?.id
 
   // Sub-view local filters.
   const [ordStatus, setOrdStatus] = useState('all')
@@ -387,6 +393,32 @@ export default function ClientDetail() {
 
   const [toast, setToast] = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
+
+  // ── Export-PDF split-button menu (Download / Share / Share via WhatsApp) ──
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
+  // Web Share API file-sharing (Level 2) is the only mechanism that can hand
+  // the PDF directly to an installed app (WhatsApp Desktop, Mail, etc.) via
+  // the native OS share sheet — supported in Chromium on Windows 10 1809+/11
+  // (and Android/iOS), not in Firefox or non-secure contexts. Checked once;
+  // the "Share…" menu item only renders when this is true.
+  const [canShareFiles] = useState(() => {
+    try {
+      return typeof navigator !== 'undefined' && !!navigator.canShare &&
+        navigator.canShare({ files: [new File([''], 'test.pdf', { type: 'application/pdf' })] })
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
   // The column-selection modal itself owns the in-flight/disabled UX for
   // each export now (see useExportColumnsModal below), so a per-export
   // "am I currently exporting" flag on the trigger button is no longer
@@ -397,8 +429,9 @@ export default function ClientDetail() {
   useEffect(() => {
     if (!c) return
     setClient({
-      name: c.name, nameAr: '', initials, type: c.type, currency: c.currency,
-      address: '', terms: c.paymentTerms ?? '', limit: 0, notesAr: c.notes ?? '', notesEn: '',
+      name: c.name, nameAr: c.nameAr ?? '', initials, type: c.type, currency: c.currency,
+      address: c.address ?? '', terms: c.paymentTerms ?? '', limit: c.creditLimit ? parseFloat(c.creditLimit) : 0,
+      notesAr: c.notes ?? '', notesEn: c.notesEn ?? '',
       phones: c.phones.map(p => ({ number: p.number, label: p.label, meta: p.isActive ? 'active' : 'inactive', active: p.isActive, primary: false })),
       preferred, outstandingBal, openInvoices, daysSinceOrder, avgDays,
     })
@@ -565,7 +598,7 @@ export default function ClientDetail() {
       { key: 'date', header: 'Date', type: 'date', value: p => p.date ? new Date(p.date) : null },
       { key: 'method', header: 'Method', value: p => p.method },
       { key: 'invoice', header: 'Invoice', value: p => p.invoiceId ? (p.invoice?.displayId ?? p.invoiceId) : null },
-      { key: 'receivedBy', header: 'Received by', value: p => p.receiverName ?? '—' },
+      { key: 'receivedBy', header: 'Received by', value: p => p.receiver?.name ?? p.receiverName ?? '—' },
       // Deselected by default — the one free-text/optional field among all 7
       // exports' columns; every transactional column stays checked.
       { key: 'notes', header: 'Notes', value: p => p.notes ?? null, defaultSelected: false },
@@ -634,42 +667,117 @@ export default function ClientDetail() {
     })
   }
 
-  // Downloads the Statement of Account as a PDF, using the exact same
-  // stmtFiltered/stmtOpening/stmtDebit/stmtCredit/stmtClosing figures already
-  // shown on screen and in exportStatement()'s Excel export above — no second
-  // accounting calculation. Unlike the Excel export, this always has the
-  // complete period (stmtFiltered is never a paginated slice), so there's
-  // nothing to fetch first; it downloads directly, no column-picker modal.
-  async function downloadStatementPdf() {
+  // Shared by all three export/share actions below so Download, Share, and
+  // Share-via-WhatsApp always render the exact same document from the exact
+  // same stmtFiltered/stmtOpening/stmtDebit/stmtCredit/stmtClosing figures
+  // already shown on screen and in exportStatement()'s Excel export — no
+  // second accounting calculation, no drift between the three actions.
+  function statementPdfConfig(): StatementPdfConfig {
     const primaryPhone = client.phones.find(p => p.active)?.number ?? client.phones[0]?.number ?? null
+    return {
+      client: {
+        name: client.name,
+        address: client.address || null,
+        phone: primaryPhone,
+        currency: client.currency,
+      },
+      // Falls back to the actual first/last row date when no explicit
+      // From/To filter is set — same fallback stmtPeriod (shown on screen
+      // just above this table) already uses, so the PDF never shows a bare
+      // "—" for a statement that plainly does cover real dates.
+      from: stmtFrom ? new Date(stmtFrom).toISOString() : (stmtFiltered[0]?.rawDate ?? null),
+      to: stmtTo ? new Date(stmtTo).toISOString() : (stmtFiltered[stmtFiltered.length - 1]?.rawDate ?? null),
+      rows: stmtFiltered.map(e => ({ ref: e.ref, rawDate: e.rawDate, desc: e.desc, debit: e.debit, credit: e.credit, balance: e.balance })),
+      openingBalance: stmtOpening,
+      periodDebitTotal: stmtDebit,
+      periodCreditTotal: stmtCredit,
+      closingBalance: stmtClosing,
+    }
+  }
+
+  // Downloads the Statement of Account as a PDF directly — no column-picker
+  // modal (unlike the Excel export, this always has the complete period;
+  // stmtFiltered is never a paginated slice, so there's nothing to fetch first).
+  async function downloadStatementPdf() {
     try {
-      await exportStatementPdf({
-        client: {
-          name: client.name,
-          // Client has no stored address anywhere in this app (not in the
-          // Prisma model, not in the API response) — the edit form's Address
-          // field is local-UI-only and never persisted. Showing '—' here is
-          // honest; inventing a value would not be.
-          address: null,
-          phone: primaryPhone,
-          currency: client.currency,
-        },
-        // Falls back to the actual first/last row date when no explicit
-        // From/To filter is set — same fallback stmtPeriod (shown on screen
-        // just above this table) already uses, so the PDF never shows a bare
-        // "—" for a statement that plainly does cover real dates.
-        from: stmtFrom ? new Date(stmtFrom).toISOString() : (stmtFiltered[0]?.rawDate ?? null),
-        to: stmtTo ? new Date(stmtTo).toISOString() : (stmtFiltered[stmtFiltered.length - 1]?.rawDate ?? null),
-        rows: stmtFiltered.map(e => ({ ref: e.ref, rawDate: e.rawDate, desc: e.desc, debit: e.debit, credit: e.credit, balance: e.balance })),
-        openingBalance: stmtOpening,
-        periodDebitTotal: stmtDebit,
-        periodCreditTotal: stmtCredit,
-        closingBalance: stmtClosing,
-      })
+      await exportStatementPdf(statementPdfConfig())
     } catch (e) {
       console.error('Failed to export statement PDF:', e)
       showToast('Failed to export statement PDF')
     }
+  }
+
+  // Hands the PDF to the native OS share sheet (Web Share API, file
+  // sharing) — the only way a browser can pass a file directly to an
+  // installed app. On Windows 10 1809+/11 with a Chromium browser, WhatsApp
+  // Desktop shows up there automatically (alongside Mail, Nearby Share,
+  // etc.) if it's installed — same file, same document, no manual attach
+  // step. Only ever called when canShareFiles is true (menu item is hidden
+  // otherwise — Firefox and non-secure contexts don't support this).
+  // Deliberately no title/text — some share targets (WhatsApp included) show
+  // those as a caption alongside the file, and the ask here is the file
+  // alone, no message.
+  async function shareStatementPdf() {
+    try {
+      const doc = await buildStatementPdf(statementPdfConfig())
+      const filename = statementPdfFilename(client.name)
+      const file = new File([doc.output('blob')], filename, { type: 'application/pdf' })
+      await navigator.share({ files: [file] })
+    } catch (e) {
+      if ((e as Error)?.name === 'AbortError') return // user closed the share sheet — not a failure
+      console.error('Failed to share statement PDF:', e)
+      showToast('Failed to share statement PDF')
+    }
+  }
+
+  // WhatsApp has no URL scheme that accepts a pre-attached file (neither
+  // wa.me links nor the desktop app's protocol handler expose that, for
+  // security reasons — this isn't a gap in this app). So when the native OS
+  // share sheet is available (canShareFiles), this hands it the file first —
+  // same mechanism as shareStatementPdf() — and the file arrives already
+  // attached the moment the user picks WhatsApp from that panel, no manual
+  // step. Only when that's unsupported does this fall back to downloading
+  // the file and opening a bare WhatsApp chat (wa.me, no pre-filled text) to
+  // the client's own number, where the user attaches the just-downloaded
+  // file themselves — a genuine platform limitation on browsers/OSes without
+  // Web Share file support, not something a web page can route around.
+  //
+  // Requires a stored phone number even on the native-share branch — this
+  // button's whole point is "send to THIS client", so it must never open a
+  // blank/unaddressed share with nothing identifying who it's for (see
+  // toWhatsAppDigits() in lib/phone.ts for why a naive digit-strip of the
+  // stored number isn't enough — real client records include both bare
+  // local numbers and malformed "+961 0…" entries).
+  async function shareStatementViaWhatsApp() {
+    const primaryPhone = client.phones.find(p => p.active)?.number ?? client.phones[0]?.number ?? null
+    const digits = toWhatsAppDigits(primaryPhone)
+    if (!digits) {
+      showToast('No phone number on file for this client')
+      return
+    }
+
+    if (canShareFiles) {
+      try {
+        const doc = await buildStatementPdf(statementPdfConfig())
+        const filename = statementPdfFilename(client.name)
+        const file = new File([doc.output('blob')], filename, { type: 'application/pdf' })
+        await navigator.share({ files: [file] })
+        return
+      } catch (e) {
+        if ((e as Error)?.name === 'AbortError') return // user closed the share sheet — not a failure
+        console.error('Failed to share statement PDF, falling back to download:', e)
+        // fall through to the download+wa.me fallback below
+      }
+    }
+    try {
+      await exportStatementPdf(statementPdfConfig())
+    } catch (e) {
+      console.error('Failed to export statement PDF:', e)
+      showToast('Failed to export statement PDF')
+      return
+    }
+    window.open(`https://wa.me/${digits}`, '_blank', 'noreferrer')
+    showToast('Statement downloaded — attach it in the WhatsApp chat that just opened')
   }
 
   function openEditModal() {
@@ -699,13 +807,12 @@ export default function ClientDetail() {
     }))
   }
 
-  // Persists the Edit modal to the real backend. Only fields that actually
-  // exist on the Client entity are sent (see the ClientVM comment at the top
-  // of this file — nameAr/address/limit/notesEn are pure local view-model
-  // fields with no backend column; they were never persisted before this fix
-  // either, and adding backend support for them is out of scope here).
-  // name/type/currency/paymentTerms/notes go through the same PATCH
-  // /clients/:id useUpdateClient() already used correctly by
+  // Persists the Edit modal to the real backend. nameAr/address/creditLimit/
+  // notesEn now have real Client columns (migration add_client_profile_fields)
+  // — previously these were pure local view-model fields that silently reset
+  // to blank on the next refetch, which is exactly the "edit doesn't save"
+  // bug this fixes. name/type/currency/paymentTerms/notes go through the same
+  // PATCH /clients/:id useUpdateClient() already used correctly by
   // FillClientDetail.tsx. Phones go through the separate add/deactivate
   // endpoints (CONSTRAINT 14 — phones are never deleted, only deactivated;
   // there is no edit-in-place or reactivate endpoint, so those two actions
@@ -718,10 +825,14 @@ export default function ClientDetail() {
         id: cid,
         body: {
           name: editForm.name.trim(),
+          nameAr: editForm.nameAr.trim() || null,
           type: editForm.type as any,
           currency: editForm.currency as any,
           paymentTerms: editForm.terms.trim() || undefined,
+          address: editForm.address.trim() || null,
+          creditLimit: editForm.limit ? editForm.limit.toFixed(2) : null,
           notes: editForm.notesAr.trim() || undefined,
+          notesEn: editForm.notesEn.trim() || null,
         },
       })
 
@@ -803,11 +914,11 @@ export default function ClientDetail() {
   function savePayment() {
     const amt = parseFloat(payAmt)
     if (!amt || amt <= 0) { showToast('Enter an amount'); return }
-    // Resolve the picked name back to a real User ID (same pattern as
-    // WarehouseSales.tsx) so the ledger actually gets credited — previously
-    // this page only ever sent receiverName, which the backend stores for
-    // display but never resolves to a ledger-crediting receiver.
-    const receiverId = allReceivers.find(r => r.name === payReceiverName)?.id
+    // Only cash/whish/omt are offered here (the 3-option select below), and
+    // all three are personal-custody methods — the backend rejects them with
+    // no receiverId (RECEIVER_REQUIRED) anyway; this is just an honest
+    // inline message instead of a round-trip 400. Never auto-select one.
+    if (!resolvedPayReceiverId) { showToast('Receiver is required.'); return }
     createPaymentM.mutate(
       {
         clientId: cid,
@@ -816,7 +927,7 @@ export default function ClientDetail() {
         method: (payMethod as any),
         date: payDate,
         notes: payNote || null,
-        ...(receiverId ? { receiverId } : { receiverName: payReceiverName || undefined }),
+        receiverId: resolvedPayReceiverId,
       },
       {
         onSuccess: () => {
@@ -950,7 +1061,7 @@ export default function ClientDetail() {
             <button className="btn" onClick={() => navigate(`/orders/new?clientId=${cid}`)}>
               <i className="ti ti-plus" style={{ fontSize: 15 }} /> New order
             </button>
-            <button className="btn" onClick={() => { setPayDate(new Date().toISOString().slice(0, 10)); setPayModalOpen(true) }}>
+            <button className="btn" onClick={() => { setPayDate(toDateOnlyString(new Date())); setPayModalOpen(true) }}>
               <i className="ti ti-receipt" style={{ fontSize: 15 }} /> Log payment
             </button>
           </>
@@ -975,7 +1086,7 @@ export default function ClientDetail() {
                   <div className="page-header-meta">
                     <span className="badge badge-green">{client.type}</span>
                     <span className="badge badge-gray">{client.currency}</span>
-                    {c.notes && <span className="meta-row"><i className="ti ti-map-pin" /> {c.notes}</span>}
+                    {client.address && <span className="meta-row"><i className="ti ti-map-pin" /> {client.address}</span>}
                     <span className="meta-row"><i className="ti ti-calendar" /> client since {fmtDate(c.createdAt)}</span>
                     {avgDays > 0 && <span className="meta-row"><i className="ti ti-clock" /> avg {avgDays}d between orders</span>}
                   </div>
@@ -1002,7 +1113,7 @@ export default function ClientDetail() {
                 <div className="action-ic green"><i className="ti ti-file-invoice" /></div>
                 <div className="action-tx"><span className="t">Make invoice</span><span className="s">issue a new charge</span></div>
               </button>
-              <button className="action-card" onClick={() => { setPayDate(new Date().toISOString().slice(0, 10)); setPayModalOpen(true) }}>
+              <button className="action-card" onClick={() => { setPayDate(toDateOnlyString(new Date())); setPayModalOpen(true) }}>
                 <div className="action-ic dark"><i className="ti ti-receipt" /></div>
                 <div className="action-tx"><span className="t">Make payment</span><span className="s">log money received</span></div>
               </button>
@@ -1072,7 +1183,7 @@ export default function ClientDetail() {
                       <div className="phone-meta">{p.meta}</div>
                       <div className="row-actions">
                         <a className="icon-btn" href={`tel:${p.number.replace(/\s/g, '')}`} title="Call"><i className="ti ti-phone" /></a>
-                        <a className="icon-btn" href={`https://wa.me/${p.number.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" title="WhatsApp"><i className="ti ti-brand-whatsapp" /></a>
+                        <a className="icon-btn" href={`https://wa.me/${toWhatsAppDigits(p.number)}`} target="_blank" rel="noreferrer" title="WhatsApp"><i className="ti ti-brand-whatsapp" /></a>
                       </div>
                     </div>
                   ))}
@@ -1351,7 +1462,26 @@ export default function ClientDetail() {
               </div>
               <div className="stmt-actions no-print">
                 <button className="btn" onClick={() => window.print()}><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print</button>
-                <button className="btn-export" onClick={downloadStatementPdf}><i className="ti ti-download" /> Export PDF</button>
+                <div ref={exportMenuRef} style={{ position: 'relative' }}>
+                  <button className="btn-export" onClick={() => setExportMenuOpen(o => !o)}>
+                    <i className="ti ti-download" /> Export PDF <i className="ti ti-chevron-down" style={{ fontSize: 11 }} />
+                  </button>
+                  {exportMenuOpen && (
+                    <div className="export-menu">
+                      <button className="export-menu-item" onClick={() => { setExportMenuOpen(false); downloadStatementPdf() }}>
+                        <i className="ti ti-download" /> Download
+                      </button>
+                      {canShareFiles && (
+                        <button className="export-menu-item" onClick={() => { setExportMenuOpen(false); shareStatementPdf() }}>
+                          <i className="ti ti-share-2" /> Share…
+                        </button>
+                      )}
+                      <button className="export-menu-item whatsapp" onClick={() => { setExportMenuOpen(false); shareStatementViaWhatsApp() }}>
+                        <i className="ti ti-brand-whatsapp" /> Share via WhatsApp
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button className="btn-export" onClick={exportStatement}><i className="ti ti-table-export" /> Export Excel</button>
               </div>
             </div>
@@ -1449,7 +1579,7 @@ export default function ClientDetail() {
                 </div>
               </div>
               <div className="stmt-actions">
-                <button className="btn" onClick={() => { setPayDate(new Date().toISOString().slice(0, 10)); setPayModalOpen(true) }}><i className="ti ti-plus" style={{ fontSize: 15 }} /> Log payment</button>
+                <button className="btn" onClick={() => { setPayDate(toDateOnlyString(new Date())); setPayModalOpen(true) }}><i className="ti ti-plus" style={{ fontSize: 15 }} /> Log payment</button>
                 <button className="btn-export" onClick={exportPayments}><i className="ti ti-table-export" /> Export Excel</button>
               </div>
             </div>
@@ -1631,7 +1761,7 @@ export default function ClientDetail() {
               <div className="form-grid" style={{ marginBottom: 16 }}>
                 <div>
                   <span className="field-label">Order date</span>
-                  <input className="input" type="date" defaultValue={new Date().toISOString().slice(0, 10)} />
+                  <input className="input" type="date" defaultValue={toDateOnlyString(new Date())} />
                 </div>
                 <div>
                   <span className="field-label">Delivery date</span>
@@ -1747,11 +1877,14 @@ export default function ClientDetail() {
                   <input className="input num" type="number" value={payAmt} onChange={e => setPayAmt(e.target.value)} placeholder="0.00" />
                 </div>
                 <div>
-                  <span className="field-label">Received by</span>
+                  <span className="field-label">Received by <span style={{ color: 'var(--red)' }}>*</span></span>
                   <select className="select" value={payReceiverName} onChange={e => setPayReceiverName(e.target.value)}>
                     <option value="">— select receiver —</option>
                     {allReceivers.map(r => <option key={r.id || r.name} value={r.name}>{r.name}</option>)}
                   </select>
+                  {!resolvedPayReceiverId && (
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Receiver is required.</div>
+                  )}
                 </div>
                 <div style={{ gridColumn: '1 / -1' }}>
                   <span className="field-label">Reference / note</span>

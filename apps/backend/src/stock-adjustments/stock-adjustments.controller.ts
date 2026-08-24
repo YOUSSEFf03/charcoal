@@ -14,6 +14,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagg
 import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { StockAdjustmentsService } from './stock-adjustments.service';
 import { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto';
+import { UpdateStockAdjustmentDto } from './dto/update-stock-adjustment.dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ClerkUser } from '../auth/clerk.strategy';
@@ -55,7 +56,7 @@ export class StockAdjustmentsController {
   @Roles('owner')
   update(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: { qtyAfter?: string; reason?: string },
+    @Body() dto: UpdateStockAdjustmentDto,
   ) {
     return this.stockAdjustmentsService.update(id, dto);
   }

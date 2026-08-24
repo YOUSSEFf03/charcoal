@@ -3,11 +3,11 @@ import Topbar from '../components/layout/Topbar'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { useAvailableStockLots, usePackedStockSummary, useStockExits, useCreateStockExit, useUpdateStockExit, useWalkInSummary, useWarehouseCashSummary, useOnAccountCount, useFifoDraw } from '../hooks/useWarehouse'
 import { useClients } from '../hooks/useClients'
-import { useWorkers } from '../hooks/useWorkers'
-import { useReceivers } from '../hooks/useReceivers'
+import { useCashReceivers } from '../hooks/useUsers'
 import { useCreateWalkInSale } from '../hooks/useWalkInSales'
 import { useRate } from '../context/RateContext'
 import { roundDp } from '../lib/money'
+import { toDateOnlyString, currentWeekToDateRange } from '../lib/date'
 
 type SaleMode = 'packed' | 'kg'
 type SaleTab = 'entry' | 'log'
@@ -41,14 +41,16 @@ export default function WarehouseSales() {
   // doc comment / StockLotsService.findAvailable() for the full reasoning.
   const lotsQ = useAvailableStockLots()
   const packedSummaryQ = usePackedStockSummary()
-  const workersQ = useWorkers()
-  const { receivers: customReceivers } = useReceivers()
+  const receiversQ = useCashReceivers()
   const rateCtx = useRate()
   const rawRate = rateCtx.rawRate
 
   // Log tab date filter — must be declared before exitsQ uses them.
+  // toDateOnlyString (local calendar-day parts), never toISOString().slice(0,10)
+  // — the latter converts to UTC first and rolls the date back a day in a
+  // timezone ahead of UTC (Beirut, UTC+3).
   const thirtyDaysAgoStr = (() => {
-    const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10)
+    const d = new Date(); d.setDate(d.getDate() - 30); return toDateOnlyString(d)
   })()
   const [logDateFrom, setLogDateFrom] = useState(thirtyDaysAgoStr)
   const [logDateTo, setLogDateTo] = useState('')
@@ -71,10 +73,7 @@ export default function WarehouseSales() {
   const exitsTotal = exitsQ.data?.total ?? 0
   const exitsTotalPages = Math.max(1, Math.ceil(exitsTotal / SALES_LOG_PAGE_SIZE))
 
-  const today = new Date().toISOString().slice(0, 10)
-  const weekStart = (() => {
-    const d = new Date(); d.setDate(d.getDate() - d.getDay()); return d.toISOString().slice(0, 10)
-  })()
+  const { dateFrom: weekStart, dateTo: today } = currentWeekToDateRange()
   // KPI: backend-aggregated totals (no page limit, accurate for any volume).
   const todaySummaryQ = useWalkInSummary({ dateFrom: today, dateTo: today })
   const weekSummaryQ  = useWalkInSummary({ dateFrom: weekStart, dateTo: today })
@@ -106,11 +105,11 @@ export default function WarehouseSales() {
     (packedSummaryQ.data ?? []).map(p => [p.bagTypeId, p.availableBags])
   )
 
-  // Receivers: real workers + custom receivers from Settings
-  const allReceivers = [
-    ...(workersQ.data ?? []).map(w => ({ id: w.id, name: w.name, role: 'worker' })),
-    ...customReceivers,
-  ]
+  // Every user who can receive cash (owner/accountant/sales_rep/worker/
+  // receiver) — see useCashReceivers()'s doc comment for why this replaced
+  // the old useWorkers()+useReceivers() combination (worker.id was the wrong
+  // FK; a worker's real id lives on the linked User via Worker.userId).
+  const allReceivers = receiversQ.data ?? []
 
   const WALK_IN = { id: 'walk-in', name: 'Walk-in customer', type: 'walk_in', initials: 'W', meta: 'no account · cash only' }
 
@@ -129,7 +128,7 @@ export default function WarehouseSales() {
   const clientsQ = useClients({ search: buyerInput || undefined, limit: 100 })
   const apiClients = clientsQ.data?.data ?? []
 
-  const [saleDate, setSaleDate] = useState(new Date().toISOString().slice(0, 10))
+  const [saleDate, setSaleDate] = useState(toDateOnlyString(new Date()))
   const [mode, setMode] = useState<SaleMode>('packed')
 
   // Packed lines — use first real bag type as default
@@ -353,7 +352,7 @@ export default function WarehouseSales() {
       // receiverId must be a User ID (payments_receiverId_fkey → users table).
       // Workers come from the workers table — their IDs are invalid here.
       // Only receivers (role='receiver') are real users and safe to pass.
-      const receiverId = allReceivers.find(r => r.name === receiver && r.role === 'receiver')?.id
+      const receiverId = allReceivers.find(r => r.name === receiver)?.id
 
       try {
         await createWalkInSale.mutateAsync({
@@ -396,7 +395,7 @@ export default function WarehouseSales() {
 
       // collectedById must be a User ID (stock_exits_collectedById_fkey → users table).
       // Workers come from the workers table — their IDs are invalid here.
-      const collectedById = allReceivers.find(r => r.name === receiver && r.role === 'receiver')?.id
+      const collectedById = allReceivers.find(r => r.name === receiver)?.id
 
       // Anonymous packed-bag sale — no invoice, no client; amount recorded
       // directly on each exit (mirrors the anonymous KG-sale branch below).
@@ -458,7 +457,7 @@ export default function WarehouseSales() {
         // Uses the same endpoint as bag sales so the client gets a proper invoice.
         const description = `${lot.charcoalType} Grade ${lot.grade}`
         const mappedMethod = PAY_METHOD_MAP[payMethod]
-        const receiverId = allReceivers.find(r => r.name === receiver && r.role === 'receiver')?.id
+        const receiverId = allReceivers.find(r => r.name === receiver)?.id
         try {
           await createWalkInSale.mutateAsync({
             clientId: selectedBuyerId!,
@@ -495,7 +494,7 @@ export default function WarehouseSales() {
         const kgAmt = roundDp(kgNum * (parseFloat(kgPrice) || 0) * (kgCurr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1), 2)
         // collectedById must be a User ID (stock_exits_collectedById_fkey → users table).
         // Workers come from the workers table — their IDs are invalid here.
-        const collectedById = allReceivers.find(r => r.name === receiver && r.role === 'receiver')?.id
+        const collectedById = allReceivers.find(r => r.name === receiver)?.id
         await createExit.mutateAsync({
           lotId:     lot.id,
           kgQuantity: kgNum,

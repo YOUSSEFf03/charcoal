@@ -3,15 +3,14 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import Topbar from '../components/layout/Topbar'
 import { useClient, useClientBalance, useUpdateClient } from '../hooks/useClients'
-import { useReceivers } from '../hooks/useReceivers'
 import { usePayments, useCreatePayment } from '../hooks/usePayments'
 import { useWorkers } from '../hooks/useWorkers'
-import { useUsers } from '../hooks/useUsers'
-import { useFillJobs, useFillJobPriceStats, useCreateFillJob, useConfirmFillPickup, useFillJobYtdSummary } from '../hooks/useFillJobs'
+import { useCashReceivers } from '../hooks/useUsers'
+import { useFillJobs, useFillJobPriceStats, useCreateFillJob, useConfirmFillPickup, useFillJobYtdSummary, useFillJobNetStock } from '../hooks/useFillJobs'
 import { useStockExits } from '../hooks/useWarehouse'
 import { useClientLedger } from '../hooks/useReports'
 import { formatUsd } from '../lib/money'
-import { formatDate } from '../lib/date'
+import { formatDate, formatDateTime, toDateOnlyString } from '../lib/date'
 import { api } from '../lib/api'
 
 interface BagSpec {
@@ -21,15 +20,12 @@ interface Contact { name: string; role: string; phone: string }
 
 let _fjBagId = 1
 
-const DRIVERS: string[] = []
-
-interface PickupItem { id: string; qty: number; wasted: number }
-interface PickupRecord { id: string; displayId?: string; date: string; driver: string; paid: boolean; items: PickupItem[] }
-const PICKUPS: PickupRecord[] = []
-
-function calcPickup(_p: PickupRecord) {
-  return { bags: 0, revenue: 0, cost: 0, profit: 0, margin: 0, wasted: 0 }
-}
+// Small "recent" preview lists on the overview — the dedicated /pickups,
+// /fill-jobs, and /payments pages fetch their own full, paginated history.
+// Bags & Pricing stock-on-hand does NOT depend on these — see
+// useFillJobNetStock(), the unbounded server-side aggregate that replaced
+// the client-side reduce which used to require an unbounded fetch here.
+const RECENT_LIMIT = 5
 
 function makeSpecKey(size: number, charcoal: string) {
   return `${size}_${charcoal}`
@@ -43,21 +39,41 @@ export default function FillClientDetail() {
   const clientQ = useClient(id ?? '')
   const client = clientQ.data
   const balanceQ = useClientBalance(id ?? '')
-  const paymentsQ = usePayments({ clientId: id, limit: 100 })
+  // Recent-only, for the overview's Payment History preview — the dedicated
+  // /payments page fetches the full paginated history. Total-paid/outstanding
+  // KPIs below are sourced from ledgerQ/balanceQ (unbounded aggregates), never
+  // from this capped list.
+  const paymentsQ = usePayments({ clientId: id, limit: RECENT_LIMIT })
   const realPayments = paymentsQ.data?.data ?? []
   const workersQ = useWorkers()
   const workersList = workersQ.data ?? []
-  const usersQ = useUsers({ limit: 100 })
-  const usersList = usersQ.data?.data ?? []
-  const { receivers } = useReceivers()
+  // Every user who can receive cash (owner/accountant/sales_rep/worker/
+  // receiver) — see useCashReceivers()'s doc comment. Replaces the old
+  // combination of owner-only useUsers({limit:100}) (403'd for any other
+  // role — this page has no role restriction of its own) + useReceivers() +
+  // workersList, where selecting a worker from the "Workers" optgroup below
+  // was never actually resolved to an id at all (only usersList/receivers
+  // were checked), so it silently fell back to name-only receiverName.
+  const receiversQ = useCashReceivers()
+  const receivers = receiversQ.data ?? []
 
-  // Fill job data
-  const fillJobsQ = useFillJobs(id ?? '')
+  // Fill job data — recent-only, for the overview's Fill Jobs preview. The
+  // dedicated /fill-jobs page fetches the full paginated history. Stock-on-
+  // hand and spec-discovery below do NOT depend on this capped list — see
+  // netStockQ.
+  const fillJobsQ = useFillJobs(id ?? '', { limit: RECENT_LIMIT })
   const fillJobs = fillJobsQ.data?.data ?? []
   const priceStatsQ = useFillJobPriceStats(id ?? '')
   const priceStats = priceStatsQ.data ?? {}
-  const pickupsQ = useStockExits({ clientId: id, exitType: 'client_bags_fill', limit: 100 })
+  // Recent-only, for the overview's Pickups preview — see fillJobsQ's comment.
+  const pickupsQ = useStockExits({ clientId: id, exitType: 'client_bags_fill', hasAmount: true, limit: RECENT_LIMIT })
   const pickups = pickupsQ.data?.data ?? []
+  // Net warehouse stock per bag spec — unbounded, server-computed
+  // (FillJobsService.getNetStock()). Authoritative for Bags & Pricing's
+  // "in warehouse" column and for auto-discovering specs from fill-job
+  // history; independent of the capped fillJobsQ/pickupsQ lists above.
+  const netStockQ = useFillJobNetStock(id ?? '')
+  const netStock = netStockQ.data ?? {}
   const createFillJob = useCreateFillJob()
   const confirmPickup = useConfirmFillPickup()
   const createPayment = useCreatePayment()
@@ -113,45 +129,12 @@ export default function FillClientDetail() {
     setBags(prev => prev.map(b => b.id === id ? { ...b, ...patch } : b))
   }
 
-  // Total bags filled per specKey from fill job history
-  const stockFromJobs = useMemo(() => {
-    const map: Record<string, number> = {}
-    for (const fj of fillJobs) {
-      for (const out of fj.bagOutputs) {
-        map[out.specKey] = (map[out.specKey] ?? 0) + out.qty
-      }
-    }
-    return map
-  }, [fillJobs])
-
-  // Bags picked up per specKey — parsed from the JSON reason field of each pickup exit
-  const pickedUpFromJobs = useMemo(() => {
-    const map: Record<string, number> = {}
-    for (const pk of pickups) {
-      if (!pk.reason) continue
-      try {
-        const summary = JSON.parse(pk.reason) as { specKey?: string; size?: number; charcoal?: string; qty: number }[]
-        for (const item of summary) {
-          const key = item.specKey ?? makeSpecKey(item.size ?? 0, item.charcoal ?? '')
-          map[key] = (map[key] ?? 0) + item.qty
-        }
-      } catch { /* ignore non-JSON reasons from old records */ }
-    }
-    return map
-  }, [pickups])
-
-  // Specs discovered from fill job history (so they appear even before manual editor entry)
+  // Specs discovered from fill job history (so they appear even before manual
+  // editor entry) — sourced from netStockQ, the unbounded server aggregate,
+  // not the capped fillJobsQ list above.
   const specsFromJobs = useMemo(() => {
-    const map = new Map<string, { specKey: string; size: number; charcoal: string }>()
-    for (const fj of fillJobs) {
-      for (const out of fj.bagOutputs) {
-        if (!map.has(out.specKey)) {
-          map.set(out.specKey, { specKey: out.specKey, size: out.size, charcoal: out.charcoal })
-        }
-      }
-    }
-    return Array.from(map.values())
-  }, [fillJobs])
+    return Object.entries(netStock).map(([specKey, v]) => ({ specKey, size: v.size, charcoal: v.charcoal }))
+  }, [netStock])
 
   // When fill jobs arrive (new or refetched), promote any NEW specs into bags
   // so they appear in the editor. Existing bag pricing is never overwritten.
@@ -179,12 +162,11 @@ export default function FillClientDetail() {
 
   // allBags = local bag editor specs merged with fill-job-derived specs + net stock counts
   const allBags = useMemo(() => {
-    const netStock = (specKey: string) =>
-      Math.max(0, (stockFromJobs[specKey] ?? 0) - (pickedUpFromJobs[specKey] ?? 0))
+    const stockFor = (specKey: string) => netStock[specKey]?.netStock ?? 0
 
     const result: BagSpec[] = bags.map(b => {
       const key = makeSpecKey(b.size, b.charcoal)
-      return { ...b, stock: netStock(key) }
+      return { ...b, stock: stockFor(key) }
     })
     for (const spec of specsFromJobs) {
       if (!result.find(b => makeSpecKey(b.size, b.charcoal) === spec.specKey)) {
@@ -196,12 +178,12 @@ export default function FillClientDetail() {
           worker: 0,
           ours: false,
           bagCost: 0,
-          stock: netStock(spec.specKey),
+          stock: stockFor(spec.specKey),
         })
       }
     }
     return result
-  }, [bags, stockFromJobs, pickedUpFromJobs, specsFromJobs])
+  }, [bags, netStock, specsFromJobs])
 
   // YTD stats: cost from fill jobs, revenue from pickup amounts. Computed
   // server-side (FillJobsService.getYtdSummary()) — unbounded per client,
@@ -212,6 +194,7 @@ export default function FillClientDetail() {
   const ytdSummaryQ = useFillJobYtdSummary(id ?? '')
   const ytdStats = {
     bagsYTD: ytdSummaryQ.data?.bagsYTD ?? 0,
+    jobCount: ytdSummaryQ.data?.jobCount ?? 0,
     wasteKg: parseFloat(ytdSummaryQ.data?.wasteKg ?? '0'),
     wastePct: ytdSummaryQ.data?.wastePct ?? 0,
     revenueYTD: parseFloat(ytdSummaryQ.data?.revenueYTD ?? '0'),
@@ -226,20 +209,19 @@ export default function FillClientDetail() {
   const [showPickup, setShowPickup] = useState(false)
   const [showFillJob, setShowFillJob] = useState(false)
   const [showPay, setShowPay] = useState(false)
-  const [showPickupDetail, setShowPickupDetail] = useState<number | null>(null)
   const [showEditClient, setShowEditClient] = useState(false)
   const [editClientForm, setEditClientForm] = useState({ name: '', currency: 'USD', notes: '', paymentTerms: '' })
   const [editClientSaving, setEditClientSaving] = useState(false)
 
   // Pickup modal state
-  const [puDate, setPuDate] = useState(new Date().toISOString().slice(0, 10))
+  const [puDate, setPuDate] = useState(toDateOnlyString(new Date()))
   const [puDriver, setPuDriver] = useState('')
   const [puQty, setPuQty] = useState<Record<string, number>>({})
   const [puWaste, setPuWaste] = useState<Record<string, number>>({})
   const [puSaving, setPuSaving] = useState(false)
 
   // Fill job modal state
-  const [fjDate, setFjDate] = useState(new Date().toISOString().slice(0, 10))
+  const [fjDate, setFjDate] = useState(toDateOnlyString(new Date()))
   const [fjWorker, setFjWorker] = useState('')
   const [fjBagRows, setFjBagRows] = useState([{ id: _fjBagId++, bagId: '', qty: 0 }])
   const [fjCharRows, setFjCharRows] = useState([{ id: _fjBagId++, lotId: '', kg: 0 }])
@@ -247,7 +229,7 @@ export default function FillClientDetail() {
   const [fjSaving, setFjSaving] = useState(false)
 
   // Payment modal state
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10))
+  const [payDate, setPayDate] = useState(toDateOnlyString(new Date()))
   const [payMethod, setPayMethod] = useState('cash')
   const [payAmt, setPayAmt] = useState(0)
   const [payBy, setPayBy] = useState('')
@@ -533,7 +515,7 @@ export default function FillClientDetail() {
             <div className="kpi-tile">
               <div className="kpi-tile-label">Bags YTD</div>
               <div className="kpi-tile-value">{ytdStats.hasData ? ytdStats.bagsYTD : '—'}</div>
-              <div className="kpi-tile-sub">{ytdStats.hasData ? `${fillJobs.length} fill job${fillJobs.length !== 1 ? 's' : ''}` : 'no fill jobs yet'}</div>
+              <div className="kpi-tile-sub">{ytdStats.hasData ? `${ytdStats.jobCount} fill job${ytdStats.jobCount !== 1 ? 's' : ''}` : 'no fill jobs yet'}</div>
             </div>
             <div className="kpi-tile">
               <div className="kpi-tile-label">In warehouse</div>
@@ -564,69 +546,9 @@ export default function FillClientDetail() {
         <div style={{ display: 'grid', gridTemplateColumns: '1.65fr 1fr', gap: 14 }}>
           <div className="stack">
 
-            {/* Statement of account — DEBIT / CREDIT / BALANCE only. Pickups
-                (bag movement) and Fill jobs (production) below remain
-                operational detail; this card is the single financial record. */}
-            <div className="card">
-              <div className="card-head">
-                <div className="card-title"><i className="ti ti-file-invoice" /> Statement of account</div>
-              </div>
-              <div className="stmt-summary">
-                <div className="stmt-cell"><div className="l">Opening balance</div><div className="v">{formatUsd(stmtOpening)}</div></div>
-                <div className="stmt-cell"><div className="l">Total debit</div><div className="v amber">{formatUsd(stmtDebitTotal)}</div><div className="s">fill pickups</div></div>
-                <div className="stmt-cell"><div className="l">Total credit</div><div className="v green">{formatUsd(stmtCreditTotal)}</div><div className="s">payments received</div></div>
-                <div className="stmt-cell"><div className="l">Closing balance</div><div className={`v ${stmtClosing > 0 ? 'amber' : stmtClosing < 0 ? 'red' : 'green'}`}>{formatUsd(stmtClosing)}</div><div className="s">{stmtClosing > 0 ? 'owed by client' : stmtClosing < 0 ? 'in credit' : 'settled'}</div></div>
-              </div>
-              {ledgerQ.isLoading && <div className="empty">Loading…</div>}
-              {!ledgerQ.isLoading && (
-                <table className="data-table stmt-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Description</th>
-                      <th className="right">Debit</th>
-                      <th className="right">Credit</th>
-                      <th className="right">Balance</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="opening">
-                      <td className="mono"></td>
-                      <td className="desc">Opening balance</td>
-                      <td className="num"></td><td className="num"></td>
-                      <td className="num">{formatUsd(stmtOpening)}</td>
-                    </tr>
-                    {statement.map((e, i) => {
-                      const debit = parseFloat(e.debit)
-                      const credit = parseFloat(e.credit)
-                      const balance = parseFloat(e.runningBalance)
-                      return (
-                        <tr key={i}>
-                          <td className="mono">{formatDate(e.date, { day: '2-digit' })}</td>
-                          <td className="desc">{e.description}</td>
-                          <td className="num dr">{debit ? formatUsd(debit) : ''}</td>
-                          <td className="num cr">{credit ? formatUsd(credit) : ''}</td>
-                          <td className={`num ${balance < 0 ? 'bal-neg' : 'bal-pos'}`} style={{ fontWeight: 600 }}>{formatUsd(balance)}</td>
-                        </tr>
-                      )
-                    })}
-                    {statement.length === 0 && (
-                      <tr><td colSpan={5} className="empty">No fill pickups or payments recorded yet</td></tr>
-                    )}
-                  </tbody>
-                  <tfoot>
-                    <tr>
-                      <td colSpan={2} style={{ textAlign: 'right' }}>Totals</td>
-                      <td className="num dr">{formatUsd(stmtDebitTotal)}</td>
-                      <td className="num cr">{formatUsd(stmtCreditTotal)}</td>
-                      <td className="num">{formatUsd(stmtClosing)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-              )}
-            </div>
-
-            {/* Bags & Pricing */}
+            {/* Bags & Pricing — kept as the first section on the overview,
+                immediately after the KPI hero (explicit product requirement:
+                this is the client's primary day-to-day working section). */}
             <div className="card">
               <div className="card-head">
                 <div className="card-title"><i className="ti ti-package" /> Bags &amp; pricing <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>per-bag rates · stock on hand</span></div>
@@ -679,11 +601,37 @@ export default function FillClientDetail() {
               </div>
             </div>
 
-            {/* Pickups */}
+            {/* Statement of account — summary only. Full transaction history
+                lives on the dedicated Statement page (same authoritative
+                client-ledger endpoint, date-filterable, with Print PDF). */}
             <div className="card">
               <div className="card-head">
-                <div className="card-title"><i className="ti ti-truck" /> Pickups</div>
-                <button className="card-action" onClick={() => setShowPickup(true)}><i className="ti ti-plus" style={{ fontSize: 13 }} /> New pickup</button>
+                <div className="card-title"><i className="ti ti-file-invoice" /> Statement of account</div>
+                <button className="card-action" onClick={() => navigate(`/fill-clients/${id}/statement`)}>
+                  <i className="ti ti-arrow-right" style={{ fontSize: 13 }} /> View full statement
+                </button>
+              </div>
+              {ledgerQ.isLoading && <div className="empty">Loading…</div>}
+              {!ledgerQ.isLoading && (
+                <div className="stmt-summary">
+                  <div className="stmt-cell"><div className="l">Opening balance</div><div className="v">{formatUsd(stmtOpening)}</div></div>
+                  <div className="stmt-cell"><div className="l">Total debit</div><div className="v amber">{formatUsd(stmtDebitTotal)}</div><div className="s">fill pickups</div></div>
+                  <div className="stmt-cell"><div className="l">Total credit</div><div className="v green">{formatUsd(stmtCreditTotal)}</div><div className="s">payments received</div></div>
+                  <div className="stmt-cell"><div className="l">Closing balance</div><div className={`v ${stmtClosing > 0 ? 'amber' : stmtClosing < 0 ? 'red' : 'green'}`}>{formatUsd(stmtClosing)}</div><div className="s">{stmtClosing > 0 ? 'owed by client' : stmtClosing < 0 ? 'in credit' : 'settled'}</div></div>
+                </div>
+              )}
+            </div>
+
+            {/* Recent pickups */}
+            <div className="card">
+              <div className="card-head">
+                <div className="card-title"><i className="ti ti-truck" /> Recent pickups</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="card-action" onClick={() => navigate(`/fill-clients/${id}/pickups`)}>
+                    <i className="ti ti-list" style={{ fontSize: 13 }} /> View all
+                  </button>
+                  <button className="card-action" onClick={() => setShowPickup(true)}><i className="ti ti-plus" style={{ fontSize: 13 }} /> New pickup</button>
+                </div>
               </div>
               {pickupsQ.isLoading && <div className="empty">Loading…</div>}
               {!pickupsQ.isLoading && pickups.length === 0 && (
@@ -712,8 +660,8 @@ export default function FillClientDetail() {
                       }
                       return (
                         <tr key={pk.id}>
-                          <td style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
-                            {new Date(pk.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                          <td className="mono">
+                            {formatDateTime(pk.date, { day: '2-digit' })}
                           </td>
                           <td style={{ color: 'var(--text2)' }}>{pk.recipient ?? '—'}</td>
                           <td>
@@ -727,29 +675,20 @@ export default function FillClientDetail() {
                       )
                     })}
                   </tbody>
-                  <tfoot>
-                    <tr style={{ background: 'var(--surface2)' }}>
-                      <td colSpan={2} style={{ padding: '9px 18px', fontWeight: 600, fontSize: 12 }}>Total pickups</td>
-                      <td style={{ padding: '9px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700 }}>
-                        {pickups.reduce((s: number, pk: any) => {
-                          if (!pk.reason) return s
-                          try { return s + (JSON.parse(pk.reason) as any[]).reduce((a, i) => a + i.qty, 0) } catch { return s }
-                        }, 0)} bags
-                      </td>
-                      <td className="right" style={{ padding: '9px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent)' }}>
-                        ${pickups.reduce((s: number, pk: any) => s + (pk.amount ? parseFloat(pk.amount) : 0), 0).toFixed(2)}
-                      </td>
-                    </tr>
-                  </tfoot>
                 </table>
               )}
             </div>
 
-            {/* Fill jobs */}
+            {/* Recent fill jobs */}
             <div className="card">
               <div className="card-head">
-                <div className="card-title"><i className="ti ti-list" /> Fill jobs</div>
-                <button className="card-action" onClick={() => setShowFillJob(true)}><i className="ti ti-plus" style={{ fontSize: 13 }} /> New fill job</button>
+                <div className="card-title"><i className="ti ti-list" /> Recent fill jobs</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="card-action" onClick={() => navigate(`/fill-clients/${id}/fill-jobs`)}>
+                    <i className="ti ti-list" style={{ fontSize: 13 }} /> View all
+                  </button>
+                  <button className="card-action" onClick={() => setShowFillJob(true)}><i className="ti ti-plus" style={{ fontSize: 13 }} /> New fill job</button>
+                </div>
               </div>
               {fillJobsQ.isLoading && <div className="empty">Loading…</div>}
               {!fillJobsQ.isLoading && fillJobs.length === 0 && (
@@ -769,7 +708,7 @@ export default function FillClientDetail() {
                   <tbody>
                     {fillJobs.map(fj => (
                       <tr key={fj.id}>
-                        <td style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{new Date(fj.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                        <td className="mono">{formatDateTime(fj.date, { day: '2-digit' })}</td>
                         <td style={{ color: 'var(--text2)' }}>{fj.workerEntity?.name ?? '—'}</td>
                         <td className="right num">{parseFloat(fj.totalCharcoalKg).toFixed(1)} kg</td>
                         <td className="right num" style={{ fontWeight: 600 }}>{fj.totalBags}</td>
@@ -781,11 +720,16 @@ export default function FillClientDetail() {
               )}
             </div>
 
-            {/* Payment history */}
+            {/* Recent payments */}
             <div className="card">
               <div className="card-head">
-                <div className="card-title"><i className="ti ti-cash" /> Payment history</div>
-                <button className="card-action" onClick={() => setShowPay(true)}><i className="ti ti-plus" style={{ fontSize: 13 }} /> Log payment</button>
+                <div className="card-title"><i className="ti ti-cash" /> Recent payments</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="card-action" onClick={() => navigate(`/fill-clients/${id}/payments`)}>
+                    <i className="ti ti-list" style={{ fontSize: 13 }} /> View payment history
+                  </button>
+                  <button className="card-action" onClick={() => setShowPay(true)}><i className="ti ti-plus" style={{ fontSize: 13 }} /> Log payment</button>
+                </div>
               </div>
               <div className="pay-kpis">
                 {/* Total paid — all time, unbounded (stmtCreditTotal from ledgerQ),
@@ -794,18 +738,19 @@ export default function FillClientDetail() {
                 <div className="pay-kpi"><div className="lbl">Outstanding</div><div className={`val ${clientBalance > 0 ? 'amber' : 'green'}`}>${clientBalance.toFixed(2)}</div></div>
               </div>
               <table className="data-table">
-                <thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Currency</th></tr></thead>
+                <thead><tr><th>Date</th><th>Method</th><th>Receiver</th><th>Amount</th><th>Currency</th></tr></thead>
                 <tbody>
                   {paymentsQ.isLoading && (
-                    <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}>Loading…</td></tr>
+                    <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}>Loading…</td></tr>
                   )}
                   {!paymentsQ.isLoading && realPayments.length === 0 && (
-                    <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}>No payments recorded</td></tr>
+                    <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}>No payments recorded</td></tr>
                   )}
                   {!paymentsQ.isLoading && realPayments.map((p) => (
                     <tr key={p.id}>
-                      <td style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{p.date}</td>
+                      <td className="mono">{formatDateTime(p.date, { day: '2-digit' })}</td>
                       <td><span className="badge badge-gray">{p.method}</span></td>
+                      <td style={{ color: 'var(--text2)', fontSize: 12.5 }}>{p.receiver?.name ?? p.receiverName ?? '—'}</td>
                       <td className="right num" style={{ fontWeight: 600, color: 'var(--accent)' }}>+${parseFloat(p.amount).toFixed(2)}</td>
                       <td style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)' }}>{p.currency}</td>
                     </tr>
@@ -826,7 +771,13 @@ export default function FillClientDetail() {
                   ...realPayments.map(p => ({ key: 'pay-' + p.id, date: p.date, kind: 'payment' as const, data: p })),
                   ...fillJobs.map(fj => ({ key: 'fj-' + fj.id, date: fj.date, kind: 'filljob' as const, data: fj })),
                   ...pickups.map(pk => ({ key: 'pk-' + pk.id, date: pk.date, kind: 'pickup' as const, data: pk })),
-                ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                ]
+                  .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                  // Concise recent-activity feed, not another transaction
+                  // table — each of the 3 source lists is already capped to
+                  // RECENT_LIMIT above; this caps the MERGED, interleaved
+                  // feed to the same rough size.
+                  .slice(0, RECENT_LIMIT)
 
                 if (events.length === 0) return <div className="empty">No activity yet.</div>
 
@@ -838,7 +789,10 @@ export default function FillClientDetail() {
                         <div className="act-icon green"><i className="ti ti-cash" /></div>
                         <div>
                           <div className="act-text">Payment <strong>${parseFloat(p.amount).toFixed(2)}</strong> received via {p.method}</div>
-                          <div className="act-time">{p.date}</div>
+                          {/* Payment.date is a date-only business value (no time-of-day) —
+                              formatDateTime() detects that and renders a bare date rather
+                              than a fabricated, misleading time. */}
+                          <div className="act-time">{formatDateTime(p.date, { day: '2-digit' })}{p.receiverName ? ` · ${p.receiverName}` : ''}</div>
                         </div>
                       </div>
                     )
@@ -850,7 +804,7 @@ export default function FillClientDetail() {
                         <div className="act-icon" style={{ background: 'rgba(99,102,241,0.1)', color: '#6366f1' }}><i className="ti ti-package" /></div>
                         <div>
                           <div className="act-text">Fill job — <strong>{fj.totalBags} bags</strong> · {parseFloat(fj.totalCharcoalKg).toFixed(1)} kg charcoal</div>
-                          <div className="act-time">{fj.date}{fj.workerEntity ? ` · ${fj.workerEntity.name}` : ''}</div>
+                          <div className="act-time">{formatDateTime(fj.date, { day: '2-digit' })}{fj.workerEntity ? ` · ${fj.workerEntity.name}` : ''}</div>
                         </div>
                       </div>
                     )
@@ -875,7 +829,7 @@ export default function FillClientDetail() {
                           {pk.amount ? <> · <strong>${parseFloat(pk.amount).toFixed(2)}</strong></> : ''}
                           {pkSummary && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>{pkSummary}</span>}
                         </div>
-                        <div className="act-time">{pk.date}{pk.recipient ? ` · ${pk.recipient}` : ''}</div>
+                        <div className="act-time">{formatDateTime(pk.date, { day: '2-digit' })}{pk.recipient ? ` · ${pk.recipient}` : ''}</div>
                       </div>
                     </div>
                   )
@@ -1358,7 +1312,13 @@ export default function FillClientDetail() {
       )}
 
       {/* ── Modal: Log payment ── */}
-      {showPay && (
+      {showPay && (() => {
+        // Payment method here is always cash/whish/omt (the 3 pills below) —
+        // all three are personal-custody methods, so a receiver is always
+        // required. Resolved once here so both the inline hint and the
+        // submit button's disabled state agree with what actually gets sent.
+        const resolvedPayById = receivers.find(r => r.name === payBy)?.id
+        return (
         <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setShowPay(false)}>
           <div className="modal" style={{ width: 500, maxWidth: '96vw' }}>
             <div className="compose-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0' }}>
@@ -1433,35 +1393,20 @@ export default function FillClientDetail() {
                   <input className="input" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} />
                 </div>
                 <div className="field">
-                  <label className="field-label">Received by</label>
+                  <label className="field-label">Received by <span style={{ color: 'var(--red)' }}>*</span></label>
                   <select className="select" value={payBy} onChange={e => setPayBy(e.target.value)}>
                     <option value="">— select receiver —</option>
-                    {usersList.length > 0 && (
-                      <optgroup label="Staff">
-                        {usersList.map(u => (
-                          <option key={u.id} value={u.name}>{u.name} · {u.role}</option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {workersList.length > 0 && (
-                      <optgroup label="Workers">
-                        {workersList.map(w => (
-                          <option key={w.id} value={w.name}>{w.name}</option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {receivers.length > 0 && (
-                      <optgroup label="Receivers">
-                        {receivers.map(r => (
-                          <option key={r.id} value={r.name}>{r.name}{r.role ? ` · ${r.role}` : ''}</option>
-                        ))}
-                      </optgroup>
-                    )}
+                    {receivers.map(r => (
+                      <option key={r.id} value={r.name}>{r.name} · {r.role}</option>
+                    ))}
                   </select>
-                  {usersList.length === 0 && workersList.length === 0 && receivers.length === 0 && (
+                  {receivers.length === 0 && (
                     <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
                       Add receivers in <strong>Settings → Money receivers</strong>
                     </div>
+                  )}
+                  {receivers.length > 0 && !resolvedPayById && (
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Receiver is required.</div>
                   )}
                 </div>
                 <div className="field" style={{ gridColumn: '1/-1' }}>
@@ -1477,18 +1422,17 @@ export default function FillClientDetail() {
               </span>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn" onClick={() => setShowPay(false)}>Cancel</button>
-                <button className="btn green" disabled={paySaving || payAmt <= 0} onClick={async () => {
-                  if (!id || payAmt <= 0) return
+                <button className="btn green" disabled={paySaving || payAmt <= 0 || !resolvedPayById} onClick={async () => {
+                  if (!id || payAmt <= 0 || !resolvedPayById) return
                   setPaySaving(true)
                   try {
-                    const receiverId = usersList.find(u => u.name === payBy)?.id ?? receivers.find(r => r.name === payBy)?.id
                     await createPayment.mutateAsync({
                       clientId: id,
                       amount: payAmt.toFixed(2),
                       currency: (client?.currency ?? 'USD') as any,
                       method: payMethod as any,
                       date: payDate,
-                      ...(receiverId ? { receiverId } : { receiverName: payBy || undefined }),
+                      receiverId: resolvedPayById,
                       notes: payRef || undefined,
                     })
                     setShowPay(false)
@@ -1513,58 +1457,6 @@ export default function FillClientDetail() {
             </div>
           </div>
         </div>
-      )}
-
-      {/* ── Modal: Pickup detail ── */}
-      {showPickupDetail !== null && (() => {
-        const p = PICKUPS[showPickupDetail]
-        const c = calcPickup(p)
-        return (
-          <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setShowPickupDetail(null)}>
-            <div className="modal" style={{ width: 820, maxWidth: '96vw' }}>
-              <div className="compose-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.2px' }}><i className="ti ti-truck" style={{ marginRight: 8 }} />{p.displayId ?? p.id}</div>
-                    <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'IBM Plex Mono',monospace", marginTop: 3 }}>{p.date} · {p.driver}</div>
-                  </div>
-                  <span style={{
-                    padding: '4px 11px', borderRadius: 20, fontSize: 10.5, fontWeight: 700,
-                    fontFamily: "'IBM Plex Mono',monospace", letterSpacing: '0.6px',
-                    background: p.paid ? 'rgba(29,107,74,0.3)' : 'rgba(180,83,9,0.3)',
-                    color: p.paid ? '#6EE7B7' : '#FCD34D'
-                  }}>
-                    {p.paid ? 'PAID' : 'UNPAID'}
-                  </span>
-                </div>
-                <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} onClick={() => setShowPickupDetail(null)}><i className="ti ti-x" /></button>
-              </div>
-
-              <div className="pd-kpis" style={{ borderBottom: '1px solid var(--border)' }}>
-                {[
-                  { label: 'Bags picked up', val: String(c.bags), sub: '', cls: '' },
-                  { label: 'Revenue', val: `$${c.revenue.toFixed(2)}`, sub: '', cls: '' },
-                  { label: 'Costs', val: `$${c.cost.toFixed(2)}`, sub: '', cls: 'cost' },
-                  { label: 'Wasted bags', val: String(c.wasted), sub: c.wasted > 0 ? 'deducted from stock' : 'none', cls: 'waste' },
-                  { label: 'Profit', val: `$${c.profit.toFixed(2)}`, sub: `${c.margin.toFixed(1)}% margin`, cls: 'profit' },
-                ].map(k => (
-                  <div key={k.label} className={`pd-kpi ${k.cls}`}>
-                    <span className="lbl">{k.label}</span>
-                    <span className="val">{k.val}</span>
-                    {k.sub && <span className="sub">{k.sub}</span>}
-                  </div>
-                ))}
-              </div>
-
-              <div className="modal-footer">
-                <span style={{ fontSize: 11.5, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>driver: {p.driver}</span>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="btn" onClick={() => setShowPickupDetail(null)}>Close</button>
-                  <button className="btn"><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print invoice</button>
-                </div>
-              </div>
-            </div>
-          </div>
         )
       })()}
 

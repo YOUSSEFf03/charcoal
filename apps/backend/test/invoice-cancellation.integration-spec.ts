@@ -170,7 +170,7 @@ describe('Invoice cancellation guards — real Postgres integration', () => {
     );
     createdShipmentIds.push(shipment.id);
 
-    await shipments.confirmDelivery(shipment.id, {} as any, CLERK_ID);
+    await shipments.confirmDelivery(shipment.id, {} as any, { userId: CLERK_ID, role: 'owner' });
 
     const invoice = await prisma.invoice.findFirst({ where: { orderId } });
     expect(invoice).not.toBeNull();

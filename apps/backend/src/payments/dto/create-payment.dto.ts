@@ -24,7 +24,7 @@ export class CreatePaymentDto {
   @ApiProperty({ description: 'Optional notes', required: false, example: 'Partial payment' })
   @IsOptional() @IsString() notes?: string;
 
-  @ApiProperty({ description: 'UUID of the receiver user (preferred over receiverName)', required: false })
+  @ApiProperty({ description: 'UUID of the receiver user (preferred over receiverName). Required by PaymentsService.create() when method is cash/whish/omt — RECEIVER_REQUIRED_METHODS — enforced there rather than here so the validation error carries a clear RECEIVER_REQUIRED code instead of a generic 422.', required: false })
   @IsOptional() @IsUUID('all') receiverId?: string;
 
   @ApiProperty({ description: 'Name of person who received the cash (legacy fallback, set automatically from receiverId)', required: false })

@@ -7,6 +7,7 @@ import type {
   ClientOrderDetail,
   CreateOrderDto,
   UpdateOrderDto,
+  DeliveryQueueOrderItem,
   PaginatedResponse,
 } from '../types/api'
 
@@ -32,6 +33,37 @@ export function useOrders(params?: OrdersQuery) {
     queryKey: ordersKey(params),
     queryFn: async () => {
       const res = await api.get<PaginatedResponse<ClientOrderListItem>>('/orders', { params })
+      return res.data
+    },
+  })
+}
+
+/** Query params accepted by GET /orders/delivery-queue. */
+export interface DeliveryQueueQuery {
+  page?: number
+  limit?: number
+  search?: string
+  driverId?: string
+  status?: string
+  sortBy?: 'createdAt' | 'client' | 'weight' | 'status'
+  sortOrder?: 'asc' | 'desc'
+}
+
+const deliveryQueueKey = (params?: DeliveryQueueQuery) => ['orders', 'delivery-queue', params ?? {}] as const
+
+/**
+ * The "delivery queue" — orders still requiring delivery action (draft/
+ * confirmed/partially_delivered), with its OWN pagination/search/filter/
+ * sort, entirely independent of useOrders()'s order-history list. See
+ * OrdersService.findDeliveryQueue()'s doc comment for exactly which
+ * statuses qualify and why.
+ * GET /orders/delivery-queue
+ */
+export function useDeliveryQueue(params?: DeliveryQueueQuery) {
+  return useQuery({
+    queryKey: deliveryQueueKey(params),
+    queryFn: async () => {
+      const res = await api.get<PaginatedResponse<DeliveryQueueOrderItem>>('/orders/delivery-queue', { params })
       return res.data
     },
   })
@@ -106,6 +138,9 @@ export function useMarkOrderDelivered() {
       return res.data
     },
     onSuccess: (_data, id) => {
+      // Broad ['orders'] invalidation already covers ['orders','delivery-queue',…]
+      // (query-key prefix match) — a delivered order must disappear from the
+      // queue immediately, same as it updates in the history list.
       qc.invalidateQueries({ queryKey: ['orders'] })
       qc.invalidateQueries({ queryKey: ['orders', id] })
     },

@@ -7,6 +7,7 @@ import {
 import { ExitType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStockExitDto } from './dto/create-stock-exit.dto';
+import { UpdateStockExitDto } from './dto/update-stock-exit.dto';
 import Decimal from 'decimal.js';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { UsersService } from '../users/users.service';
@@ -44,6 +45,7 @@ export class StockExitsService {
     dateTo?: string,
     clientId?: string,
     lotId?: string,
+    hasAmount?: boolean,
   ) {
     const skip = (page - 1) * limit;
 
@@ -62,6 +64,17 @@ export class StockExitsService {
       ...(lotId
         ? { OR: [{ lotId }, { packedStock: { lotId } }] }
         : {}),
+      // Opt-in: excludes amount=null rows. For exitType='client_bags_fill'
+      // specifically, a null amount means this row is the internal charcoal-
+      // consumption bookkeeping exit FillJobsService.create() itself writes
+      // (Step 7 of that method — kg leaving the warehouse for a fill job),
+      // NOT a customer bag pickup (which always has amount set — see
+      // ConfirmFillPickup/POST /stock-exits). The Fill Client Pickups pages
+      // pass this so that internal row never renders as a garbled pickup row
+      // (its `reason` is a plain "Fill job <id>" string, not the bag-summary
+      // JSON a real pickup's reason holds). Same amount:{not:null} distinction
+      // FillJobsService.getYtdSummary() already uses for its revenue query.
+      ...(hasAmount ? { amount: { not: null } } : {}),
     };
 
     const [data, total] = await this.prisma.$transaction([
@@ -433,7 +446,7 @@ export class StockExitsService {
    * Update mutable fields on an existing exit (amount, recipient).
    * Identity and audit fields (loggedById, exitType, date) are immutable after creation.
    */
-  async updateExit(id: string, dto: { amount?: number; recipient?: string }) {
+  async updateExit(id: string, dto: UpdateStockExitDto) {
     const exit = await this.prisma.stockExit.findUnique({ where: { id } });
     if (!exit) throw new NotFoundException({ error: 'Exit not found', code: 'NOT_FOUND' });
     // This exit's price already lives on its invoice line — setting `amount`

@@ -6,7 +6,9 @@ import { useClients } from '../hooks/useClients'
 import { useInvoices } from '../hooks/useInvoices'
 import { useCreatePayment } from '../hooks/usePayments'
 import { useArSummary } from '../hooks/useReports'
+import { useCashReceivers } from '../hooks/useUsers'
 import type { CreatePaymentDto, PaymentMethod } from '../types/api'
+import { toDateOnlyString } from '../lib/date'
 
 const METHODS: { id: PaymentMethod; label: string; sub: string; icon: string }[] = [
   { id: 'cash',  label: 'Cash',  sub: 'most common', icon: 'ti-cash' },
@@ -20,15 +22,27 @@ export default function Payment() {
   const [amount, setAmount] = useState(500)
   const [curr, setCurr] = useState<'USD' | 'LBP'>('USD')
   const [method, setMethod] = useState<PaymentMethod>('cash')
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10))
+  const [payDate, setPayDate] = useState(toDateOnlyString(new Date()))
   const [ref, setRef] = useState('')
   const [notes, setNotes] = useState('')
   const [selectedClientId, setSelectedClientId] = useState('')
   const [selectedInvoiceId, setSelectedInvoiceId] = useState('')
+  const [receiverName, setReceiverName] = useState('')
 
   const { data: clientsRes } = useClients()
   const clients = clientsRes?.data ?? []
   const selectedClient = clients.find(c => c.id === selectedClientId)
+
+  // receiverId must be a real User ID (payments_receiverId_fkey) so the
+  // payment credits that user's cash-handover ledger. Without it, a cash
+  // payment logged here is invisible to Cash Handover reconciliation even
+  // though it was collected by a real person. useCashReceivers() already
+  // returns real User ids for owner/accountant/sales_rep/worker/receiver —
+  // no more combining a Worker-table id (wrong FK) with a fake hardcoded
+  // "Owner" (no id) the way the old allReceivers construction did.
+  const receiversQ = useCashReceivers()
+  const allReceivers = receiversQ.data ?? []
+  const resolvedReceiverId = allReceivers.find(r => r.name === receiverName)?.id
 
   // Invoices are fetched reactively once a client is selected (hook is gated by clientId).
   const { data: invoicesRes } = useInvoices(selectedClientId ? { clientId: selectedClientId } : undefined)
@@ -57,6 +71,15 @@ export default function Payment() {
       showToast(`Amount exceeds balance — max $${BALANCE.toFixed(2)}`)
       return
     }
+    // All three methods offered here (cash/whish/omt) are personal-custody
+    // methods — the backend rejects them with no receiverId (RECEIVER_REQUIRED)
+    // anyway; this check exists purely so the user gets an honest inline
+    // message instead of a round-trip 400. Never auto-select a default —
+    // the user must explicitly choose who received the cash.
+    if (!resolvedReceiverId) {
+      showToast('Receiver is required.')
+      return
+    }
     const body: CreatePaymentDto = {
       clientId: selectedClientId,
       invoiceId: selectedInvoiceId || null,
@@ -65,6 +88,7 @@ export default function Payment() {
       method,
       date: payDate,
       notes: notes || null,
+      ...(resolvedReceiverId ? { receiverId: resolvedReceiverId } : receiverName ? { receiverName } : {}),
     }
     createPayment.mutate(body, {
       onSuccess: () => {
@@ -73,7 +97,8 @@ export default function Payment() {
         setRef('')
         setNotes('')
         setSelectedInvoiceId('')
-        setPayDate(new Date().toISOString().slice(0, 10))
+        setReceiverName('')
+        setPayDate(toDateOnlyString(new Date()))
       },
       onError: (err) => {
         const message =
@@ -201,6 +226,20 @@ export default function Payment() {
               </div>
             </div>
 
+            {/* Received by */}
+            <div className="field-card">
+              <div className="field-card-head">received by <span style={{ color: 'var(--red)' }}>*</span></div>
+              <div className="field">
+                <select className="input" value={receiverName} onChange={e => setReceiverName(e.target.value)}>
+                  <option value="">— select receiver —</option>
+                  {allReceivers.map(r => <option key={r.id || r.name} value={r.name}>{r.name}</option>)}
+                </select>
+                {!resolvedReceiverId && (
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Receiver is required.</div>
+                )}
+              </div>
+            </div>
+
             {/* Apply to invoices */}
             <div className="field-card" style={{ padding: 0 }}>
               <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -230,10 +269,17 @@ export default function Payment() {
                     <div style={{ fontSize: 12.5, color: 'var(--text2)' }}>{inv.lines.map(l => l.saleUnit === 'KG' ? `${l.kgQuantity}kg ${l.description}` : `${l.qty}× ${l.bagTypeName}`).join(' + ')}</div>
                     <div className="num">${outstanding.toFixed(2)}</div>
                     <div style={{ textAlign: 'right' }}><span className="age-pill ok">{inv.status}</span></div>
+                    {/* CreatePaymentDto has no per-invoice allocation — the whole
+                        `amount` above is applied to whichever single invoice is
+                        selected (payment-allocation.service.ts's allocateDirect
+                        has no clamp, by design). This mirrors that: previously
+                        showed the invoice's outstanding balance here even when
+                        the entered amount differed, implying only that much
+                        would apply when actually the full amount would. */}
                     <input
                       className="apply-input"
                       type="number"
-                      value={on ? outstanding.toFixed(2) : 0}
+                      value={on ? amount.toFixed(2) : 0}
                       disabled
                       step={0.01}
                       readOnly

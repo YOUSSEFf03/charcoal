@@ -53,7 +53,7 @@ export class StockLotsController {
    * IMPORTANT: must come before GET /:id so NestJS does not treat
    * "available" as a UUID parameter.
    */
-  @ApiOperation({ summary: 'All stock lots with kgRemaining > 0, unbounded (no page cap) — for the warehouse-sale KG lot selector' })
+  @ApiOperation({ summary: 'All stock lots with kgRemaining > 0, unbounded (no page cap) — for lot selectors (warehouse-sale KG picker, stock-adjustment picker)' })
   @ApiResponse({ status: 200, description: 'Success' })
   @Get('available')
   @Roles('owner', 'accountant', 'sales_rep', 'worker')

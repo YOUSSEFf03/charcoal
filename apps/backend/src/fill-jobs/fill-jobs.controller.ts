@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   ParseUUIDPipe,
   Post,
   Query,
@@ -28,8 +29,18 @@ export class FillJobsController {
     @Query('clientId', ParseUUIDPipe) clientId: string,
     @Query('page', new ParsePagePipe()) page: number,
     @Query('limit', new ParseLimitPipe(50)) limit: number,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
-    return this.fillJobsService.findAll(clientId, page, limit);
+    return this.fillJobsService.findAll(clientId, page, limit, dateFrom, dateTo);
+  }
+
+  @ApiOperation({ summary: 'Net bags in warehouse per bag spec for a client (produced minus picked up), unbounded' })
+  @ApiResponse({ status: 200, description: 'Map of specKey -> netStock' })
+  @Get('net-stock')
+  @Roles('owner', 'accountant', 'sales_rep')
+  getNetStock(@Query('clientId', ParseUUIDPipe) clientId: string) {
+    return this.fillJobsService.getNetStock(clientId);
   }
 
   @ApiOperation({ summary: 'Get avg and last fill price per bag spec for a client' })
@@ -46,6 +57,20 @@ export class FillJobsController {
   @Roles('owner', 'accountant', 'sales_rep')
   getYtdSummary(@Query('clientId', ParseUUIDPipe) clientId: string) {
     return this.fillJobsService.getYtdSummary(clientId);
+  }
+
+  /**
+   * IMPORTANT: must come after the literal-path GET routes above (net-stock,
+   * price-stats, ytd-summary) so NestJS does not treat those path segments as
+   * a UUID :id param — same convention as StockLotsController's 'available'.
+   */
+  @ApiOperation({ summary: 'Get a fill job by ID' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404 })
+  @Get(':id')
+  @Roles('owner', 'accountant', 'sales_rep')
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.fillJobsService.findOne(id);
   }
 
   @ApiOperation({ summary: 'Create a fill job (auto-calculates fill price from stock lot cost)' })

@@ -71,8 +71,9 @@ export class ShipmentsController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateActualWeightDto,
+    @CurrentUser() user: ClerkUser,
   ) {
-    return this.shipmentsService.updateActualWeight(id, dto);
+    return this.shipmentsService.updateActualWeight(id, dto, user);
   }
 
   @ApiOperation({ summary: 'Update actual weight of a shipment' })
@@ -84,8 +85,9 @@ export class ShipmentsController {
   updateActualWeight(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateActualWeightDto,
+    @CurrentUser() user: ClerkUser,
   ) {
-    return this.shipmentsService.updateActualWeight(id, dto);
+    return this.shipmentsService.updateActualWeight(id, dto, user);
   }
 
   @ApiOperation({ summary: 'Confirm delivery — drains packed stock FIFO (atomic)' })
@@ -99,7 +101,7 @@ export class ShipmentsController {
     @Body() dto: ConfirmDeliveryDto,
     @CurrentUser() user: ClerkUser,
   ) {
-    return this.shipmentsService.confirmDelivery(id, dto, user.userId);
+    return this.shipmentsService.confirmDelivery(id, dto, user);
   }
 
   @ApiOperation({ summary: 'Log a return for a shipment (atomic)' })
@@ -113,7 +115,7 @@ export class ShipmentsController {
     @Body() dto: LogReturnDto,
     @CurrentUser() user: ClerkUser,
   ) {
-    return this.shipmentsService.logReturn(id, dto, user.userId);
+    return this.shipmentsService.logReturn(id, dto, user);
   }
 
   @ApiOperation({ summary: 'Cancel a pending shipment — releases its packed-stock reservation (atomic)' })
@@ -131,7 +133,10 @@ export class ShipmentsController {
   @ApiResponse({ status: 404, description: 'Not found' })
   @Get(':id/receipt')
   @Roles('driver', 'owner', 'sales_rep')
-  getReceipt(@Param('id', ParseUUIDPipe) id: string) {
-    return this.shipmentsService.getReceipt(id);
+  getReceipt(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: ClerkUser,
+  ) {
+    return this.shipmentsService.getReceipt(id, user);
   }
 }

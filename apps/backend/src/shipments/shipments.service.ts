@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -15,6 +16,7 @@ import { CreateShipmentDto } from './dto/create-shipment.dto';
 import { ConfirmDeliveryDto } from './dto/confirm-delivery.dto';
 import { LogReturnDto } from './dto/log-return.dto';
 import { UpdateActualWeightDto } from './dto/update-actual-weight.dto';
+import { ClerkUser } from '../auth/clerk.strategy';
 
 @Injectable()
 export class ShipmentsService {
@@ -202,14 +204,48 @@ export class ShipmentsService {
 
   /**
    * Update the actual weight of a shipment.
+   *
+   * Ownership: same rule as confirmDelivery()/logReturn() — a caller with role
+   * 'driver' may only touch a shipment whose order is assigned to them
+   * (ClientOrder.driverId). This endpoint is @Roles('driver', 'owner'); without
+   * this check any authenticated driver could overwrite another driver's
+   * shipment weight.
    */
-  async updateActualWeight(id: string, dto: UpdateActualWeightDto) {
-    await this.findOne(id);
+  async updateActualWeight(id: string, dto: UpdateActualWeightDto, currentUser: ClerkUser) {
+    const shipment = await this.prisma.shipment.findUnique({
+      where: { id },
+      include: { order: { select: { driverId: true } } },
+    });
+    if (!shipment) {
+      throw new NotFoundException({ error: 'Shipment not found', code: 'NOT_FOUND' });
+    }
+    await this.assertDriverOwnsShipmentOrder(
+      this.prisma as unknown as Prisma.TransactionClient, shipment.order.driverId, currentUser,
+    );
 
     return this.prisma.shipment.update({
       where: { id },
       data: { actualKg: dto.actualKg },
     });
+  }
+
+  /**
+   * Shared ownership guard for driver-facing shipment actions
+   * (confirmDelivery/logReturn/updateActualWeight, all @Roles('driver', 'owner')).
+   * A caller with role 'driver' may only act on a shipment whose order is
+   * assigned to them (ClientOrder.driverId === their own User.id); any other
+   * role passes through unchecked.
+   */
+  private async assertDriverOwnsShipmentOrder(
+    db: Prisma.TransactionClient,
+    orderDriverId: string | null,
+    currentUser: ClerkUser,
+  ): Promise<void> {
+    if (currentUser.role !== 'driver') return;
+    const caller = await db.user.findUnique({ where: { clerkId: currentUser.userId } });
+    if (!caller || orderDriverId !== caller.id) {
+      throw new ForbiddenException({ error: 'Access denied to this shipment', code: 'FORBIDDEN' });
+    }
   }
 
   /**
@@ -376,8 +412,16 @@ export class ShipmentsService {
 
     const plan = await this.packedStockService.getFifoDraw(bagTypeId, quantity);
     if (!plan.fulfilled) {
+      // Resolve the human-readable bag type name for the error message —
+      // only on this (rare) failure path, so the happy path never pays for
+      // an extra query. The raw bagTypeId UUID must never reach the user
+      // (it was the exact text of a prior reported bug); fall back to a
+      // generic label if the BagType row is somehow gone by the time we get
+      // here (e.g. concurrently deleted — defense in depth, not expected).
+      const bagType = await tx.bagType.findUnique({ where: { id: bagTypeId }, select: { id: true, name: true } });
+      const label = bagType ? `"${bagType.name}"` : 'the requested bag type';
       throw new BadRequestException({
-        error: `Insufficient packed stock for bagTypeId ${bagTypeId} — available: ${plan.available}, requested: ${quantity}`,
+        error: `Insufficient packed stock for ${label} — available: ${plan.available}, requested: ${quantity}.`,
         code: 'CONSTRAINT_VIOLATION',
       });
     }
@@ -421,21 +465,42 @@ export class ShipmentsService {
    *
    * @param id - Shipment UUID
    * @param dto - Delivery confirmation data
-   * @param userId - Clerk user ID from @CurrentUser (CONSTRAINT 5)
+   * @param currentUser - Authenticated caller from @CurrentUser (CONSTRAINT 5 + ownership)
    * @constraint 2 guard against negative packed stock per drain
    * @constraint 5 loggedById from user.id, never from DTO
+   *
+   * Ownership: a caller with role 'driver' may only confirm delivery for a
+   * shipment whose order is assigned to them (ClientOrder.driverId). This
+   * endpoint is @Roles('driver', 'owner'); without this check any
+   * authenticated driver could confirm delivery — draining stock, issuing an
+   * invoice, and crediting a cash ledger — for a shipment that isn't theirs.
+   *
+   * Concurrency: locks the shipment row (`SELECT ... FOR UPDATE`) before
+   * reading it, so two near-simultaneous confirmDelivery() calls for the SAME
+   * shipment (a double-tapped "Deliver" button, or a retried request) never
+   * both observe `status !== 'delivered'`. Without this lock both could pass
+   * that check, both attempt to drain the same reservation rows (the loser's
+   * ShipmentReservation.delete then hits a raw "record not found" once
+   * unblocked — surfaced as a 500), and — worse — both create a payment,
+   * allocation, and ledger credit for the same delivery. The second call now
+   * blocks here until the first commits, then sees the fresh `delivered`
+   * status and — via {@link drainShipment}'s own no-op guard and the
+   * `alreadyDelivered` check below — skips draining and Step 5 entirely.
    */
-  async confirmDelivery(id: string, dto: ConfirmDeliveryDto, userId: string) {
+  async confirmDelivery(id: string, dto: ConfirmDeliveryDto, currentUser: ClerkUser) {
     // Resolve caller's internal user record before opening a transaction —
     // the user row is not mutated during delivery confirmation.
-    const user = await this.prisma.user.findUnique({ where: { clerkId: userId } });
+    const user = await this.prisma.user.findUnique({ where: { clerkId: currentUser.userId } });
     if (!user) {
       throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
     }
 
     // Delivery FIFO drain: scales with (bag types × stock entries); 15 s covers large shipments without hanging the pool indefinitely.
     return this.prisma.$transaction(async (tx) => {
-      // Step 1: Fetch shipment with bags, order, and THIS shipment's reservation rows.
+      // Step 1: Lock the shipment row BEFORE reading it (see doc comment
+      // above), then fetch it with bags, order, and THIS shipment's
+      // reservation rows.
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM "shipments" WHERE id = ${id} FOR UPDATE`);
       const shipment = await tx.shipment.findUnique({
         where: { id },
         include: {
@@ -447,6 +512,18 @@ export class ShipmentsService {
       if (!shipment) {
         throw new NotFoundException({ error: 'Shipment not found', code: 'NOT_FOUND' });
       }
+      await this.assertDriverOwnsShipmentOrder(tx, shipment.order.driverId, currentUser);
+
+      // Captured BEFORE draining — drainShipment() already no-ops on a
+      // double-confirm (nothing left to physically drain), but that alone
+      // doesn't stop Step 5 below from creating a SECOND Payment/allocation/
+      // ledger-credit for the same delivery on a retried request (e.g. a
+      // driver on a flaky mobile connection whose first confirm succeeded
+      // server-side but whose response never arrived, then retries). This is
+      // the same idempotency guarantee Step 2 (drain) and Step 4 (invoice)
+      // already have, extended to Step 5 so all three agree on "already
+      // handled" for the exact same shipment.
+      const alreadyDelivered = shipment.status === 'delivered';
 
       // Step 2: Drain this shipment's reservations and mark it delivered.
       await this.drainShipment(tx, shipment, user.id, dto.notes);
@@ -486,7 +563,7 @@ export class ShipmentsService {
       // driver (ClientOrder.driverId) — a real User, known before the transaction
       // opens, so no receiver picker is needed. Orders with no assigned driver
       // keep today's behavior: the payment is recorded, nothing is credited.
-      if (dto.paymentAmount && dto.paymentMethod) {
+      if (!alreadyDelivered && dto.paymentAmount && dto.paymentMethod) {
         const paymentAmount = new Decimal(dto.paymentAmount);
         let receiverFields: { receiverId?: string; receiverName?: string } = {};
         if (shipment.order.driverId) {
@@ -546,18 +623,22 @@ export class ShipmentsService {
    *
    * @param id - Shipment UUID
    * @param dto - Return log data
-   * @param userId - Clerk user ID (unused in return, kept for signature consistency)
+   * @param currentUser - Authenticated caller from @CurrentUser (ownership check only)
+   *
+   * Ownership: same rule as confirmDelivery() — a caller with role 'driver'
+   * may only log a return for a shipment whose order is assigned to them.
    */
-  async logReturn(id: string, dto: LogReturnDto, _userId: string) {
+  async logReturn(id: string, dto: LogReturnDto, currentUser: ClerkUser) {
     return this.prisma.$transaction(async (tx) => {
       // Step 1: Fetch shipment with bags
       const shipment = await tx.shipment.findUnique({
         where: { id },
-        include: { bags: true },
+        include: { bags: true, order: { select: { driverId: true } } },
       });
       if (!shipment) {
         throw new NotFoundException({ error: 'Shipment not found', code: 'NOT_FOUND' });
       }
+      await this.assertDriverOwnsShipmentOrder(tx, shipment.order.driverId, currentUser);
 
       // Only delivered shipments may be returned; pre-delivery, use cancelShipment.
       if (shipment.status !== 'delivered') {
@@ -683,7 +764,7 @@ export class ShipmentsService {
   /**
    * Return a delivery receipt for a shipment.
    */
-  async getReceipt(id: string) {
+  async getReceipt(id: string, currentUser: ClerkUser) {
     const shipment = await this.prisma.shipment.findUnique({
       where: { id },
       include: {
@@ -694,6 +775,14 @@ export class ShipmentsService {
     if (!shipment) {
       throw new NotFoundException({ error: 'Shipment not found', code: 'NOT_FOUND' });
     }
+    // Ownership: same rule as confirmDelivery()/logReturn()/updateActualWeight() —
+    // a caller with role 'driver' may only view the receipt for a shipment
+    // whose order is assigned to them. This endpoint is @Roles('driver',
+    // 'owner', 'sales_rep'); without this check any authenticated driver could
+    // read another driver's delivery — including the client's name and address.
+    await this.assertDriverOwnsShipmentOrder(
+      this.prisma as unknown as Prisma.TransactionClient, shipment.order.driverId, currentUser,
+    );
 
     return {
       shipment: {

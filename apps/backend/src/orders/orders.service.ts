@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -59,6 +60,115 @@ export class OrdersService {
   }
 
   /**
+   * Statuses that still require delivery action — i.e. NOT
+   * ['delivered','invoiced','paid']. Mirrors the exact condition
+   * OrderDetail.tsx already uses to decide whether to show its "Mark as
+   * delivered" button, and the exact inverse of the `hasDeliveredOrder` set
+   * InvoicesService.cancel() checks (['delivered','partially_delivered',
+   * 'invoiced','paid']) — both independently confirm this is the real
+   * "delivery not yet complete" boundary already recognized elsewhere in the
+   * codebase, not a frontend invention.
+   *
+   * 'confirmed' is included for schema-correctness (a real OrderStatus enum
+   * value meaning "further along than draft, still not delivered") even
+   * though nothing in the current codebase ever writes it — CreateOrderDto/
+   * UpdateOrderDto have no `status` field, so every order is created
+   * 'draft' and moves directly to 'delivered' via markDelivered(). 'draft'
+   * is therefore the real, everyday "awaiting delivery" state today, not
+   * merely an unsubmitted/editable draft — see markDelivered()'s doc
+   * comment: "New Order → Mark Delivered directly, with no shipment/
+   * delivery-address step in between."
+   */
+  private static readonly DELIVERY_QUEUE_STATUSES: OrderStatus[] = [
+    'draft',
+    'confirmed',
+    'partially_delivered',
+  ];
+
+  /**
+   * Return a paginated "delivery queue" — orders that still require delivery
+   * action (see DELIVERY_QUEUE_STATUSES) — with its OWN pagination/search/
+   * filter/sort, entirely independent of findAll()'s order-history listing.
+   * A minimal select (no shipments/invoices/bagLines) keeps this fast: it's
+   * an operational queue, polled/refreshed far more often than the history
+   * list.
+   *
+   * Sorting: no backend "priority" field exists (deliberately not invented —
+   * see the ticket this implements). Default is `createdAt` ascending —
+   * oldest-waiting-first, the standard FIFO operational-queue default absent
+   * any richer signal. Every order returned already "requires attention" by
+   * virtue of the status filter alone, so there is no further tier to sort
+   * by first. `status`/`client`/`weight` sorts are offered as explicit,
+   * user-chosen alternatives, never assumed.
+   *
+   * @param page - 1-indexed page
+   * @param limit - Items per page (small — this renders as cards, not table rows)
+   * @param search - Case-insensitive client-name search (same pattern as findAll())
+   * @param driverId - Optional: only orders assigned to this driver
+   * @param status - Optional: narrows to one of DELIVERY_QUEUE_STATUSES; any
+   *   other value is ignored (same "unrecognized falls back to default"
+   *   convention as findAll()'s sortBy) rather than erroring — a status
+   *   outside this set could never appear in the queue anyway.
+   * @param sortBy - 'createdAt' (default) | 'client' | 'weight' | 'status'
+   * @param sortOrder - 'asc' (default) | 'desc'
+   */
+  async findDeliveryQueue(
+    page: number,
+    limit: number,
+    search?: string,
+    driverId?: string,
+    status?: OrderStatus,
+    sortBy?: string,
+    sortOrder?: string,
+  ) {
+    const skip = (page - 1) * limit;
+    const statusFilter =
+      status && OrdersService.DELIVERY_QUEUE_STATUSES.includes(status)
+        ? [status]
+        : OrdersService.DELIVERY_QUEUE_STATUSES;
+
+    const where: Prisma.ClientOrderWhereInput = {
+      status: { in: statusFilter },
+      ...(driverId ? { driverId } : {}),
+      ...(search ? { client: { name: { contains: search, mode: 'insensitive' } } } : {}),
+    };
+
+    const direction: Prisma.SortOrder = sortOrder === 'desc' ? 'desc' : 'asc';
+    const orderBy: Prisma.ClientOrderOrderByWithRelationInput =
+      sortBy === 'client' ? { client: { name: direction } } :
+      sortBy === 'weight' ? { totalKgRequested: direction } :
+      sortBy === 'status' ? { status: direction } :
+      { createdAt: direction };
+
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.clientOrder.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy,
+        select: {
+          id: true,
+          displayId: true,
+          clientId: true,
+          client: { select: { id: true, name: true } },
+          charcoalType: true,
+          grade: true,
+          totalKgRequested: true,
+          bagTypeId: true,
+          bagType: { select: { id: true, name: true, nominalKg: true } },
+          status: true,
+          createdAt: true,
+          driverId: true,
+          driver: { select: { id: true, name: true } },
+        },
+      }),
+      this.prisma.clientOrder.count({ where }),
+    ]);
+
+    return { data, total, page, limit };
+  }
+
+  /**
    * Return a single order with client, shipments and bag lines.
    *
    * @param id - Order UUID
@@ -109,6 +219,20 @@ export class OrdersService {
     });
     if (!client) {
       throw new NotFoundException({ error: 'Client not found', code: 'NOT_FOUND' });
+    }
+
+    // Every downstream balance/ledger calculation (ClientBalanceService, Payments,
+    // getClientLedger, getArSummary) assumes an order's currency — and therefore
+    // its eventual invoice's currency — always matches the client's own currency;
+    // Payment.amount is always stored in the client's currency (PaymentsService),
+    // so a mismatched order/invoice currency would compare unlike units when its
+    // paidAmount/status is recomputed. Reject rather than silently store it.
+    if (dto.currency !== client.currency) {
+      throw new BadRequestException({
+        message: `Order currency (${dto.currency}) must match the client's currency (${client.currency})`,
+        error: `Order currency (${dto.currency}) must match the client's currency (${client.currency})`,
+        code: 'CONSTRAINT_VIOLATION',
+      });
     }
 
     // Compute avgOrderDays update
@@ -193,6 +317,27 @@ export class OrdersService {
       }
     }
 
+    // Same invariant enforced at create() — an order's currency must always
+    // match its client's currency (see create()'s comment). Only relevant here
+    // while still draft (clientId/currency locked otherwise, guarded above):
+    // changing either field independently could otherwise desync them.
+    if (dto.clientId !== undefined || dto.currency !== undefined) {
+      const effectiveClient = dto.clientId !== undefined
+        ? await this.prisma.client.findUnique({ where: { id: dto.clientId } })
+        : order.client;
+      if (!effectiveClient) {
+        throw new NotFoundException({ error: 'Client not found', code: 'NOT_FOUND' });
+      }
+      const effectiveCurrency = dto.currency ?? order.currency;
+      if (effectiveCurrency !== effectiveClient.currency) {
+        throw new BadRequestException({
+          message: `Order currency (${effectiveCurrency}) must match the client's currency (${effectiveClient.currency})`,
+          error: `Order currency (${effectiveCurrency}) must match the client's currency (${effectiveClient.currency})`,
+          code: 'CONSTRAINT_VIOLATION',
+        });
+      }
+    }
+
     return this.prisma.clientOrder.update({
       where: { id },
       data: {
@@ -243,14 +388,24 @@ export class OrdersService {
    * pre-existing gap (no order-level raw-lot deduction exists anywhere in
    * this codebase, shipment-based or otherwise) is unchanged by this method.
    *
-   * Idempotent: an order that is already delivered/invoiced/paid is returned
-   * as-is with no further deduction or transaction — this is what prevents a
-   * double deduction if Mark Delivered is clicked twice in a row.
+   * Idempotent, including under concurrency: an order that is already
+   * delivered/invoiced/paid short-circuits before opening a transaction at
+   * all (the common sequential-repeat-call case). But two requests can also
+   * arrive close enough together that BOTH read that same pre-commit status
+   * and pass this outer check — a double click that outran the frontend's
+   * pending-state disable, or a retried request. For that race window, the
+   * transaction itself opens by locking the order row (`SELECT ... FOR
+   * UPDATE`) before reading anything else, then re-checks status against
+   * that fresh, lock-protected read: the second transaction blocks behind
+   * the first, and once unblocked sees the now-delivered status and returns
+   * without draining or crediting anything a second time. This is what
+   * actually prevents a double deduction — the outer check alone cannot,
+   * since two concurrent callers can both observe "not yet delivered".
    *
-   * The stock deduction and the order-status write happen inside one
+   * The stock deduction and the order-status write happen inside that same
    * transaction — insufficient stock rolls everything back (no partial
    * deduction, order status unchanged), and the invoice below is only ever
-   * reached once that transaction has committed.
+   * reached once the transaction has committed.
    *
    * @param id - Order UUID
    * @param userId - Clerk user ID from @CurrentUser — resolved to the internal
@@ -262,14 +417,14 @@ export class OrdersService {
   async markDelivered(id: string, userId: string) {
     const order = await this.findOne(id);
 
-    // Idempotent no-op — already delivered (or further along); nothing to
-    // (re-)drain and nothing new to invoice. Prevents a double deduction on a
-    // second click.
+    // Fast-path idempotent no-op — already delivered (or further along).
+    // Only an optimization for the ordinary sequential repeat call (skips
+    // opening a transaction); it does NOT by itself make concurrent calls
+    // safe — see the lock+recheck inside the transaction below, which is
+    // what actually closes that race.
     if (['delivered', 'invoiced', 'paid'].includes(order.status)) {
       return order;
     }
-
-    const activeShipments = order.shipments.filter(s => s.status !== 'cancelled');
 
     // Resolve caller before opening a transaction — needed to stamp
     // StockExit.loggedById for whatever gets drained below (CONSTRAINT 5:
@@ -282,14 +437,45 @@ export class OrdersService {
     // Generous timeout — same reasoning as ShipmentsService.confirmDelivery():
     // a FIFO drain can touch several packed-stock rows.
     const updatedOrder = await this.prisma.$transaction(async (tx) => {
+      // Lock the order row FIRST, before reading anything else — for every
+      // path, not just the direct-deduction branch. Two concurrent
+      // markDelivered() calls for the same order both pass the outer
+      // idempotency check above (both read the same pre-commit status), so
+      // without this lock both could proceed to drain stock / advance status.
+      // The second call now blocks here until the first commits; the
+      // re-check immediately below then sees the now-'delivered' status
+      // (fresh, lock-protected read) and returns without draining a second
+      // time. This also covers the direct-deduction branch's pre-existing
+      // reason for this same lock: totalKgRequested/bagTypeId are read fresh
+      // here too, closing the race with a concurrent PATCH /orders/:id
+      // (update() itself takes no lock, so this side must serialize against it).
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM "client_orders" WHERE id = ${id} FOR UPDATE`);
+      const freshOrder = await tx.clientOrder.findUnique({
+        where: { id },
+        include: { bagType: true, shipments: { select: { id: true, status: true } } },
+      });
+      if (!freshOrder) {
+        throw new NotFoundException({ error: 'Order not found', code: 'NOT_FOUND' });
+      }
+      if (['delivered', 'invoiced', 'paid'].includes(freshOrder.status)) {
+        // A concurrent call already delivered this order while this one was
+        // blocked on the lock above — nothing left to (re-)drain. Scalar-only
+        // re-fetch so the response shape matches the normal path below
+        // (tx.clientOrder.update() also returns scalar columns only) — no
+        // second response format for the racing-caller case.
+        return tx.clientOrder.findUnique({ where: { id } });
+      }
+
+      const activeShipments = freshOrder.shipments.filter(s => s.status !== 'cancelled');
+
       if (activeShipments.length > 0) {
         // Legacy/shipment-bearing path — unchanged.
         for (const activeShipment of activeShipments) {
           if (activeShipment.status === 'delivered') continue;
 
           // Re-fetch inside the transaction with reservations + their packed-stock
-          // rows — findOne()'s outer include doesn't carry these (it's the public
-          // order-detail payload and has no reason to expose reservation internals).
+          // rows — the query above doesn't carry these (it only needs id/status to
+          // pick the branch and skip cancelled/already-delivered shipments).
           const shipment = await tx.shipment.findUnique({
             where: { id: activeShipment.id },
             include: { reservations: { include: { packedStock: true } } },
@@ -298,38 +484,18 @@ export class OrdersService {
 
           await this.shipments.drainShipment(tx, shipment, user.id);
         }
-      } else if (order.bagTypeId) {
-        // Normal path — no shipment. Lock the order row BEFORE reading it —
-        // unlike the shipment-based branch (whose quantity is anchored to
-        // already-created ShipmentReservation rows, immune to later order
-        // edits), this branch derives its deduction quantity directly from
-        // totalKgRequested/bagTypeId. OrdersService.update() only blocks
-        // editing those fields once status !== 'draft', and every order is
-        // still 'draft' right up until this transaction commits — so without
-        // this lock, a concurrent PATCH could commit a totalKgRequested/
-        // bagTypeId change in the gap between this read and the status write
-        // below, after which createFromOrder()'s own fresh read (post-commit)
-        // would compute a different qty than what was actually deducted here.
-        // update() itself takes no lock, so this side must be the one to
-        // serialize against it.
-        await tx.$queryRaw(Prisma.sql`SELECT id FROM "client_orders" WHERE id = ${id} FOR UPDATE`);
-        const freshOrder = await tx.clientOrder.findUnique({
-          where: { id },
-          include: { bagType: true },
-        });
-        if (!freshOrder) {
-          throw new NotFoundException({ error: 'Order not found', code: 'NOT_FOUND' });
-        }
-        if (freshOrder.bagTypeId && freshOrder.bagType) {
-          // Same formula InvoicesService.createFromOrder() uses to build the
-          // invoice line — keeps the invoice and the physical deduction in
-          // agreement on bag count.
-          const qty = Math.round(
-            parseFloat(freshOrder.totalKgRequested.toString()) /
-              parseFloat(freshOrder.bagType.nominalKg.toString()),
-          );
-          await this.shipments.drainPackedStockDirect(tx, freshOrder.bagTypeId, qty, id, user.id);
-        }
+      } else if (freshOrder.bagTypeId && freshOrder.bagType) {
+        // Normal path — no shipment. Quantity is derived directly from
+        // totalKgRequested/bagTypeId, both already read fresh (and
+        // lock-protected, see above) by the query above.
+        // Same formula InvoicesService.createFromOrder() uses to build the
+        // invoice line — keeps the invoice and the physical deduction in
+        // agreement on bag count.
+        const qty = Math.round(
+          parseFloat(freshOrder.totalKgRequested.toString()) /
+            parseFloat(freshOrder.bagType.nominalKg.toString()),
+        );
+        await this.shipments.drainPackedStockDirect(tx, freshOrder.bagTypeId, qty, id, user.id);
       }
       // KG order (bagTypeId null) with no shipment: nothing to deduct —
       // pre-existing gap, see doc comment above.
@@ -346,6 +512,9 @@ export class OrdersService {
     // POST /orders/:id/invoice to generate it manually. If the stock drain
     // itself failed above, the transaction rolled back and this line is never
     // reached — the invoice can never be issued for undelivered stock.
+    // createFromOrder() is idempotent and race-safe on its own (see its doc
+    // comment) — safe to call again even when the branch above short-circuited
+    // because a concurrent request already delivered this order.
     await this.invoices.createFromOrder(id, undefined, true);
 
     return updatedOrder;

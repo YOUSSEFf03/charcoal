@@ -58,3 +58,26 @@ describe('currentMonthToDateRange (regression — pre-existing helper, confirmin
     expect(dateTo).toBe('2026-08-19')
   })
 })
+
+describe('toDateOnlyString — a date-only business value must not shift across timezones', () => {
+  it('2026-08-01 stays 2026-08-01, at any hour of that local day (application-wide timezone audit)', () => {
+    // This is the literal example from the timezone audit: a date-only
+    // business value such as "2026-08-01" must remain "2026-08-01"
+    // regardless of the time of day it's read/selected — never rolled back
+    // to 2026-07-31 by an incidental toISOString()/UTC conversion.
+    for (const hour of [0, 1, 2, 3, 12, 23]) {
+      expect(toDateOnlyString(new Date(2026, 7, 1, hour, 0))).toBe('2026-08-01')
+    }
+  })
+
+  it('never produces the previous day for any hour of any day — the exact bug class found in Money Handover History and Invoices', () => {
+    // A naive `new Date(y, m, d).toISOString().slice(0, 10)` rolls the date
+    // back by one for any timezone ahead of UTC (Beirut, UTC+3) for hours
+    // 00:00–02:59 local time. toDateOnlyString must never do that, for any
+    // hour, on any day — assert across a full 24h sweep on a fixed day.
+    for (let hour = 0; hour < 24; hour++) {
+      const d = new Date(2026, 7, 1, hour, 30)
+      expect(toDateOnlyString(d)).toBe('2026-08-01')
+    }
+  })
+})

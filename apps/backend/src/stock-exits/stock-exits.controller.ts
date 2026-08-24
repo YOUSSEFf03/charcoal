@@ -13,6 +13,7 @@ import { ExitType } from '@prisma/client';
 import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { StockExitsService } from './stock-exits.service';
 import { CreateStockExitDto } from './dto/create-stock-exit.dto';
+import { UpdateStockExitDto } from './dto/update-stock-exit.dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ClerkUser } from '../auth/clerk.strategy';
@@ -36,8 +37,9 @@ export class StockExitsController {
     @Query('dateTo') dateTo?: string,
     @Query('clientId') clientId?: string,
     @Query('lotId') lotId?: string,
+    @Query('hasAmount') hasAmount?: string,
   ) {
-    return this.stockExitsService.findAll(page, limit, exitType, dateFrom, dateTo, clientId, lotId);
+    return this.stockExitsService.findAll(page, limit, exitType, dateFrom, dateTo, clientId, lotId, hasAmount === 'true');
   }
 
   /**
@@ -112,7 +114,7 @@ export class StockExitsController {
   @Roles('owner', 'sales_rep')
   async updateExit(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: { amount?: number; recipient?: string },
+    @Body() dto: UpdateStockExitDto,
   ) {
     return this.stockExitsService.updateExit(id, dto);
   }

@@ -87,6 +87,6 @@ export class PackingSessionsController {
     @Body() dto: UpdatePackingSessionDto,
     @CurrentUser() user: ClerkUser,
   ) {
-    return this.packingSessionsService.updatePackingSession(id, dto, user.userId);
+    return this.packingSessionsService.updatePackingSession(id, dto, user);
   }
 }

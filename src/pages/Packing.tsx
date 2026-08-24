@@ -5,6 +5,7 @@ import { useStockLots } from '../hooks/useWarehouse'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { useWorkers } from '../hooks/useWorkers'
 import type { PackingSession } from '../lib/types'
+import { toDateOnlyString } from '../lib/date'
 
 // ── constants ──────────────────────────────────────────────────────────────
 
@@ -146,7 +147,7 @@ export default function Packing() {
     }
   }
 
-  const todayIso = new Date().toISOString().slice(0, 10)
+  const todayIso = toDateOnlyString(new Date())
   const entries: Entry[] = (sessionsQ.data?.data ?? []).filter(s => (s.date ?? '').slice(0, 10) === todayIso).map(toEntry)
 
   const updateSession = useUpdatePackingSession()
@@ -267,8 +268,12 @@ export default function Packing() {
         data: {
           lotInputs: validRows.map(r => ({ lotId: LOTS[r.lotIdx].id, kg: Number(r.kg).toFixed(3) })),
           bagsOutput: [{ bagTypeId: selectedBagType.id, qty: Number(editBagQty) }],
-          ...(editVarianceNote ? { varianceNote: editVarianceNote } : {}),
-          notes: editNotes || undefined,
+          // Always sent, even empty — packing-sessions.service.ts distinguishes
+          // omitted (dto.field === undefined → keep existing) from an explicit ''
+          // (→ clear the field). Omitting on empty meant a user clearing the
+          // notes/variance-note box and saving silently left the old value in place.
+          varianceNote: editVarianceNote,
+          notes: editNotes,
           workerEntityId: editWorkerId,
         },
       },
@@ -310,7 +315,7 @@ export default function Packing() {
       {
         lotInputs,
         bagsOutput: [{ bagTypeId: selectedBagType.id, qty: Number(bagQty) }],
-        date: new Date().toISOString().slice(0, 10),
+        date: toDateOnlyString(new Date()),
         // Always sent, never omitted/blank — canAdd (and the guard above) already
         // guarantee selectedWorkerId is non-empty by this point.
         workerEntityId: selectedWorkerId,
@@ -320,6 +325,7 @@ export default function Packing() {
           showToast(`Entry added · ${bagQty} × ${TYPES[bagTypeIdx]?.label ?? ''} · ${fmt(waste, 1)} kg waste`)
           clearCompose()
         },
+        onError: (err: any) => showToast(err?.error ?? 'Failed to save. Try again.'),
       },
     )
   }
@@ -605,7 +611,12 @@ export default function Packing() {
           </div>
           {updateSession.isError && (
             <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 4 }}>
-              {(updateSession.error as any)?.response?.data?.message ?? 'Failed to save. Try again.'}
+              {/* api.ts's response interceptor normalizes every failed request to
+                  { status, error, code, details } — there is no .response on the
+                  rejected value, so this always fell through to the generic
+                  message and the real reason (WORKER_NOT_FOUND, EDIT_BLOCKED,
+                  negative-variance-requires-note, etc.) was never shown. */}
+              {(updateSession.error as any)?.error ?? 'Failed to save. Try again.'}
             </div>
           )}
         </div>

@@ -41,6 +41,25 @@ export class OrdersController {
     return this.ordersService.findAll(page, limit, clientId, status, search);
   }
 
+  @ApiOperation({ summary: 'Paginated "delivery queue" — orders still requiring delivery action (draft/confirmed/partially_delivered), independent of the main order-history list/pagination' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  // IMPORTANT: must come before GET /:id so Nest does not treat
+  // "delivery-queue" as a UUID route param — same pattern as
+  // UsersController.findReceivers() vs GET /users/:id.
+  @Get('delivery-queue')
+  @Roles('owner', 'sales_rep')
+  findDeliveryQueue(
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(10)) limit: number,
+    @Query('search') search?: string,
+    @Query('driverId') driverId?: string,
+    @Query('status') status?: OrderStatus,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
+  ) {
+    return this.ordersService.findDeliveryQueue(page, limit, search, driverId, status, sortBy, sortOrder);
+  }
+
   @ApiOperation({ summary: 'Get an order by ID' })
   @ApiResponse({ status: 200, description: 'OK' })
   @ApiResponse({ status: 404, description: 'Not found' })

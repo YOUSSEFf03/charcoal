@@ -193,4 +193,90 @@ describe('DriverTripsService', () => {
       expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
     });
   });
+
+  // =========================================================================
+  // startTrip() / completeTrip() — IDOR regression: a driver must not be able
+  // to start/complete another driver's trip. Both endpoints are
+  // @Roles('driver', 'owner'), so without this check any authenticated
+  // driver could hit POST /driver-trips/:id/start or /complete for a trip
+  // assigned to someone else.
+  // =========================================================================
+
+  describe('startTrip() — ownership guard', () => {
+    it('throws ForbiddenException(FORBIDDEN) when a driver starts another driver\'s trip, and never updates it', async () => {
+      const tripId = 'trip-uuid-4';
+      const callerClerkId = 'clerk-driver-caller-2';
+      const callerDbId = 'db-driver-caller-id-2';
+      const ownerDbId = 'db-driver-owner-id-2';
+
+      mockPrisma.driverTrip.findUnique.mockResolvedValue({ id: tripId, driverId: ownerDbId, status: 'pending' });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: callerDbId, clerkId: callerClerkId, role: 'driver' });
+
+      await expect(service.startTrip(tripId, callerClerkId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'FORBIDDEN' }),
+      });
+      expect(mockPrisma.driverTrip.update).not.toHaveBeenCalled();
+    });
+
+    it('allows a driver to start their own trip', async () => {
+      const tripId = 'trip-uuid-5';
+      const driverClerkId = 'clerk-driver-owner-1';
+      const driverDbId = 'db-driver-owner-id-1';
+
+      mockPrisma.driverTrip.findUnique.mockResolvedValue({ id: tripId, driverId: driverDbId, status: 'pending' });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: driverDbId, clerkId: driverClerkId, role: 'driver' });
+      mockPrisma.driverTrip.update.mockResolvedValue({ id: tripId, status: 'in_progress' });
+
+      const result = await service.startTrip(tripId, driverClerkId);
+
+      expect(result).toMatchObject({ status: 'in_progress' });
+      expect(mockPrisma.driverTrip.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: tripId } }),
+      );
+    });
+
+    it('allows an owner caller to start any driver\'s trip', async () => {
+      const tripId = 'trip-uuid-6';
+      const ownerClerkId = 'clerk-owner-3';
+
+      mockPrisma.driverTrip.findUnique.mockResolvedValue({ id: tripId, driverId: 'some-other-driver', status: 'pending' });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-owner-id', clerkId: ownerClerkId, role: 'owner' });
+      mockPrisma.driverTrip.update.mockResolvedValue({ id: tripId, status: 'in_progress' });
+
+      await expect(service.startTrip(tripId, ownerClerkId)).resolves.toMatchObject({ status: 'in_progress' });
+    });
+  });
+
+  describe('completeTrip() — ownership guard', () => {
+    it('throws ForbiddenException(FORBIDDEN) when a driver completes another driver\'s trip, and never records expenses against it', async () => {
+      const tripId = 'trip-uuid-7';
+      const callerClerkId = 'clerk-driver-caller-3';
+      const callerDbId = 'db-driver-caller-id-3';
+      const ownerDbId = 'db-driver-owner-id-3';
+
+      mockPrisma.driverTrip.findUnique.mockResolvedValue({ id: tripId, driverId: ownerDbId, status: 'in_progress' });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: callerDbId, clerkId: callerClerkId, role: 'driver' });
+
+      await expect(
+        service.completeTrip(tripId, { fuelCost: '20.00' } as any, callerClerkId),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'FORBIDDEN' }),
+      });
+      expect(mockPrisma.driverTrip.update).not.toHaveBeenCalled();
+    });
+
+    it('allows a driver to complete their own trip', async () => {
+      const tripId = 'trip-uuid-8';
+      const driverClerkId = 'clerk-driver-owner-2';
+      const driverDbId = 'db-driver-owner-id-2';
+
+      mockPrisma.driverTrip.findUnique.mockResolvedValue({ id: tripId, driverId: driverDbId, status: 'in_progress' });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: driverDbId, clerkId: driverClerkId, role: 'driver' });
+      mockPrisma.driverTrip.update.mockResolvedValue({ id: tripId, status: 'completed' });
+
+      await expect(
+        service.completeTrip(tripId, { fuelCost: '20.00' } as any, driverClerkId),
+      ).resolves.toMatchObject({ status: 'completed' });
+    });
+  });
 });

@@ -163,7 +163,7 @@ describe('Stock deduction + COGS — real Postgres integration', () => {
     shipmentId = shipment.id;
 
     await expect(
-      shipmentsService.confirmDelivery(shipmentId, { notes: 'integration test delivery' } as any, CLERK_ID),
+      shipmentsService.confirmDelivery(shipmentId, { notes: 'integration test delivery' } as any, { userId: CLERK_ID, role: 'owner' }),
     ).resolves.toMatchObject({ status: 'delivered' });
   });
 

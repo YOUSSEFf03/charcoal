@@ -95,16 +95,36 @@ export default function DriverMobile() {
   // The shipment currently being confirmed (first active stop).
   const activeStop = STOPS.find(s => s.state === 'active')
 
+  // Maps the on-screen method label to the backend PaymentMethod enum — same
+  // mapping convention used in WarehouseSales.tsx/Employees.tsx/Dashboard.tsx.
+  const PAY_METHOD_MAP: Record<string, 'cash' | 'whish' | 'omt'> = { Cash: 'cash', Whish: 'whish', OMT: 'omt' }
+
   // Confirm delivery of the active stop with the collected payment + actual weight.
   function confirmActiveDelivery() {
     if (!activeStop) { go('success'); return }
+    // Actual weight is logged through its own dedicated endpoint
+    // (PATCH /shipments/:id/actual-weight) — ConfirmDeliveryDto has no
+    // actualKg field, so including it in confirmDeliveryM's body as well
+    // used to 400 (forbidNonWhitelisted) whenever a weight was entered.
     if (actualKg) logActualWeightM.mutate({ id: activeStop.id, body: { actualKg } })
+    // totalPay > 0 guard added on final audit: without it, confirming a
+    // delivery with no amount entered and "on account" left off sent
+    // paymentAmount="0.00" + a real paymentMethod — with paymentMethod now
+    // wired up (see below), the backend's `if (paymentAmount && paymentMethod)`
+    // guard is truthy for "0.00" too, so this used to create a real, noisy
+    // $0.00 Payment/ledger-credit row on every such confirmation. The receipt
+    // preview below already treats totalPay<=0 as "On account" (line ~417),
+    // so this matches the page's own existing definition of "nothing collected".
+    const paymentAmount = (!onAccount && totalPay > 0) ? totalPay.toFixed(2) : undefined
     confirmDeliveryM.mutate(
       {
         id: activeStop.id,
         body: {
-          actualKg: actualKg || undefined,
-          paymentAmount: onAccount ? undefined : (usd + lbp / (parseInt(rateCtx.rate.replace(/,/g, ''), 10) || 89550)).toFixed(2),
+          paymentAmount,
+          // Previously omitted, so shipments.service.ts's `if (paymentAmount &&
+          // paymentMethod)` guard never fired — cash collected on delivery was
+          // never turned into a Payment row / ledger credit.
+          paymentMethod: paymentAmount ? PAY_METHOD_MAP[method] : undefined,
         },
       },
       { onSuccess: () => go('success') },

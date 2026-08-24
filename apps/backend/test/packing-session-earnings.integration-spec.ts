@@ -20,9 +20,14 @@ import { PackingSessionsModule } from '../src/packing-sessions/packing-sessions.
 import { PackingSessionsService } from '../src/packing-sessions/packing-sessions.service';
 import { WorkersModule } from '../src/workers/workers.module';
 import { WorkersService } from '../src/workers/workers.service';
+import { ClerkUser } from '../src/auth/clerk.strategy';
 
 const TAG = `EARNINGS_INTEGRITY_${Date.now()}`;
 const CLERK_ID = 'user_test_owner'; // matches the dev-auth-bypass seeded user (auth.guard.ts)
+// updatePackingSession()'s ownership check only restricts role 'worker' — this
+// suite exercises the historical-earnings business logic, not the ownership
+// guard, so an 'owner' caller (always exempt) preserves the seeded user's role.
+const OWNER_CALLER: ClerkUser = { userId: CLERK_ID, role: 'owner' };
 
 describe('Historical packing earnings integrity — real Postgres integration', () => {
   let moduleRef: TestingModule;
@@ -122,7 +127,7 @@ describe('Historical packing earnings integrity — real Postgres integration', 
     await prisma.bagType.update({ where: { id: bagType10kgId }, data: { workerRate: '0.2000' } });
 
     // 5: update ONLY varianceNote
-    await packingSvc.updatePackingSession(created!.id, { varianceNote: 'unrelated edit' } as any, CLERK_ID);
+    await packingSvc.updatePackingSession(created!.id, { varianceNote: 'unrelated edit' } as any, OWNER_CALLER);
 
     // 6: sessionEarnings must STILL be $1.00
     const refetched = await prisma.packingSession.findUnique({ where: { id: created!.id } });
@@ -151,7 +156,7 @@ describe('Historical packing earnings integrity — real Postgres integration', 
     await prisma.bagType.update({ where: { id: bagType10kgId }, data: { workerRate: '0.2000' } });
 
     // Edit the old session's notes only
-    await packingSvc.updatePackingSession(created!.id, { notes: 'touched, unrelated' } as any, CLERK_ID);
+    await packingSvc.updatePackingSession(created!.id, { notes: 'touched, unrelated' } as any, OWNER_CALLER);
 
     const refetched = await prisma.packingSession.findUnique({ where: { id: created!.id } });
     expect(parseFloat(refetched!.sessionEarnings.toString())).toBeCloseTo(7.6, 2);
@@ -182,7 +187,7 @@ describe('Historical packing earnings integrity — real Postgres integration', 
     sessionIds.push(created!.id);
 
     await prisma.bagType.update({ where: { id: bagType10kgId }, data: { workerRate: '0.2000' } });
-    await packingSvc.updatePackingSession(created!.id, { notes: 'unrelated' } as any, CLERK_ID);
+    await packingSvc.updatePackingSession(created!.id, { notes: 'unrelated' } as any, OWNER_CALLER);
 
     const totals = await (workersSvc as any).computeTotals(workerId);
     expect(parseFloat(totals.pieceEarned)).toBeCloseTo(1.0, 2); // NOT 2.0

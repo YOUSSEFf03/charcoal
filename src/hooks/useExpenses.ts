@@ -158,3 +158,19 @@ export function useCreateGeneralExpense() {
     },
   })
 }
+
+/**
+ * Delete a general expense (owner only).
+ * DELETE /general-expenses/:id
+ */
+export function useDeleteGeneralExpense() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/general-expenses/${id}`)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['general-expenses'] })
+    },
+  })
+}

@@ -496,6 +496,61 @@ describe('ContainersService', () => {
     });
   });
 
+  describe('updateProductLine() — arrival guard', () => {
+    it('throws BadRequestException(CONTAINER_ARRIVED) when editing a product line on an arrived container, and never touches the DB', async () => {
+      // Regression test: editing paidBags/kgPerBag/pricePerTon after arrival would
+      // recompute cost allocation (recalculateContainerCosts) against a tonnage that
+      // no longer matches the StockLot's already-frozen kgReceived/kgRemaining,
+      // silently desyncing costPerKg from the physical stock actually on hand.
+      mockPrisma.container.findUnique.mockResolvedValue({ id: 'c7', status: 'arrived' });
+
+      await expect(
+        service.updateProductLine('c7', 'line-7', { paidBags: 999 } as any),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONTAINER_ARRIVED' }),
+      });
+      expect(mockPrisma.containerProductLine.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when container does not exist', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(null);
+      await expect(service.updateProductLine('bad-id', 'line-id', {} as any)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('createProductLine() — arrival guard', () => {
+    it('throws BadRequestException(CONTAINER_ARRIVED) when adding a product line to an arrived container, and never creates it', async () => {
+      // Regression test: a line added post-arrival has no corresponding StockLot
+      // (only created by the arrival transition), so its tonnage would silently
+      // dilute expense/discount allocation across the container's REAL stock via
+      // recalculateContainerCosts()'s totalTonnage denominator, without the new
+      // line ever receiving a cost share of its own.
+      mockPrisma.container.findUnique.mockResolvedValue({ id: 'c8', status: 'arrived' });
+
+      await expect(
+        service.createProductLine('c8', {
+          charcoalType: 'coconut', grade: 'A', supplierId: 'sup-1',
+          paidBags: 100, kgPerBag: 10, pricePerTon: 800,
+        } as any),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONTAINER_ARRIVED' }),
+      });
+      expect(mockPrisma.supplier.findUnique).not.toHaveBeenCalled();
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when container does not exist', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(null);
+      await expect(
+        service.createProductLine('bad-id', {
+          charcoalType: 'coconut', grade: 'A', supplierId: 'sup-1',
+          paidBags: 100, kgPerBag: 10, pricePerTon: 800,
+        } as any),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
   // =========================================================================
   // Test 7: GET container as sales_rep → no costPerKg / averageCostPerKg
   // =========================================================================

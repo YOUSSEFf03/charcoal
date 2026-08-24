@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useUsers, useUpdateUserRole, useCreateLocalUser, useDeleteLocalUser } from '../hooks/useUsers'
+import { useUsers, useUpdateUserRole, useUpdateUserName, useCreateLocalUser, useDeleteLocalUser } from '../hooks/useUsers'
 import { useBagTypes, useCreateBagType, useUpdateBagType, useDeleteBagType } from '../hooks/useBagTypes'
 import { useReceivers } from '../hooks/useReceivers'
 import { useRate } from '../context/RateContext'
@@ -49,8 +49,11 @@ const NAV: NavItem[] = [
 ]
 
 export default function Settings() {
-  const usersQuery = useUsers()
+  // limit:100 (server's MAX_PAGE_LIMIT) — this list has no pagination UI of its
+  // own and silently truncated at the endpoint's default of 20 users.
+  const usersQuery = useUsers({ limit: 100 })
   const updateUserRole = useUpdateUserRole()
+  const updateUserName = useUpdateUserName()
   const createLocalUser = useCreateLocalUser()
   const deleteLocalUser = useDeleteLocalUser()
   const rateCtx = useRate()
@@ -83,6 +86,7 @@ export default function Settings() {
   const [dangerModalOpen, setDangerModalOpen] = useState<'reset' | 'clear' | 'export' | null>(null)
   const [editingUser, setEditingUser] = useState<User | null>(null)
   const [editingRole, setEditingRole] = useState<Role>('accountant')
+  const [editingName, setEditingName] = useState('')
   const [driverRates, setDriverRates] = useState<Record<string, string>>({})
   const [company, setCompany] = useState({ name: 'Farah Charcoal', phone: '+961 1 234 567', address: 'Beirut, Lebanon', addressAr: 'بيروت، لبنان', taxNo: '', email: 'contact@farahcharcoal.lb', footer: '' })
 
@@ -206,7 +210,12 @@ export default function Settings() {
                 </div>
                 <div><label style={lbl}>Invoice footer note (optional)</label><input style={inp} value={company.footer} onChange={e => setCompany(c => ({ ...c, footer: e.target.value }))} placeholder="e.g. Thank you for your business" /></div>
               </div>
-              <div style={ftr}><button style={saveBtn} onClick={() => showToast()}><i className="ti ti-check" style={{ fontSize: 14 }} /> Save changes</button></div>
+              {/* No backend endpoint stores company info anywhere (only exchange-rate
+                  is persisted via SettingsController) — this used to claim "Changes
+                  saved" and silently discard everything. Flagged for a product
+                  decision on whether to add real persistence; until then this says
+                  so honestly instead of lying. */}
+              <div style={ftr}><button style={saveBtn} onClick={() => showToast('Not saved — company info isn’t stored by the backend yet')}><i className="ti ti-check" style={{ fontSize: 14 }} /> Save changes</button></div>
             </div>
           </>}
 
@@ -428,7 +437,10 @@ export default function Settings() {
                   <div style={{ padding: 18, fontSize: 13, color: 'var(--text3)', textAlign: 'center' }}>No driver users found. Add users with the driver role in Users &amp; Roles.</div>
                 )}
               </div>
-              <div style={ftr}><button style={saveBtn} onClick={() => showToast()}><i className="ti ti-check" style={{ fontSize: 14 }} /> Save rates</button></div>
+              {/* Same gap as Company Info/Preferences above (see the TODO on the rate
+                  input) — no backend persists a driver daily rate anywhere, so this
+                  must not claim "Changes saved" the way it used to. */}
+              <div style={ftr}><button style={saveBtn} onClick={() => showToast('Not saved — driver rates aren’t stored by the backend yet')}><i className="ti ti-check" style={{ fontSize: 14 }} /> Save rates</button></div>
             </div>
           </>}
 
@@ -546,7 +558,7 @@ export default function Settings() {
                     <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 500 }}>{u.name}</div><div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", marginTop: 1 }}>{u.email}</div></div>
                     <span className={`badge ${meta.badgeClass}`} style={meta.badgeStyle}>{meta.label}</span>
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => { setEditingUser(u); setEditingRole(u.role); setEditUserOpen(true) }}><i className="ti ti-edit" style={{ fontSize: 13 }} /></button>
+                      <button className="btn" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => { setEditingUser(u); setEditingRole(u.role); setEditingName(u.name); setEditUserOpen(true) }}><i className="ti ti-edit" style={{ fontSize: 13 }} /></button>
                       <button className="btn" style={{ fontSize: 12, padding: '5px 10px', background: 'var(--red-bg)', color: 'var(--red)', borderColor: '#fca5a5' }} onClick={() => { setEditingUser(u); setDeleteUserOpen(true) }}><i className="ti ti-trash" style={{ fontSize: 13 }} /></button>
                     </div>
                   </div>
@@ -588,7 +600,8 @@ export default function Settings() {
                 <div style={{ marginBottom: 16 }}><label style={lbl}>Receipt printer width</label><select style={inp}><option>58mm thermal roll</option><option>80mm thermal roll</option></select></div>
                 <div><label style={lbl}>Default receipt language</label><select style={inp}><option>English</option><option>Arabic</option><option>English + Arabic</option></select></div>
               </div>
-              <div style={ftr}><button style={saveBtn} onClick={() => showToast()}><i className="ti ti-check" style={{ fontSize: 14 }} /> Save preferences</button></div>
+              {/* Same gap as Company Info above — no backend for print preferences. */}
+              <div style={ftr}><button style={saveBtn} onClick={() => showToast('Not saved — preferences aren’t stored by the backend yet')}><i className="ti ti-check" style={{ fontSize: 14 }} /> Save preferences</button></div>
             </div>
           </>}
 
@@ -680,8 +693,10 @@ export default function Settings() {
               <button onClick={() => setEditUserOpen(false)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }}>✕</button>
             </div>
             <div style={{ padding: 20 }}>
-              <div style={{ marginBottom: 16 }}><label style={lbl}>Full name</label><input style={inp} type="text" defaultValue={editingUser.name} /></div>
-              <div style={{ marginBottom: 16 }}><label style={lbl}>Email</label><input style={{ ...inp, fontFamily: "'IBM Plex Mono',monospace" }} type="text" defaultValue={editingUser.email} /></div>
+              <div style={{ marginBottom: 16 }}><label style={lbl}>Full name</label><input style={inp} type="text" value={editingName} onChange={e => setEditingName(e.target.value)} /></div>
+              {/* No Email field — UsersController's UpdateUserNameDto only accepts
+                  name/phone; there is no email-edit endpoint anywhere in the backend,
+                  so this input could never actually be saved. */}
               <div><label style={lbl}>Role</label>
                 <select style={inp} value={editingRole} onChange={e => setEditingRole(e.target.value as Role)}>
                   {ROLE_OPTIONS.map(r => <option key={r} value={r}>{ROLE_META[r].label}</option>)}
@@ -690,12 +705,21 @@ export default function Settings() {
             </div>
             <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="btn" onClick={() => setEditUserOpen(false)}>Cancel</button>
-              <button className="btn" disabled={updateUserRole.isPending} style={{ background: 'var(--text)', color: '#fff', borderColor: 'var(--text)', opacity: updateUserRole.isPending ? 0.6 : 1 }} onClick={() => {
+              <button className="btn" disabled={updateUserRole.isPending || updateUserName.isPending} style={{ background: 'var(--text)', color: '#fff', borderColor: 'var(--text)', opacity: (updateUserRole.isPending || updateUserName.isPending) ? 0.6 : 1 }} onClick={() => {
                 if (!editingUser) return
-                updateUserRole.mutate(
-                  { id: editingUser.id, role: editingRole },
-                  { onSuccess: () => { setEditUserOpen(false); showToast('Role updated') } }
-                )
+                const nameChanged = editingName.trim() && editingName.trim() !== editingUser.name
+                const roleChanged = editingRole !== editingUser.role
+                const finish = () => { setEditUserOpen(false); showToast('User updated') }
+                if (nameChanged) {
+                  updateUserName.mutate(
+                    { id: editingUser.id, name: editingName.trim() },
+                    { onSuccess: () => { if (roleChanged) updateUserRole.mutate({ id: editingUser.id, role: editingRole }, { onSuccess: finish }); else finish() } },
+                  )
+                } else if (roleChanged) {
+                  updateUserRole.mutate({ id: editingUser.id, role: editingRole }, { onSuccess: finish })
+                } else {
+                  setEditUserOpen(false)
+                }
               }}><i className="ti ti-check" style={{ fontSize: 14 }} /> Save changes</button>
             </div>
           </div>
@@ -768,9 +792,15 @@ export default function Settings() {
             </div>
             <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="btn" onClick={() => setDangerModalOpen(null)}>Cancel</button>
-              <button className="btn" style={dangerModalOpen === 'export' ? { background: 'var(--text)', color: '#fff' } : { background: 'var(--red)', color: '#fff', borderColor: 'var(--red)' }}
-                onClick={() => { setDangerModalOpen(null); showToast(dangerModalOpen === 'reset' ? 'Adjustments reset' : dangerModalOpen === 'clear' ? 'Session history cleared' : 'farah_backup.json downloaded') }}>
-                {dangerModalOpen === 'export' ? <><i className="ti ti-download" style={{ fontSize: 14 }} /> Download backup</> : <><i className="ti ti-check" style={{ fontSize: 14 }} /> Confirm</>}
+              {/* None of these three actions has a backend endpoint — "Confirm"/"Download
+                  backup" used to unconditionally claim the (irreversible-sounding)
+                  action succeeded — "Adjustments reset", "Session history cleared",
+                  a fake downloaded filename — while nothing happened. Needs a product
+                  decision on whether to actually build these as real destructive
+                  operations; until then this must not lie about having performed one. */}
+              <button className="btn" disabled style={dangerModalOpen === 'export' ? { background: 'var(--surface2)', color: 'var(--text3)', cursor: 'not-allowed' } : { background: 'var(--surface2)', color: 'var(--text3)', cursor: 'not-allowed' }}
+                title="Not implemented yet">
+                {dangerModalOpen === 'export' ? <><i className="ti ti-download" style={{ fontSize: 14 }} /> Not available yet</> : <><i className="ti ti-check" style={{ fontSize: 14 }} /> Not available yet</>}
               </button>
             </div>
           </div>

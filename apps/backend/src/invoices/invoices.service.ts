@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InvoiceStatus, Prisma } from '@prisma/client';
+import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoiceCalculatorService } from './invoice-calculator.service';
 import { SettingsService } from '../settings/settings.service';
@@ -85,7 +86,22 @@ export class InvoicesService {
 
     const where: Prisma.InvoiceWhereInput = {
       ...(clientId ? { clientId } : {}),
-      ...(search ? { client: { name: { contains: search, mode: 'insensitive' } } } : {}),
+      // Matches by client name OR invoice number (displayId, e.g. "SI-0042") —
+      // the Invoices page's search box is the primary way a user finds a
+      // specific invoice, and searching by the number printed on the
+      // physical/PDF invoice is at least as common a lookup as by client
+      // name. displayId already carries a unique index (schema.prisma), so
+      // an exact/prefix match is cheap; `contains` still works for a partial
+      // number without needing a new index at this table's realistic size
+      // (paginated 20/page, filtered by clientId/status/date first).
+      ...(search
+        ? {
+            OR: [
+              { client: { name: { contains: search, mode: 'insensitive' } } },
+              { displayId: { contains: search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
       ...(isOverdue
         ? {
             status: { in: ['issued', 'partially_paid'] as InvoiceStatus[] },
@@ -121,13 +137,22 @@ export class InvoicesService {
   }
 
   /**
-   * Return a single invoice with client, payments, allocations, and loggedBy details.
+   * Return a single invoice with client, order source, payments, allocations,
+   * and loggedBy details — the authoritative data for both the Invoice Detail
+   * page and the print/PDF view (InvoicePrint.tsx), which both read this same
+   * endpoint so they can never disagree.
    *
    * `payments` (Payment.invoiceId = this invoice) only shows payments directly
    * linked at creation time. `allocations` is the complete picture — it also
    * includes amounts FIFO-allocated here from a client-level payment created
    * with invoiceId null (see PaymentAllocationService) — so it's the field to
    * use for "what has actually been applied to this invoice."
+   *
+   * `client` is an explicit select (not `client: true`) — deliberately
+   * excludes the client's own computed balance/isOverdue (those are only
+   * ever computed by ClientsService, never here) and any other client field
+   * this page doesn't display, rather than silently returning a client shape
+   * wider than what's documented on the response type.
    *
    * @param id - Invoice UUID
    * @throws NotFoundException if not found
@@ -136,7 +161,13 @@ export class InvoicesService {
     const invoice = await this.prisma.invoice.findUnique({
       where: { id },
       include: {
-        client: true,
+        client: {
+          select: { id: true, name: true, type: true, currency: true, phones: true },
+        },
+        // Source reference for an ORDER invoice (null for WAREHOUSE_SALE — see
+        // Invoice.source). Minimal projection — just enough to link back to
+        // the order, not the full order/shipment graph.
+        order: { select: { id: true, displayId: true, status: true } },
         payments: {
           include: { loggedBy: { select: { id: true, name: true } } },
         },
@@ -154,7 +185,16 @@ export class InvoicesService {
       throw new NotFoundException({ error: 'Invoice not found', code: 'NOT_FOUND' });
     }
 
-    return invoice;
+    // total/paidAmount are non-nullable Decimal columns — always present on a real
+    // Prisma row. The guard exists only because findOne() is also called
+    // internally by update()/cancel() purely for status/client checks, against
+    // test doubles that don't necessarily populate every column.
+    return {
+      ...invoice,
+      ...(invoice.total != null && invoice.paidAmount != null
+        ? { balanceDue: new Decimal(invoice.total).minus(invoice.paidAmount).toFixed(2) }
+        : {}),
+    };
   }
 
   /**
@@ -169,6 +209,20 @@ export class InvoicesService {
     });
     if (!client) {
       throw new NotFoundException({ error: 'Client not found', code: 'NOT_FOUND' });
+    }
+
+    // Every downstream balance/ledger calculation (ClientBalanceService, Payments,
+    // getClientLedger, getArSummary) assumes an invoice's currency always matches
+    // its client's currency — Payment.amount is always stored in the client's
+    // currency (PaymentsService), so a mismatched invoice currency would compare
+    // unlike units when paidAmount/status is recomputed. Reject rather than
+    // silently store it (mirrors the same guard in OrdersService.create/update).
+    if (dto.currency !== client.currency) {
+      throw new BadRequestException({
+        message: `Invoice currency (${dto.currency}) must match the client's currency (${client.currency})`,
+        error: `Invoice currency (${dto.currency}) must match the client's currency (${client.currency})`,
+        code: 'CONSTRAINT_VIOLATION',
+      });
     }
 
     if (dto.orderId) {
@@ -232,6 +286,26 @@ export class InvoicesService {
       linesData = computed.lines as unknown as Prisma.InputJsonValue;
       subtotal = computed.subtotal;
       total = this.calculator.computeTotal(subtotal);
+    }
+
+    // Same invariant enforced at create() — an invoice's currency must always
+    // match its client's currency (see create()'s comment). Changing either
+    // field independently could otherwise desync them.
+    if (dto.clientId !== undefined || dto.currency !== undefined) {
+      const effectiveClient = dto.clientId !== undefined
+        ? await this.prisma.client.findUnique({ where: { id: dto.clientId } })
+        : invoice.client;
+      if (!effectiveClient) {
+        throw new NotFoundException({ error: 'Client not found', code: 'NOT_FOUND' });
+      }
+      const effectiveCurrency = dto.currency ?? invoice.currency;
+      if (effectiveCurrency !== effectiveClient.currency) {
+        throw new BadRequestException({
+          message: `Invoice currency (${effectiveCurrency}) must match the client's currency (${effectiveClient.currency})`,
+          error: `Invoice currency (${effectiveCurrency}) must match the client's currency (${effectiveClient.currency})`,
+          code: 'CONSTRAINT_VIOLATION',
+        });
+      }
     }
 
     return this.prisma.invoice.update({
@@ -394,20 +468,38 @@ export class InvoicesService {
 
     // Create invoice in its final state — issued immediately when autoIssue is true,
     // draft otherwise. Single write; no separate update needed for the happy path.
-    return db.invoice.create({
-      data: {
-        clientId: order.clientId,
-        orderId,
-        lines: enrichedLines as unknown as Prisma.InputJsonValue,
-        subtotal,
-        total,
-        currency: order.currency,
-        source: 'ORDER',
-        status: rate !== null ? 'issued' : 'draft',
-        ...(rate !== null ? { issuedAt: new Date(), exchangeRateSnapshot: rate.toString() } : {}),
-        paidAmount: '0',
-      },
-    });
+    try {
+      return await db.invoice.create({
+        data: {
+          clientId: order.clientId,
+          orderId,
+          lines: enrichedLines as unknown as Prisma.InputJsonValue,
+          subtotal,
+          total,
+          currency: order.currency,
+          source: 'ORDER',
+          status: rate !== null ? 'issued' : 'draft',
+          ...(rate !== null ? { issuedAt: new Date(), exchangeRateSnapshot: rate.toString() } : {}),
+          paidAmount: '0',
+        },
+      });
+    } catch (e) {
+      // Expected race: a concurrent createFromOrder() call for the same order
+      // (e.g. two near-simultaneous delivery confirmations) can pass the
+      // `existing` check above at the same time — only one create() wins, the
+      // other hits invoices_orderId_unique_active (P2002). Return the winner's
+      // invoice instead of surfacing a raw constraint violation as a 500; if no
+      // matching invoice actually exists, this wasn't that race — rethrow.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const winner = await db.invoice.findFirst({
+          where: { orderId, status: { not: 'cancelled' } },
+        });
+        if (winner) {
+          return winner;
+        }
+      }
+      throw e;
+    }
   }
 
   /**
