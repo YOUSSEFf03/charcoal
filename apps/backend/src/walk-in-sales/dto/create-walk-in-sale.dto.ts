@@ -106,4 +106,13 @@ export class CreateWalkInSaleDto {
 
   @ApiProperty({ description: 'Optional notes', required: false })
   @IsOptional() @IsString() notes?: string;
+
+  @ApiProperty({
+    description:
+      'Client-generated key identifying one logical sale-submission attempt (e.g. a UUID generated once per form session, unchanged across retries of the same attempt). ' +
+      'When provided, a second request with the same key returns the FIRST attempt\'s result instead of creating a duplicate sale — this is what protects against a double-click, ' +
+      'a slow-network retry, or two near-simultaneous identical requests. Optional for backward compatibility (an omitted key gets no idempotency protection); the Warehouse Sales UI always sends one.',
+    required: false,
+  })
+  @IsOptional() @IsUUID('all') idempotencyKey?: string;
 }

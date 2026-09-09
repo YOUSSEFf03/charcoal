@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { WalkInSalesService } from './walk-in-sales.service';
+import { Prisma } from '@prisma/client';
+import { WalkInSalesService, computeSaleFingerprint } from './walk-in-sales.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoiceCalculatorService } from '../invoices/invoice-calculator.service';
 import { PaymentAllocationService } from '../invoices/payment-allocation.service';
@@ -21,7 +22,16 @@ function fn(): any { return jest.fn(); }
 describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
   let service: WalkInSalesService;
 
-  const mockPrisma = { user: { findUnique: fn() }, client: { findUnique: fn() }, $transaction: fn() } as any;
+  const mockPrisma = {
+    user: { findUnique: fn() },
+    client: { findUnique: fn() },
+    // invoice.findFirst is only ever called by the idempotency check/recovery
+    // path (see "create() — idempotency" below) — every other test in this
+    // file never sets dto.idempotencyKey, so that path is never reached and
+    // this mock stays untouched for them.
+    invoice: { findFirst: fn() },
+    $transaction: fn(),
+  } as any;
   // Real-ish calculator: handles both BAG (qty × pricePerBag) and KG (kgQuantity × pricePerKg).
   const calculator = {
     computeLines: (lines: any[]) => {
@@ -148,7 +158,7 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
     // Sale 10 × $12 = $120; received exactly $120.
-    await service.create(baseDto({ receivedUsd: '120.00' }), clerkId);
+    await service.create(baseDto({ receivedUsd: '120.00', receiverId: 'receiver-1' }), clerkId);
 
     // Stock exit written (canonical ledger record present — BUG-3 fixed).
     expect(tx.stockExit.create).toHaveBeenCalledTimes(1);
@@ -201,7 +211,7 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
     // Price quoted in USD ($12); client currency is LBP → invoice line converts to 1,080,000 LBP/bag.
-    await service.create(baseDto({ receivedLbp: '10800000' }), clerkId);
+    await service.create(baseDto({ receivedLbp: '10800000', receiverId: 'receiver-1' }), clerkId);
 
     const invArg = tx.invoice.create.mock.calls[0][0].data;
     expect(invArg.currency).toBe('LBP');
@@ -254,7 +264,7 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     const tx = makeTx();
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
-    await service.create(baseDto({ receivedUsd: '120.00' }), clerkId);
+    await service.create(baseDto({ receivedUsd: '120.00', receiverId: 'receiver-1' }), clerkId);
 
     expect(tx.stockExit.create).toHaveBeenCalledTimes(1);
     const stockExitData = tx.stockExit.create.mock.calls[0][0].data;
@@ -265,6 +275,36 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     expect(stockExitData.amount).not.toBeUndefined();
     expect(typeof stockExitData.amount).not.toBe('number');
     expect(typeof stockExitData.amount).not.toBe('string');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Required-location audit, 2026-09 — Warehouse/Walk-in Sales must remain
+  // completely unaffected by the multi-location requirement now enforced on
+  // normal ClientOrder creation (OrdersService.create()). This walk-in sale
+  // never sets Invoice.orderId (confirmed by this whole file), so it never
+  // has a ClientOrder to attach a location to in the first place — the
+  // requirement is structurally out of reach here, not merely untriggered.
+  // mockPrisma above has no `clientLocation` key at all: if this code path
+  // ever tried to touch it, the call would throw synchronously rather than
+  // silently pass.
+  // ---------------------------------------------------------------------------
+  it('a client enabled for multiple locations (multiLocationEnabled: true) still completes a walk-in sale with no location field, and never touches ClientLocation', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+    mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD', multiLocationEnabled: true });
+    settings.getExchangeRate.mockResolvedValue(89550);
+    calculator.recomputeStatus.mockResolvedValue({ paidAmount: '120.00', status: 'paid' });
+    const tx = makeTx();
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    const result = await service.create(baseDto({ receivedUsd: '120.00', receiverId: 'receiver-1' }), clerkId);
+
+    expect(result).toBeDefined();
+    expect(tx.invoice.create).toHaveBeenCalledTimes(1);
+    const invoiceData = tx.invoice.create.mock.calls[0][0].data;
+    // Never orderId, never locationId — a walk-in sale's invoice has no
+    // ClientOrder behind it at all.
+    expect(invoiceData).not.toHaveProperty('orderId');
+    expect(invoiceData).not.toHaveProperty('locationId');
   });
 
   it('throws NOT_FOUND when the client does not exist', async () => {
@@ -355,7 +395,7 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     const tx = makeTx();
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
-    await service.create(kgDto({ receivedUsd: '1250.00' }), clerkId);
+    await service.create(kgDto({ receivedUsd: '1250.00', receiverId: 'receiver-1' }), clerkId);
 
     const payData = tx.payment.create.mock.calls[0][0].data;
     expect(payData.invoiceId).toBe('inv-1');
@@ -413,7 +453,7 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
     const tx = makeTx();
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
-    await service.create(kgDto({ receivedUsd: '1250.00' }), clerkId);
+    await service.create(kgDto({ receivedUsd: '1250.00', receiverId: 'receiver-1' }), clerkId);
 
     const exitData = tx.stockExit.create.mock.calls[0][0].data;
     // Must be exactly null — a number would feed P&L walkInRevenue and double-count.
@@ -535,7 +575,65 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
       expect(calledDate).toEqual(new Date('2026-06-03'));
     });
 
-    it('does not call LedgerWriteService when no receiverId is provided, even though a payment is recorded', async () => {
+    // ── Forensic audit finding (2026-08-27): "Warehouse sale created twice +
+    // receiver account not credited" ───────────────────────────────────────
+    // This test used to assert the BUG itself — a cash sale with no receiverId
+    // silently succeeded, recorded a payment, and never credited anyone's
+    // ledger (LedgerWriteService.creditAccount() only runs when receiverId is
+    // set, and nothing upstream stopped a receiverless cash payment from being
+    // created). Reproduced live against the dev DB: a cash payment posted with
+    // no receiver → invoice marked paid, Payment row created, zero
+    // AccountEntry rows, zero UserAccount balance change. WalkInSalesService
+    // never had PaymentsService's RECEIVER_REQUIRED_METHODS enforcement
+    // applied to it. Fixed by reusing that exact same constant/rule (not a
+    // new one) — this test now asserts the FIXED behavior: rejected before
+    // the transaction even opens, so nothing is ever written.
+    it('rejects a cash sale with no receiverId — RECEIVER_REQUIRED, same rule as PaymentsService, nothing written', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      const tx = makeTx();
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(
+        service.create(baseDto({ receivedUsd: '120.00' }), clerkId), // no receiverId
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'RECEIVER_REQUIRED' }),
+      });
+
+      // Rejected before the transaction opens — no invoice, no stock exit, no
+      // payment, no ledger credit. Not a partial write rolled back; nothing
+      // was ever attempted.
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      expect(tx.invoice.create).not.toHaveBeenCalled();
+      expect(tx.payment.create).not.toHaveBeenCalled();
+      expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
+    });
+
+    it('whish and omt also require a receiver (same as cash) — bank_transfer does not', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      calculator.recomputeStatus.mockResolvedValue({ paidAmount: '120.00', status: 'paid' });
+
+      for (const method of ['whish', 'omt']) {
+        const tx = makeTx();
+        mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+        await expect(
+          service.create(baseDto({ receivedUsd: '120.00', method }), clerkId),
+        ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'RECEIVER_REQUIRED' }) });
+      }
+
+      // bank_transfer is exempt — same exemption PaymentsService applies
+      // (CASH_MANAGEMENT_FINAL_BLUEPRINT.md §2: no person holds custody of a
+      // bank transfer, so there's nothing to attribute).
+      const tx = makeTx();
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      await service.create(baseDto({ receivedUsd: '120.00', method: 'bank_transfer' }), clerkId);
+      expect(tx.payment.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('cheque is exempt too (same as bank_transfer) — full payment-method matrix', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
       mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
       settings.getExchangeRate.mockResolvedValue(89550);
@@ -543,10 +641,9 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
       const tx = makeTx();
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
-      await service.create(baseDto({ receivedUsd: '120.00' }), clerkId); // no receiverId
+      await service.create(baseDto({ receivedUsd: '120.00', method: 'cheque' }), clerkId);
 
       expect(tx.payment.create).toHaveBeenCalledTimes(1);
-      expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
     });
 
     it('does not call LedgerWriteService when receiverId is provided but nothing was received', async () => {
@@ -620,6 +717,12 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
       expect(payArg.receiverName).toBe('Jane Receiver');
     });
 
+    // method changed to bank_transfer (was the default 'cash') — since the
+    // RECEIVER_REQUIRED fix, a real receiverId is mandatory for cash/whish/omt,
+    // so "no receiverId, just a name" is no longer reachable for those methods
+    // (see the RECEIVER_REQUIRED_METHODS regression tests above). bank_transfer
+    // is exempt, so it's still the right vehicle for testing the receiverName-
+    // fallback STORAGE mechanism on its own, independent of that gate.
     it('falls back to receiverName (no receiverId) when the picked name cannot resolve to a real User — e.g. a Worker', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
       mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
@@ -629,7 +732,7 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
       // No receiverId — the frontend couldn't resolve "Omar Khalil" (a Worker) to a User.id.
-      await service.create(baseDto({ receivedUsd: '120.00', receiverName: 'Omar Khalil' }), clerkId);
+      await service.create(baseDto({ receivedUsd: '120.00', method: 'bank_transfer', receiverName: 'Omar Khalil' }), clerkId);
 
       const payArg = tx.payment.create.mock.calls[0][0].data;
       expect(payArg.receiverId).toBeUndefined();
@@ -647,7 +750,7 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
       const tx = makeTx();
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
-      await service.create(baseDto({ receivedUsd: '120.00' }), clerkId);
+      await service.create(baseDto({ receivedUsd: '120.00', method: 'bank_transfer' }), clerkId);
 
       const payArg = tx.payment.create.mock.calls[0][0].data;
       expect(payArg.receiverId).toBeUndefined();
@@ -907,6 +1010,348 @@ describe('WalkInSalesService (BUG-3 + BUG-4)', () => {
       expect(tx.$queryRaw).toHaveBeenCalledTimes(1); // lock still acquired before the (failed) validation
       expect(tx.packedStock.update).not.toHaveBeenCalled();
       expect(tx.invoice.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // Idempotency (forensic audit, 2026-08-27): a double-click, a slow-network
+  // retry, or two near-simultaneous identical requests must never create two
+  // independent sales. Mirrors InvoicesService.createFromOrder()'s existing
+  // check-then-act + P2002-recovery pattern exactly (see
+  // invoices.service.spec.ts's own "concurrent-delivery race" tests) — this
+  // block is the same shape, applied to the idempotencyKey column instead of
+  // orderId. Real cross-transaction concurrency proof (two genuine overlapping
+  // Postgres transactions) lives in
+  // test/walk-in-sale-idempotency.integration-spec.ts — these are the
+  // mocked-Prisma unit tests for the surrounding logic (short-circuit, what
+  // gets stored, P2002 recovery, non-race errors still throw).
+  // =========================================================================
+  describe('create() — idempotency (forensic audit regression)', () => {
+    function p2002() {
+      return new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`idempotencyKey`)',
+        { code: 'P2002', clientVersion: 'test' },
+      );
+    }
+
+    it('returns the existing invoice immediately when idempotencyKey AND requestFingerprint both match — no re-validation, no transaction', async () => {
+      const dto = baseDto({ idempotencyKey: 'key-1' });
+      const existing = { id: 'existing-inv', idempotencyKey: 'key-1', status: 'paid', requestFingerprint: computeSaleFingerprint(dto) };
+      mockPrisma.invoice.findFirst.mockResolvedValue(existing);
+
+      const result = await service.create(dto, clerkId);
+
+      expect(result).toBe(existing);
+      expect(mockPrisma.invoice.findFirst).toHaveBeenCalledWith({
+        where: { idempotencyKey: 'key-1', status: { not: 'cancelled' } },
+        include: { client: { select: { id: true, name: true } }, payments: true },
+      });
+      // Fail-fast: none of the normal validation/creation work ever ran.
+      expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+      expect(mockPrisma.client.findUnique).not.toHaveBeenCalled();
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('proceeds normally (no short-circuit) when idempotencyKey is provided but no existing invoice has it yet', async () => {
+      mockPrisma.invoice.findFirst.mockResolvedValue(null);
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      const tx = makeTx();
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(baseDto({ idempotencyKey: 'key-2' }), clerkId);
+
+      expect(tx.invoice.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('stores idempotencyKey on the created invoice when provided', async () => {
+      mockPrisma.invoice.findFirst.mockResolvedValue(null);
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      const tx = makeTx();
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(baseDto({ idempotencyKey: 'key-3' }), clerkId);
+
+      expect(tx.invoice.create.mock.calls[0][0].data.idempotencyKey).toBe('key-3');
+    });
+
+    it('omits idempotencyKey cleanly (no crash, no lookup) when the caller does not provide one — backward compatible', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      const tx = makeTx();
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(baseDto({}), clerkId); // no idempotencyKey — matches every other test in this file
+
+      expect(mockPrisma.invoice.findFirst).not.toHaveBeenCalled();
+      expect(tx.invoice.create.mock.calls[0][0].data.idempotencyKey).toBeUndefined();
+    });
+
+    it('concurrent-submission race: create() hits P2002 on idempotencyKey → returns the winner\'s invoice instead of throwing', async () => {
+      const dto = baseDto({ idempotencyKey: 'key-race' });
+      const winner = { id: 'winner-inv', idempotencyKey: 'key-race', status: 'paid', requestFingerprint: computeSaleFingerprint(dto) };
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      // First findFirst (the `existing` idempotency check) races and loses: null.
+      // Second findFirst (the post-P2002 recovery lookup) finds the winner.
+      mockPrisma.invoice.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(winner);
+      mockPrisma.$transaction.mockRejectedValue(p2002());
+
+      const result = await service.create(dto, clerkId);
+
+      expect(result).toBe(winner);
+      expect(mockPrisma.invoice.findFirst).toHaveBeenCalledTimes(2);
+    });
+
+    it('P2002 with no matching invoice actually found (not the idempotency race) is rethrown, not swallowed', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      mockPrisma.invoice.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      const err = p2002();
+      mockPrisma.$transaction.mockRejectedValue(err);
+
+      await expect(service.create(baseDto({ idempotencyKey: 'key-4' }), clerkId)).rejects.toBe(err);
+    });
+
+    it('a P2002 with no idempotencyKey on the request is never treated as the race (nothing to recover) — rethrown', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      const err = p2002();
+      mockPrisma.$transaction.mockRejectedValue(err);
+
+      await expect(service.create(baseDto({}), clerkId)).rejects.toBe(err);
+      // No idempotencyKey on the request → no recovery lookup even attempted.
+      expect(mockPrisma.invoice.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('a non-P2002 error from the transaction is never swallowed — unexpected failures still throw', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+      settings.getExchangeRate.mockResolvedValue(89550);
+      mockPrisma.invoice.findFirst.mockResolvedValue(null);
+      mockPrisma.$transaction.mockRejectedValue(new Error('DB connection lost'));
+
+      await expect(service.create(baseDto({ idempotencyKey: 'key-5' }), clerkId)).rejects.toThrow('DB connection lost');
+      // Only the one `existing` check — no second findFirst for a non-P2002 error.
+      expect(mockPrisma.invoice.findFirst).toHaveBeenCalledTimes(1);
+    });
+
+    // =======================================================================
+    // Phase 3 (2026-08-27 follow-up audit) — SAME idempotencyKey reused with
+    // DIFFERENT sale data. The naive "return whatever invoice has this key"
+    // guard would silently hand the second caller the FIRST caller's sale —
+    // wrong amount, wrong goods, no error. requestFingerprint exists
+    // specifically to catch this and reject cleanly instead.
+    // =======================================================================
+    describe('same idempotencyKey, different request data (IDEMPOTENCY_KEY_REUSED)', () => {
+      it('rejects with 409 IDEMPOTENCY_KEY_REUSED when the key matches but the amount differs — zero side effects', async () => {
+        const firstDto = baseDto({ idempotencyKey: 'key-reused', receivedUsd: '10.00', receiverId: 'r1' });
+        const existing = {
+          id: 'existing-inv', idempotencyKey: 'key-reused', status: 'paid',
+          requestFingerprint: computeSaleFingerprint(firstDto),
+        };
+        mockPrisma.invoice.findFirst.mockResolvedValue(existing);
+
+        // Second request: SAME key, DIFFERENT amount ($50, not $10).
+        const secondDto = baseDto({ idempotencyKey: 'key-reused', receivedUsd: '50.00', receiverId: 'r1' });
+
+        await expect(service.create(secondDto, clerkId)).rejects.toMatchObject({
+          response: expect.objectContaining({ code: 'IDEMPOTENCY_KEY_REUSED' }),
+        });
+        // No re-validation, no transaction, no write of any kind — the
+        // mismatch is caught before any side effect is even attempted.
+        expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+        expect(mockPrisma.client.findUnique).not.toHaveBeenCalled();
+        expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      });
+
+      it('rejects with 409 IDEMPOTENCY_KEY_REUSED when the key matches but the bags differ', async () => {
+        const firstDto = baseDto({ idempotencyKey: 'key-reused-2' });
+        const existing = {
+          id: 'existing-inv-2', idempotencyKey: 'key-reused-2', status: 'issued',
+          requestFingerprint: computeSaleFingerprint(firstDto),
+        };
+        mockPrisma.invoice.findFirst.mockResolvedValue(existing);
+
+        const secondDto = baseDto({
+          idempotencyKey: 'key-reused-2',
+          bags: [{ packedStockId: 'DIFFERENT-ps', bagTypeId, bagTypeName: '25kg', quantity: 999, pricePerBag: '12.00', currency: 'USD' }],
+        });
+
+        await expect(service.create(secondDto, clerkId)).rejects.toMatchObject({
+          response: expect.objectContaining({ code: 'IDEMPOTENCY_KEY_REUSED' }),
+        });
+      });
+
+      it('the SAME request replayed (identical data) is never mistaken for reuse — returns the original, no error', async () => {
+        const dto = baseDto({ idempotencyKey: 'key-genuine-retry', receivedUsd: '10.00', receiverId: 'r1' });
+        const existing = {
+          id: 'existing-inv-3', idempotencyKey: 'key-genuine-retry', status: 'paid',
+          requestFingerprint: computeSaleFingerprint(dto),
+        };
+        mockPrisma.invoice.findFirst.mockResolvedValue(existing);
+
+        // Exact same DTO object re-sent — a genuine retry, not reuse.
+        const result = await service.create({ ...dto }, clerkId);
+
+        expect(result).toBe(existing);
+      });
+
+      it('applies the SAME mismatch check on the post-P2002 recovery path (concurrent requests, same key, different data)', async () => {
+        const firstDto = baseDto({ idempotencyKey: 'key-race-mismatch', receivedUsd: '10.00', receiverId: 'r1' });
+        const winner = {
+          id: 'winner-inv', idempotencyKey: 'key-race-mismatch', status: 'issued',
+          requestFingerprint: computeSaleFingerprint(firstDto),
+        };
+        mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+        mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+        settings.getExchangeRate.mockResolvedValue(89550);
+        mockPrisma.invoice.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(winner);
+        mockPrisma.$transaction.mockRejectedValue(p2002());
+
+        // This call's own data ($50) differs from what actually won the race ($10)
+        // — same receiver, so it clears the RECEIVER_REQUIRED gate and actually
+        // reaches the transaction/P2002 path this test exists to exercise.
+        const secondDto = baseDto({ idempotencyKey: 'key-race-mismatch', receivedUsd: '50.00', receiverId: 'r1' });
+
+        await expect(service.create(secondDto, clerkId)).rejects.toMatchObject({
+          response: expect.objectContaining({ code: 'IDEMPOTENCY_KEY_REUSED' }),
+        });
+      });
+    });
+
+    // =======================================================================
+    // Confirmed bug fix (forensic audit, 2026-08-27): a cancelled invoice
+    // must never be returned by an idempotency-key lookup, and must never
+    // permanently block that key from a fresh live sale. The bug was: a
+    // zero-payment walk-in sale gets cancelled (InvoicesService.cancel()),
+    // then a retry with the same key silently got the cancelled invoice back
+    // instead of creating a new valid sale. Real-Postgres proof of the full
+    // create→cancel→retry sequence lives in
+    // walk-in-sale-idempotency.integration-spec.ts; these are the
+    // mocked-Prisma unit tests for the surrounding application logic.
+    // =======================================================================
+    describe('cancelled invoices are excluded from idempotency matching', () => {
+      it('existing invoice under this key is CANCELLED → treated as not found, proceeds to create a fresh sale', async () => {
+        // findFirst is called with status:{not:'cancelled'} — a real Postgres
+        // query with that filter would never return a cancelled row in the
+        // first place, so the correct mock behavior here is simply "nothing
+        // matched" (null), exactly like the "no existing invoice" case.
+        mockPrisma.invoice.findFirst.mockResolvedValue(null);
+        mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+        mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+        settings.getExchangeRate.mockResolvedValue(89550);
+        const tx = makeTx();
+        mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+        await service.create(baseDto({ idempotencyKey: 'key-was-cancelled' }), clerkId);
+
+        // Proves the query itself asks Postgres to exclude cancelled rows —
+        // this is the actual fix, not just "mock returns null so it works".
+        expect(mockPrisma.invoice.findFirst).toHaveBeenCalledWith({
+          where: { idempotencyKey: 'key-was-cancelled', status: { not: 'cancelled' } },
+          include: { client: { select: { id: true, name: true } }, payments: true },
+        });
+        expect(tx.invoice.create).toHaveBeenCalledTimes(1);
+        expect(tx.invoice.create.mock.calls[0][0].data.idempotencyKey).toBe('key-was-cancelled');
+      });
+
+      it('the post-P2002 recovery lookup also excludes cancelled invoices (same filter, same reasoning)', async () => {
+        mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+        mockPrisma.client.findUnique.mockResolvedValue({ id: clientId, name: 'Acme', currency: 'USD' });
+        settings.getExchangeRate.mockResolvedValue(89550);
+        // Pre-transaction check: nothing live found (null) — proceeds.
+        // A P2002 fires anyway (simulating some other genuine race) —
+        // the recovery lookup must ALSO filter cancelled rows.
+        mockPrisma.invoice.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+        mockPrisma.$transaction.mockRejectedValue(p2002());
+
+        await expect(
+          service.create(baseDto({ idempotencyKey: 'key-recovery-cancelled' }), clerkId),
+        ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+
+        expect(mockPrisma.invoice.findFirst).toHaveBeenNthCalledWith(2, {
+          where: { idempotencyKey: 'key-recovery-cancelled', status: { not: 'cancelled' } },
+          include: { client: { select: { id: true, name: true } }, payments: true },
+        });
+      });
+
+      it('two LIVE (non-cancelled) invoices sharing a key remain impossible — the app-level check still rejects a live duplicate before ever reaching the DB', async () => {
+        // Whatever is found by the status-filtered query is, by definition,
+        // live — so a match here always goes through the normal
+        // match/mismatch comparison (return existing on match, 409 on
+        // mismatch), never a silent "two live rows" outcome. This documents
+        // the invariant explicitly: only a CANCELLED existing row is ever
+        // treated as absent; a LIVE one is always either returned (same
+        // fingerprint) or rejected (different fingerprint) — never ignored.
+        const dto = baseDto({ idempotencyKey: 'key-live' });
+        const existing = { id: 'live-inv', idempotencyKey: 'key-live', status: 'paid', requestFingerprint: computeSaleFingerprint(dto) };
+        mockPrisma.invoice.findFirst.mockResolvedValue(existing);
+
+        const result = await service.create(dto, clerkId);
+
+        expect(result).toBe(existing);
+        expect(mockPrisma.$transaction).not.toHaveBeenCalled(); // never even attempts a second live create
+      });
+    });
+  });
+
+  // ===========================================================================
+  // computeSaleFingerprint() — pure function, tested directly (determinism,
+  // sort-independence, sensitivity to every field that actually matters).
+  // UNCHANGED by the cancelled-invoice fix above — same algorithm, same
+  // fields, same sort rules (see forensic audit report item "fingerprint
+  // algorithm remains unchanged").
+  // ===========================================================================
+  describe('computeSaleFingerprint()', () => {
+    it('is deterministic — same input always produces the same fingerprint', () => {
+      const dto = baseDto({ idempotencyKey: 'k', receivedUsd: '10.00', receiverId: 'r1' });
+      expect(computeSaleFingerprint(dto)).toBe(computeSaleFingerprint({ ...dto }));
+    });
+
+    it('is independent of the order of bags in the array', () => {
+      const bagA = { packedStockId: 'ps-a', bagTypeId, bagTypeName: '25kg', quantity: 1, pricePerBag: '12.00', currency: 'USD' as const };
+      const bagB = { packedStockId: 'ps-b', bagTypeId, bagTypeName: '25kg', quantity: 2, pricePerBag: '12.00', currency: 'USD' as const };
+      const dto1 = baseDto({ bags: [bagA, bagB] });
+      const dto2 = baseDto({ bags: [bagB, bagA] });
+      expect(computeSaleFingerprint(dto1)).toBe(computeSaleFingerprint(dto2));
+    });
+
+    it('changes when the received amount changes', () => {
+      const dto1 = baseDto({ receivedUsd: '10.00' });
+      const dto2 = baseDto({ receivedUsd: '50.00' });
+      expect(computeSaleFingerprint(dto1)).not.toBe(computeSaleFingerprint(dto2));
+    });
+
+    it('changes when the bag quantity changes', () => {
+      const dto1 = baseDto({ bags: [{ packedStockId, bagTypeId, bagTypeName: '25kg', quantity: 1, pricePerBag: '12.00', currency: 'USD' }] });
+      const dto2 = baseDto({ bags: [{ packedStockId, bagTypeId, bagTypeName: '25kg', quantity: 99, pricePerBag: '12.00', currency: 'USD' }] });
+      expect(computeSaleFingerprint(dto1)).not.toBe(computeSaleFingerprint(dto2));
+    });
+
+    it('changes when the receiver changes', () => {
+      const dto1 = baseDto({ receiverId: 'receiver-a' });
+      const dto2 = baseDto({ receiverId: 'receiver-b' });
+      expect(computeSaleFingerprint(dto1)).not.toBe(computeSaleFingerprint(dto2));
+    });
+
+    it('is unaffected by display-only fields (notes, recipient)', () => {
+      const dto1 = baseDto({ notes: 'first note', recipient: 'Alice' });
+      const dto2 = baseDto({ notes: 'a completely different note', recipient: 'Bob' });
+      expect(computeSaleFingerprint(dto1)).toBe(computeSaleFingerprint(dto2));
+    });
+
+    it('ignores receiverName when receiverId is set (receiverId is what actually determines the ledger credit)', () => {
+      const dto1 = baseDto({ receiverId: 'r1', receiverName: 'Stale Name A' });
+      const dto2 = baseDto({ receiverId: 'r1', receiverName: 'Stale Name B' });
+      expect(computeSaleFingerprint(dto1)).toBe(computeSaleFingerprint(dto2));
     });
   });
 });

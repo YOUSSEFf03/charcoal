@@ -31,8 +31,9 @@ vi.mock('../hooks/usePayments', () => ({
   useCreatePayment: () => ({ mutate: vi.fn(), isPending: false }),
 }))
 
+const mockUseOrders = vi.fn()
 vi.mock('../hooks/useOrders', () => ({
-  useOrders: () => ({ data: { data: [], total: 0 } }),
+  useOrders: (...args: unknown[]) => mockUseOrders(...args),
 }))
 
 vi.mock('../context/RateContext', () => ({
@@ -58,6 +59,7 @@ function client(id: string, overrides: Partial<Client> = {}): Client {
     notes: null,
     notesEn: null,
     isActive: true,
+    multiLocationEnabled: false,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     balance: '0.00',
@@ -90,6 +92,73 @@ beforeEach(() => {
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
+  })
+  mockUseOrders.mockReturnValue({ data: { data: [], total: 0 } })
+})
+
+describe('Clients page — trueBalance includes draft orders', () => {
+  // Regression: trueBalance() = raw balance + value of uninvoiced orders.
+  // The order-status filter used to be ['confirmed', 'partially_delivered',
+  // 'delivered'] — but 'confirmed' is never actually written anywhere in the
+  // app (no create/edit-order flow has a status field), so every open order
+  // sits in 'draft' (the real, everyday "awaiting delivery" state) until
+  // markDelivered(). That silently zeroed out true balance for any client
+  // whose only open orders were still 'draft'.
+  it('adds a draft order\'s value to the client\'s displayed balance', () => {
+    mockUseClients.mockReturnValue({
+      data: { data: [client('a', { balance: '100.00' })], total: 1 },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    })
+    mockUseOrders.mockReturnValue({
+      data: {
+        data: [
+          {
+            id: 'o1', clientId: 'a', charcoalType: 'BBQ', grade: 'A',
+            totalKgRequested: '50', bagTypeId: null, pricePerBag: '1.00',
+            currency: 'USD', status: 'draft', createdById: 'u1',
+            createdAt: '2026-01-01', updatedAt: '2026-01-01', notes: null,
+            supplierName: null, driverId: null,
+            client: { id: 'a', name: 'a' }, bagType: null,
+          },
+        ],
+        total: 1,
+      },
+    })
+
+    renderClients()
+
+    // balance 100 + draft order (50 kg x $1/kg = 50) = 150
+    expect(screen.getByText('$150.00')).toBeInTheDocument()
+  })
+
+  it('does NOT add an already-invoiced order\'s value (avoids double counting with c.balance)', () => {
+    mockUseClients.mockReturnValue({
+      data: { data: [client('a', { balance: '100.00' })], total: 1 },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    })
+    mockUseOrders.mockReturnValue({
+      data: {
+        data: [
+          {
+            id: 'o1', clientId: 'a', charcoalType: 'BBQ', grade: 'A',
+            totalKgRequested: '50', bagTypeId: null, pricePerBag: '1.00',
+            currency: 'USD', status: 'invoiced', createdById: 'u1',
+            createdAt: '2026-01-01', updatedAt: '2026-01-01', notes: null,
+            supplierName: null, driverId: null,
+            client: { id: 'a', name: 'a' }, bagType: null,
+          },
+        ],
+        total: 1,
+      },
+    })
+
+    renderClients()
+
+    expect(screen.getByText('$100.00')).toBeInTheDocument()
   })
 })
 

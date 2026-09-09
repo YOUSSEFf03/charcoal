@@ -86,3 +86,45 @@ export function formatDateTime(
   const m = d.getMinutes().toString().padStart(2, '0')
   return `${datePart} ${h}:${m}`
 }
+
+/**
+ * Whole calendar days from "now" (local time) to an ISO date/datetime,
+ * comparing LOCAL calendar dates only — never raw millisecond subtraction
+ * (`new Date(a).getTime() - new Date(b).getTime()`) and never
+ * `.toISOString().slice(0,10)`, both of which can misreport the day count
+ * across a UTC-ahead timezone's local midnight (e.g. Beirut, UTC+3) the same
+ * way toDateOnlyString() above was written to avoid. Both the ETA and "now"
+ * are reduced to a LOCAL midnight Date via the same getFullYear/getMonth/
+ * getDate constructor pattern before subtracting, so the result reflects the
+ * calendar-day gap a person would actually count, and Math.round (not
+ * Math.floor) absorbs the odd 23h/25h day a DST transition can produce
+ * between two local-midnight instants.
+ *
+ * @returns positive = days in the future, 0 = today, negative = days in the
+ *          past (overdue), or null if `iso` is missing/invalid.
+ */
+export function daysUntil(iso?: string | null): number | null {
+  if (!iso) return null
+  const target = new Date(iso)
+  if (Number.isNaN(target.getTime())) return null
+  const now = new Date()
+  const targetMidnight = new Date(target.getFullYear(), target.getMonth(), target.getDate())
+  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const msPerDay = 24 * 60 * 60 * 1000
+  return Math.round((targetMidnight.getTime() - todayMidnight.getTime()) / msPerDay)
+}
+
+/**
+ * Business-friendly ETA countdown label from an ISO date/datetime, built on
+ * daysUntil() above. Never shows a negative number (e.g. "-3 days") — past
+ * ETAs read as "N day(s) overdue" instead. Never fabricates a value: a
+ * missing/invalid ETA reads as "ETA unavailable", not a guessed date.
+ */
+export function formatEtaCountdown(iso?: string | null): string {
+  const days = daysUntil(iso)
+  if (days === null) return 'ETA unavailable'
+  if (days === 0) return 'Arrives today'
+  if (days > 0) return `${days} day${days === 1 ? '' : 's'} to arrival`
+  const overdue = Math.abs(days)
+  return `${overdue} day${overdue === 1 ? '' : 's'} overdue`
+}

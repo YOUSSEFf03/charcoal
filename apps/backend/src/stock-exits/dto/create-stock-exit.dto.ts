@@ -106,4 +106,19 @@ export class CreateStockExitDto {
   @IsOptional()
   @IsString()
   collectedBy?: string;
+
+  /**
+   * Client-generated key identifying one logical exit-creation attempt — see
+   * StockExitsService.create()'s doc comment for the full idempotency
+   * mechanism this enables (mirrors CreateWalkInSaleDto.idempotencyKey /
+   * WalkInSalesService for the anonymous-walk-in-sale path, which this
+   * endpoint — not /walk-in-sales — actually handles). Optional and
+   * backward-compatible: a caller that omits it (every non-sale exit type,
+   * and any pre-existing caller) gets no idempotency protection, exactly as
+   * before this field existed.
+   */
+  @ApiProperty({ description: 'Client-generated idempotency key for one logical exit-creation attempt (optional)', required: false })
+  @IsOptional()
+  @IsUUID('all')
+  idempotencyKey?: string;
 }

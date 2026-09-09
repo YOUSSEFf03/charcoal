@@ -349,6 +349,11 @@ describe('InvoicesService', () => {
     // ClientOrder.status is set by OrdersService.markDelivered() regardless of
     // whether delivery went through the shipment path or the direct (no-shipment)
     // path, whereas a delivered Shipment row only ever exists for the former.
+    // stockExit.findMany defaults to [] (no linked exits) so every pre-existing
+    // test below — none of which cares about stock reversal — is unaffected;
+    // packedStock.update/stockLot.update are only ever called when a test's
+    // stockExit.findMany mock is overridden to return rows (see the "stock
+    // reversal" block further down).
     function makeCancelTx() {
       return {
         invoice: {
@@ -357,6 +362,9 @@ describe('InvoicesService', () => {
         },
         paymentAllocation: { findFirst: (jest.fn() as any).mockResolvedValue(null) },
         clientOrder: { findUnique: (jest.fn() as any).mockResolvedValue({ status: 'draft' }) },
+        stockExit: { findMany: (jest.fn() as any).mockResolvedValue([]) },
+        packedStock: { update: jest.fn() as any },
+        stockLot: { update: jest.fn() as any },
       };
     }
 
@@ -674,6 +682,149 @@ describe('InvoicesService', () => {
       expect(tx.clientOrder.findUnique).not.toHaveBeenCalled();
       expect(tx.invoice.update).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({ status: 'cancelled' });
+    });
+
+    // =======================================================================
+    // Stock reversal fix (forensic audit, 2026-08-28): cancelling a
+    // WAREHOUSE_SALE invoice must restore the stock its creation deducted —
+    // see this method's doc comment in invoices.service.ts.
+    // =======================================================================
+
+    it('stock reversal: restores PackedStock.quantity for a linked BAG StockExit', async () => {
+      const invoiceId = 'inv-uuid-stock-bag';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'WAREHOUSE_SALE',
+        orderId: null,
+      });
+      tx.invoice.update.mockResolvedValue({ id: invoiceId, status: 'cancelled' });
+      tx.stockExit.findMany.mockResolvedValue([
+        { id: 'exit-1', invoiceId, packedStockId: 'ps-1', quantity: 5, lotId: null, kgQuantity: null },
+      ]);
+      mockCalculator.validateCancellable.mockReturnValue(undefined);
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.cancel(invoiceId);
+
+      expect(tx.stockExit.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { invoiceId } }),
+      );
+      expect(tx.packedStock.update).toHaveBeenCalledWith({
+        where: { id: 'ps-1' },
+        data: { quantity: { increment: 5 } },
+      });
+      expect(tx.stockLot.update).not.toHaveBeenCalled();
+    });
+
+    it('stock reversal: restores StockLot.kgRemaining for a linked KG StockExit', async () => {
+      const invoiceId = 'inv-uuid-stock-kg';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'WAREHOUSE_SALE',
+        orderId: null,
+      });
+      tx.invoice.update.mockResolvedValue({ id: invoiceId, status: 'cancelled' });
+      tx.stockExit.findMany.mockResolvedValue([
+        { id: 'exit-2', invoiceId, packedStockId: null, quantity: null, lotId: 'lot-1', kgQuantity: { toString: () => '10.000' } },
+      ]);
+      mockCalculator.validateCancellable.mockReturnValue(undefined);
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.cancel(invoiceId);
+
+      expect(tx.stockLot.update).toHaveBeenCalledWith({
+        where: { id: 'lot-1' },
+        data: { kgRemaining: { increment: '10.000' } },
+      });
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+    });
+
+    it('stock reversal: restores BOTH bag and kg lines for a multi-line sale, one update per exit', async () => {
+      const invoiceId = 'inv-uuid-stock-mixed';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'WAREHOUSE_SALE',
+        orderId: null,
+      });
+      tx.invoice.update.mockResolvedValue({ id: invoiceId, status: 'cancelled' });
+      tx.stockExit.findMany.mockResolvedValue([
+        { id: 'exit-a', invoiceId, packedStockId: 'ps-a', quantity: 3, lotId: null, kgQuantity: null },
+        { id: 'exit-b', invoiceId, packedStockId: 'ps-b', quantity: 4, lotId: null, kgQuantity: null },
+        { id: 'exit-c', invoiceId, packedStockId: null, quantity: null, lotId: 'lot-a', kgQuantity: { toString: () => '5.000' } },
+      ]);
+      mockCalculator.validateCancellable.mockReturnValue(undefined);
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.cancel(invoiceId);
+
+      expect(tx.packedStock.update).toHaveBeenCalledTimes(2);
+      expect(tx.packedStock.update).toHaveBeenCalledWith({ where: { id: 'ps-a' }, data: { quantity: { increment: 3 } } });
+      expect(tx.packedStock.update).toHaveBeenCalledWith({ where: { id: 'ps-b' }, data: { quantity: { increment: 4 } } });
+      expect(tx.stockLot.update).toHaveBeenCalledTimes(1);
+      expect(tx.stockLot.update).toHaveBeenCalledWith({ where: { id: 'lot-a' }, data: { kgRemaining: { increment: '5.000' } } });
+    });
+
+    it('stock reversal: ORDER invoice with no linked StockExit performs no stock writes', async () => {
+      const invoiceId = 'inv-uuid-order-no-exits';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'ORDER',
+        orderId: null,
+      });
+      tx.invoice.update.mockResolvedValue({ id: invoiceId, status: 'cancelled' });
+      // stockExit.findMany already defaults to [] via makeCancelTx().
+      mockCalculator.validateCancellable.mockReturnValue(undefined);
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.cancel(invoiceId);
+
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.stockLot.update).not.toHaveBeenCalled();
+    });
+
+    it('stock reversal: a REJECTED cancellation (e.g. PAYMENT_EXISTS) never queries or restores stock', async () => {
+      const invoiceId = 'inv-uuid-rejected-no-stock';
+
+      const tx = makeCancelTx();
+      tx.invoice.findUnique.mockResolvedValue({
+        id: invoiceId,
+        status: 'issued',
+        source: 'WAREHOUSE_SALE',
+        orderId: null,
+      });
+      tx.paymentAllocation.findFirst.mockResolvedValue({ id: 'alloc-x' });
+
+      mockCalculator.validateCancellable.mockImplementation((inv: any) => {
+        if (inv.hasPayments) {
+          throw new BadRequestException({ code: 'PAYMENT_EXISTS' } as any);
+        }
+      });
+
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.cancel(invoiceId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'PAYMENT_EXISTS' }),
+      });
+
+      expect(tx.stockExit.findMany).not.toHaveBeenCalled();
+      expect(tx.packedStock.update).not.toHaveBeenCalled();
+      expect(tx.stockLot.update).not.toHaveBeenCalled();
     });
   });
 

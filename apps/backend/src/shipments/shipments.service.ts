@@ -11,7 +11,7 @@ import { InvoicesService } from '../invoices/invoices.service';
 import { PaymentAllocationService } from '../invoices/payment-allocation.service';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { UsersService } from '../users/users.service';
-import { PackedStockService } from '../packed-stock/packed-stock.service';
+import { PackedStockService, PACKED_STOCK_FIFO_ORDER_BY } from '../packed-stock/packed-stock.service';
 import { CreateShipmentDto } from './dto/create-shipment.dto';
 import { ConfirmDeliveryDto } from './dto/confirm-delivery.dto';
 import { LogReturnDto } from './dto/log-return.dto';
@@ -93,13 +93,28 @@ export class ShipmentsService {
    * shared bag-type row. We now record a keyed {@link ShipmentReservation} row per
    * (shipment, packedStock) chunk so every reservation belongs to exactly one shipment.
    *
-   *   For each bag line, walk packed-stock rows FIFO (createdAt asc) and validate each row
-   *   against its FREE quantity (`quantity − reservedQuantity`). For each chunk taken we
-   *   upsert a ShipmentReservation row AND increment the row's denormalized
+   *   For each bag line, walk packed-stock rows FIFO ({@link PACKED_STOCK_FIFO_ORDER_BY} —
+   *   the same deterministic oldest-batch-first tiebreak chain as
+   *   PackedStockService.getFifoDraw(); see that method's doc comment for the full
+   *   rationale) and validate each row against its FREE quantity
+   *   (`quantity − reservedQuantity`). For each chunk taken we upsert a
+   *   ShipmentReservation row AND increment the row's denormalized
    *   `reservedQuantity` cache in lockstep (cache always equals Σ of the row's
    *   reservations). If the full line cannot be reserved the whole transaction rolls back.
    *   Reservation does NOT decrement `quantity` — physical bags leave only at delivery;
    *   cancel/return releases this shipment's reservation rows.
+   *
+   * ── Deterministic ordering (forensic audit, 2026-08-29) ──────────────────
+   * This walk used to order by `createdAt asc` alone — the same nondeterministic-tie
+   * defect proven and fixed in PackedStockService.getFifoDraw() (sibling PackedStock
+   * rows from one packing session's createMany() batch share one client-computed
+   * createdAt, so `createdAt asc` alone leaves their relative order SQL-unspecified,
+   * resolved in practice by incidental physical tuple layout). This method draws from
+   * PackedStock exactly like getFifoDraw()'s callers do, so it carried the identical
+   * risk of an ambiguous choice between same-createdAt lots with different
+   * charcoalType/grade/costPerKg/dateReceived. Fixed by reusing the same
+   * {@link PACKED_STOCK_FIFO_ORDER_BY} tiebreak chain rather than inventing a
+   * separate rule.
    *
    * The reservation walk uses the same FIFO order as {@link confirmDelivery} and
    * {@link cancelShipment} so reserve, drain, and release stay consistent.
@@ -150,7 +165,7 @@ export class ShipmentsService {
 
         const stocks = await tx.packedStock.findMany({
           where: { bagTypeId: bag.bagTypeId },
-          orderBy: { createdAt: 'asc' },
+          orderBy: PACKED_STOCK_FIFO_ORDER_BY,
         });
 
         for (const stock of stocks) {
@@ -372,9 +387,11 @@ export class ShipmentsService {
    * delivered.
    *
    * Reuses PackedStockService.getFifoDraw() for the draw plan (same
-   * createdAt-ascending order, same `quantity − reservedQuantity` free-stock
-   * rule as every other consumer of packed stock in this codebase —
-   * StockExitsService, WalkInSalesService, ShipmentsService.createShipment())
+   * deterministic oldest-batch-first order — see that method's doc comment
+   * for the full ordering/tiebreak rule — and same `quantity −
+   * reservedQuantity` free-stock rule as every other consumer of packed
+   * stock in this codebase — StockExitsService, WalkInSalesService,
+   * ShipmentsService.createShipment())
    * rather than re-implementing the FIFO walk. Only the write step — the
    * locked decrement + StockExit(exitType:'order') creation per drawn chunk —
    * is new, and it mirrors {@link drainShipment}'s per-chunk write exactly.
@@ -615,7 +632,11 @@ export class ShipmentsService {
    * and marks the shipment as returned. Updates order status.
    *
    * Step 1: Fetch shipment with bags
-   * Step 2: For each ShipmentBag — increment first available PackedStock (orderBy createdAt asc)
+   * Step 2: For each ShipmentBag — increment the oldest-batch PackedStock row
+   *         ({@link PACKED_STOCK_FIFO_ORDER_BY} — same deterministic tiebreak
+   *         chain as the reservation walk in {@link createShipment}; forensic
+   *         audit 2026-08-29 — this `findFirst` used to order by `createdAt asc`
+   *         alone, the same sibling-tie defect fixed elsewhere in this file)
    * Step 3: Update shipment status to 'returned'
    * Step 4: Recompute order status from sibling shipments
    *
@@ -656,7 +677,7 @@ export class ShipmentsService {
       for (const bag of shipment.bags) {
         const stock = await tx.packedStock.findFirst({
           where: { bagTypeId: bag.bagTypeId },
-          orderBy: { createdAt: 'asc' },
+          orderBy: PACKED_STOCK_FIFO_ORDER_BY,
         });
 
         if (stock) {

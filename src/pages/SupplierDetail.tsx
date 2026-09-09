@@ -1,15 +1,24 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useSupplier, useSupplierPayments, useCreateSupplierPayment } from '../hooks/useSuppliers'
 import { useContainers } from '../hooks/useContainers'
 import { useSupplierLedger } from '../hooks/useReports'
 import { exportExcel, type ExcelColumn } from '../lib/excelExport'
+import { buildStatementPdf, exportStatementPdf, statementPdfFilename, type StatementPdfConfig } from '../lib/statementPdf'
+import { toWhatsAppDigits } from '../lib/phone'
 import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
 import { formatUsd } from '../lib/money'
 import { formatDate, toDateOnlyString } from '../lib/date'
 
 type View = 'detail' | 'statement'
+// Statement of Account presentation (monthly-statement unification,
+// 2026-09-07): the PRIMARY view is always a single calendar month, navigated
+// with ← / → — same convention as Employees.tsx's Statement of Account and
+// ClientDetail.tsx's Client Statement tab. "All time" and "Custom" (the
+// free-text From/To range this tab used to default to) remain available as
+// de-emphasized, explicit opt-ins — never the default.
+type StatementMode = 'month' | 'all-time' | 'custom'
 
 function initialsOf(name?: string | null): string {
   if (!name) return '?'
@@ -80,17 +89,63 @@ export default function SupplierDetail() {
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
   const { openExportModal, exportColumnsModal } = useExportColumnsModal()
 
+  // ── Export-PDF split-button menu (Download / Share / Share via WhatsApp) —
+  // mirrors ClientDetail.tsx's Statement of Account export exactly. ──────────
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
+  const [canShareFiles] = useState(() => {
+    try {
+      return typeof navigator !== 'undefined' && !!navigator.canShare &&
+        navigator.canShare({ files: [new File([''], 'test.pdf', { type: 'application/pdf' })] })
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
   // Statement of Account sub-view filters. dateFrom/dateTo are sent to the backend
   // (the opening balance is computed server-side for the exact selected range);
   // type/search are display-only filters applied client-side to the fetched entries.
-  const [stmtFrom, setStmtFrom] = useState('')
-  const [stmtTo, setStmtTo] = useState('')
+  const [statementMode, setStatementMode] = useState<StatementMode>('month')
+  const [statementMonth, setStatementMonth] = useState(() => {
+    const d = new Date()
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
   const [stmtType, setStmtType] = useState<'all' | 'debit' | 'credit'>('all')
   const [stmtQ, setStmtQ] = useState('')
 
+  const statementMonthYear  = statementMonth.getFullYear()
+  const statementMonthIdx   = statementMonth.getMonth()
+  const statementMonthLabel = statementMonth.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+  function goToPrevStatementMonth() {
+    setStatementMode('month')
+    setStatementMonth(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))
+  }
+  function goToNextStatementMonth() {
+    setStatementMode('month')
+    setStatementMonth(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))
+  }
+  const { dateFrom: stmtFrom, dateTo: stmtTo } =
+    statementMode === 'all-time' ? { dateFrom: undefined, dateTo: undefined } :
+    statementMode === 'custom'   ? { dateFrom: customFrom || undefined, dateTo: customTo || undefined } :
+    {
+      dateFrom: toDateOnlyString(new Date(statementMonthYear, statementMonthIdx, 1)),
+      dateTo:   toDateOnlyString(new Date(statementMonthYear, statementMonthIdx + 1, 0)),
+    }
+
   const ledgerQ = useSupplierLedger(supplierId, {
-    dateFrom: stmtFrom || undefined,
-    dateTo:   stmtTo   || undefined,
+    dateFrom: stmtFrom,
+    dateTo:   stmtTo,
   })
 
   // Statement ledger sourced from backend — Container Product Line + direct Stock
@@ -118,14 +173,19 @@ export default function SupplierDetail() {
   })
   const stmtDebit   = stmtFiltered.reduce((s, e) => s + e.debit, 0)
   const stmtCredit  = stmtFiltered.reduce((s, e) => s + e.credit, 0)
-  // Server-computed opening balance for the exact selected date range — no client-side
-  // "previous row" workaround needed since the backend already supports dateFrom/dateTo.
+  // Server-computed opening/closing balance for the exact selected date
+  // range — no client-side "previous row" workaround needed since the
+  // backend already supports dateFrom/dateTo. Using summary.outstanding
+  // (rather than the last entry's balance) also keeps an empty month
+  // showing the correct carried-forward balance instead of a fake zero.
   const stmtOpening = parseFloat(ledgerQ.data?.summary.openingBalance ?? '0')
-  const stmtClosing = stmtFiltered.length ? stmtFiltered[stmtFiltered.length - 1].balance : stmtOpening
-  const stmtOpeningDate = stmtFiltered.length ? stmtFiltered[0].date : (LEDGER[0]?.date ?? fmtDate(new Date().toISOString()))
-  const stmtPeriod = stmtFiltered.length ? `${stmtFiltered[0].date} — ${stmtFiltered[stmtFiltered.length - 1].date}` : '—'
-  const stmtFilterActive = stmtFrom || stmtTo || stmtType !== 'all' || stmtQ
-  function resetStmt() { setStmtFrom(''); setStmtTo(''); setStmtType('all'); setStmtQ('') }
+  const stmtClosing = parseFloat(ledgerQ.data?.summary.outstanding ?? String(stmtOpening))
+  const stmtOpeningDate = statementMode === 'custom' && !stmtFrom ? '' : fmtDate(stmtFrom)
+  const stmtPeriod = statementMode === 'all-time' ? 'All time'
+    : statementMode === 'custom' ? (stmtFrom || stmtTo ? `${stmtFrom ? fmtDate(stmtFrom) : 'start'} — ${stmtTo ? fmtDate(stmtTo) : 'today'}` : 'Custom range')
+    : statementMonthLabel
+  const stmtFilterActive = stmtType !== 'all' || stmtQ
+  function resetStmt() { setStmtType('all'); setStmtQ('') }
 
   function exportStatement() {
     if (stmtFiltered.length === 0) { showToast('Nothing to export'); return }
@@ -163,6 +223,87 @@ export default function SupplierDetail() {
     })
   }
 
+  // Shared by all three export/share actions below — mirrors ClientDetail.tsx's
+  // statementPdfConfig() exactly, so Download/Share/WhatsApp always render the
+  // same document from the same stmtFiltered/stmtOpening/stmtDebit/stmtCredit/
+  // stmtClosing figures already shown on screen and in exportStatement()'s
+  // Excel export. Suppliers have no `address`/`currency` fields of their own
+  // (unlike Client) — country stands in for address, and the statement is
+  // always USD, same as the on-screen Statement of Account view above.
+  function statementPdfConfig(): StatementPdfConfig {
+    const primaryPhone = supplier?.contactPersons[0]?.phone ?? null
+    return {
+      client: {
+        name: supplier?.name ?? 'Supplier',
+        address: supplier?.country || null,
+        phone: primaryPhone,
+        currency: 'USD',
+      },
+      partyLabel: 'Supplier',
+      from: stmtFrom ? new Date(stmtFrom).toISOString() : (stmtFiltered[0]?.rawDate ?? null),
+      to: stmtTo ? new Date(stmtTo).toISOString() : (stmtFiltered[stmtFiltered.length - 1]?.rawDate ?? null),
+      rows: stmtFiltered.map(e => ({ ref: e.ref, rawDate: e.rawDate, desc: e.desc, debit: e.debit, credit: e.credit, balance: e.balance })),
+      openingBalance: stmtOpening,
+      periodDebitTotal: stmtDebit,
+      periodCreditTotal: stmtCredit,
+      closingBalance: stmtClosing,
+    }
+  }
+
+  async function downloadStatementPdf() {
+    try {
+      await exportStatementPdf(statementPdfConfig())
+    } catch (e) {
+      console.error('Failed to export statement PDF:', e)
+      showToast('Failed to export statement PDF')
+    }
+  }
+
+  async function shareStatementPdf() {
+    try {
+      const doc = await buildStatementPdf(statementPdfConfig())
+      const filename = statementPdfFilename(supplier?.name ?? 'Supplier', 'Supplier')
+      const file = new File([doc.output('blob')], filename, { type: 'application/pdf' })
+      await navigator.share({ files: [file] })
+    } catch (e) {
+      if ((e as Error)?.name === 'AbortError') return // user closed the share sheet — not a failure
+      console.error('Failed to share statement PDF:', e)
+      showToast('Failed to share statement PDF')
+    }
+  }
+
+  async function shareStatementViaWhatsApp() {
+    const primaryPhone = supplier?.contactPersons[0]?.phone ?? null
+    const digits = toWhatsAppDigits(primaryPhone)
+    if (!digits) {
+      showToast('No phone number on file for this supplier')
+      return
+    }
+
+    if (canShareFiles) {
+      try {
+        const doc = await buildStatementPdf(statementPdfConfig())
+        const filename = statementPdfFilename(supplier?.name ?? 'Supplier', 'Supplier')
+        const file = new File([doc.output('blob')], filename, { type: 'application/pdf' })
+        await navigator.share({ files: [file] })
+        return
+      } catch (e) {
+        if ((e as Error)?.name === 'AbortError') return // user closed the share sheet — not a failure
+        console.error('Failed to share statement PDF, falling back to download:', e)
+        // fall through to the download+wa.me fallback below
+      }
+    }
+    try {
+      await exportStatementPdf(statementPdfConfig())
+    } catch (e) {
+      console.error('Failed to export statement PDF:', e)
+      showToast('Failed to export statement PDF')
+      return
+    }
+    window.open(`https://wa.me/${digits}`, '_blank', 'noreferrer')
+    showToast('Statement downloaded — attach it in the WhatsApp chat that just opened')
+  }
+
   function showToast(msg: string) {
     setToast(msg)
     clearTimeout(toastTimer.current)
@@ -193,7 +334,7 @@ export default function SupplierDetail() {
   if (supplierQuery.isLoading) {
     return (
       <>
-        <Topbar title="Supplier" />
+        <Topbar title="Supplier" back={{ label: 'Back to suppliers', to: '/suppliers' }} />
         <div className="content">
           <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>
             <i className="ti ti-loader" style={{ fontSize: 22 }} /> Loading supplier…
@@ -206,7 +347,7 @@ export default function SupplierDetail() {
   if (supplierQuery.isError) {
     return (
       <>
-        <Topbar title="Supplier" />
+        <Topbar title="Supplier" back={{ label: 'Back to suppliers', to: '/suppliers' }} />
         <div className="content">
           <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--red)' }}>
             <i className="ti ti-alert-triangle" style={{ fontSize: 22 }} /> Couldn't load this supplier.
@@ -218,7 +359,12 @@ export default function SupplierDetail() {
 
   return (
     <>
-      <Topbar title={supplier?.name ?? 'Supplier'}>
+      <Topbar
+        title={supplier?.name ?? 'Supplier'}
+        back={view === 'detail'
+          ? { label: 'Back to suppliers', to: '/suppliers' }
+          : { label: 'Back to supplier', to: () => setView('detail') }}
+      >
         {view === 'detail' ? (
           <>
             <button className="btn"><i className="ti ti-edit" style={{ fontSize: 15 }} /> Edit</button>
@@ -229,11 +375,7 @@ export default function SupplierDetail() {
               <i className="ti ti-cash" style={{ fontSize: 15 }} /> Pay supplier
             </button>
           </>
-        ) : (
-          <button className="btn" onClick={() => setView('detail')}>
-            <i className="ti ti-arrow-left" style={{ fontSize: 15 }} /> Back to supplier
-          </button>
-        )}
+        ) : null}
       </Topbar>
       <div className="content">
 
@@ -328,30 +470,32 @@ export default function SupplierDetail() {
               {(supplier?.purchasedTypes ?? []).length === 0 ? (
                 <div className="empty">No stock lots found for this supplier</div>
               ) : (
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Charcoal type</th>
-                      <th style={{ width: 90 }}>Grade</th>
-                      <th className="right" style={{ width: 110 }}>Total received</th>
-                      <th className="right" style={{ width: 110 }}>In stock</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(supplier?.purchasedTypes ?? []).map((t, i) => (
-                      <tr key={i}>
-                        <td style={{ fontWeight: 500 }}>{t.type}</td>
-                        <td>
-                          <span className={`grade-pill grade-${t.grade}`}>Grade {t.grade}</span>
-                        </td>
-                        <td className="right num">{t.totalKg.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg</td>
-                        <td className="right num" style={{ color: t.kgRemaining > 0 ? 'var(--accent)' : 'var(--text3)', fontWeight: t.kgRemaining > 0 ? 600 : 400 }}>
-                          {t.kgRemaining > 0 ? `${t.kgRemaining.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg` : '—'}
-                        </td>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Charcoal type</th>
+                        <th style={{ width: 90 }}>Grade</th>
+                        <th className="right" style={{ width: 110 }}>Total received</th>
+                        <th className="right" style={{ width: 110 }}>In stock</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {(supplier?.purchasedTypes ?? []).map((t, i) => (
+                        <tr key={i}>
+                          <td style={{ fontWeight: 500 }}>{t.type}</td>
+                          <td>
+                            <span className={`grade-pill grade-${t.grade}`}>Grade {t.grade}</span>
+                          </td>
+                          <td className="right num">{t.totalKg.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg</td>
+                          <td className="right num" style={{ color: t.kgRemaining > 0 ? 'var(--accent)' : 'var(--text3)', fontWeight: t.kgRemaining > 0 ? 600 : 400 }}>
+                            {t.kgRemaining > 0 ? `${t.kgRemaining.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
 
@@ -380,30 +524,32 @@ export default function SupplierDetail() {
               )}
               {!containersQ.isLoading && containers.length > 0 && (
                 <>
-                  <table className="data-table" style={{ borderBottom: '1px solid var(--border)' }}>
-                    <thead>
-                      <tr>
-                        <th style={{ width: 120 }}>Arrived</th>
-                        <th>Container #</th>
-                        <th style={{ width: 100 }}>Status</th>
-                        <th style={{ width: 50 }} />
+                  <div className="table-scroll">
+                    <table className="data-table" style={{ borderBottom: '1px solid var(--border)' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: 120 }}>Arrived</th>
+                          <th>Container #</th>
+                          <th style={{ width: 100 }}>Status</th>
+                          <th style={{ width: 50 }} />
+                        </tr>
+                      </thead>
+                      <tbody>
+                    {containers.slice(0, shownCont).map(c => (
+                      <tr key={c.id} style={{ cursor: 'pointer' }} onClick={() => navigate('/containers/' + c.id)}>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>{c.arrivalDate ?? '—'}</td>
+                        <td style={{ fontWeight: 500 }}>{c.number}</td>
+                        <td><span className={`badge ${c.status === 'arrived' ? 'badge-green' : c.status === 'port' ? 'badge-amber' : 'badge-gray'}`}>{c.status}</span></td>
+                        <td>
+                          <div className="row-actions" onClick={e => e.stopPropagation()}>
+                            <button className="icon-btn" title="View container" aria-label="View container" onClick={() => navigate('/containers/' + c.id)}><i className="ti ti-arrow-up-right" /></button>
+                          </div>
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
-                  {containers.slice(0, shownCont).map(c => (
-                    <tr key={c.id} style={{ cursor: 'pointer' }} onClick={() => navigate('/containers/' + c.id)}>
-                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>{c.arrivalDate ?? '—'}</td>
-                      <td style={{ fontWeight: 500 }}>{c.number}</td>
-                      <td><span className={`badge ${c.status === 'arrived' ? 'badge-green' : c.status === 'port' ? 'badge-amber' : 'badge-gray'}`}>{c.status}</span></td>
-                      <td>
-                        <div className="row-actions" onClick={e => e.stopPropagation()}>
-                          <button className="icon-btn" onClick={() => navigate('/containers/' + c.id)}><i className="ti ti-arrow-up-right" /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                    </tbody>
-                  </table>
+                    ))}
+                      </tbody>
+                    </table>
+                  </div>
                   <div className="more-foot">
                     <span>showing {Math.min(shownCont, containers.length)} of {containersQ.data?.total ?? containers.length} containers</span>
                     {containers.length > 5 && (
@@ -445,35 +591,37 @@ export default function SupplierDetail() {
                 <div className="empty">No payments recorded yet.</div>
               )}
               {!paymentsQ.isLoading && payments.length > 0 && (
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: 120 }}>Date</th>
-                      <th style={{ width: 110 }}>Method</th>
-                      <th>Note</th>
-                      <th>Logged by</th>
-                      <th className="right" style={{ width: 110 }}>Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {payments.map(p => (
-                      <tr key={p.id}>
-                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>
-                          {new Date(p.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                        </td>
-                        <td><span className="badge badge-gray">{p.method.replace('_', ' ')}</span></td>
-                        <td style={{ fontSize: 12.5, color: 'var(--text2)' }}>
-                          {p.container ? <span style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{p.container.number}</span> : '—'}
-                          {p.notes && <span style={{ marginLeft: 6, color: 'var(--text3)' }}>{p.notes}</span>}
-                        </td>
-                        <td style={{ fontSize: 12.5, color: 'var(--text3)' }}>{p.loggedBy.name}</td>
-                        <td className="right num" style={{ fontWeight: 600, color: 'var(--accent)' }}>
-                          +{money(parseFloat(p.amount))} <span style={{ fontSize: 10, fontWeight: 400 }}>{p.currency}</span>
-                        </td>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 120 }}>Date</th>
+                        <th style={{ width: 110 }}>Method</th>
+                        <th>Note</th>
+                        <th>Logged by</th>
+                        <th className="right" style={{ width: 110 }}>Amount</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {payments.map(p => (
+                        <tr key={p.id}>
+                          <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>
+                            {new Date(p.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                          </td>
+                          <td><span className="badge badge-gray">{p.method.replace('_', ' ')}</span></td>
+                          <td style={{ fontSize: 12.5, color: 'var(--text2)' }}>
+                            {p.container ? <span style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{p.container.number}</span> : '—'}
+                            {p.notes && <span style={{ marginLeft: 6, color: 'var(--text3)' }}>{p.notes}</span>}
+                          </td>
+                          <td style={{ fontSize: 12.5, color: 'var(--text3)' }}>{p.loggedBy.name}</td>
+                          <td className="right num" style={{ fontWeight: 600, color: 'var(--accent)' }}>
+                            +{money(parseFloat(p.amount))} <span style={{ fontSize: 10, fontWeight: 400 }}>{p.currency}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
 
@@ -575,13 +723,69 @@ export default function SupplierDetail() {
               </div>
               <div className="stmt-actions no-print">
                 <button className="btn" onClick={() => window.print()}><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print</button>
+                <div ref={exportMenuRef} style={{ position: 'relative' }}>
+                  <button className="btn-export" onClick={() => setExportMenuOpen(o => !o)}>
+                    <i className="ti ti-download" /> Export PDF <i className="ti ti-chevron-down" style={{ fontSize: 11 }} />
+                  </button>
+                  {exportMenuOpen && (
+                    <div className="export-menu">
+                      <button className="export-menu-item" onClick={() => { setExportMenuOpen(false); downloadStatementPdf() }}>
+                        <i className="ti ti-download" /> Download
+                      </button>
+                      {canShareFiles && (
+                        <button className="export-menu-item" onClick={() => { setExportMenuOpen(false); shareStatementPdf() }}>
+                          <i className="ti ti-share-2" /> Share…
+                        </button>
+                      )}
+                      <button className="export-menu-item whatsapp" onClick={() => { setExportMenuOpen(false); shareStatementViaWhatsApp() }}>
+                        <i className="ti ti-brand-whatsapp" /> Share via WhatsApp
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button className="btn-export" onClick={exportStatement}><i className="ti ti-table-export" /> Export Excel</button>
               </div>
             </div>
 
-            {/* Filter bar — hidden on print (see .no-print in index.css); the
-                view-head above already shows supplier name + selected period,
-                so nothing period-identifying is lost from the printout. */}
+            {/* Month navigation — hidden on print (see .no-print in
+                index.css); the view-head above already shows supplier name +
+                selected period, so nothing period-identifying is lost from
+                the printout. Same convention as Employees.tsx's Statement of
+                Account and ClientDetail.tsx's Client Statement tab. */}
+            <div className="filter-row no-print" style={{ justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {statementMode === 'month' && (
+                  <>
+                    <button className="btn" onClick={goToPrevStatementMonth} title="Previous month">
+                      <i className="ti ti-chevron-left" style={{ fontSize: 14 }} />
+                    </button>
+                    <div style={{ fontWeight: 600, fontSize: 14, minWidth: 140, textAlign: 'center', fontFamily: "'IBM Plex Mono', monospace" }}>
+                      {statementMonthLabel}
+                    </div>
+                    <button className="btn" onClick={goToNextStatementMonth} title="Next month">
+                      <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                    </button>
+                  </>
+                )}
+                {statementMode === 'all-time' && (
+                  <div style={{ fontWeight: 600, fontSize: 14, fontFamily: "'IBM Plex Mono', monospace" }}>All time</div>
+                )}
+                {statementMode === 'custom' && (
+                  <div className="filter-dates">
+                    <span className="lbl">From</span>
+                    <input className="date-mini" type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} />
+                    <span className="lbl">To</span>
+                    <input className="date-mini" type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} />
+                  </div>
+                )}
+              </div>
+              <div className="seg">
+                {([['month', 'Month'], ['all-time', 'All time'], ['custom', 'Custom']] as const).map(([k, lbl]) => (
+                  <div key={k} className={`seg-opt ${statementMode === k ? 'sel' : ''}`} onClick={() => setStatementMode(k)}>{lbl}</div>
+                ))}
+              </div>
+            </div>
+
             <div className="filter-row no-print">
               <div className="filter-search">
                 <i className="ti ti-search" />
@@ -591,12 +795,6 @@ export default function SupplierDetail() {
                 {([['all', 'All'], ['debit', 'Purchases'], ['credit', 'Payments']] as const).map(([k, lbl]) => (
                   <div key={k} className={`seg-opt ${stmtType === k ? 'sel' : ''}`} onClick={() => setStmtType(k)}>{lbl}</div>
                 ))}
-              </div>
-              <div className="filter-dates">
-                <span className="lbl">From</span>
-                <input className="date-mini" type="date" value={stmtFrom} onChange={e => setStmtFrom(e.target.value)} />
-                <span className="lbl">To</span>
-                <input className="date-mini" type="date" value={stmtTo} onChange={e => setStmtTo(e.target.value)} />
               </div>
               {stmtFilterActive ? <button className="btn" onClick={resetStmt}><i className="ti ti-x" style={{ fontSize: 14 }} /> Reset</button> : null}
             </div>
@@ -671,7 +869,7 @@ export default function SupplierDetail() {
               <div>
                 <div className="modal-title"><i className="ti ti-cash" style={{ marginRight: 8 }} />Pay {supplier?.name ?? 'Supplier'}</div>
               </div>
-              <button className="close-btn" onClick={() => setPayOpen(false)}>✕</button>
+              <button className="close-btn" aria-label="Close" onClick={() => setPayOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-grid">

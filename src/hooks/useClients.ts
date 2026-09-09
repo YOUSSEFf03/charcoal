@@ -8,6 +8,9 @@ import type {
   DeactivateClientPhoneDto,
   ClientBalanceResponse,
   PaginatedResponse,
+  ClientLocation,
+  CreateClientLocationDto,
+  UpdateClientLocationDto,
 } from '../types/api'
 
 /** Query params accepted by GET /clients. */
@@ -202,6 +205,70 @@ export function useDeactivatePhone() {
     },
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['clients', id] })
+    },
+  })
+}
+
+// ----------------------------------------------------------------------------
+// CLIENT LOCATIONS (forensic audit, 2026-08-31) — provenance for normal
+// Orders only. NEVER a second financial account — see ClientLocation's
+// backend schema.prisma doc comment.
+// ----------------------------------------------------------------------------
+
+/**
+ * A client's locations (active + inactive) — for the Client page's
+ * management UI.
+ * @param clientId - Client UUID
+ * @returns React Query result of ClientLocation[]
+ * GET /clients/:id/locations
+ */
+export function useClientLocations(clientId: string) {
+  return useQuery({
+    queryKey: ['clients', clientId, 'locations'],
+    queryFn: async () => {
+      const res = await api.get<ClientLocation[]>(`/clients/${clientId}/locations`)
+      return res.data
+    },
+    enabled: Boolean(clientId),
+  })
+}
+
+/**
+ * "+ Add Location" — find-or-conflict, case-insensitive within this client.
+ * @returns mutation accepting { id, body: CreateClientLocationDto }
+ * POST /clients/:id/locations
+ */
+export function useCreateClientLocation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, body }: { id: string; body: CreateClientLocationDto }) => {
+      const res = await api.post<ClientLocation>(`/clients/${id}/locations`, body)
+      return res.data
+    },
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ['clients', id, 'locations'] })
+    },
+  })
+}
+
+/**
+ * Edit a location, including deactivate/reactivate (isActive) — never
+ * deletes it (CONSTRAINT: preserve historical location info once a location
+ * has transactions).
+ * @returns mutation accepting { id, locationId, body: UpdateClientLocationDto }
+ * PATCH /clients/:id/locations/:locationId
+ */
+export function useUpdateClientLocation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      id, locationId, body,
+    }: { id: string; locationId: string; body: UpdateClientLocationDto }) => {
+      const res = await api.patch<ClientLocation>(`/clients/${id}/locations/${locationId}`, body)
+      return res.data
+    },
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ['clients', id, 'locations'] })
     },
   })
 }

@@ -43,6 +43,25 @@ export class StockExitsController {
   }
 
   /**
+   * IMPORTANT: must come before GET /:id so NestJS does not treat "grouped"
+   * as a UUID parameter — same reasoning as the GET /summary route below.
+   */
+  @ApiOperation({ summary: 'List stock exits paginated by LOGICAL SALE (one row per invoice, not per StockExit)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @Get('grouped')
+  @Roles('owner', 'accountant', 'sales_rep')
+  findAllGrouped(
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe(20)) limit: number,
+    @Query('exitType') exitType?: ExitType,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('clientId') clientId?: string,
+  ) {
+    return this.stockExitsService.findAllGrouped(page, limit, exitType, dateFrom, dateTo, clientId);
+  }
+
+  /**
    * IMPORTANT: must come before GET /:id so NestJS does not treat "summary"
    * as a UUID parameter.
    */

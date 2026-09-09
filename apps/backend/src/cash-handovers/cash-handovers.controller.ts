@@ -38,6 +38,50 @@ export class CashHandoversController {
     return this.service.getReceiverBalance(receiverId);
   }
 
+  // ── Expenses page (forensic audit, 2026-08-31) ────────────────────────────
+  // IMPORTANT: these three static-prefixed routes must be declared before any
+  // future `@Get(':something')` on this controller, for the same reason
+  // `GET /stock-exits/grouped` is declared before `GET /stock-exits/:id` —
+  // otherwise Nest would try to parse "expenses" as a UUID path param.
+  @ApiOperation({ summary: 'Flat list of every cash-handover-sourced business expense in range (Business Expenses page) — aggregated server-side, never paginated raw rows' })
+  @Get('expenses')
+  getBusinessExpenses(
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.service.getBusinessExpenses(dateFrom, dateTo);
+  }
+
+  @ApiOperation({ summary: 'Cash-holder expense totals (per-employee breakdown) — aggregated server-side, never paginated raw rows' })
+  @Get('expenses/summary')
+  getExpensesSummary(
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.service.getExpensesSummary(dateFrom, dateTo);
+  }
+
+  @ApiOperation({ summary: "One employee's expense total + category breakdown" })
+  @Get('expenses/employee/:employeeId')
+  getEmployeeExpenses(
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.service.getEmployeeExpenses(employeeId, dateFrom, dateTo);
+  }
+
+  @ApiOperation({ summary: 'Every individual expense occurrence for one employee in one category' })
+  @Get('expenses/employee/:employeeId/category/:categoryId')
+  getEmployeeCategoryExpenses(
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+    @Param('categoryId', ParseUUIDPipe) categoryId: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.service.getEmployeeCategoryExpenses(employeeId, categoryId, dateFrom, dateTo);
+  }
+
   @ApiOperation({ summary: 'Log a cash handover' })
   @Post()
   create(

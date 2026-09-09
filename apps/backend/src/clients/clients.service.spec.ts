@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { ClientsService } from './clients.service';
 import { ClientBalanceService } from './client-balance.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -734,5 +734,130 @@ describe('ClientsService — findAll()', () => {
     const result = await service.findAll(1, 20, undefined, undefined, undefined, undefined, true, undefined, undefined, 100);
 
     expect(result.data.map((c: any) => c.id)).toEqual(['b']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Client Locations (forensic audit, 2026-08-31): "Client Multiple Locations
+// with ONE shared client balance" — provenance for normal Orders only.
+// CASE numbers reference the task's own test matrix.
+// ---------------------------------------------------------------------------
+describe('ClientsService — Client Locations', () => {
+  let service: ClientsService;
+
+  const mockPrisma = {
+    client: { findUnique: fn() },
+    clientLocation: { findMany: fn(), findFirst: fn(), findUnique: fn(), create: fn(), update: fn() },
+  };
+  const mockBalanceService = { computeBalance: fn() };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ClientsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: ClientBalanceService, useValue: mockBalanceService },
+      ],
+    }).compile();
+    service = module.get<ClientsService>(ClientsService);
+  });
+
+  describe('listLocations()', () => {
+    it('CASE 1 — a client with no locations returns an empty list, never crashes', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c1' });
+      mockPrisma.clientLocation.findMany.mockResolvedValue([]);
+
+      const result = await service.listLocations('c1');
+
+      expect(result).toEqual([]);
+    });
+
+    it('throws NotFoundException for an unknown client', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue(null);
+      await expect(service.listLocations('nonexistent')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('createLocation() — CASE 3', () => {
+    it('creates a new location for the client', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c1' });
+      mockPrisma.clientLocation.findFirst.mockResolvedValue(null);
+      mockPrisma.clientLocation.create.mockResolvedValue({ id: 'loc-a', clientId: 'c1', name: 'Hamra Branch' });
+
+      const result = await service.createLocation('c1', { name: 'Hamra Branch' });
+
+      expect(result.name).toBe('Hamra Branch');
+      expect(mockPrisma.clientLocation.create).toHaveBeenCalledWith({
+        data: { clientId: 'c1', name: 'Hamra Branch' },
+      });
+    });
+
+    it('CASE 3 — a second, differently-named location (Location B) can be created for the same client', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c1' });
+      mockPrisma.clientLocation.findFirst.mockResolvedValue(null);
+      mockPrisma.clientLocation.create.mockResolvedValue({ id: 'loc-b', clientId: 'c1', name: 'Jounieh Branch' });
+
+      const result = await service.createLocation('c1', { name: 'Jounieh Branch' });
+
+      expect(result.name).toBe('Jounieh Branch');
+    });
+
+    it('rejects a case-insensitive duplicate name within the SAME client ("Fuel/fuel/FUEL" prevention pattern)', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c1' });
+      mockPrisma.clientLocation.findFirst.mockResolvedValue({ id: 'loc-existing', name: 'Hamra Branch' });
+
+      await expect(service.createLocation('c1', { name: 'hamra branch' })).rejects.toThrow(ConflictException);
+      expect(mockPrisma.clientLocation.create).not.toHaveBeenCalled();
+    });
+
+    it('the SAME location name is allowed for a DIFFERENT client — uniqueness is per-client, not global', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c2' });
+      // findFirst is scoped to clientId in the real query — this mock simply
+      // proves the service never widens the search beyond the given client.
+      mockPrisma.clientLocation.findFirst.mockResolvedValue(null);
+      mockPrisma.clientLocation.create.mockResolvedValue({ id: 'loc-c2', clientId: 'c2', name: 'Hamra Branch' });
+
+      const result = await service.createLocation('c2', { name: 'Hamra Branch' });
+
+      expect(result.name).toBe('Hamra Branch');
+      expect(mockPrisma.clientLocation.findFirst).toHaveBeenCalledWith({
+        where: { clientId: 'c2', name: { equals: 'Hamra Branch', mode: 'insensitive' } },
+      });
+    });
+
+    it('rejects an empty/whitespace-only name', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c1' });
+      await expect(service.createLocation('c1', { name: '   ' })).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.clientLocation.findFirst).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateLocation() — CASE 15 (deactivate preserves history)', () => {
+    it('CASE 15 — deactivating a location sets isActive=false, never deletes the row', async () => {
+      mockPrisma.clientLocation.findUnique.mockResolvedValue({ id: 'loc-a', clientId: 'c1', name: 'Hamra Branch', isActive: true });
+      mockPrisma.clientLocation.update.mockResolvedValue({ id: 'loc-a', clientId: 'c1', name: 'Hamra Branch', isActive: false });
+
+      const result = await service.updateLocation('c1', 'loc-a', { isActive: false });
+
+      expect(result.isActive).toBe(false);
+      expect(mockPrisma.clientLocation.update).toHaveBeenCalledWith({
+        where: { id: 'loc-a' },
+        data: { isActive: false },
+      });
+      // The row itself is UPDATEd, never deleted — no delete/remove call exists on this service.
+    });
+
+    it('throws NotFoundException when the location belongs to a DIFFERENT client', async () => {
+      mockPrisma.clientLocation.findUnique.mockResolvedValue({ id: 'loc-a', clientId: 'other-client', name: 'Hamra Branch', isActive: true });
+      await expect(service.updateLocation('c1', 'loc-a', { isActive: false })).rejects.toThrow(NotFoundException);
+    });
+
+    it('rejects renaming to a name that collides (case-insensitive) with another active location on the same client', async () => {
+      mockPrisma.clientLocation.findUnique.mockResolvedValue({ id: 'loc-a', clientId: 'c1', name: 'Hamra Branch', isActive: true });
+      mockPrisma.clientLocation.findFirst.mockResolvedValue({ id: 'loc-b', name: 'Jounieh Branch' });
+
+      await expect(service.updateLocation('c1', 'loc-a', { name: 'jounieh branch' })).rejects.toThrow(ConflictException);
+    });
   });
 });

@@ -16,6 +16,8 @@ import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { AddPhoneDto } from './dto/add-phone.dto';
 import { DeactivatePhoneDto } from './dto/deactivate-phone.dto';
+import { CreateClientLocationDto } from './dto/create-client-location.dto';
+import { UpdateClientLocationDto } from './dto/update-client-location.dto';
 import { Roles } from '../auth/roles.decorator';
 
 @ApiTags('clients')
@@ -134,6 +136,50 @@ export class ClientsController {
     @Body() dto: DeactivatePhoneDto,
   ) {
     return this.clientsService.deactivatePhone(id, dto);
+  }
+
+  // ── Client Locations (forensic audit, 2026-08-31) ─────────────────────────
+  // Provenance for normal Orders only — never a second financial account. See
+  // ClientsService's Client Locations section doc comment.
+  @ApiOperation({ summary: 'List a client\'s locations (active + inactive)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 404, description: 'Client not found' })
+  @Get(':id/locations')
+  @Roles('owner', 'accountant', 'sales_rep')
+  listLocations(@Param('id', ParseUUIDPipe) id: string) {
+    return this.clientsService.listLocations(id);
+  }
+
+  @ApiOperation({ summary: 'Add a location to a client (find-or-conflict, case-insensitive within this client)' })
+  @ApiResponse({ status: 201, description: 'Created' })
+  @ApiResponse({ status: 404, description: 'Client not found' })
+  @ApiResponse({ status: 409, description: 'A location with this name already exists for this client' })
+  @Post(':id/locations')
+  @Roles('owner', 'sales_rep')
+  createLocation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateClientLocationDto,
+  ) {
+    return this.clientsService.createLocation(id, dto);
+  }
+
+  /**
+   * There is intentionally no DELETE endpoint for locations — deactivate
+   * (isActive: false in the body) instead, mirroring phones' CONSTRAINT 14
+   * (never deleted, only deactivated).
+   */
+  @ApiOperation({ summary: 'Update a client location, including deactivate/reactivate (never deleted)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 404, description: 'Client or location not found' })
+  @ApiResponse({ status: 409, description: 'A location with this name already exists for this client' })
+  @Patch(':id/locations/:locationId')
+  @Roles('owner', 'sales_rep')
+  updateLocation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('locationId', ParseUUIDPipe) locationId: string,
+    @Body() dto: UpdateClientLocationDto,
+  ) {
+    return this.clientsService.updateLocation(id, locationId, dto);
   }
 
   @ApiOperation({ summary: 'Get computed balance for a client' })

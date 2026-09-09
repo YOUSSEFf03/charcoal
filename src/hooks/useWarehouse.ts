@@ -25,6 +25,8 @@ export interface StockLotsQuery {
 export interface PackedStockQuery {
   bagTypeId?: string
   lotId?: string
+  page?: number
+  limit?: number
 }
 
 /**
@@ -133,19 +135,30 @@ export function useStockLot(id: string) {
   })
 }
 
+/** GET /packed-stock — paginated, includes `lot`/`bagType`/`session.date`. */
+export interface PackedStockPage {
+  data: PackedStock[]
+  total: number
+  page: number
+  limit: number
+}
+
 /**
- * List packed stock with bag type and lot.
- * @param params - bagTypeId filter
- * @returns React Query result of PackedStock[]
+ * List packed stock (paginated), with bag type, source lot, and packing-session
+ * date included. Server default limit is 20 when omitted.
+ * @param params - bagTypeId/lotId filters, page/limit
+ * @param options.enabled - pass false to skip fetching (e.g. no bagTypeId selected yet)
+ * @returns React Query result of PackedStockPage
  * GET /packed-stock
  */
-export function usePackedStock(params?: PackedStockQuery) {
+export function usePackedStock(params?: PackedStockQuery, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['packed-stock', params ?? {}],
     queryFn: async () => {
-      const res = await api.get<PackedStock[]>('/packed-stock', { params })
+      const res = await api.get<PackedStockPage>('/packed-stock', { params })
       return res.data
     },
+    enabled: options?.enabled ?? true,
   })
 }
 
@@ -160,17 +173,6 @@ export function usePackedStockSummary() {
     queryFn: async () => {
       const res = await api.get<PackedStockSummary[]>('/packed-stock/summary')
       return res.data
-    },
-  })
-}
-
-/** List packed stock records (with quantity > 0 by default). GET /packed-stock */
-export function usePackedStockRecords(params?: { bagTypeId?: string; limit?: number }) {
-  return useQuery({
-    queryKey: ['packed-stock-records', params ?? {}],
-    queryFn: async () => {
-      const res = await api.get<{ data: any[] }>('/packed-stock', { params })
-      return res.data.data
     },
   })
 }
@@ -300,6 +302,32 @@ export function useStockExits(params?: { exitType?: string; dateFrom?: string; d
 }
 
 /**
+ * List stock exits paginated by LOGICAL SALE, not by raw StockExit row.
+ * GET /stock-exits/grouped
+ *
+ * Why this exists (forensic audit, 2026-08-28): a walk-in sale whose FIFO
+ * draw spans more than one packed-stock/lot row produces multiple StockExit
+ * rows sharing one invoiceId — useStockExits() rendered one table row per
+ * StockExit, so that ONE sale showed up as several rows. This groups by
+ * invoiceId server-side (a display-only StockExit with invoiceId=null stays
+ * its own one-line row), and — critically — paginates over the DISTINCT
+ * group key, not a page of raw rows, so a sale's lines are never silently
+ * split across two pages. Each row's `lines` array replaces the single
+ * exit's own bagType/lotId/quantity fields; a standalone (non-invoiced) row
+ * also carries `rawExit` — the original StockExit object — for the
+ * edit-sale-amount flow, which is still exit-level.
+ */
+export function useGroupedStockExits(params?: { exitType?: string; dateFrom?: string; dateTo?: string; page?: number; limit?: number; clientId?: string }) {
+  return useQuery({
+    queryKey: ['stock-exits', 'grouped', params ?? {}],
+    queryFn: async () => {
+      const res = await api.get<{ data: any[]; total: number; page: number; limit: number }>('/stock-exits/grouped', { params })
+      return res.data
+    },
+  })
+}
+
+/**
  * Single stock exit by ID — Fill Client Pickup Detail page (StockExit rows
  * with exitType='client_bags_fill' ARE the "pickup" record; there is no
  * separate Pickup model).
@@ -361,13 +389,18 @@ export function useCreateStockExit() {
       amount?: number
       collectedBy?: string
       collectedById?: string
+      // Client-generated key identifying one logical exit-creation attempt —
+      // see StockExitsService.create()'s doc comment (backend) for the full
+      // idempotency mechanism this enables. Only meaningful for amount-bearing
+      // anonymous walk-in sales (WarehouseSales.tsx); every other caller of
+      // this hook simply omits it and gets no idempotency protection.
+      idempotencyKey?: string
     }) => {
       const res = await api.post('/stock-exits', body)
       return res.data
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['packed-stock'] })
-      qc.invalidateQueries({ queryKey: ['packed-stock-records'] })
       qc.invalidateQueries({ queryKey: ['stock-exits'] })
       qc.invalidateQueries({ queryKey: ['stock-lots'] })
       qc.invalidateQueries({ queryKey: ['warehouse', 'summary'] })

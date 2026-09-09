@@ -19,6 +19,7 @@ import { SetRatesDto } from './dto/set-rates.dto';
 import { CreateWorkerPaymentDto } from './dto/create-worker-payment.dto';
 import { CreateWorkerEarningDto } from './dto/create-worker-earning.dto';
 import { UpdateWorkerEarningDto } from './dto/update-worker-earning.dto';
+import { LogDailyWageDto } from './dto/log-daily-wage.dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ClerkUser } from '../auth/clerk.strategy';
@@ -86,15 +87,17 @@ export class WorkersController {
     return this.workersService.setRates(id, dto);
   }
 
-  @ApiOperation({ summary: 'List payments for a worker' })
+  @ApiOperation({ summary: 'List payments for a worker (optionally filtered by date range)' })
   @ApiResponse({ status: 200 })
   @Get(':id/payments')
   listPayments(
     @Param('id', ParseUUIDPipe) id: string,
     @Query('page', new ParsePagePipe()) page: number,
     @Query('limit', new ParseLimitPipe(20)) limit: number,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
-    return this.workersService.listPayments(id, page, limit);
+    return this.workersService.listPayments(id, page, limit, dateFrom, dateTo);
   }
 
   @ApiOperation({ summary: 'Add a payment to a worker' })
@@ -162,5 +165,43 @@ export class WorkersController {
     @Body() dto: UpdateWorkerEarningDto,
   ) {
     return this.workersService.updateEarning(id, earningId, dto);
+  }
+
+  @ApiOperation({ summary: '"Add daily wage" — records today\'s daily wage using the configured Settings amount' })
+  @ApiResponse({ status: 201 })
+  @ApiResponse({ status: 400, description: 'Daily wage amount not configured in Settings' })
+  @ApiResponse({ status: 404 })
+  @ApiResponse({ status: 409, description: 'Daily wage already recorded for this date' })
+  @Post(':id/daily-wage')
+  addDailyWage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: LogDailyWageDto,
+    @CurrentUser() user: ClerkUser,
+  ) {
+    return this.workersService.logDailyWage(id, dto, user.userId);
+  }
+
+  @ApiOperation({ summary: 'Statement of Account — chronological earning/payment ledger with running balance' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404 })
+  @Get(':id/statement')
+  getStatement(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.workersService.getStatement(id, dateFrom, dateTo);
+  }
+
+  @ApiOperation({ summary: 'Employee performance analytics — bags packed, bag-type breakdown, working days, daily performance, packing history (owner-only, same as the rest of this controller)' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404 })
+  @Get(':id/performance')
+  getPerformance(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.workersService.getPerformance(id, dateFrom, dateTo);
   }
 }

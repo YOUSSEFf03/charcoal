@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useClient, useUpdateClient, useAddPhone, useDeactivatePhone } from '../hooks/useClients'
+import { useClient, useUpdateClient, useAddPhone, useDeactivatePhone, useClientLocations, useCreateClientLocation, useUpdateClientLocation } from '../hooks/useClients'
 import { useInvoices } from '../hooks/useInvoices'
 import { useClientLedger } from '../hooks/useReports'
 import { useOrders, useCreateOrder } from '../hooks/useOrders'
 import { useBagTypes } from '../hooks/useBagTypes'
-import { useStockExits, useClientWarehouseSummary } from '../hooks/useWarehouse'
+import { useGroupedStockExits, useClientWarehouseSummary } from '../hooks/useWarehouse'
 import { usePayments, useCreatePayment } from '../hooks/usePayments'
 import { useCashReceivers } from '../hooks/useUsers'
 import { useRate } from '../context/RateContext'
@@ -27,9 +27,18 @@ interface ClientVM {
   address: string; terms: string; limit: number; notesAr: string; notesEn: string
   phones: Phone[]; preferred: string[]
   outstandingBal: number; openInvoices: number; daysSinceOrder: number; avgDays: number
+  /** Multiple-locations audit, 2026-08-31 — see useClientLocations()'s doc comment. */
+  multiLocationEnabled: boolean
 }
 
 type View = 'detail' | 'orders' | 'invoices' | 'warehouse' | 'statement' | 'payments'
+// Statement of Account presentation (monthly-statement unification, 2026-09-07):
+// the PRIMARY view is always a single calendar month, navigated with ← / → —
+// same convention as Employees.tsx's Statement of Account and Expenses.tsx's
+// month selector. "All time" and "Custom" (preserving the free-text From/To
+// range this tab used to default to) remain available as de-emphasized,
+// explicit opt-ins — never the default.
+type StatementMode = 'month' | 'all-time' | 'custom'
 
 const CHARCOAL_TYPES = ['BBQ Hardwood · A', 'BBQ Hardwood · B', 'Shisha · A', 'Shisha · B', 'Restaurant Grade · A']
 
@@ -146,8 +155,52 @@ export default function ClientDetail() {
     clientId: cid, page: invoicePage, limit: INVOICE_PAGE_SIZE,
     sortBy: invoiceSort?.key, sortOrder: invoiceSort?.order,
   })
+  // Unbounded per-client ledger — feeds the overview KPIs (openInvoices,
+  // totalCharged/totalPaid) and the cumulative AccountChart, which are
+  // deliberately whole-relationship figures, not period-scoped. The
+  // Statement of Account TAB uses its own separate, date-filtered query
+  // (stmtLedgerQ, declared below) so viewing a normal month never pulls the
+  // client's entire lifetime history over the wire — see the Statement
+  // scalability audit, 2026-09-07.
   const ledgerQ = useClientLedger(cid)
-  const warehouseExitsQ = useStockExits({ clientId: cid, page: warehouseSalesPage, limit: WAREHOUSE_PAGE_SIZE })
+
+  // Statement of Account TAB — month-based by default (statement of account
+  // presentation, monthly-statement unification 2026-09-07). "All time" and
+  // "Custom" (preserving the free-text From/To range this tab used to
+  // default to) remain available as de-emphasized, explicit opt-ins.
+  const [statementMode, setStatementMode] = useState<StatementMode>('month')
+  const [statementMonth, setStatementMonth] = useState(() => {
+    const d = new Date()
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
+  const [stmtCustomFrom, setStmtCustomFrom] = useState('')
+  const [stmtCustomTo, setStmtCustomTo] = useState('')
+  const statementMonthYear  = statementMonth.getFullYear()
+  const statementMonthIdx   = statementMonth.getMonth()
+  const statementMonthLabel = statementMonth.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+  function goToPrevStatementMonth() {
+    setStatementMode('month')
+    setStatementMonth(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))
+  }
+  function goToNextStatementMonth() {
+    setStatementMode('month')
+    setStatementMonth(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))
+  }
+  const { dateFrom: stmtDateFrom, dateTo: stmtDateTo } =
+    statementMode === 'all-time' ? { dateFrom: undefined, dateTo: undefined } :
+    statementMode === 'custom'   ? { dateFrom: stmtCustomFrom || undefined, dateTo: stmtCustomTo || undefined } :
+    {
+      dateFrom: toDateOnlyString(new Date(statementMonthYear, statementMonthIdx, 1)),
+      dateTo:   toDateOnlyString(new Date(statementMonthYear, statementMonthIdx + 1, 0)),
+    }
+  // Dedicated, server-side date-filtered ledger query (opening balance
+  // computed server-side from the pre-period aggregate — see
+  // ReportsService.getClientLedger()). Separate from the unbounded
+  // `ledgerQ` above so a normal monthly view never fetches the client's
+  // whole lifetime history.
+  const stmtLedgerQ = useClientLedger(cid, { dateFrom: stmtDateFrom, dateTo: stmtDateTo })
+
+  const warehouseExitsQ = useGroupedStockExits({ clientId: cid, page: warehouseSalesPage, limit: WAREHOUSE_PAGE_SIZE })
   const warehouseSummaryQ = useClientWarehouseSummary(cid)
   const paymentsQ = usePayments({
     clientId: cid, page: paymentPage, limit: PAYMENT_PAGE_SIZE,
@@ -159,6 +212,21 @@ export default function ClientDetail() {
   const updateClient = useUpdateClient()
   const addPhone = useAddPhone()
   const deactivatePhone = useDeactivatePhone()
+  // Multiple-locations audit, 2026-08-31 — provenance for normal Orders only,
+  // never a second financial account. See ClientLocation's backend
+  // schema.prisma doc comment.
+  const locationsQ = useClientLocations(cid)
+  const createLocation = useCreateClientLocation()
+  const updateLocation = useUpdateClientLocation()
+  const clientLocations = locationsQ.data ?? []
+  const [locationModal, setLocationModal] = useState<{ id: string | null; name: string; address: string; phone: string; notes: string } | null>(null)
+  // Required-location audit, 2026-09 — this embedded "New order" modal is a
+  // second, independent order-creation entry point (alongside NewOrder.tsx)
+  // and must mirror its location behavior exactly: required once the client
+  // is enabled for multiple locations, optional otherwise. See saveOrder()
+  // and the modal's own JSX below.
+  const activeOrderLocations = clientLocations.filter(l => l.isActive)
+  const [orderLocationId, setOrderLocationId] = useState('')
   const bagTypesQ = useBagTypes()
   const bagTypesList = bagTypesQ.data ?? []
   const bagTypeNames = bagTypesList.map(b => b.name)
@@ -289,49 +357,86 @@ export default function ClientDetail() {
     return null
   }
 
+  // Display-only USD amount for a GROUPED warehouse-sale row (see
+  // useGroupedStockExits — one row per invoice, not per StockExit).
+  // Standalone (non-invoiced) rows delegate to exitDisplayAmountUsd() via the
+  // attached rawExit; an invoiced row sums every line's lineTotal — already
+  // the exact figure InvoiceCalculatorService.computeLines() stored.
+  function groupAmountUsd(row: any): number | null {
+    if (row.rawExit) return exitDisplayAmountUsd(row.rawExit)
+    const total = (row.lines ?? []).reduce((sum: number, l: any) => sum + (parseFloat(l.lineTotal ?? '0') || 0), 0)
+    return row.currency === 'LBP' ? (rawRate > 0 ? total / rawRate : 0) : total
+  }
+
   // Warehouse-sale rows derived for the sub-view table (export fetches its
-  // own complete-history data separately — see exportWarehouse()).
-  const WAREHOUSE = warehousePurchases.map((exit: any) => {
-    const isRaw = !!exit.lotId && !exit.packedStockId
-    const charcoalLot = isRaw ? exit.lot : exit.packedStock?.lot
-    const kgOut = isRaw
-      ? parseFloat(exit.kgQuantity ?? '0')
-      : exit.bagType ? parseFloat(exit.bagType.nominalKg) * (exit.quantity ?? 0) : 0
+  // own complete-history data separately — see exportWarehouse()). One row
+  // per GROUPED sale (forensic audit, 2026-08-28) — a sale whose FIFO draw
+  // spanned more than one packed-stock lot previously showed up as several
+  // rows here, one per underlying StockExit.
+  const WAREHOUSE = warehousePurchases.map((row: any) => {
+    const lines: any[] = row.lines ?? []
+    const multi = lines.length > 1
+    const uniformBagType = !multi ? lines[0] : (lines.every(l => l.bagTypeId === lines[0]?.bagTypeId) ? lines[0] : null)
+    const uniformCharcoal = !multi ? lines[0] : (lines.every(l => l.charcoalType === lines[0]?.charcoalType && l.grade === lines[0]?.grade) ? lines[0] : null)
+    const isRaw = !multi && lines[0]?.saleUnit === 'KG'
     return {
-      id: exit.id,
-      displayId: (exit.displayId as string | undefined) ?? null,
-      rawDate: exit.createdAt ?? exit.date ?? '',
-      date: fmtDate(exit.date),
+      id: row.id,
+      displayId: row.invoiceDisplayId as string | null,
+      rawDate: row.date ?? '',
+      date: fmtDate(row.date),
       isRaw,
-      bagTypeName: exit.bagType?.name ?? null,
-      bagNominal: exit.bagType ? `${parseFloat(exit.bagType.nominalKg).toFixed(1)} kg/bag` : '',
-      charcoal: charcoalLot ? `${charcoalLot.charcoalType} · Grade ${charcoalLot.grade}` : '—',
-      qty: isRaw ? null : (exit.quantity ?? null),
-      kg: kgOut,
-      amount: exitDisplayAmountUsd(exit),
-      by: exit.loggedBy?.name ?? '—',
+      multi,
+      lineCount: lines.length,
+      bagTypeName: uniformBagType?.bagTypeName ?? null,
+      bagNominal: uniformBagType?.nominalKgPerBag ? `${parseFloat(uniformBagType.nominalKgPerBag).toFixed(1)} kg/bag` : '',
+      charcoal: uniformCharcoal?.charcoalType ? `${uniformCharcoal.charcoalType} · Grade ${uniformCharcoal.grade}` : (multi ? 'Mixed' : '—'),
+      qty: row.totalQtyBags > 0 ? row.totalQtyBags : null,
+      kg: parseFloat(row.totalKg ?? '0'),
+      amount: groupAmountUsd(row),
+      by: row.loggedBy?.name ?? '—',
     }
   })
 
   // Statement ledger sourced from backend — invoices + payments only, cancelled/draft excluded.
-  const LEDGER = (ledgerQ.data?.entries ?? []).map(e => {
-    const rawDate = typeof e.date === 'string' ? e.date : new Date((e.date as any)).toISOString()
-    const debit  = parseFloat(e.debit)
-    const credit = parseFloat(e.credit)
-    return {
-      rawDate,
-      date:        fmtDate(rawDate),
-      ref:         e.displayId ?? e.reference.slice(0, 8).toUpperCase(),
-      referenceId: e.reference,
-      desc:        e.description,
-      kind:        e.type as 'invoice' | 'payment',
-      debit,
-      credit,
-      balance:     parseFloat(e.runningBalance),
-      // Present on 'invoice' entries only — see openInvoices below.
-      status:      e.status,
-    }
-  })
+  // Shared entry mapper — used for both the unbounded overview ledger
+  // (LEDGER) and the Statement tab's period-scoped ledger (STMT_LEDGER), so
+  // the two never diverge in shape or in the order-reference-resolution
+  // logic below.
+  function mapLedgerEntries(entries: NonNullable<typeof ledgerQ.data>['entries'] | undefined) {
+    return (entries ?? []).map(e => {
+      const rawDate = typeof e.date === 'string' ? e.date : new Date((e.date as any)).toISOString()
+      const debit  = parseFloat(e.debit)
+      const credit = parseFloat(e.credit)
+      return {
+        rawDate,
+        date:        fmtDate(rawDate),
+        // Forensic audit (2026-08-31): "Statement of Account shows the wrong ID
+        // for orders". An invoice raised FROM an order is known to the client by
+        // its ORDER reference (o.displayId, e.g. "SO-0168" — the same field
+        // Orders.tsx/OrderDetail.tsx show, and this file's own INVOICES-tab
+        // mapping above already resolves for the same relationship), not the
+        // invoice's own internal number (e.g. "SI-0648") — those are genuinely
+        // different sequences. e.orderDisplayId is only ever present on an
+        // 'invoice' entry that actually has an orderId (getClientLedger()
+        // resolves it server-side, unbounded — never a page-capped local join
+        // against ordersQ). Falls back to the invoice's own displayId exactly
+        // as before for a non-order (warehouse-sale) invoice or any other entry
+        // kind, so nothing here is fabricated.
+        ref:         e.orderDisplayId ?? e.displayId ?? e.reference.slice(0, 8).toUpperCase(),
+        referenceId: e.reference,
+        desc:        e.description,
+        kind:        e.type as 'invoice' | 'payment',
+        debit,
+        credit,
+        balance:     parseFloat(e.runningBalance),
+        // Present on 'invoice' entries only — see openInvoices below.
+        status:      e.status,
+      }
+    })
+  }
+  const LEDGER = mapLedgerEntries(ledgerQ.data?.entries)
+  // Statement of Account tab only — period-scoped, server-filtered.
+  const STMT_LEDGER = mapLedgerEntries(stmtLedgerQ.data?.entries)
   const totalCharged = LEDGER.reduce((s, e) => s + e.debit, 0)
   const totalPaid    = LEDGER.reduce((s, e) => s + e.credit, 0)
   // Open-invoice count derived from the already-unbounded-per-client ledger —
@@ -355,6 +460,7 @@ export default function ClientDetail() {
     notesAr: c?.notes ?? '', notesEn: c?.notesEn ?? '',
     phones: activePhones.map(p => ({ number: p.number, label: p.label, meta: p.isActive ? 'active' : 'inactive', active: p.isActive, primary: false })),
     preferred, outstandingBal, openInvoices, daysSinceOrder, avgDays,
+    multiLocationEnabled: c?.multiLocationEnabled ?? false,
   }))
 
   const [editOpen, setEditOpen] = useState(false)
@@ -362,20 +468,27 @@ export default function ClientDetail() {
   const [orderOpen, setOrderOpen] = useState(false)
   const [payModalOpen, setPayModalOpen] = useState(false)
 
+  // Required-location audit, 2026-09 — same gating as NewOrder.tsx's
+  // showLocationSelector: shown (and required) only once this client is
+  // enabled for multiple locations AND has at least one active one.
+  const showOrderLocationSelector = client.multiLocationEnabled && activeOrderLocations.length > 0
+  const orderLocationRequiredBlocked = showOrderLocationSelector && !orderLocationId
+  // A location belongs to ONE specific client (never global) — start every
+  // fresh "New order" modal open with no location pre-picked, same as
+  // NewOrder.tsx resetting on client switch.
+  useEffect(() => { if (orderOpen) setOrderLocationId('') }, [orderOpen])
+
   const [editForm, setEditForm] = useState({ ...client })
   const [orderLines, setOrderLines] = useState([{ id: _olid++, bag: '', char: 'BBQ Hardwood · A', qty: 0, price: 0 }])
   const [payDate, setPayDate] = useState(toDateOnlyString(new Date()))
   const [payMethod, setPayMethod] = useState('cash')
   const [payAmt, setPayAmt] = useState('')
   const [payNote, setPayNote] = useState('')
-  const [payReceiverName, setPayReceiverName] = useState('')
-  const resolvedPayReceiverId = allReceivers.find(r => r.name === payReceiverName)?.id
+  const [payReceiverId, setPayReceiverId] = useState('')
 
   // Sub-view local filters.
   const [ordStatus, setOrdStatus] = useState('all')
   const [ordQ, setOrdQ] = useState('')
-  const [stmtFrom, setStmtFrom] = useState('')
-  const [stmtTo, setStmtTo] = useState('')
   const [stmtType, setStmtType] = useState<'all' | 'debit' | 'credit'>('all')
   const [stmtQ, setStmtQ] = useState('')
 
@@ -434,6 +547,7 @@ export default function ClientDetail() {
       notesAr: c.notes ?? '', notesEn: c.notesEn ?? '',
       phones: c.phones.map(p => ({ number: p.number, label: p.label, meta: p.isActive ? 'active' : 'inactive', active: p.isActive, primary: false })),
       preferred, outstandingBal, openInvoices, daysSinceOrder, avgDays,
+      multiLocationEnabled: c.multiLocationEnabled,
     })
     // openInvoices is now ledger-derived (unbounded per-client), so resync on
     // ledger entry count rather than the paginated invoice page's row count.
@@ -451,8 +565,6 @@ export default function ClientDetail() {
   }
 
   /* ── Excel export (per section) ── */
-  function isoToMs(iso: string) { return iso ? new Date(iso + 'T00:00:00').getTime() : null }
-
   function exportOrders() {
     if (filteredOrders.length === 0) { showToast('Nothing to export'); return }
     const columns: ExcelColumn<(typeof filteredOrders)[number]>[] = [
@@ -545,11 +657,15 @@ export default function ClientDetail() {
       title: 'Warehouse sales', subtitle: client.name, columns,
       onExport: async selectedColumns => {
         try {
+          // One row per GROUPED sale (forensic audit, 2026-08-28) — /stock-exits
+          // is raw, one row per StockExit; /stock-exits/grouped collapses a
+          // multi-lot sale's rows into one, exactly like the on-screen WAREHOUSE
+          // table above, so a multi-lot sale is never exported as several rows.
           let all: any[] = []
           let fetchPage = 1
           let total = Infinity
           while (all.length < total) {
-            const res = await api.get<{ data: any[]; total: number }>('/stock-exits', {
+            const res = await api.get<{ data: any[]; total: number }>('/stock-exits/grouped', {
               params: { clientId: cid, page: fetchPage, limit: EXPORT_PAGE_SIZE },
             })
             const { data, total: resTotal } = res.data
@@ -560,20 +676,20 @@ export default function ClientDetail() {
             fetchPage++
           }
           if (all.length === 0) { showToast('Nothing to export'); return }
-          const exportRows: WarehouseExportRow[] = all.map(exit => {
-            const isRaw = !!exit.lotId && !exit.packedStockId
-            const charcoalLot = isRaw ? exit.lot : exit.packedStock?.lot
-            const kgOut = isRaw
-              ? parseFloat(exit.kgQuantity ?? '0')
-              : exit.bagType ? parseFloat(exit.bagType.nominalKg) * (exit.quantity ?? 0) : 0
+          const exportRows: WarehouseExportRow[] = all.map(row => {
+            const lines: any[] = row.lines ?? []
+            const multi = lines.length > 1
+            const uniformBagType = !multi ? lines[0] : (lines.every((l: any) => l.bagTypeId === lines[0]?.bagTypeId) ? lines[0] : null)
+            const uniformCharcoal = !multi ? lines[0] : (lines.every((l: any) => l.charcoalType === lines[0]?.charcoalType && l.grade === lines[0]?.grade) ? lines[0] : null)
+            const isRaw = !multi && lines[0]?.saleUnit === 'KG'
             return {
-              date: exit.date ? new Date(exit.date) : null,
-              bagType: isRaw ? 'By kg' : (exit.bagType?.name ?? '—'),
-              charcoal: charcoalLot ? `${charcoalLot.charcoalType} · Grade ${charcoalLot.grade}` : '—',
-              qty: isRaw ? null : (exit.quantity ?? null),
-              kg: kgOut || null,
-              amount: exitDisplayAmountUsd(exit) ?? 0,
-              loggedBy: exit.loggedBy?.name ?? '—',
+              date: row.date ? new Date(row.date) : null,
+              bagType: multi ? `${lines.length} items` : isRaw ? 'By kg' : (uniformBagType?.bagTypeName ?? '—'),
+              charcoal: uniformCharcoal?.charcoalType ? `${uniformCharcoal.charcoalType} · Grade ${uniformCharcoal.grade}` : (multi ? 'Mixed' : '—'),
+              qty: row.totalQtyBags > 0 ? row.totalQtyBags : null,
+              kg: parseFloat(row.totalKg ?? '0') || null,
+              amount: groupAmountUsd(row) ?? 0,
+              loggedBy: row.loggedBy?.name ?? '—',
             }
           })
           await exportExcel({
@@ -681,12 +797,12 @@ export default function ClientDetail() {
         phone: primaryPhone,
         currency: client.currency,
       },
-      // Falls back to the actual first/last row date when no explicit
-      // From/To filter is set — same fallback stmtPeriod (shown on screen
-      // just above this table) already uses, so the PDF never shows a bare
-      // "—" for a statement that plainly does cover real dates.
-      from: stmtFrom ? new Date(stmtFrom).toISOString() : (stmtFiltered[0]?.rawDate ?? null),
-      to: stmtTo ? new Date(stmtTo).toISOString() : (stmtFiltered[stmtFiltered.length - 1]?.rawDate ?? null),
+      // The selected statement period — current month by default, or the
+      // full range when "All time"/"Custom" is chosen (falls back to the
+      // actual first/last row date so the PDF never shows a bare "—" for a
+      // statement that plainly does cover real dates).
+      from: stmtDateFrom ? new Date(stmtDateFrom).toISOString() : (stmtFiltered[0]?.rawDate ?? null),
+      to: stmtDateTo ? new Date(stmtDateTo).toISOString() : (stmtFiltered[stmtFiltered.length - 1]?.rawDate ?? null),
       rows: stmtFiltered.map(e => ({ ref: e.ref, rawDate: e.rawDate, desc: e.desc, debit: e.debit, credit: e.credit, balance: e.balance })),
       openingBalance: stmtOpening,
       periodDebitTotal: stmtDebit,
@@ -783,6 +899,46 @@ export default function ClientDetail() {
   function openEditModal() {
     setEditForm({ ...client, phones: client.phones.map(p => ({ ...p })) })
     setEditOpen(true)
+  }
+
+  // ── Client Locations (forensic audit, 2026-08-31) ─────────────────────────
+  // Provenance for normal Orders only — see useClientLocations()'s doc
+  // comment. Toggling the switch, adding, editing, and deactivating all
+  // persist immediately (no diff-on-save, unlike the phones editor above) —
+  // each is its own small, independent mutation.
+  function toggleMultiLocation(enabled: boolean) {
+    updateClient.mutate(
+      { id: cid, body: { multiLocationEnabled: enabled } },
+      { onError: (err: any) => window.alert(err?.error ?? 'Failed to update') },
+    )
+  }
+  function openAddLocation() {
+    setLocationModal({ id: null, name: '', address: '', phone: '', notes: '' })
+  }
+  function openEditLocation(loc: { id: string; name: string; address: string | null; phone: string | null; notes: string | null }) {
+    setLocationModal({ id: loc.id, name: loc.name, address: loc.address ?? '', phone: loc.phone ?? '', notes: loc.notes ?? '' })
+  }
+  function saveLocation() {
+    if (!locationModal || !locationModal.name.trim()) return
+    const body = {
+      name: locationModal.name.trim(),
+      address: locationModal.address.trim() || undefined,
+      phone: locationModal.phone.trim() || undefined,
+      notes: locationModal.notes.trim() || undefined,
+    }
+    const onSuccess = () => setLocationModal(null)
+    const onError = (err: any) => window.alert(err?.error ?? 'Failed to save location')
+    if (locationModal.id) {
+      updateLocation.mutate({ id: cid, locationId: locationModal.id, body }, { onSuccess, onError })
+    } else {
+      createLocation.mutate({ id: cid, body }, { onSuccess, onError })
+    }
+  }
+  function toggleLocationActive(locationId: string, isActive: boolean) {
+    updateLocation.mutate(
+      { id: cid, locationId, body: { isActive } },
+      { onError: (err: any) => window.alert(err?.error ?? 'Failed to update location') },
+    )
   }
 
   function addPhoneInEditor() {
@@ -882,6 +1038,10 @@ export default function ClientDetail() {
     if (orderSub === 0) { showToast('Add at least one item'); return }
     const firstLine = orderLines.find(l => l.qty > 0)
     if (!firstLine) { showToast('Enter a quantity'); return }
+    // Required-location audit, 2026-09 — UX mirror of the backend's
+    // authoritative rule (OrdersService.create()); see
+    // showOrderLocationSelector's own doc comment above.
+    if (orderLocationRequiredBlocked) { showToast('Select a location for this client'); return }
 
     const [charType, grade] = firstLine.char.split(' · ')
     const bagType = bagTypesList.find(b => b.name.toLowerCase().includes(firstLine.bag.replace(' kg', 'kg').toLowerCase()) || b.nominalKg === firstLine.bag.replace(' kg', ''))
@@ -899,6 +1059,7 @@ export default function ClientDetail() {
         bagTypeId: bagType?.id,
         pricePerBag: firstLine.price.toFixed(2),
         currency: (c?.currency ?? 'USD') as any,
+        ...(orderLocationId ? { locationId: orderLocationId } : {}),
       },
       {
         onSuccess: () => {
@@ -918,7 +1079,7 @@ export default function ClientDetail() {
     // all three are personal-custody methods — the backend rejects them with
     // no receiverId (RECEIVER_REQUIRED) anyway; this is just an honest
     // inline message instead of a round-trip 400. Never auto-select one.
-    if (!resolvedPayReceiverId) { showToast('Receiver is required.'); return }
+    if (!payReceiverId) { showToast('Receiver is required.'); return }
     createPaymentM.mutate(
       {
         clientId: cid,
@@ -927,7 +1088,7 @@ export default function ClientDetail() {
         method: (payMethod as any),
         date: payDate,
         notes: payNote || null,
-        receiverId: resolvedPayReceiverId,
+        receiverId: payReceiverId,
       },
       {
         onSuccess: () => {
@@ -989,12 +1150,11 @@ export default function ClientDetail() {
     ? { amount: paymentLedgerEntries[paymentLedgerEntries.length - 1].credit, date: paymentLedgerEntries[paymentLedgerEntries.length - 1].date }
     : null
 
-  // Statement filtering — opening = running balance just before first shown row.
-  const stmtFromMs = isoToMs(stmtFrom), stmtToMs = isoToMs(stmtTo)
-  const stmtFiltered = LEDGER.filter(e => {
-    const ms = e.rawDate ? new Date(e.rawDate).getTime() : 0
-    if (stmtFromMs && ms < stmtFromMs) return false
-    if (stmtToMs && ms > stmtToMs) return false
+  // Statement filtering — date range is already applied server-side (see
+  // stmtLedgerQ above); type/search remain display-only filters over the
+  // already period-scoped STMT_LEDGER, mirroring SupplierDetail.tsx's
+  // Statement tab exactly.
+  const stmtFiltered = STMT_LEDGER.filter(e => {
     if (stmtType === 'debit' && !e.debit) return false
     if (stmtType === 'credit' && !e.credit) return false
     if (stmtQ && !(e.desc + ' ' + e.ref).toLowerCase().includes(stmtQ.toLowerCase())) return false
@@ -1002,15 +1162,20 @@ export default function ClientDetail() {
   })
   const stmtDebit = stmtFiltered.reduce((s, e) => s + e.debit, 0)
   const stmtCredit = stmtFiltered.reduce((s, e) => s + e.credit, 0)
-  const stmtFirstIdx = stmtFiltered.length ? LEDGER.indexOf(stmtFiltered[0]) : -1
-  const stmtOpening = stmtFirstIdx > 0 ? LEDGER[stmtFirstIdx - 1].balance : 0
-  const stmtClosing = stmtFiltered.length ? stmtFiltered[stmtFiltered.length - 1].balance : stmtOpening
-  const stmtOpeningDate = stmtFiltered.length ? stmtFiltered[0].date : (LEDGER[0]?.date ?? fmtDate(new Date().toISOString()))
-  const stmtPeriod = stmtFiltered.length ? `${stmtFiltered[0].date} — ${stmtFiltered[stmtFiltered.length - 1].date}` : '—'
-  // Table-display-only sort — stmtFiltered itself must stay chronological:
-  // stmtOpening/stmtClosing/stmtPeriod above, and exportStatement()'s Excel
-  // export, all rely on stmtFiltered[0]/[length-1] being the chronologically
-  // first/last row.
+  // Server-computed opening/closing balance for the exact selected period —
+  // never derived by walking a client-side array (see ReportsService.
+  // getClientLedger()'s pre-period aggregate). Correct for an empty month
+  // too: with no entries, `balance` still equals the carried-forward
+  // opening balance, never a fake zero.
+  const stmtOpening = parseFloat(stmtLedgerQ.data?.openingBalance ?? '0')
+  const stmtClosing = parseFloat(stmtLedgerQ.data?.balance ?? String(stmtOpening))
+  const stmtOpeningDate = statementMode === 'month' ? fmtDate(stmtDateFrom) : (stmtDateFrom ? fmtDate(stmtDateFrom) : '')
+  const stmtPeriod = statementMode === 'all-time' ? 'All time'
+    : statementMode === 'custom' ? (stmtDateFrom || stmtDateTo ? `${stmtDateFrom ? fmtDate(stmtDateFrom) : 'start'} — ${stmtDateTo ? fmtDate(stmtDateTo) : 'today'}` : 'Custom range')
+    : statementMonthLabel
+  // Table-display-only sort — stmtFiltered itself must stay chronological
+  // (exportStatement()'s Excel export relies on stmtFiltered[0]/[length-1]
+  // being the chronologically first/last row).
   const sortedStmtRows = stmtSort ? [...stmtFiltered].sort((a, b) => {
     const dir = stmtSort.order === 'asc' ? 1 : -1
     if (stmtSort.key === 'date') return dir * ((a.rawDate ? new Date(a.rawDate).getTime() : 0) - (b.rawDate ? new Date(b.rawDate).getTime() : 0))
@@ -1018,8 +1183,8 @@ export default function ClientDetail() {
     if (stmtSort.key === 'credit') return dir * (a.credit - b.credit)
     return dir * (a.balance - b.balance)
   }) : stmtFiltered
-  const stmtFilterActive = stmtFrom || stmtTo || stmtType !== 'all' || stmtQ
-  function resetStmt() { setStmtFrom(''); setStmtTo(''); setStmtType('all'); setStmtQ('') }
+  const stmtFilterActive = stmtType !== 'all' || stmtQ
+  function resetStmt() { setStmtType('all'); setStmtQ('') }
 
   const overdue = daysSinceOrder > avgDays
 
@@ -1052,7 +1217,12 @@ export default function ClientDetail() {
 
   return (
     <>
-      <Topbar title={client.name} back={{ label: 'All clients', to: '/clients' }}>
+      <Topbar
+        title={client.name}
+        back={view === 'detail'
+          ? { label: 'All clients', to: '/clients' }
+          : { label: 'Back to client', to: () => setView('detail') }}
+      >
         {view === 'detail' ? (
           <>
             <button className="btn" onClick={openEditModal}>
@@ -1065,11 +1235,7 @@ export default function ClientDetail() {
               <i className="ti ti-receipt" style={{ fontSize: 15 }} /> Log payment
             </button>
           </>
-        ) : (
-          <button className="btn" onClick={() => setView('detail')}>
-            <i className="ti ti-arrow-left" style={{ fontSize: 15 }} /> Back to client
-          </button>
-        )}
+        ) : null}
       </Topbar>
       <div className="content">
 
@@ -1189,6 +1355,62 @@ export default function ClientDetail() {
                   ))}
                 </div>
 
+                {/* Client Locations (forensic audit, 2026-08-31) — provenance for
+                    normal Orders only. The client's balance above stays the ONE
+                    total for the whole client, regardless of how many locations
+                    it has — never a fake per-location balance here. */}
+                <div className="card">
+                  <div className="card-head">
+                    <div className="card-title"><i className="ti ti-map-pin" /> Locations
+                      {client.multiLocationEnabled && (
+                        <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>{clientLocations.length}</span>
+                      )}
+                    </div>
+                    {client.multiLocationEnabled && (
+                      <button className="card-action" onClick={openAddLocation}><i className="ti ti-plus" style={{ fontSize: 13 }} /> Add Location</button>
+                    )}
+                  </div>
+                  {!client.multiLocationEnabled ? (
+                    <div style={{ padding: '14px 18px' }}>
+                      <div className="pref-empty" style={{ marginBottom: 10 }}>
+                        This client uses a single location. Enable multiple locations to track branches (e.g. Hamra, Jounieh) on orders — the client keeps ONE shared balance either way.
+                      </div>
+                      <button className="btn" onClick={() => toggleMultiLocation(true)} disabled={updateClient.isPending}>
+                        Enable multiple locations
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {locationsQ.isLoading && <div className="pref-empty">Loading…</div>}
+                      {!locationsQ.isLoading && clientLocations.length === 0 && (
+                        <div className="pref-empty">No locations yet — use "Add Location" above.</div>
+                      )}
+                      {clientLocations.map(loc => (
+                        <div className={`phone-row ${loc.isActive ? '' : 'inactive'}`} key={loc.id}>
+                          <div className={`phone-dot ${loc.isActive ? '' : 'inactive'}`} />
+                          <div style={{ minWidth: 0 }}>
+                            <div className="phone-number">{loc.name}</div>
+                            <div className="phone-label">{loc.address || (loc.isActive ? 'active' : 'deactivated')}</div>
+                          </div>
+                          <div className="row-actions">
+                            <button className="icon-btn" title="Edit" onClick={() => openEditLocation(loc)}><i className="ti ti-pencil" /></button>
+                            {loc.isActive ? (
+                              <button className="icon-btn" title="Deactivate" onClick={() => toggleLocationActive(loc.id, false)}><i className="ti ti-eye-off" /></button>
+                            ) : (
+                              <button className="icon-btn" title="Reactivate" onClick={() => toggleLocationActive(loc.id, true)}><i className="ti ti-eye" /></button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{ padding: '10px 18px' }}>
+                        <button className="btn" style={{ fontSize: 12 }} onClick={() => toggleMultiLocation(false)} disabled={updateClient.isPending}>
+                          Disable multiple locations
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
                 <div className="card">
                   <div className="card-head">
                     <div className="card-title"><i className="ti ti-star" /> Preferred charcoal</div>
@@ -1262,40 +1484,42 @@ export default function ClientDetail() {
             </div>
 
             <div className="card">
-              <table className="data-table">
-                <thead><tr>
-                  <SortHeader label="Date" sortKey="date" sort={orderSort} onSort={k => toggleSort(orderSort, setOrderSort, k)} width={120} />
-                  <th>Order</th><th style={{ width: 60 }}>Type</th>
-                  <SortHeader label="Weight" sortKey="kg" sort={orderSort} onSort={k => toggleSort(orderSort, setOrderSort, k)} />
-                  <SortHeader label="Price/bag" sortKey="price" sort={orderSort} onSort={k => toggleSort(orderSort, setOrderSort, k)} width={100} align="right" />
-                  <th style={{ width: 90 }}>Status</th><th className="right" style={{ width: 90 }}>Actions</th>
-                </tr></thead>
-                <tbody>
-                  {ordersQ.isLoading && <tr><td colSpan={7} className="empty">Loading…</td></tr>}
-                  {!ordersQ.isLoading && sortedOrders.length === 0 && <tr><td colSpan={7} className="empty">No orders match this filter</td></tr>}
-                  {sortedOrders.map(o => (
-                    <tr key={o.id} style={{ cursor: 'pointer' }} onClick={() => navigate('/orders/' + o.id)}>
-                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>{o.date}</td>
-                      <td>
-                        <div style={{ fontWeight: 500, fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }} title={o.id}>{o.displayId}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text3)' }}>
-                          {o.char}{o.supplier ? ` · ${o.supplier}` : ''}{o.bagTypeName ? ` · ${o.bagTypeName}` : ''}
-                        </div>
-                      </td>
-                      <td><span className={`badge ${o.isBag ? 'badge-blue' : 'badge-amber'}`}>{o.isBag ? 'Bag' : 'KG'}</span></td>
-                      <td style={{ fontSize: 12.5, color: 'var(--text2)' }}>{o.items}</td>
-                      <td className="num" style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>${o.total.toFixed(2)}</td>
-                      <td>{statusBadge(o.status)}</td>
-                      <td>
-                        <div className="row-actions" onClick={e => e.stopPropagation()}>
-                          <button className="icon-btn" title="View" onClick={() => navigate('/orders/' + o.id)}><i className="ti ti-arrow-up-right" /></button>
-                          <a className="icon-btn" href={`/invoice/${o.id}`} target="_blank" rel="noreferrer" title="Invoice"><i className="ti ti-printer" /></a>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead><tr>
+                    <SortHeader label="Date" sortKey="date" sort={orderSort} onSort={k => toggleSort(orderSort, setOrderSort, k)} width={120} />
+                    <th>Order</th><th style={{ width: 60 }}>Type</th>
+                    <SortHeader label="Weight" sortKey="kg" sort={orderSort} onSort={k => toggleSort(orderSort, setOrderSort, k)} />
+                    <SortHeader label="Price/bag" sortKey="price" sort={orderSort} onSort={k => toggleSort(orderSort, setOrderSort, k)} width={100} align="right" />
+                    <th style={{ width: 90 }}>Status</th><th className="right" style={{ width: 90 }}>Actions</th>
+                  </tr></thead>
+                  <tbody>
+                    {ordersQ.isLoading && <tr><td colSpan={7} className="empty">Loading…</td></tr>}
+                    {!ordersQ.isLoading && sortedOrders.length === 0 && <tr><td colSpan={7} className="empty">No orders match this filter</td></tr>}
+                    {sortedOrders.map(o => (
+                      <tr key={o.id} style={{ cursor: 'pointer' }} onClick={() => navigate('/orders/' + o.id)}>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>{o.date}</td>
+                        <td>
+                          <div style={{ fontWeight: 500, fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }} title={o.id}>{o.displayId}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                            {o.char}{o.supplier ? ` · ${o.supplier}` : ''}{o.bagTypeName ? ` · ${o.bagTypeName}` : ''}
+                          </div>
+                        </td>
+                        <td><span className={`badge ${o.isBag ? 'badge-blue' : 'badge-amber'}`}>{o.isBag ? 'Bag' : 'KG'}</span></td>
+                        <td style={{ fontSize: 12.5, color: 'var(--text2)' }}>{o.items}</td>
+                        <td className="num" style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>${o.total.toFixed(2)}</td>
+                        <td>{statusBadge(o.status)}</td>
+                        <td>
+                          <div className="row-actions" onClick={e => e.stopPropagation()}>
+                            <button className="icon-btn" title="View" onClick={() => navigate('/orders/' + o.id)}><i className="ti ti-arrow-up-right" /></button>
+                            <a className="icon-btn" href={`/invoice/${o.id}`} target="_blank" rel="noreferrer" title="Invoice"><i className="ti ti-printer" /></a>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
@@ -1325,42 +1549,44 @@ export default function ClientDetail() {
             </div>
 
             <div className="card">
-              <table className="data-table">
-                <thead><tr>
-                  <SortHeader label="Issued" sortKey="date" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={120} />
-                  <th>Invoice</th>
-                  <SortHeader label="Amount" sortKey="amount" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={100} align="right" />
-                  <SortHeader label="Paid" sortKey="paid" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={100} align="right" />
-                  <th className="right" style={{ width: 100 }}>Due</th>
-                  <SortHeader label="Status" sortKey="status" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={80} />
-                  <th className="right" style={{ width: 70 }}>Actions</th>
-                </tr></thead>
-                <tbody>
-                  {invoicesQ.isLoading && <tr><td colSpan={7} className="empty">Loading…</td></tr>}
-                  {!invoicesQ.isLoading && INVOICES.length === 0 && <tr><td colSpan={7} className="empty">No invoices issued yet</td></tr>}
-                  {INVOICES.map(inv => {
-                    const due = inv.amount - inv.paid
-                    return (
-                      <tr key={inv.id}>
-                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>{inv.date}</td>
-                        <td>
-                          <div style={{ fontWeight: 500, fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }} title={inv.id}>{inv.displayId}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>from {inv.orderDisplay}</div>
-                        </td>
-                        <td className="num" style={{ fontWeight: 500 }}>{fmt(inv.amount)}</td>
-                        <td className="num green">{fmt(inv.paid)}</td>
-                        <td className="num" style={{ color: due > 0 ? 'var(--accent2)' : 'var(--text3)', fontWeight: due > 0 ? 600 : 400 }}>{fmt(due)}</td>
-                        <td>{statusBadge(inv.status)}</td>
-                        <td>
-                          <div className="row-actions">
-                            <a className="icon-btn" href={`/invoice/${inv.id}`} target="_blank" rel="noreferrer" title="Open"><i className="ti ti-arrow-up-right" /></a>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead><tr>
+                    <SortHeader label="Issued" sortKey="date" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={120} />
+                    <th>Invoice</th>
+                    <SortHeader label="Amount" sortKey="amount" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={100} align="right" />
+                    <SortHeader label="Paid" sortKey="paid" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={100} align="right" />
+                    <th className="right" style={{ width: 100 }}>Due</th>
+                    <SortHeader label="Status" sortKey="status" sort={invoiceSort} onSort={k => toggleSort(invoiceSort, setInvoiceSort, k)} width={80} />
+                    <th className="right" style={{ width: 70 }}>Actions</th>
+                  </tr></thead>
+                  <tbody>
+                    {invoicesQ.isLoading && <tr><td colSpan={7} className="empty">Loading…</td></tr>}
+                    {!invoicesQ.isLoading && INVOICES.length === 0 && <tr><td colSpan={7} className="empty">No invoices issued yet</td></tr>}
+                    {INVOICES.map(inv => {
+                      const due = inv.amount - inv.paid
+                      return (
+                        <tr key={inv.id}>
+                          <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>{inv.date}</td>
+                          <td>
+                            <div style={{ fontWeight: 500, fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }} title={inv.id}>{inv.displayId}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)' }}>from {inv.orderDisplay}</div>
+                          </td>
+                          <td className="num" style={{ fontWeight: 500 }}>{fmt(inv.amount)}</td>
+                          <td className="num green">{fmt(inv.paid)}</td>
+                          <td className="num" style={{ color: due > 0 ? 'var(--accent2)' : 'var(--text3)', fontWeight: due > 0 ? 600 : 400 }}>{fmt(due)}</td>
+                          <td>{statusBadge(inv.status)}</td>
+                          <td>
+                            <div className="row-actions">
+                              <a className="icon-btn" href={`/invoice/${inv.id}`} target="_blank" rel="noreferrer" title="Open"><i className="ti ti-arrow-up-right" /></a>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
               {!invoicesQ.isLoading && INVOICES.length > 0 && invoiceTotalPages > 1 && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
                   <button className="btn" disabled={invoicePage <= 1} onClick={() => setInvoicePage(p => Math.max(1, p - 1))}>
@@ -1401,36 +1627,40 @@ export default function ClientDetail() {
             </div>
 
             <div className="card">
-              <table className="data-table">
-                <thead><tr>
-                  <th>Date</th><th>Bag type</th><th>Charcoal</th>
-                  <th className="right">Qty</th><th className="right">Kg sold</th><th className="right">Amount</th><th>Logged by</th>
-                </tr></thead>
-                <tbody>
-                  {warehouseExitsQ.isLoading && <tr><td colSpan={7} className="empty">Loading…</td></tr>}
-                  {!warehouseExitsQ.isLoading && WAREHOUSE.length === 0 && <tr><td colSpan={7} className="empty">No warehouse sales recorded</td></tr>}
-                  {WAREHOUSE.map(w => (
-                    <tr key={w.id}>
-                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>{w.date}</td>
-                      <td>{w.isRaw
-                        ? <span className="badge badge-amber">By kg</span>
-                        : <><div style={{ fontWeight: 500 }}>{w.bagTypeName ?? '—'}</div><div style={{ fontSize: 11, color: 'var(--text3)' }}>{w.bagNominal}</div></>}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text2)' }}>{w.charcoal}</td>
-                      <td className="num" style={{ fontWeight: 600 }}>{w.qty ?? '—'}</td>
-                      <td className="num" style={{ color: 'var(--text2)' }}>{w.kg > 0 ? `${w.kg.toFixed(1)} kg` : '—'}</td>
-                      <td className="num" style={{ fontWeight: 600, color: w.amount ? 'var(--accent2)' : 'var(--text3)' }}>{w.amount ? fmt(w.amount) : '—'}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text3)' }}>{w.by}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                {WAREHOUSE.length > 0 && (
-                  <tfoot><tr>
-                    <td colSpan={5} style={{ textAlign: 'right', background: 'var(--surface2)', fontWeight: 700 }}>Total</td>
-                    <td className="num amber" style={{ background: 'var(--surface2)', fontWeight: 700, borderTop: '2px solid var(--border2)' }}>{fmt(warehouseTotal)}</td>
-                    <td style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border2)' }}></td>
-                  </tr></tfoot>
-                )}
-              </table>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead><tr>
+                    <th>Date</th><th>Bag type</th><th>Charcoal</th>
+                    <th className="right">Qty</th><th className="right">Kg sold</th><th className="right">Amount</th><th>Logged by</th>
+                  </tr></thead>
+                  <tbody>
+                    {warehouseExitsQ.isLoading && <tr><td colSpan={7} className="empty">Loading…</td></tr>}
+                    {!warehouseExitsQ.isLoading && WAREHOUSE.length === 0 && <tr><td colSpan={7} className="empty">No warehouse sales recorded</td></tr>}
+                    {WAREHOUSE.map(w => (
+                      <tr key={w.id}>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>{w.date}</td>
+                        <td>{w.multi
+                          ? <span className="badge badge-gray">{w.lineCount} items</span>
+                          : w.isRaw
+                            ? <span className="badge badge-amber">By kg</span>
+                            : <><div style={{ fontWeight: 500 }}>{w.bagTypeName ?? '—'}</div><div style={{ fontSize: 11, color: 'var(--text3)' }}>{w.bagNominal}</div></>}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text2)' }}>{w.charcoal}</td>
+                        <td className="num" style={{ fontWeight: 600 }}>{w.qty ?? '—'}</td>
+                        <td className="num" style={{ color: 'var(--text2)' }}>{w.kg > 0 ? `${w.kg.toFixed(1)} kg` : '—'}</td>
+                        <td className="num" style={{ fontWeight: 600, color: w.amount ? 'var(--accent2)' : 'var(--text3)' }}>{w.amount ? fmt(w.amount) : '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{w.by}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {WAREHOUSE.length > 0 && (
+                    <tfoot><tr>
+                      <td colSpan={5} style={{ textAlign: 'right', background: 'var(--surface2)', fontWeight: 700 }}>Total</td>
+                      <td className="num amber" style={{ background: 'var(--surface2)', fontWeight: 700, borderTop: '2px solid var(--border2)' }}>{fmt(warehouseTotal)}</td>
+                      <td style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border2)' }}></td>
+                    </tr></tfoot>
+                  )}
+                </table>
+              </div>
               {!warehouseExitsQ.isLoading && WAREHOUSE.length > 0 && warehouseSalesTotalPages > 1 && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
                   <button className="btn" disabled={warehouseSalesPage <= 1} onClick={() => setWarehouseSalesPage(p => Math.max(1, p - 1))}>
@@ -1486,10 +1716,45 @@ export default function ClientDetail() {
               </div>
             </div>
 
-            {/* Filter bar — hidden on print (see .no-print in index.css); the
-                view-head above already shows client name + selected period,
-                so nothing period-identifying is lost from the printout. Same
-                fix already applied to SupplierDetail.tsx's Statement view. */}
+            {/* Month navigation — hidden on print (see .no-print in
+                index.css); the view-head above already shows client name +
+                selected period, so nothing period-identifying is lost from
+                the printout. Same convention as Employees.tsx's Statement of
+                Account and Expenses.tsx's month selector. */}
+            <div className="filter-row no-print" style={{ justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {statementMode === 'month' && (
+                  <>
+                    <button className="btn" onClick={goToPrevStatementMonth} title="Previous month">
+                      <i className="ti ti-chevron-left" style={{ fontSize: 14 }} />
+                    </button>
+                    <div style={{ fontWeight: 600, fontSize: 14, minWidth: 140, textAlign: 'center', fontFamily: "'IBM Plex Mono', monospace" }}>
+                      {statementMonthLabel}
+                    </div>
+                    <button className="btn" onClick={goToNextStatementMonth} title="Next month">
+                      <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                    </button>
+                  </>
+                )}
+                {statementMode === 'all-time' && (
+                  <div style={{ fontWeight: 600, fontSize: 14, fontFamily: "'IBM Plex Mono', monospace" }}>All time</div>
+                )}
+                {statementMode === 'custom' && (
+                  <div className="filter-dates">
+                    <span className="lbl">From</span>
+                    <input className="date-mini" type="date" value={stmtCustomFrom} onChange={e => setStmtCustomFrom(e.target.value)} />
+                    <span className="lbl">To</span>
+                    <input className="date-mini" type="date" value={stmtCustomTo} onChange={e => setStmtCustomTo(e.target.value)} />
+                  </div>
+                )}
+              </div>
+              <div className="seg">
+                {([['month', 'Month'], ['all-time', 'All time'], ['custom', 'Custom']] as const).map(([k, lbl]) => (
+                  <div key={k} className={`seg-opt ${statementMode === k ? 'sel' : ''}`} onClick={() => setStatementMode(k)}>{lbl}</div>
+                ))}
+              </div>
+            </div>
+
             <div className="filter-row no-print">
               <div className="filter-search">
                 <i className="ti ti-search" />
@@ -1499,12 +1764,6 @@ export default function ClientDetail() {
                 {([['all', 'All'], ['debit', 'Charges'], ['credit', 'Payments']] as const).map(([k, lbl]) => (
                   <div key={k} className={`seg-opt ${stmtType === k ? 'sel' : ''}`} onClick={() => setStmtType(k)}>{lbl}</div>
                 ))}
-              </div>
-              <div className="filter-dates">
-                <span className="lbl">From</span>
-                <input className="date-mini" type="date" value={stmtFrom} onChange={e => setStmtFrom(e.target.value)} />
-                <span className="lbl">To</span>
-                <input className="date-mini" type="date" value={stmtTo} onChange={e => setStmtTo(e.target.value)} />
               </div>
               {stmtFilterActive ? <button className="btn" onClick={resetStmt}><i className="ti ti-x" style={{ fontSize: 14 }} /> Reset</button> : null}
             </div>
@@ -1527,34 +1786,40 @@ export default function ClientDetail() {
                   <SortHeader label="Balance" sortKey="balance" sort={stmtSort} onSort={k => toggleSort(stmtSort, setStmtSort, k)} width={130} align="right" />
                 </tr></thead>
                 <tbody>
-                  {/* Opening balance always renders first, regardless of sort —
-                      it's a summary anchor for the period, not a transaction row. */}
-                  <tr className="opening">
-                    <td className="mono">{stmtOpeningDate}</td>
-                    <td></td>
-                    <td className="desc">Opening balance</td>
-                    <td className="num"></td><td className="num"></td>
-                    <td className="num">{fmt(stmtOpening)}</td>
-                  </tr>
-                  {sortedStmtRows.map((e, i) => {
-                    return (
-                      <tr key={i}>
-                        <td className="mono">{fmtDateTime(e.rawDate)}</td>
-                        <td className="mono ref-cell">
-                          {e.kind === 'invoice' ? (
-                            <a href={`/invoice/${e.referenceId}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{e.ref}</a>
-                          ) : (
-                            <span style={{ color: e.kind === 'payment' ? 'var(--accent)' : undefined }}>{e.ref}</span>
-                          )}
-                        </td>
-                        <td className="desc">{e.desc}</td>
-                        <td className="num dr">{e.debit ? fmt(e.debit) : ''}</td>
-                        <td className="num cr">{e.credit ? fmt(e.credit) : ''}</td>
-                        <td className={`num ${e.balance < 0 ? 'bal-neg' : 'bal-pos'}`} style={{ fontWeight: 600 }}>{fmt(e.balance)}</td>
+                  {stmtLedgerQ.isLoading && <tr><td colSpan={6} className="empty">Loading…</td></tr>}
+                  {stmtLedgerQ.isError && <tr><td colSpan={6} className="empty">Failed to load statement. Please try again.</td></tr>}
+                  {!stmtLedgerQ.isLoading && !stmtLedgerQ.isError && (
+                    <>
+                      {/* Opening balance always renders first, regardless of sort —
+                          it's a summary anchor for the period, not a transaction row. */}
+                      <tr className="opening">
+                        <td className="mono">{stmtOpeningDate}</td>
+                        <td></td>
+                        <td className="desc">Opening balance</td>
+                        <td className="num"></td><td className="num"></td>
+                        <td className="num">{fmt(stmtOpening)}</td>
                       </tr>
-                    )
-                  })}
-                  {stmtFiltered.length === 0 && <tr><td colSpan={6} className="empty">No entries match this filter</td></tr>}
+                      {sortedStmtRows.map((e, i) => {
+                        return (
+                          <tr key={i}>
+                            <td className="mono">{fmtDateTime(e.rawDate)}</td>
+                            <td className="mono ref-cell">
+                              {e.kind === 'invoice' ? (
+                                <a href={`/invoice/${e.referenceId}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{e.ref}</a>
+                              ) : (
+                                <span style={{ color: e.kind === 'payment' ? 'var(--accent)' : undefined }}>{e.ref}</span>
+                              )}
+                            </td>
+                            <td className="desc">{e.desc}</td>
+                            <td className="num dr">{e.debit ? fmt(e.debit) : ''}</td>
+                            <td className="num cr">{e.credit ? fmt(e.credit) : ''}</td>
+                            <td className={`num ${e.balance < 0 ? 'bal-neg' : 'bal-pos'}`} style={{ fontWeight: 600 }}>{fmt(e.balance)}</td>
+                          </tr>
+                        )
+                      })}
+                      {stmtFiltered.length === 0 && <tr><td colSpan={6} className="empty">No entries match this filter</td></tr>}
+                    </>
+                  )}
                 </tbody>
                 <tfoot><tr>
                   <td colSpan={3} style={{ textAlign: 'right' }}>Totals</td>
@@ -1591,43 +1856,45 @@ export default function ClientDetail() {
             </div>
 
             <div className="card">
-              <table className="data-table">
-                <thead><tr>
-                  <th style={{ width: 90 }}>Receipt #</th>
-                  <SortHeader label="Date" sortKey="date" sort={paymentSort} onSort={k => toggleSort(paymentSort, setPaymentSort, k)} width={130} />
-                  <th style={{ width: 90 }}>Method</th>
-                  <th>Invoice / Ref</th><th>Received by</th>
-                  <SortHeader label="Amount" sortKey="amount" sort={paymentSort} onSort={k => toggleSort(paymentSort, setPaymentSort, k)} width={120} align="right" />
-                  <th className="right" style={{ width: 140 }}>Running total</th>
-                </tr></thead>
-                <tbody>
-                  {paymentsQ.isLoading && <tr><td colSpan={7} className="empty">Loading…</td></tr>}
-                  {!paymentsQ.isLoading && PAYMENTS.length === 0 && <tr><td colSpan={7} className="empty">No payments recorded</td></tr>}
-                  {paymentsWithRun.map(p => (
-                    <tr key={p.id}>
-                      <td><span className="mono" style={{ fontSize: 12 }} title={p.id}>{p.displayId}</span></td>
-                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>{p.date}</td>
-                      <td><span className="badge badge-gray">{p.method}</span></td>
-                      <td>
-                        {p.invId
-                          ? <a href={`/invoice/${p.invId}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none', fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>{p.invDisplay}</a>
-                          : <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text3)' }}>—</span>}
-                        {p.ref && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6 }}>{p.ref}</span>}
-                      </td>
-                      <td style={{ fontSize: 12.5, color: 'var(--text2)' }}>{p.by}</td>
-                      <td className="num green" style={{ fontWeight: 600 }}>+{fmt(p.amount)}</td>
-                      <td className="num" style={{ color: 'var(--text2)' }}>{fmt(p.run)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                {PAYMENTS.length > 0 && (
-                  <tfoot><tr>
-                    <td colSpan={5} style={{ textAlign: 'right', background: 'var(--surface2)', fontWeight: 700 }}>Total received</td>
-                    <td className="num green" style={{ background: 'var(--surface2)', fontWeight: 700, borderTop: '2px solid var(--border2)' }}>{fmt(paymentsTotal)}</td>
-                    <td style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border2)' }}></td>
-                  </tr></tfoot>
-                )}
-              </table>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead><tr>
+                    <th style={{ width: 90 }}>Receipt #</th>
+                    <SortHeader label="Date" sortKey="date" sort={paymentSort} onSort={k => toggleSort(paymentSort, setPaymentSort, k)} width={130} />
+                    <th style={{ width: 90 }}>Method</th>
+                    <th>Invoice / Ref</th><th>Received by</th>
+                    <SortHeader label="Amount" sortKey="amount" sort={paymentSort} onSort={k => toggleSort(paymentSort, setPaymentSort, k)} width={120} align="right" />
+                    <th className="right" style={{ width: 140 }}>Running total</th>
+                  </tr></thead>
+                  <tbody>
+                    {paymentsQ.isLoading && <tr><td colSpan={7} className="empty">Loading…</td></tr>}
+                    {!paymentsQ.isLoading && PAYMENTS.length === 0 && <tr><td colSpan={7} className="empty">No payments recorded</td></tr>}
+                    {paymentsWithRun.map(p => (
+                      <tr key={p.id}>
+                        <td><span className="mono" style={{ fontSize: 12 }} title={p.id}>{p.displayId}</span></td>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5 }}>{p.date}</td>
+                        <td><span className="badge badge-gray">{p.method}</span></td>
+                        <td>
+                          {p.invId
+                            ? <a href={`/invoice/${p.invId}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none', fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>{p.invDisplay}</a>
+                            : <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text3)' }}>—</span>}
+                          {p.ref && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6 }}>{p.ref}</span>}
+                        </td>
+                        <td style={{ fontSize: 12.5, color: 'var(--text2)' }}>{p.by}</td>
+                        <td className="num green" style={{ fontWeight: 600 }}>+{fmt(p.amount)}</td>
+                        <td className="num" style={{ color: 'var(--text2)' }}>{fmt(p.run)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {PAYMENTS.length > 0 && (
+                    <tfoot><tr>
+                      <td colSpan={5} style={{ textAlign: 'right', background: 'var(--surface2)', fontWeight: 700 }}>Total received</td>
+                      <td className="num green" style={{ background: 'var(--surface2)', fontWeight: 700, borderTop: '2px solid var(--border2)' }}>{fmt(paymentsTotal)}</td>
+                      <td style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border2)' }}></td>
+                    </tr></tfoot>
+                  )}
+                </table>
+              </div>
               {!paymentsQ.isLoading && PAYMENTS.length > 0 && paymentTotalPages > 1 && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
                   <button className="btn" disabled={paymentPage <= 1} onClick={() => setPaymentPage(p => Math.max(1, p - 1))}>
@@ -1659,7 +1926,7 @@ export default function ClientDetail() {
           <div className="modal" style={{ maxWidth: 760, maxHeight: '90vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <div className="modal-head">
               <div className="modal-title"><i className="ti ti-edit" style={{ marginRight: 8 }} />Edit client</div>
-              <button className="close-btn" onClick={() => setEditOpen(false)}>✕</button>
+              <button className="close-btn" aria-label="Close" onClick={() => setEditOpen(false)}>✕</button>
             </div>
             <div className="modal-body" style={{ overflowY: 'auto' }}>
               <div className="form-grid">
@@ -1755,7 +2022,7 @@ export default function ClientDetail() {
           <div className="modal" style={{ maxWidth: 880, maxHeight: '90vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <div className="modal-head">
               <div className="modal-title"><i className="ti ti-plus" style={{ marginRight: 8 }} />New order · {client.name}</div>
-              <button className="close-btn" onClick={() => setOrderOpen(false)}>✕</button>
+              <button className="close-btn" aria-label="Close" onClick={() => setOrderOpen(false)}>✕</button>
             </div>
             <div className="modal-body" style={{ overflowY: 'auto' }}>
               <div className="form-grid" style={{ marginBottom: 16 }}>
@@ -1767,6 +2034,21 @@ export default function ClientDetail() {
                   <span className="field-label">Delivery date</span>
                   <input className="input" type="date" />
                 </div>
+                {/* Required-location audit, 2026-09 — mirrors NewOrder.tsx's
+                    own Location selector exactly: shown (and required) only
+                    once this client is enabled for multiple locations AND
+                    has at least one active one. */}
+                {showOrderLocationSelector && (
+                  <div>
+                    <span className="field-label">Location *</span>
+                    <select className="select" value={orderLocationId} onChange={e => setOrderLocationId(e.target.value)}>
+                      <option value="">Select a location…</option>
+                      {activeOrderLocations.map(l => (
+                        <option key={l.id} value={l.id}>{l.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
 
               <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -1810,7 +2092,7 @@ export default function ClientDetail() {
                         {fmt(roundDp(l.qty * l.price))}
                       </td>
                       <td style={{ padding: 8, borderTop: '1px solid var(--border)' }}>
-                        <button style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: 'var(--text3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        <button aria-label="Remove line" style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: 'var(--text3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                           onClick={() => removeOrderLine(l.id)} disabled={orderLines.length === 1}>
                           <i className="ti ti-x" style={{ fontSize: 12 }} />
                         </button>
@@ -1842,11 +2124,61 @@ export default function ClientDetail() {
             <div className="modal-footer" style={{ justifyContent: 'flex-end' }}>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn" onClick={() => setOrderOpen(false)}>Cancel</button>
-                <button className="btn" onClick={() => saveOrder('draft')} disabled={createOrder.isPending}>Save draft</button>
-                <button className="btn green" onClick={() => saveOrder('confirm')} disabled={createOrder.isPending}>
+                <button className="btn" onClick={() => saveOrder('draft')} disabled={createOrder.isPending || orderLocationRequiredBlocked} title={orderLocationRequiredBlocked ? 'Select a location for this client' : undefined}>Save draft</button>
+                <button className="btn green" onClick={() => saveOrder('confirm')} disabled={createOrder.isPending || orderLocationRequiredBlocked} title={orderLocationRequiredBlocked ? 'Select a location for this client' : undefined}>
                   <i className="ti ti-check" style={{ fontSize: 15 }} /> {createOrder.isPending ? 'Creating…' : 'Create order'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADD/EDIT LOCATION MODAL (forensic audit, 2026-08-31) */}
+      {locationModal && (
+        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setLocationModal(null)}>
+          <div className="modal" style={{ maxWidth: 440 }}>
+            <div className="modal-head">
+              <div className="modal-title"><i className="ti ti-map-pin" style={{ marginRight: 8 }} />{locationModal.id ? 'Edit location' : 'Add location'}</div>
+              <button className="close-btn" aria-label="Close" onClick={() => setLocationModal(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <span className="field-label">Location name</span>
+              <input
+                className="input"
+                placeholder="e.g. Hamra Branch"
+                autoFocus
+                value={locationModal.name}
+                onChange={e => setLocationModal(m => m ? { ...m, name: e.target.value } : m)}
+              />
+              <span className="field-label" style={{ marginTop: 10, display: 'block' }}>Address (optional)</span>
+              <input
+                className="input"
+                value={locationModal.address}
+                onChange={e => setLocationModal(m => m ? { ...m, address: e.target.value } : m)}
+              />
+              <span className="field-label" style={{ marginTop: 10, display: 'block' }}>Phone (optional)</span>
+              <input
+                className="input"
+                value={locationModal.phone}
+                onChange={e => setLocationModal(m => m ? { ...m, phone: e.target.value } : m)}
+              />
+              <span className="field-label" style={{ marginTop: 10, display: 'block' }}>Notes (optional)</span>
+              <input
+                className="input"
+                value={locationModal.notes}
+                onChange={e => setLocationModal(m => m ? { ...m, notes: e.target.value } : m)}
+              />
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setLocationModal(null)}>Cancel</button>
+              <button
+                className="btn primary"
+                onClick={saveLocation}
+                disabled={createLocation.isPending || updateLocation.isPending || !locationModal.name.trim()}
+              >
+                <i className="ti ti-check" style={{ fontSize: 14 }} /> {(createLocation.isPending || updateLocation.isPending) ? 'Saving…' : 'Save location'}
+              </button>
             </div>
           </div>
         </div>
@@ -1858,7 +2190,7 @@ export default function ClientDetail() {
           <div className="modal" style={{ maxWidth: 560 }}>
             <div className="modal-head">
               <div className="modal-title"><i className="ti ti-receipt" style={{ marginRight: 8 }} />Log payment</div>
-              <button className="close-btn" onClick={() => setPayModalOpen(false)}>✕</button>
+              <button className="close-btn" aria-label="Close" onClick={() => setPayModalOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-grid">
@@ -1878,11 +2210,11 @@ export default function ClientDetail() {
                 </div>
                 <div>
                   <span className="field-label">Received by <span style={{ color: 'var(--red)' }}>*</span></span>
-                  <select className="select" value={payReceiverName} onChange={e => setPayReceiverName(e.target.value)}>
+                  <select className="select" value={payReceiverId} onChange={e => setPayReceiverId(e.target.value)}>
                     <option value="">— select receiver —</option>
-                    {allReceivers.map(r => <option key={r.id || r.name} value={r.name}>{r.name}</option>)}
+                    {allReceivers.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
-                  {!resolvedPayReceiverId && (
+                  {!payReceiverId && (
                     <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Receiver is required.</div>
                   )}
                 </div>

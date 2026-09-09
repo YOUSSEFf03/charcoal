@@ -14,6 +14,7 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { ContainersService } from './containers.service';
+import { ContainerTrackingService } from './tracking/container-tracking.service';
 import { CreateContainerDto } from './dto/create-container.dto';
 import { UpdateContainerDto } from './dto/update-container.dto';
 import { CreateProductLineDto } from './dto/create-product-line.dto';
@@ -29,13 +30,16 @@ import { ClerkUser } from '../auth/clerk.strategy';
 @ApiBearerAuth()
 @Controller('containers')
 export class ContainersController {
-  constructor(private readonly containersService: ContainersService) {}
+  constructor(
+    private readonly containersService: ContainersService,
+    private readonly containerTrackingService: ContainerTrackingService,
+  ) {}
 
   // ---------------------------------------------------------------------------
   // Container endpoints
   // ---------------------------------------------------------------------------
 
-  @ApiOperation({ summary: 'List containers (paginated, filterable by status/supplierId/search)' })
+  @ApiOperation({ summary: 'List containers (paginated, filterable by status/supplierId/search/finalized), each with a cached tracking summary if available' })
   @ApiResponse({ status: 200, description: 'Containers returned' })
   @Get()
   @Roles('owner', 'accountant', 'sales_rep')
@@ -45,8 +49,17 @@ export class ContainersController {
     @Query('status') status?: string,
     @Query('supplierId') supplierId?: string,
     @Query('search') search?: string,
+    // Opt-in only — see ContainersService.findAll()'s doc comment.
+    // 'true' = only finalized (History page), 'false' = exclude finalized
+    // (main Containers page), omitted = unfiltered (every other caller,
+    // unchanged from before finalization existed).
+    @Query('finalized') finalizedParam?: string,
+    @Query('finalizedFrom') finalizedFrom?: string,
+    @Query('finalizedTo') finalizedTo?: string,
     @CurrentUser() user?: ClerkUser,
   ) {
+    const finalized =
+      finalizedParam === 'true' ? true : finalizedParam === 'false' ? false : undefined;
     return this.containersService.findAll(
       page,
       limit,
@@ -54,6 +67,9 @@ export class ContainersController {
       supplierId,
       search,
       user?.role,
+      finalized,
+      finalizedFrom,
+      finalizedTo,
     );
   }
 
@@ -95,6 +111,20 @@ export class ContainersController {
     @CurrentUser() user: ClerkUser,
   ) {
     return this.containersService.update(id, dto, user.userId);
+  }
+
+  @ApiOperation({ summary: 'Finalize an arrived container — locks its financial/identity record permanently; owner only' })
+  @ApiResponse({ status: 200, description: 'Container finalized' })
+  @ApiResponse({ status: 400, description: 'Container is not arrived' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @ApiResponse({ status: 409, description: 'Already finalized' })
+  @Post(':id/finalize')
+  @Roles('owner')
+  finalize(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: ClerkUser,
+  ) {
+    return this.containersService.finalize(id, user.userId);
   }
 
   @ApiOperation({ summary: 'Delete container — blocked if status=arrived' })
@@ -260,5 +290,42 @@ export class ContainersController {
   @HttpCode(204)
   removeDiscount(@Param('containerId', ParseUUIDPipe) containerId: string) {
     return this.containersService.removeDiscount(containerId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shipment tracking (Traqo Ocean) — informational only, never touches
+  // container status/cost/accounting. Same read roles as the container
+  // itself; refresh shares that set rather than widening access.
+  // ---------------------------------------------------------------------------
+
+  @ApiOperation({ summary: 'Search supported ocean carriers (SCAC) for the carrier picker' })
+  @ApiResponse({ status: 200, description: 'Carriers returned' })
+  @Get('tracking/carriers')
+  @Roles('owner')
+  listCarriers(@Query('search') search?: string) {
+    return this.containerTrackingService.listCarriers(search);
+  }
+
+  @ApiOperation({ summary: 'Get the last stored tracking snapshot for a container (no live provider call)' })
+  @ApiResponse({ status: 200, description: 'Tracking snapshot returned (null if never refreshed)' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Get(':containerId/tracking')
+  @Roles('owner', 'accountant', 'sales_rep')
+  getTracking(@Param('containerId', ParseUUIDPipe) containerId: string) {
+    return this.containerTrackingService.getTracking(containerId);
+  }
+
+  @ApiOperation({ summary: 'Manually refresh tracking from Traqo; server-throttled, never called automatically' })
+  @ApiResponse({ status: 200, description: 'Tracking refreshed and persisted' })
+  @ApiResponse({ status: 400, description: 'Container has no carrier (sealine) set' })
+  @ApiResponse({ status: 404, description: 'Container or tracking not found' })
+  @ApiResponse({ status: 409, description: 'Traqo has already confirmed this shipment is closed (code TRACKING_ENDED)' })
+  @ApiResponse({ status: 429, description: 'Refreshed too recently, or provider rate limit' })
+  @ApiResponse({ status: 502, description: 'Provider unavailable' })
+  @ApiResponse({ status: 503, description: 'Tracking not configured, or no Traqo account slot available (code NO_TRACKING_SLOT_AVAILABLE)' })
+  @Post(':containerId/tracking/refresh')
+  @Roles('owner', 'accountant', 'sales_rep')
+  refreshTracking(@Param('containerId', ParseUUIDPipe) containerId: string) {
+    return this.containerTrackingService.refreshTracking(containerId);
   }
 }

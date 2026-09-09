@@ -63,4 +63,12 @@ export class CreateClientDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiProperty({
+    description: 'Opt-in switch that reveals the Locations management UI for this client — a client stays single-location by default. Never affects the client\'s single financial account/balance.',
+    required: false, default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  multiLocationEnabled?: boolean;
 }

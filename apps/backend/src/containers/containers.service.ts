@@ -2,11 +2,13 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
+import { buildDateFilter } from '../reports/reports.service';
 import { CreateContainerDto } from './dto/create-container.dto';
 import { UpdateContainerDto } from './dto/update-container.dto';
 import { CreateProductLineDto } from './dto/create-product-line.dto';
@@ -14,10 +16,16 @@ import { UpdateProductLineDto } from './dto/update-product-line.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
 import { UpsertDiscountDto } from './dto/upsert-discount.dto';
+import { ContainerNotificationService } from '../notifications/container-notification.service';
 
 @Injectable()
 export class ContainersService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(ContainersService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: ContainerNotificationService,
+  ) {}
 
   // ---------------------------------------------------------------------------
   // Internal helpers
@@ -71,6 +79,15 @@ export class ContainersService {
     });
 
     if (!container || container.productLines.length === 0) return;
+
+    // Cost-protection backstop: a finalized container's StockLot.costPerKg
+    // must never move again, even if some future call site forgets its own
+    // CONTAINER_FINALIZED guard. Every public mutation that reaches this
+    // function (expense/discount/product-line writes) already checks
+    // finalizedAt itself and throws a proper business error before ever
+    // calling this — this is a silent no-op defense-in-depth, not the
+    // primary guard, so it deliberately does not throw.
+    if (container.finalizedAt) return;
 
     const totalExpenses = container.expenses.reduce(
       (sum, e) => sum.plus(new Decimal(e.amount.toString())),
@@ -138,6 +155,25 @@ export class ContainersService {
   }
 
   /**
+   * Throws CONTAINER_FINALIZED if this container's financial/identity record
+   * has been locked (Container.finalizedAt is set). Called by every mutation
+   * the approved finalization design requires to stop working post-
+   * finalization: expense/discount writes, and identity/supplier/carrier/
+   * status edits in update(). Product-line writes and container deletion
+   * need no separate call to this — they already reject whenever
+   * `status === 'arrived'`, and finalization is only ever reachable from
+   * that status, so they're transitively covered by the existing guard.
+   */
+  private assertNotFinalized(container: { finalizedAt: Date | null }): void {
+    if (container.finalizedAt) {
+      throw new BadRequestException({
+        error: 'This container has been finalized. Its financial information can no longer be changed.',
+        code: 'CONTAINER_FINALIZED',
+      });
+    }
+  }
+
+  /**
    * Strip sensitive cost fields from a container response when role === 'sales_rep'.
    * CONSTRAINT 12.
    */
@@ -201,7 +237,12 @@ export class ContainersService {
       paidBags: number;
       kgPerBag: { toString(): string };
     }>;
-    stockLots?: Array<{ costPerKg: { toString(): string } }>;
+    // costPerKg is optional here: findOne()'s full StockLot relation has it,
+    // but findAll()'s select-scoped stockLots (kgReceived/kgRemaining only —
+    // added for the Finalize summary / History "Remaining stock" column,
+    // never over-fetching cost into the list) does not. Lots missing it are
+    // excluded from the average below rather than crashing on `undefined.toString()`.
+    stockLots?: Array<{ costPerKg?: { toString(): string } | null }>;
   }) {
     const totalExpenses = container.expenses.reduce(
       (sum, e) => sum.plus(new Decimal(e.amount.toString())),
@@ -224,13 +265,16 @@ export class ContainersService {
     );
 
     let averageCostPerKg: string | null = null;
-    if (container.stockLots && container.stockLots.length > 0) {
-      const avgCost = container.stockLots
+    const lotsWithCost = (container.stockLots ?? []).filter(
+      (lot): lot is { costPerKg: { toString(): string } } => lot.costPerKg != null,
+    );
+    if (lotsWithCost.length > 0) {
+      const avgCost = lotsWithCost
         .reduce(
           (sum, lot) => sum.plus(new Decimal(lot.costPerKg.toString())),
           new Decimal(0),
         )
-        .div(container.stockLots.length);
+        .div(lotsWithCost.length);
       averageCostPerKg = avgCost.toDecimalPlaces(4).toString();
     }
 
@@ -255,6 +299,23 @@ export class ContainersService {
   // Container CRUD
   // ---------------------------------------------------------------------------
 
+  /**
+   * @param finalized - Opt-in filter, backward compatible: omitted (undefined)
+   *   returns containers regardless of finalization state — the exact
+   *   pre-finalization behavior, so existing callers (SupplierDetail's
+   *   per-supplier container list, Dashboard's port-status widget) are
+   *   unaffected. `false` excludes finalized containers (the main
+   *   Containers page — "active operational work" only). `true` returns
+   *   ONLY finalized containers (the History page), sorted finalizedAt
+   *   desc, and additionally supports finalizedFrom/finalizedTo.
+   * @param finalizedFrom / finalizedTo - "YYYY-MM-DD", only applied when
+   *   finalized === true. finalizedAt is a genuine DateTime column (not a
+   *   @db.Date), so this uses the same Asia/Beirut zonedMidnightUtc
+   *   business-day boundary helper (buildDateFilter) the P&L/reports date
+   *   filters already use — never a raw `new Date(str)`/`toISOString()`
+   *   UTC-midnight comparison, which would silently misplace same-day
+   *   finalizations for a timezone ahead of UTC.
+   */
   async findAll(
     page: number,
     limit: number,
@@ -262,8 +323,16 @@ export class ContainersService {
     supplierId?: string,
     search?: string,
     userRole?: string,
+    finalized?: boolean,
+    finalizedFrom?: string,
+    finalizedTo?: string,
   ) {
     const skip = (page - 1) * limit;
+
+    const finalizedDateFilter =
+      finalized === true && (finalizedFrom || finalizedTo)
+        ? buildDateFilter(finalizedFrom, finalizedTo)
+        : undefined;
 
     const where: Prisma.ContainerWhereInput = {
       ...(status ? { status: status as any } : {}),
@@ -271,6 +340,16 @@ export class ContainersService {
       ...(search
         ? { number: { contains: search, mode: 'insensitive' } }
         : {}),
+      ...(finalized === true
+        ? {
+            finalizedAt: {
+              not: null,
+              ...(finalizedDateFilter?.businessGte ? { gte: finalizedDateFilter.businessGte } : {}),
+              ...(finalizedDateFilter?.businessLt ? { lt: finalizedDateFilter.businessLt } : {}),
+            },
+          }
+        : {}),
+      ...(finalized === false ? { finalizedAt: null } : {}),
     };
 
     const [containers, total] = await this.prisma.$transaction([
@@ -278,12 +357,35 @@ export class ContainersService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy: finalized === true ? { finalizedAt: 'desc' } : { createdAt: 'desc' },
         include: {
           supplier: true,
           productLines: { orderBy: { createdAt: 'asc' } },
           expenses: true,
           discount: true,
+          finalizedBy: { select: { id: true, name: true } },
+          // kgReceived/kgRemaining only — feeds the Finalize confirmation
+          // summary and the History page's "Remaining stock" column
+          // without a second request; never the full StockLot relation here.
+          stockLots: { select: { kgReceived: true, kgRemaining: true } },
+          // Cached tracking summary for the containers-list cards. Reads our
+          // DB only — never calls Traqo. `select` (not the full relation)
+          // keeps this list-safe: excludes rawResponse (can be large, holds
+          // a geo route polyline) and events (only needed on the detail
+          // page's dedicated GET .../tracking call), so this stays a single
+          // JOIN rather than growing the list payload per container.
+          tracking: {
+            select: {
+              status: true,
+              vessel: true,
+              voyage: true,
+              origin: true,
+              destination: true,
+              currentLocation: true,
+              eta: true,
+              lastFetchedAt: true,
+            },
+          },
         },
       }),
       this.prisma.container.count({ where }),
@@ -305,6 +407,7 @@ export class ContainersService {
         expenses: true,
         discount: true,
         stockLots: { orderBy: { createdAt: 'asc' } },
+        finalizedBy: { select: { id: true, name: true } },
       },
     });
 
@@ -349,6 +452,8 @@ export class ContainersService {
           status: arrivingNow ? 'arrived' : (dto.status as any) ?? 'port',
           ...(arrivingNow ? { arrivalDate: new Date() } : {}),
           ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+          ...(dto.sealine !== undefined ? { sealine: dto.sealine } : {}),
+          ...(dto.sealineName !== undefined ? { sealineName: dto.sealineName } : {}),
           createdById: user.id,
         },
       });
@@ -425,6 +530,28 @@ export class ContainersService {
       });
     }
 
+    // Finalized containers: number/supplier/carrier/status are all locked —
+    // this is also what closes the "status can revert via a direct API
+    // call" gap for finalized containers specifically (status is included
+    // below). `notes` is deliberately NOT in this list — it carries no
+    // financial/identity meaning and stays editable, same as before.
+    // Finalized containers: number/supplier/carrier/status are all locked —
+    // this is also what closes the "status can revert via a direct API
+    // call" gap for finalized containers specifically (status is included
+    // below). `notes` is deliberately NOT in this list — it carries no
+    // financial/identity meaning and stays editable, same as before.
+    if (existing.finalizedAt) {
+      const attemptsLockedField =
+        dto.number !== undefined ||
+        dto.supplierId !== undefined ||
+        dto.sealine !== undefined ||
+        dto.sealineName !== undefined ||
+        dto.status !== undefined;
+      if (attemptsLockedField) {
+        this.assertNotFinalized(existing);
+      }
+    }
+
     // Arrival transition: transactional with StockLot creation
     // Arrival: creates one StockLot per product line then recalculates all costPerKg; 10 s is generous for typical containers (3-10 lines).
     if (dto.status === 'arrived') {
@@ -496,6 +623,21 @@ export class ContainersService {
         await this.recalculateContainerCosts(id, tx);
       }, { timeout: 10_000, maxWait: 5_000 });
 
+      // Phase C: the container has now genuinely transitioned to 'arrived'
+      // (the transaction above throws ALREADY_ARRIVED before ever reaching
+      // this line otherwise — see Step 2 — so every execution that gets
+      // here is a real not-arrived -> arrived transition, never a repeat).
+      // Deliberately AFTER the transaction commits and wrapped so a
+      // notification failure can never affect the arrival response itself.
+      try {
+        await this.notifications.notifyArrivalIfNeeded(id);
+      } catch (e) {
+        this.logger.error(
+          `Arrival notification dispatch failed for container ${id} — arrival itself already succeeded and is unaffected.`,
+          e instanceof Error ? e.stack : String(e),
+        );
+      }
+
       // Step 6: Return the updated container with all relations for the HTTP response.
       return this.prisma.container.findUnique({
         where: { id },
@@ -515,6 +657,8 @@ export class ContainersService {
     if (dto.supplierId !== undefined) updateData.supplier = { connect: { id: dto.supplierId } };
     if (dto.status !== undefined) updateData.status = dto.status as any;
     if (dto.notes !== undefined) updateData.notes = dto.notes;
+    if (dto.sealine !== undefined) updateData.sealine = dto.sealine;
+    if (dto.sealineName !== undefined) updateData.sealineName = dto.sealineName;
 
     try {
       return await this.prisma.container.update({
@@ -533,6 +677,82 @@ export class ContainersService {
       }
       throw e;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Finalization
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Finalize an arrived container: locks its financial/identity record by
+   * stamping finalizedAt/finalizedById. Deliberately does NOT touch
+   * StockLot, ContainerProductLine, ContainerExpense, or ContainerDiscount
+   * rows, and does NOT call recalculateContainerCosts() — the container's
+   * cost is already fully computed by the normal arrived-container flow;
+   * finalization only freezes the CURRENT value by making every future
+   * write to expenses/discounts rejected (see assertNotFinalized() and its
+   * call sites), never by recomputing anything here.
+   *
+   * Race-safe/idempotent by construction: the actual write is a conditional
+   * `updateMany` matching `status: 'arrived', finalizedAt: null` — two
+   * concurrent finalize calls can never both succeed. The loser's `count`
+   * comes back 0 and is reported as CONTAINER_ALREADY_FINALIZED, the same
+   * error a genuine second request gets.
+   */
+  async finalize(id: string, userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { clerkId: userId },
+    });
+    if (!user) {
+      throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
+    }
+
+    const container = await this.prisma.container.findUnique({
+      where: { id },
+    });
+    if (!container) {
+      throw new NotFoundException({
+        error: 'Container not found',
+        code: 'NOT_FOUND',
+      });
+    }
+    if (container.status !== 'arrived') {
+      throw new BadRequestException({
+        error: 'Only an arrived container can be finalized.',
+        code: 'CONTAINER_NOT_ARRIVED',
+      });
+    }
+    if (container.finalizedAt) {
+      throw new ConflictException({
+        error: 'This container has already been finalized.',
+        code: 'CONTAINER_ALREADY_FINALIZED',
+      });
+    }
+
+    const result = await this.prisma.container.updateMany({
+      where: { id, status: 'arrived', finalizedAt: null },
+      data: { finalizedAt: new Date(), finalizedById: user.id },
+    });
+
+    if (result.count === 0) {
+      // Lost a concurrent race with another finalize request.
+      throw new ConflictException({
+        error: 'This container has already been finalized.',
+        code: 'CONTAINER_ALREADY_FINALIZED',
+      });
+    }
+
+    return this.prisma.container.findUniqueOrThrow({
+      where: { id },
+      include: {
+        supplier: true,
+        productLines: { orderBy: { createdAt: 'asc' } },
+        expenses: true,
+        discount: true,
+        stockLots: { orderBy: { createdAt: 'asc' } },
+        finalizedBy: { select: { id: true, name: true } },
+      },
+    });
   }
 
   async remove(id: string): Promise<void> {
@@ -824,6 +1044,7 @@ export class ContainersService {
         code: 'NOT_FOUND',
       });
     }
+    this.assertNotFinalized(container);
 
     const user = await this.prisma.user.findUnique({
       where: { clerkId: userId },
@@ -864,6 +1085,7 @@ export class ContainersService {
         code: 'NOT_FOUND',
       });
     }
+    this.assertNotFinalized(container);
 
     const expense = await this.prisma.containerExpense.findFirst({
       where: { id: expenseId, containerId },
@@ -904,6 +1126,7 @@ export class ContainersService {
         code: 'NOT_FOUND',
       });
     }
+    this.assertNotFinalized(container);
 
     const expense = await this.prisma.containerExpense.findFirst({
       where: { id: expenseId, containerId },
@@ -956,6 +1179,7 @@ export class ContainersService {
         code: 'NOT_FOUND',
       });
     }
+    this.assertNotFinalized(container);
 
     return this.prisma.$transaction(async (tx) => {
       const discount = await tx.containerDiscount.upsert({
@@ -987,6 +1211,7 @@ export class ContainersService {
         code: 'NOT_FOUND',
       });
     }
+    this.assertNotFinalized(container);
 
     const discount = await this.prisma.containerDiscount.findUnique({
       where: { containerId },

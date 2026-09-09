@@ -41,12 +41,20 @@ export class LedgerWriteService {
     });
   }
 
+  /**
+   * @param description - Optional override for the AccountEntry.description
+   *   (default: 'Cash handover'). Added for CashHandoverCorrectionService's
+   *   one-time historical corrections (forensic audit, 2026-08-30), which
+   *   still go through this same write path per the "no direct AccountEntry
+   *   inserts" rule — every existing caller omits this and is unaffected.
+   */
   async debitAccount(
     tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
     userId: string,
     amount: Decimal,
     referenceId: string,
     date: Date,
+    description = 'Cash handover',
   ) {
     const account = await tx.userAccount.upsert({
       where:  { userId },
@@ -54,7 +62,7 @@ export class LedgerWriteService {
       create: { userId, balance: amount.negated().toNumber() },
     });
     await tx.accountEntry.create({
-      data: { accountId: account.id, amount: amount.negated().toFixed(2), type: 'handover', referenceId, description: 'Cash handover', date },
+      data: { accountId: account.id, amount: amount.negated().toFixed(2), type: 'handover', referenceId, description, date },
     });
   }
 }

@@ -9,8 +9,23 @@ import type {
   WorkerEarning,
   CreateWorkerEarningDto,
   UpdateWorkerEarningDto,
+  LogDailyWageDto,
+  WorkerStatement,
+  WorkerPerformance,
   PaginatedResponse,
 } from '../types/api'
+
+/** Date-range params for the Statement of Account. */
+export interface WorkerStatementQuery {
+  dateFrom?: string
+  dateTo?: string
+}
+
+/** Date-range params for Employee Performance analytics. */
+export interface WorkerPerformanceQuery {
+  dateFrom?: string
+  dateTo?: string
+}
 
 // "Next page" is available whenever fewer records have been fetched so far
 // than the server reports as the total — the same page/limit/total contract
@@ -266,5 +281,98 @@ export function useUpdateWorkerEarning() {
       qc.invalidateQueries({ queryKey: ['workers'] })
       qc.invalidateQueries({ queryKey: ['workers', id] })
     },
+  })
+}
+
+/**
+ * "Add daily wage" — records today's daily wage using the configured
+ * Settings amount (see useDailyWageRate). Rejects with a 409 (surfaced as an
+ * ApiError with error.code === 'DAILY_WAGE_ALREADY_RECORDED') if this worker
+ * already has a daily wage recorded for the given date.
+ * @returns mutation accepting { id, body: LogDailyWageDto }
+ * POST /workers/:id/daily-wage
+ */
+export function useLogDailyWage() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, body }: { id: string; body: LogDailyWageDto }) => {
+      const res = await api.post<WorkerEarning>(`/workers/${id}/daily-wage`, body)
+      return res.data
+    },
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ['workers'] })
+      qc.invalidateQueries({ queryKey: ['workers', id] })
+      qc.invalidateQueries({ queryKey: ['workers', id, 'statement'] })
+      qc.invalidateQueries({ queryKey: ['workers', id, 'earnings'] })
+    },
+  })
+}
+
+/**
+ * Statement of Account — chronological earning/payment ledger with a
+ * running balance, correctly accounting for an opening balance when a date
+ * range is given (never a fake zero for a partial period — see
+ * WorkersService.getStatement()'s doc comment).
+ * @param workerId - worker UUID (skip query if undefined)
+ * @param params - optional dateFrom/dateTo
+ * @returns React Query result of WorkerStatement
+ * GET /workers/:id/statement
+ */
+export function useWorkerStatement(workerId: string | undefined, params?: WorkerStatementQuery) {
+  return useQuery({
+    queryKey: ['workers', workerId, 'statement', params ?? {}],
+    queryFn: async () => {
+      const res = await api.get<WorkerStatement>(`/workers/${workerId}/statement`, { params })
+      return res.data
+    },
+    enabled: Boolean(workerId),
+  })
+}
+
+/**
+ * Payments for a worker within a specific period — a plain (non-infinite)
+ * query reusing the SAME `/workers/:id/payments` endpoint {@link
+ * useWorkerPayments} already calls, just with dateFrom/dateTo applied
+ * server-side. Used by the Employee Profile's period-scoped Payments
+ * section — a bounded month is always a small list, so no "See more"
+ * pagination is needed here (unlike the lifetime history feed).
+ * @param workerId - worker UUID (skip query if undefined)
+ * @param params - optional dateFrom/dateTo
+ * GET /workers/:id/payments
+ */
+export function useWorkerPaymentsInPeriod(workerId: string | undefined, params?: WorkerStatementQuery) {
+  return useQuery({
+    queryKey: ['workers', workerId, 'payments', 'period', params ?? {}],
+    queryFn: async () => {
+      const res = await api.get<PaginatedResponse<WorkerPayment>>(`/workers/${workerId}/payments`, {
+        params: { ...params, page: 1, limit: 100 },
+      })
+      return res.data
+    },
+    enabled: Boolean(workerId),
+  })
+}
+
+/**
+ * Employee Performance analytics — bags packed, bag-type breakdown, working
+ * days, daily performance, packing history, daily wages, and payments total
+ * for the given period. Server-side date filtering (see
+ * WorkersService.getPerformance()'s doc comment) — a normal monthly view
+ * never fetches the worker's entire lifetime packing history; an unbounded
+ * "all time" request (no params) still returns `totals`/`byBagType` but
+ * `dailyPerformance`/`packingHistory`/`dailyWages` come back `null`.
+ * @param workerId - worker UUID (skip query if undefined)
+ * @param params - optional dateFrom/dateTo
+ * @returns React Query result of WorkerPerformance
+ * GET /workers/:id/performance
+ */
+export function useWorkerPerformance(workerId: string | undefined, params?: WorkerPerformanceQuery) {
+  return useQuery({
+    queryKey: ['workers', workerId, 'performance', params ?? {}],
+    queryFn: async () => {
+      const res = await api.get<WorkerPerformance>(`/workers/${workerId}/performance`, { params })
+      return res.data
+    },
+    enabled: Boolean(workerId),
   })
 }

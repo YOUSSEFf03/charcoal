@@ -81,8 +81,9 @@ vi.mock('../hooks/useReports', () => ({
 }))
 
 const receiverUser = { id: 'receiver-1', name: 'Marie', role: 'receiver' }
+const mockUseCashReceivers = vi.fn(() => ({ data: [receiverUser] }))
 vi.mock('../hooks/useUsers', () => ({
-  useCashReceivers: () => ({ data: [receiverUser] }),
+  useCashReceivers: () => mockUseCashReceivers(),
 }))
 
 vi.mock('../context/RateContext', () => ({
@@ -138,6 +139,39 @@ describe('Invoices page — Log Payment modal contract', () => {
     await waitFor(() => expect(mockCreatePaymentMutate).toHaveBeenCalled())
     const [body] = mockCreatePaymentMutate.mock.calls[0]
     expect(body.receiverId).toBe('receiver-1')
+  })
+
+  // Regression (forensic audit, 2026-09): the receiver <select> used to be
+  // keyed by display NAME, resolved to an id only at submit time via
+  // `allReceivers.find(r => r.name === payReceiverName)` — silently
+  // ambiguous whenever two cash-capable users share a name (proven live
+  // against real data: 41 duplicate "Test Owner" rows from leaked test
+  // fixtures credited a real $2,000+ payment to the wrong person's ledger).
+  // The select is now keyed by id, so picking the SECOND same-named option
+  // must submit ITS id, never the first.
+  it('two receivers sharing the same display name — selecting the second one submits ITS id, never the first', async () => {
+    mockUseCashReceivers.mockReturnValue({
+      data: [
+        { id: 'receiver-a', name: 'Test Owner', role: 'owner' },
+        { id: 'receiver-b', name: 'Test Owner', role: 'owner' },
+      ],
+    })
+    try {
+      const user = userEvent.setup()
+      await openPayModal(user)
+
+      const receiverOptions = screen.getAllByText('Test Owner')
+      expect(receiverOptions).toHaveLength(2)
+      await user.selectOptions(screen.getByDisplayValue('— select receiver —'), receiverOptions[1])
+      await user.click(screen.getByRole('button', { name: /Confirm Payment/ }))
+
+      await waitFor(() => expect(mockCreatePaymentMutate).toHaveBeenCalled())
+      const [body] = mockCreatePaymentMutate.mock.calls[0]
+      expect(body.receiverId).toBe('receiver-b')
+      expect(body.receiverId).not.toBe('receiver-a')
+    } finally {
+      mockUseCashReceivers.mockReturnValue({ data: [receiverUser] })
+    }
   })
 
   it('Cash (the default method) with no receiver selected blocks submission — Confirm Payment is disabled', async () => {

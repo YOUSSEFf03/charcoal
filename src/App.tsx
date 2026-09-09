@@ -12,6 +12,7 @@ import Employees from './pages/Employees'
 import Warehouse from './pages/Warehouse'
 import WarehouseSales from './pages/WarehouseSales'
 import Containers from './pages/Containers'
+import ContainerHistory from './pages/ContainerHistory'
 import Packing from './pages/Packing'
 import BagPurchases from './pages/BagPurchases'
 import Expenses from './pages/Expenses'
@@ -40,6 +41,8 @@ import FillClientPayments from './pages/FillClientPayments'
 import FillClientPaymentDetail from './pages/FillClientPaymentDetail'
 import InvoicePrint from './pages/InvoicePrint'
 import InvoiceDetail from './pages/InvoiceDetail'
+import DeliveryReceiptPrint from './pages/DeliveryReceiptPrint'
+import DailyReportPrint from './pages/DailyReportPrint'
 
 // Small helper so each protected element reads cleanly below.
 const Guard = ({ children, allowedRoles }: { children: ReactNode; allowedRoles?: string[] }) => (
@@ -61,6 +64,9 @@ export default function App() {
 
         {/* Protected standalone — no sidebar, no layout */}
         <Route path="/invoice/:id" element={<Guard><InvoicePrint /></Guard>} />
+        <Route path="/orders/:id/delivery-receipt" element={<Guard><DeliveryReceiptPrint /></Guard>} />
+        {/* Matches backend ReportsController's @Roles('owner') on GET /reports/daily/:date */}
+        <Route path="/reports/daily/:date" element={<Guard allowedRoles={['owner']}><DailyReportPrint /></Guard>} />
 
         {/* Protected standalone — driver mobile (driver + owner only) */}
         <Route
@@ -114,6 +120,7 @@ export default function App() {
           {/* Containers */}
           <Route path="/containers" element={<Guard><Containers /></Guard>} />
           <Route path="/containers/new" element={<Guard><NewContainer /></Guard>} />
+          <Route path="/containers/history" element={<Guard><ContainerHistory /></Guard>} />
           <Route path="/containers/:id" element={<Guard><ContainerDetail /></Guard>} />
 
           {/* Finance */}

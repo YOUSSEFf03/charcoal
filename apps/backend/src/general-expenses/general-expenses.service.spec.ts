@@ -11,7 +11,7 @@ describe('GeneralExpensesService', () => {
   let service: GeneralExpensesService;
 
   const mockPrisma = {
-    generalExpense: { findMany: fn(), count: fn(), findUnique: fn(), create: fn(), delete: fn() },
+    generalExpense: { findMany: fn(), count: fn(), findUnique: fn(), create: fn(), update: fn(), delete: fn() },
     user:           { findUnique: fn() },
     $transaction:   fn(),
   };
@@ -141,6 +141,56 @@ describe('GeneralExpensesService', () => {
         service.create({ description: 'Rent', amount: '-500.00', date: '2026-08-01' } as any, 'clerk-1'),
       ).rejects.toThrow(BadRequestException);
       expect(mockPrisma.generalExpense.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('update()', () => {
+    it('throws NotFoundException when the expense does not exist', async () => {
+      mockPrisma.generalExpense.findUnique.mockResolvedValue(null);
+      await expect(service.update('missing-id', { description: 'x' } as any)).rejects.toThrow(NotFoundException);
+      expect(mockPrisma.generalExpense.update).not.toHaveBeenCalled();
+    });
+
+    it('updates only the fields provided, leaving the rest untouched', async () => {
+      mockPrisma.generalExpense.findUnique.mockResolvedValue({ id: 'ge-1', description: 'Old', amount: '100.00' });
+      mockPrisma.generalExpense.update.mockResolvedValue({ id: 'ge-1', description: 'New', amount: '100.00' });
+
+      await service.update('ge-1', { description: 'New' } as any);
+
+      const data = mockPrisma.generalExpense.update.mock.calls[0][0].data;
+      expect(data).toEqual({ description: 'New' });
+    });
+
+    it('converts a provided date string to a Date', async () => {
+      mockPrisma.generalExpense.findUnique.mockResolvedValue({ id: 'ge-1' });
+      mockPrisma.generalExpense.update.mockResolvedValue({ id: 'ge-1' });
+
+      await service.update('ge-1', { date: '2026-09-01' } as any);
+
+      const data = mockPrisma.generalExpense.update.mock.calls[0][0].data;
+      expect(data.date).toEqual(new Date('2026-09-01'));
+    });
+
+    it('rejects updating to a zero amount', async () => {
+      mockPrisma.generalExpense.findUnique.mockResolvedValue({ id: 'ge-1' });
+      await expect(service.update('ge-1', { amount: '0.00' } as any)).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.generalExpense.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects updating to a negative amount', async () => {
+      mockPrisma.generalExpense.findUnique.mockResolvedValue({ id: 'ge-1' });
+      await expect(service.update('ge-1', { amount: '-10.00' } as any)).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.generalExpense.update).not.toHaveBeenCalled();
+    });
+
+    it('allows toggling isRecurring', async () => {
+      mockPrisma.generalExpense.findUnique.mockResolvedValue({ id: 'ge-1', isRecurring: false });
+      mockPrisma.generalExpense.update.mockResolvedValue({ id: 'ge-1', isRecurring: true });
+
+      await service.update('ge-1', { isRecurring: true } as any);
+
+      const data = mockPrisma.generalExpense.update.mock.calls[0][0].data;
+      expect(data.isRecurring).toBe(true);
     });
   });
 });

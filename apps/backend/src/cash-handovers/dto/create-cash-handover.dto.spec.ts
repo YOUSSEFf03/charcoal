@@ -57,7 +57,28 @@ describe('CreateCashHandoverDto validation', () => {
   it('fails when an expenses[] item has a non-numeric amount', async () => {
     const dto = plainToInstance(CreateCashHandoverDto, {
       ...valid,
-      expenses: [{ description: 'Fuel', amount: 'lots' }],
+      expenses: [{ categoryId: '550e8400-e29b-41d4-a716-446655440001', amount: 'lots' }],
+    });
+    const errors = await validate(dto);
+    expect(errors.map((e) => e.property)).toContain('expenses');
+  });
+
+  // Forensic audit (2026-08-31): "Expenses + Cash Handover expense selection
+  // redesign" — an expenses[] item now selects an existing ExpenseCategory
+  // by id (never free text) — see CashHandoverExpenseDto's doc comment.
+  it('fails when an expenses[] item has no categoryId', async () => {
+    const dto = plainToInstance(CreateCashHandoverDto, {
+      ...valid,
+      expenses: [{ amount: '10.00' }],
+    });
+    const errors = await validate(dto);
+    expect(errors.map((e) => e.property)).toContain('expenses');
+  });
+
+  it('fails when an expenses[] item\'s categoryId is not a UUID', async () => {
+    const dto = plainToInstance(CreateCashHandoverDto, {
+      ...valid,
+      expenses: [{ categoryId: 'not-a-uuid', amount: '10.00' }],
     });
     const errors = await validate(dto);
     expect(errors.map((e) => e.property)).toContain('expenses');
@@ -66,7 +87,7 @@ describe('CreateCashHandoverDto validation', () => {
   it('passes with a well-formed expenses[] array', async () => {
     const dto = plainToInstance(CreateCashHandoverDto, {
       ...valid,
-      expenses: [{ description: 'Fuel', amount: '10.00' }],
+      expenses: [{ categoryId: '550e8400-e29b-41d4-a716-446655440001', amount: '10.00' }],
     });
     const errors = await validate(dto);
     expect(errors).toHaveLength(0);

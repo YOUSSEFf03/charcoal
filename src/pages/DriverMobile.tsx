@@ -459,7 +459,7 @@ export default function DriverMobile() {
                   <input type="text" value={e.desc} onChange={ev => updateExpense(e.id, 'desc', ev.target.value)} placeholder="Description" style={{ flex: 1, padding: '10px 12px', border: '1.5px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14, fontFamily: sans, outline: 'none', background: 'var(--surface)' }} />
                   <input type="number" value={e.amount} onChange={ev => updateExpense(e.id, 'amount', ev.target.value)} placeholder="0" style={{ width: 90, padding: '10px', border: '1.5px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14, fontFamily: mono, textAlign: 'right', outline: 'none', background: 'var(--surface)' }} />
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>$</span>
-                  <button onClick={() => removeExpense(e.id)} style={{ width: 34, height: 42, borderRadius: 'var(--radius)', border: '1.5px solid var(--border)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', flexShrink: 0 }}>
+                  <button onClick={() => removeExpense(e.id)} aria-label="Remove expense" style={{ width: 34, height: 42, borderRadius: 'var(--radius)', border: '1.5px solid var(--border)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', flexShrink: 0 }}>
                     <i className="ti ti-x" style={{ fontSize: 12 }} />
                   </button>
                 </div>

@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { validate } from 'class-validator';
-import { StockExitsService } from './stock-exits.service';
+import { Prisma } from '@prisma/client';
+import { StockExitsService, computeStockExitFingerprint } from './stock-exits.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStockExitDto } from './dto/create-stock-exit.dto';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
@@ -28,11 +29,13 @@ describe('StockExitsService', () => {
   const mockPrisma = {
     user: { findUnique: fn() },
     packedStock: { findUnique: fn(), update: fn() },
-    stockExit: { create: fn(), findUnique: fn(), findMany: fn(), count: fn(), aggregate: fn(), groupBy: fn() },
+    stockExit: { create: fn(), findFirst: fn(), findUnique: fn(), findMany: fn(), count: fn(), aggregate: fn(), groupBy: fn() },
     bagType: { findMany: fn() },
     payment: { findMany: fn() },
     paymentAllocation: { findMany: fn() },
+    accountEntry: { findMany: fn() },
     $transaction: fn(),
+    $queryRaw: fn(),
   };
 
   // PR 3: StockExitsService now delegates ledger writes to LedgerWriteService
@@ -59,6 +62,7 @@ describe('StockExitsService', () => {
     jest.clearAllMocks();
     mockUsersService.validateCashCapable.mockResolvedValue(undefined);
     mockSettingsService.getExchangeRate.mockResolvedValue(89550);
+    mockPrisma.accountEntry.findMany.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -687,6 +691,282 @@ describe('StockExitsService', () => {
   });
 
   // =========================================================================
+  // Idempotency (forensic audit, 2026-08-28): the anonymous-walk-in
+  // idempotency gap — WalkInSalesService's idempotencyKey/requestFingerprint
+  // protection never covered POST /stock-exits, the endpoint anonymous
+  // walk-in sales actually use. Mirrors walk-in-sales.service.spec.ts's
+  // "create() — idempotency" block exactly, applied to StockExit's
+  // idempotencyKey column instead of Invoice's. Real cross-transaction
+  // concurrency proof lives in
+  // test/stock-exit-idempotency.integration-spec.ts — these are the
+  // mocked-Prisma unit tests for the surrounding logic (short-circuit, what
+  // gets stored, P2002 recovery, non-race errors still throw).
+  // =========================================================================
+  describe('create() — idempotency (anonymous walk-in gap fix)', () => {
+    const clerkId = 'clerk-user-idem';
+    const packedStockId = 'packed-stock-uuid-idem';
+    const bagTypeId = 'bag-type-uuid-idem';
+
+    function baseDto(overrides: Partial<CreateStockExitDto> = {}): CreateStockExitDto {
+      return {
+        packedStockId,
+        bagTypeId,
+        quantity: 5,
+        exitType: 'walk_in' as any,
+        date: '2026-08-28',
+        amount: 10,
+        ...overrides,
+      } as CreateStockExitDto;
+    }
+
+    function makeTx() {
+      return {
+        packedStock: { findUnique: fn(), update: fn() },
+        stockExit: { create: fn() },
+        $queryRaw: fn(),
+      };
+    }
+
+    function p2002() {
+      return new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`idempotencyKey`)',
+        { code: 'P2002', clientVersion: 'test' },
+      );
+    }
+
+    it('returns the existing exit immediately when idempotencyKey AND requestFingerprint both match — no re-validation, no transaction', async () => {
+      const dto = baseDto({ idempotencyKey: 'key-1' });
+      const existing = { id: 'existing-exit', idempotencyKey: 'key-1', requestFingerprint: computeStockExitFingerprint(dto) };
+      mockPrisma.stockExit.findFirst.mockResolvedValue(existing);
+
+      const result = await service.create(dto, clerkId);
+
+      expect(result).toBe(existing);
+      expect(mockPrisma.stockExit.findFirst).toHaveBeenCalledWith({ where: { idempotencyKey: 'key-1' } });
+      // Fail-fast: none of the normal validation/creation work ever ran.
+      expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('proceeds normally (no short-circuit) when idempotencyKey is provided but no existing exit has it yet', async () => {
+      mockPrisma.stockExit.findFirst.mockResolvedValue(null);
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      const tx = makeTx();
+      tx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 20, reservedQuantity: 0, bagTypeId });
+      tx.packedStock.update.mockResolvedValue({});
+      tx.stockExit.create.mockResolvedValue({ id: 'exit-2' });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(baseDto({ idempotencyKey: 'key-2' }), clerkId);
+
+      expect(tx.stockExit.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('stores idempotencyKey and requestFingerprint on the created exit when provided', async () => {
+      mockPrisma.stockExit.findFirst.mockResolvedValue(null);
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      const tx = makeTx();
+      tx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 20, reservedQuantity: 0, bagTypeId });
+      tx.packedStock.update.mockResolvedValue({});
+      tx.stockExit.create.mockResolvedValue({ id: 'exit-3' });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      const dto = baseDto({ idempotencyKey: 'key-3' });
+      await service.create(dto, clerkId);
+
+      expect(tx.stockExit.create.mock.calls[0][0].data.idempotencyKey).toBe('key-3');
+      expect(tx.stockExit.create.mock.calls[0][0].data.requestFingerprint).toBe(computeStockExitFingerprint(dto));
+    });
+
+    it('omits idempotencyKey cleanly (no crash, no lookup) when the caller does not provide one — backward compatible', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      const tx = makeTx();
+      tx.packedStock.findUnique.mockResolvedValue({ id: packedStockId, quantity: 20, reservedQuantity: 0, bagTypeId });
+      tx.packedStock.update.mockResolvedValue({});
+      tx.stockExit.create.mockResolvedValue({ id: 'exit-4' });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.create(baseDto({}), clerkId); // no idempotencyKey — matches every non-sale exit type
+
+      expect(mockPrisma.stockExit.findFirst).not.toHaveBeenCalled();
+      expect(tx.stockExit.create.mock.calls[0][0].data.idempotencyKey).toBeUndefined();
+    });
+
+    it("concurrent-submission race: create() hits P2002 on idempotencyKey → returns the winner's exit instead of throwing", async () => {
+      const dto = baseDto({ idempotencyKey: 'key-race' });
+      const winner = { id: 'winner-exit', idempotencyKey: 'key-race', requestFingerprint: computeStockExitFingerprint(dto) };
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      // First findFirst (the `existing` idempotency check) races and loses: null.
+      // Second findFirst (the post-P2002 recovery lookup) finds the winner.
+      mockPrisma.stockExit.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(winner);
+      mockPrisma.$transaction.mockRejectedValue(p2002());
+
+      const result = await service.create(dto, clerkId);
+
+      expect(result).toBe(winner);
+      expect(mockPrisma.stockExit.findFirst).toHaveBeenCalledTimes(2);
+    });
+
+    it('P2002 with no matching exit actually found (not the idempotency race) is rethrown, not swallowed', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.stockExit.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      const err = p2002();
+      mockPrisma.$transaction.mockRejectedValue(err);
+
+      await expect(service.create(baseDto({ idempotencyKey: 'key-4' }), clerkId)).rejects.toBe(err);
+    });
+
+    it('a P2002 with no idempotencyKey on the request is never treated as the race (nothing to recover) — rethrown', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      const err = p2002();
+      mockPrisma.$transaction.mockRejectedValue(err);
+
+      await expect(service.create(baseDto({}), clerkId)).rejects.toBe(err);
+      // No idempotencyKey on the request → no recovery lookup even attempted.
+      expect(mockPrisma.stockExit.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('a non-P2002 error from the transaction is never swallowed — unexpected failures still throw', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+      mockPrisma.stockExit.findFirst.mockResolvedValue(null);
+      mockPrisma.$transaction.mockRejectedValue(new Error('DB connection lost'));
+
+      await expect(service.create(baseDto({ idempotencyKey: 'key-5' }), clerkId)).rejects.toThrow('DB connection lost');
+      // Only the one `existing` check — no second findFirst for a non-P2002 error.
+      expect(mockPrisma.stockExit.findFirst).toHaveBeenCalledTimes(1);
+    });
+
+    // =======================================================================
+    // SAME idempotencyKey reused with DIFFERENT exit data. The naive "return
+    // whatever exit has this key" guard would silently hand the second
+    // caller the FIRST caller's exit — wrong amount, wrong goods, no error.
+    // requestFingerprint exists specifically to catch this and reject cleanly.
+    // =======================================================================
+    describe('same idempotencyKey, different request data (IDEMPOTENCY_KEY_REUSED)', () => {
+      it('rejects with 409 IDEMPOTENCY_KEY_REUSED when the key matches but the amount differs — zero side effects', async () => {
+        const firstDto = baseDto({ idempotencyKey: 'key-reused', amount: 10 });
+        const existing = {
+          id: 'existing-exit', idempotencyKey: 'key-reused',
+          requestFingerprint: computeStockExitFingerprint(firstDto),
+        };
+        mockPrisma.stockExit.findFirst.mockResolvedValue(existing);
+
+        // Second request: SAME key, DIFFERENT amount ($50, not $10).
+        const secondDto = baseDto({ idempotencyKey: 'key-reused', amount: 50 });
+
+        await expect(service.create(secondDto, clerkId)).rejects.toMatchObject({
+          response: expect.objectContaining({ code: 'IDEMPOTENCY_KEY_REUSED' }),
+        });
+        // No re-validation, no transaction, no write of any kind — the
+        // mismatch is caught before any side effect is even attempted.
+        expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+        expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      });
+
+      it('rejects with 409 IDEMPOTENCY_KEY_REUSED when the key matches but the quantity differs', async () => {
+        const firstDto = baseDto({ idempotencyKey: 'key-reused-2' });
+        const existing = {
+          id: 'existing-exit-2', idempotencyKey: 'key-reused-2',
+          requestFingerprint: computeStockExitFingerprint(firstDto),
+        };
+        mockPrisma.stockExit.findFirst.mockResolvedValue(existing);
+
+        const secondDto = baseDto({ idempotencyKey: 'key-reused-2', quantity: 999 });
+
+        await expect(service.create(secondDto, clerkId)).rejects.toMatchObject({
+          response: expect.objectContaining({ code: 'IDEMPOTENCY_KEY_REUSED' }),
+        });
+      });
+
+      it('the SAME request replayed (identical data) is never mistaken for reuse — returns the original, no error', async () => {
+        const dto = baseDto({ idempotencyKey: 'key-genuine-retry' });
+        const existing = {
+          id: 'existing-exit-3', idempotencyKey: 'key-genuine-retry',
+          requestFingerprint: computeStockExitFingerprint(dto),
+        };
+        mockPrisma.stockExit.findFirst.mockResolvedValue(existing);
+
+        // Exact same DTO object re-sent — a genuine retry, not reuse.
+        const result = await service.create({ ...dto }, clerkId);
+
+        expect(result).toBe(existing);
+      });
+
+      it('applies the SAME mismatch check on the post-P2002 recovery path (concurrent requests, same key, different data)', async () => {
+        const firstDto = baseDto({ idempotencyKey: 'key-race-mismatch', amount: 10 });
+        const winner = {
+          id: 'winner-exit', idempotencyKey: 'key-race-mismatch',
+          requestFingerprint: computeStockExitFingerprint(firstDto),
+        };
+        mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', clerkId });
+        mockPrisma.stockExit.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(winner);
+        mockPrisma.$transaction.mockRejectedValue(p2002());
+
+        const secondDto = baseDto({ idempotencyKey: 'key-race-mismatch', amount: 50 });
+
+        await expect(service.create(secondDto, clerkId)).rejects.toMatchObject({
+          response: expect.objectContaining({ code: 'IDEMPOTENCY_KEY_REUSED' }),
+        });
+      });
+    });
+  });
+
+  // =========================================================================
+  // computeStockExitFingerprint() — pure function, tested directly
+  // (determinism, sensitivity to every field that actually matters,
+  // insensitivity to display-only fields).
+  // =========================================================================
+  describe('computeStockExitFingerprint()', () => {
+    const baseDto: CreateStockExitDto = {
+      packedStockId: 'ps-1',
+      bagTypeId: 'bt-1',
+      quantity: 5,
+      exitType: 'walk_in' as any,
+      date: '2026-08-28',
+      amount: 10,
+      currency: 'USD' as any,
+    };
+
+    it('is deterministic — same input always produces the same fingerprint', () => {
+      expect(computeStockExitFingerprint({ ...baseDto })).toBe(computeStockExitFingerprint({ ...baseDto }));
+    });
+
+    it('changes when quantity differs', () => {
+      expect(computeStockExitFingerprint(baseDto)).not.toBe(computeStockExitFingerprint({ ...baseDto, quantity: 6 }));
+    });
+
+    it('changes when amount differs', () => {
+      expect(computeStockExitFingerprint(baseDto)).not.toBe(computeStockExitFingerprint({ ...baseDto, amount: 11 }));
+    });
+
+    it('changes when currency differs', () => {
+      expect(computeStockExitFingerprint(baseDto)).not.toBe(computeStockExitFingerprint({ ...baseDto, currency: 'LBP' as any }));
+    });
+
+    it('changes when packedStockId differs (a different FIFO draw is a different sale)', () => {
+      expect(computeStockExitFingerprint(baseDto)).not.toBe(computeStockExitFingerprint({ ...baseDto, packedStockId: 'ps-2' }));
+    });
+
+    it('changes when collectedById differs', () => {
+      const a = computeStockExitFingerprint({ ...baseDto, collectedById: 'user-a' });
+      const b = computeStockExitFingerprint({ ...baseDto, collectedById: 'user-b' });
+      expect(a).not.toBe(b);
+    });
+
+    it('is UNAFFECTED by display-only fields (recipient, reason)', () => {
+      const a = computeStockExitFingerprint({ ...baseDto, recipient: 'Alice', reason: 'note A' } as any);
+      const b = computeStockExitFingerprint({ ...baseDto, recipient: 'Bob', reason: 'note B' } as any);
+      expect(a).toBe(b);
+    });
+
+    it('collectedById takes priority over collectedBy — an ignored collectedBy must not affect the fingerprint', () => {
+      const a = computeStockExitFingerprint({ ...baseDto, collectedById: 'user-a', collectedBy: 'Name One' } as any);
+      const b = computeStockExitFingerprint({ ...baseDto, collectedById: 'user-a', collectedBy: 'Name Two' } as any);
+      expect(a).toBe(b);
+    });
+  });
+
+  // =========================================================================
   // findAll() — pagination, filters, count/findMany where-parity, list shape.
   // Covers the Warehouse Sales Log scalability fix (frontend now paginates
   // against this already-correct backend endpoint).
@@ -838,7 +1118,7 @@ describe('StockExitsService', () => {
     }
 
     beforeEach(() => {
-      mockPrisma.stockExit.count.mockResolvedValue(0);
+      mockPrisma.$queryRaw.mockResolvedValue([{ count: 0n }]);
       mockPrisma.stockExit.aggregate.mockResolvedValue({ _sum: { kgQuantity: null } });
       mockGroupBy([], []);
       mockPrisma.bagType.findMany.mockResolvedValue([]);
@@ -851,22 +1131,22 @@ describe('StockExitsService', () => {
     });
 
     it('one exit with an explicit USD amount: totalAmount reflects it', async () => {
-      mockPrisma.stockExit.count.mockResolvedValue(1);
+      mockPrisma.$queryRaw.mockResolvedValue([{ count: 1n }]);
       mockGroupBy([], [{ currency: 'USD', _sum: { amount: { toString: () => '50.00' } } }]);
       const result = await service.getClientWarehouseSummary(CLIENT_ID);
       expect(result.totalCount).toBe(1);
       expect(result.totalAmount).toBe('50.00');
     });
 
-    it('total count reflects count(), not the length of any fetched array', async () => {
-      mockPrisma.stockExit.count.mockResolvedValue(4321);
+    it('total count reflects the DISTINCT logical-sale count (COALESCE(invoiceId, id)), not a raw StockExit row count', async () => {
+      mockPrisma.$queryRaw.mockResolvedValue([{ count: 4321n }]);
       const result = await service.getClientWarehouseSummary(CLIENT_ID);
       expect(result.totalCount).toBe(4321);
     });
 
-    it('client isolation: every query (count, kg aggregate, both groupBys, unresolved findMany) filters by this clientId', async () => {
+    it('client isolation: every query (grouped count, kg aggregate, both groupBys, unresolved findMany) filters by this clientId', async () => {
       await service.getClientWarehouseSummary(CLIENT_ID);
-      expect(mockPrisma.stockExit.count.mock.calls[0][0].where).toEqual({ clientId: CLIENT_ID });
+      expect(mockPrisma.$queryRaw.mock.calls[0][0].values).toEqual([CLIENT_ID]);
       expect(mockPrisma.stockExit.aggregate.mock.calls[0][0].where).toMatchObject({ clientId: CLIENT_ID });
       for (const call of mockPrisma.stockExit.groupBy.mock.calls) {
         expect(call[0].where).toMatchObject({ clientId: CLIENT_ID });
@@ -970,7 +1250,7 @@ describe('StockExitsService', () => {
       // the where clause is what actually carries that isolation, for every
       // one of the five underlying queries.
       await service.getClientWarehouseSummary('client-2');
-      expect(mockPrisma.stockExit.count.mock.calls[0][0].where).toEqual({ clientId: 'client-2' });
+      expect(mockPrisma.$queryRaw.mock.calls[0][0].values).toEqual(['client-2']);
       expect(mockPrisma.stockExit.findMany.mock.calls[0][0].where).toMatchObject({ clientId: 'client-2' });
     });
   });
@@ -1215,6 +1495,377 @@ describe('StockExitsService', () => {
 
     it('does not call stockExit.findMany or payment.aggregate — this is a pure count, no row-list fetch', async () => {
       await service.getOnAccountCount(DATE);
+      expect(mockPrisma.stockExit.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // findAllGrouped() — sale-history grouping fix (forensic audit, 2026-08-28)
+  // =========================================================================
+
+  describe('findAllGrouped()', () => {
+    it('collapses multiple StockExit rows sharing one invoiceId into ONE row, sourced from Invoice.lines', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ count: 1n }]) // total-count query
+        .mockResolvedValueOnce([{ key: 'inv-1' }]); // page-of-keys query
+      const invoice = {
+        id: 'inv-1', displayId: 'SI-0001', currency: 'USD',
+        total: '14.00', paidAmount: '14.00', status: 'paid',
+        lines: [
+          { saleUnit: 'BAG', bagTypeId: 'bt-1', bagTypeName: 'Bag A', qty: 3, pricePerBag: '2.00', lineTotal: '6.00', charcoalType: 'Oak', grade: 'A' },
+          { saleUnit: 'BAG', bagTypeId: 'bt-1', bagTypeName: 'Bag A', qty: 4, pricePerBag: '2.00', lineTotal: '8.00', charcoalType: 'Oak', grade: 'A' },
+        ],
+        allocations: [
+          {
+            amount: '14.00',
+            payment: {
+              id: 'pay-1', displayId: 'RV-0001', date: new Date('2026-08-20'), amount: '14.00', currency: 'USD',
+              method: 'cash', receiverId: 'u-recv', receiverName: 'Youssef', receiver: { id: 'u-recv', name: 'Youssef' },
+            },
+          },
+        ],
+      };
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        {
+          id: 'exit-1', invoiceId: 'inv-1', date: new Date('2026-08-20'), clientId: 'c1', recipient: 'Alice',
+          loggedBy: { id: 'u1', name: 'Sam' }, client: { id: 'c1', name: 'Alice Co' },
+          invoice,
+        },
+        {
+          id: 'exit-2', invoiceId: 'inv-1', date: new Date('2026-08-20'), clientId: 'c1', recipient: 'Alice',
+          loggedBy: { id: 'u1', name: 'Sam' }, client: { id: 'c1', name: 'Alice Co' },
+          invoice,
+        },
+      ]);
+      mockPrisma.bagType.findMany.mockResolvedValue([
+        { id: 'bt-1', nominalKg: { toString: () => '10.000' } },
+      ]);
+      mockPrisma.accountEntry.findMany.mockResolvedValue([
+        { referenceId: 'pay-1', amount: '14.00' },
+      ]);
+
+      const result = await service.findAllGrouped(1, 20, 'walk_in', undefined, undefined, 'c1');
+
+      expect(result.total).toBe(1);
+      expect(result.data).toHaveLength(1); // 2 raw exit rows → 1 grouped row
+      const row: any = result.data[0];
+      expect(row.id).toBe('inv-1');
+      expect(row.invoiceId).toBe('inv-1');
+      expect(row.invoiceDisplayId).toBe('SI-0001');
+      expect(row.lineCount).toBe(2);
+      expect(row.totalQtyBags).toBe(7);
+      expect(row.totalKg).toBe('70.000');
+      expect(row.rawExit).toBeUndefined(); // never present on an invoice-grouped row
+      expect(row.client).toEqual({ id: 'c1', name: 'Alice Co' });
+    });
+
+    // =========================================================================
+    // Phase 5/7 (forensic audit, warehouse sale log): SALE/PAYMENT/RECEIVER/
+    // BALANCE fields must be exposed, and the receiver's credited amount must
+    // come from the ledger (AccountEntry), never be recomputed from the
+    // invoice total or the payment amount alone.
+    // =========================================================================
+
+    it('exposes sale total, paid amount, receiver, and ledger-sourced credited amount for a fully-paid registered-client sale', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ count: 1n }])
+        .mockResolvedValueOnce([{ key: 'inv-2' }]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        {
+          id: 'exit-3', invoiceId: 'inv-2', date: new Date('2026-08-29'), clientId: 'c2', recipient: 'Marc Dib',
+          loggedBy: { id: 'u1', name: 'Sam' }, client: { id: 'c2', name: 'Marc Dib' },
+          invoice: {
+            id: 'inv-2', displayId: 'SI-0827', currency: 'USD',
+            total: '500.00', paidAmount: '500.00', status: 'paid',
+            lines: [
+              { saleUnit: 'BAG', bagTypeId: 'bt-1', bagTypeName: 'Bag A', qty: 100, pricePerBag: '5.00', lineTotal: '500.00', charcoalType: 'Oak', grade: 'A' },
+            ],
+            allocations: [
+              {
+                amount: '500.00',
+                payment: {
+                  id: 'pay-2', displayId: 'RV-0223', date: new Date('2026-08-29'), amount: '500.00', currency: 'USD',
+                  method: 'cash', receiverId: 'u-youssef', receiverName: 'youssef', receiver: { id: 'u-youssef', name: 'youssef' },
+                },
+              },
+            ],
+          },
+        },
+      ]);
+      mockPrisma.bagType.findMany.mockResolvedValue([{ id: 'bt-1', nominalKg: { toString: () => '10.000' } }]);
+      // The ledger AccountEntry is the authoritative source — deliberately
+      // given a DIFFERENT value than the payment/invoice amounts so the test
+      // can prove the endpoint reads THIS, not payment.amount or invoice.total.
+      mockPrisma.accountEntry.findMany.mockResolvedValue([
+        { referenceId: 'pay-2', amount: '500.00' },
+      ]);
+
+      const result = await service.findAllGrouped(1, 20, 'walk_in');
+
+      const row: any = result.data[0];
+      expect(row.saleTotal).toBe('500.00');
+      expect(row.paidAmount).toBe('500.00');
+      expect(row.remaining).toBe('0.00');
+      expect(row.status).toBe('paid');
+      expect(row.payments).toHaveLength(1);
+      expect(row.payments[0]).toMatchObject({
+        appliedAmount: '500.00',
+        method: 'cash',
+        receiverId: 'u-youssef',
+        receiverName: 'youssef',
+        creditedAmount: '500.00',
+      });
+      // Ledger queried by payment id, scoped to credit entry types only.
+      expect(mockPrisma.accountEntry.findMany).toHaveBeenCalledWith({
+        where: { referenceId: { in: ['pay-2'] }, type: { in: ['payment_received', 'sale_collected'] } },
+        select: { referenceId: true, amount: true },
+      });
+    });
+
+    it('shows the ledger-credited amount, not the payment amount, when they diverge (proves the ledger is authoritative)', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ count: 1n }])
+        .mockResolvedValueOnce([{ key: 'inv-3' }]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        {
+          id: 'exit-4', invoiceId: 'inv-3', date: new Date('2026-08-29'), clientId: 'c3', recipient: 'Test Client',
+          loggedBy: { id: 'u1', name: 'Sam' }, client: { id: 'c3', name: 'Test Client' },
+          invoice: {
+            id: 'inv-3', displayId: 'SI-0900', currency: 'USD',
+            total: '100.00', paidAmount: '100.00', status: 'paid',
+            lines: [{ saleUnit: 'BAG', bagTypeId: 'bt-1', bagTypeName: 'Bag A', qty: 20, pricePerBag: '5.00', lineTotal: '100.00', charcoalType: 'Oak', grade: 'A' }],
+            allocations: [
+              {
+                amount: '100.00',
+                payment: {
+                  id: 'pay-3', displayId: 'RV-0300', date: new Date('2026-08-29'), amount: '100.00', currency: 'USD',
+                  method: 'cash', receiverId: 'u-x', receiverName: 'X', receiver: { id: 'u-x', name: 'X' },
+                },
+              },
+            ],
+          },
+        },
+      ]);
+      mockPrisma.bagType.findMany.mockResolvedValue([{ id: 'bt-1', nominalKg: { toString: () => '10.000' } }]);
+      // Ledger shows a DIFFERENT amount than Payment.amount/Invoice.total —
+      // an artificial divergence (a correction, or corrupted data) that the
+      // display must surface honestly rather than paper over.
+      mockPrisma.accountEntry.findMany.mockResolvedValue([
+        { referenceId: 'pay-3', amount: '75.00' },
+      ]);
+
+      const result = await service.findAllGrouped(1, 20, 'walk_in');
+
+      const row: any = result.data[0];
+      expect(row.saleTotal).toBe('100.00');       // invoice total — unaffected
+      expect(row.payments[0].paymentAmount).toBe('100.00'); // payment's own amount — unaffected
+      expect(row.payments[0].creditedAmount).toBe('75.00'); // ledger wins for "credited to receiver"
+    });
+
+    it('reports no receiver credit (null) when a payment has no receiver assigned', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ count: 1n }])
+        .mockResolvedValueOnce([{ key: 'inv-4' }]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        {
+          id: 'exit-5', invoiceId: 'inv-4', date: new Date('2026-08-29'), clientId: 'c4', recipient: 'Bank Client',
+          loggedBy: { id: 'u1', name: 'Sam' }, client: { id: 'c4', name: 'Bank Client' },
+          invoice: {
+            id: 'inv-4', displayId: 'SI-0901', currency: 'USD',
+            total: '50.00', paidAmount: '50.00', status: 'paid',
+            lines: [{ saleUnit: 'BAG', bagTypeId: 'bt-1', bagTypeName: 'Bag A', qty: 10, pricePerBag: '5.00', lineTotal: '50.00', charcoalType: 'Oak', grade: 'A' }],
+            allocations: [
+              {
+                amount: '50.00',
+                payment: {
+                  id: 'pay-4', displayId: 'RV-0400', date: new Date('2026-08-29'), amount: '50.00', currency: 'USD',
+                  method: 'bank_transfer', receiverId: null, receiverName: null, receiver: null,
+                },
+              },
+            ],
+          },
+        },
+      ]);
+      mockPrisma.bagType.findMany.mockResolvedValue([{ id: 'bt-1', nominalKg: { toString: () => '10.000' } }]);
+
+      const result = await service.findAllGrouped(1, 20, 'walk_in');
+
+      const row: any = result.data[0];
+      expect(row.payments[0].receiverId).toBeNull();
+      expect(row.payments[0].creditedAmount).toBeNull();
+      // No receiver → nothing to look up in the ledger for this payment.
+      expect(mockPrisma.accountEntry.findMany).not.toHaveBeenCalled();
+    });
+
+    it('represents a partially-paid sale with the correct remaining balance', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ count: 1n }])
+        .mockResolvedValueOnce([{ key: 'inv-5' }]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        {
+          id: 'exit-6', invoiceId: 'inv-5', date: new Date('2026-08-29'), clientId: 'c5', recipient: 'Walid',
+          loggedBy: { id: 'u1', name: 'Sam' }, client: { id: 'c5', name: 'Walid' },
+          invoice: {
+            id: 'inv-5', displayId: 'SI-0159', currency: 'USD',
+            total: '20.90', paidAmount: '10.00', status: 'partially_paid',
+            lines: [{ saleUnit: 'BAG', bagTypeId: 'bt-1', bagTypeName: 'Bag A', qty: 11, pricePerBag: '1.90', lineTotal: '20.90', charcoalType: 'Oak', grade: 'A' }],
+            allocations: [
+              {
+                amount: '10.00',
+                payment: {
+                  id: 'pay-5', displayId: 'RV-0500', date: new Date('2026-08-29'), amount: '10.00', currency: 'USD',
+                  method: 'cash', receiverId: 'u-recv', receiverName: 'Youssef', receiver: { id: 'u-recv', name: 'Youssef' },
+                },
+              },
+            ],
+          },
+        },
+      ]);
+      mockPrisma.bagType.findMany.mockResolvedValue([{ id: 'bt-1', nominalKg: { toString: () => '10.000' } }]);
+      mockPrisma.accountEntry.findMany.mockResolvedValue([{ referenceId: 'pay-5', amount: '10.00' }]);
+
+      const result = await service.findAllGrouped(1, 20, 'walk_in');
+
+      const row: any = result.data[0];
+      expect(row.status).toBe('partially_paid');
+      expect(row.paidAmount).toBe('10.00');
+      expect(row.remaining).toBe('10.90');
+    });
+
+    it('represents a zero-payment ("on account") registered-client sale without a payments entry', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ count: 1n }])
+        .mockResolvedValueOnce([{ key: 'inv-6' }]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        {
+          id: 'exit-7', invoiceId: 'inv-6', date: new Date('2026-08-26'), clientId: 'c6', recipient: 'Walid',
+          loggedBy: { id: 'u1', name: 'Sam' }, client: { id: 'c6', name: 'Walid' },
+          invoice: {
+            id: 'inv-6', displayId: 'SI-0159b', currency: 'USD',
+            total: '20.90', paidAmount: '0.00', status: 'issued',
+            lines: [{ saleUnit: 'BAG', bagTypeId: 'bt-1', bagTypeName: 'Bag A', qty: 11, pricePerBag: '1.90', lineTotal: '20.90', charcoalType: 'Oak', grade: 'A' }],
+            allocations: [],
+          },
+        },
+      ]);
+      mockPrisma.bagType.findMany.mockResolvedValue([{ id: 'bt-1', nominalKg: { toString: () => '10.000' } }]);
+
+      const result = await service.findAllGrouped(1, 20, 'walk_in');
+
+      const row: any = result.data[0];
+      expect(row.status).toBe('issued');
+      expect(row.paidAmount).toBe('0.00');
+      expect(row.remaining).toBe('20.90');
+      expect(row.payments).toEqual([]);
+    });
+
+    it('exposes ledger-sourced credited amount for an anonymous walk-in sale (StockExit.amount path)', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ count: 1n }])
+        .mockResolvedValueOnce([{ key: 'exit-anon-2' }]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        {
+          id: 'exit-anon-2', invoiceId: null, date: new Date('2026-08-21'), clientId: null, recipient: 'Walk-in customer',
+          loggedBy: { id: 'u1', name: 'Sam' }, client: null, amount: '400.00', currency: 'USD', reason: null,
+          lotId: 'lot-1', kgQuantity: '200.000', bagTypeId: null, quantity: null,
+          bagType: null, lot: { charcoalType: 'Oak', grade: 'A' }, packedStock: null,
+          collectedById: 'u-youssef', collectedBy: 'youssef',
+        },
+      ]);
+      mockPrisma.accountEntry.findMany.mockResolvedValue([
+        { referenceId: 'exit-anon-2', amount: '400.00' },
+      ]);
+
+      const result = await service.findAllGrouped(1, 20, 'walk_in');
+
+      const row: any = result.data[0];
+      expect(row.saleTotal).toBe('400.00');
+      expect(row.paidAmount).toBe('400.00');
+      expect(row.remaining).toBe('0.00');
+      expect(row.payments).toHaveLength(1);
+      expect(row.payments[0]).toMatchObject({
+        method: null, // no payment-method column exists for anonymous exits
+        receiverId: 'u-youssef',
+        receiverName: 'youssef',
+        creditedAmount: '400.00',
+      });
+    });
+
+    it('never writes anything — findAllGrouped is read-only (no create/update/delete calls on any model)', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ count: 1n }])
+        .mockResolvedValueOnce([{ key: 'exit-anon-3' }]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        {
+          id: 'exit-anon-3', invoiceId: null, date: new Date('2026-08-21'), clientId: null, recipient: null,
+          loggedBy: null, client: null, amount: '10.00', currency: 'USD', reason: null,
+          lotId: null, kgQuantity: null, bagTypeId: 'bt-1', quantity: 1,
+          bagType: { id: 'bt-1', name: 'Bag A', nominalKg: { toString: () => '10.000' } },
+          packedStock: { lot: { charcoalType: 'Oak', grade: 'A' } },
+          collectedById: null, collectedBy: null,
+        },
+      ]);
+
+      await service.findAllGrouped(1, 20, 'walk_in');
+
+      expect(mockPrisma.stockExit.create).not.toHaveBeenCalled();
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      // accountEntry is only ever read here — no ledger-write mock is even
+      // wired into StockExitsService.findAllGrouped's dependencies.
+      expect(mockLedgerWriteService.creditAccount).not.toHaveBeenCalled();
+      expect(mockLedgerWriteService.debitAccount).not.toHaveBeenCalled();
+    });
+
+    it('returns a standalone (invoiceId=null) exit as its own one-line group, with the raw exit attached', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ count: 1n }])
+        .mockResolvedValueOnce([{ key: 'exit-anon-1' }]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        {
+          id: 'exit-anon-1', invoiceId: null, date: new Date('2026-08-19'), clientId: null, recipient: null,
+          loggedBy: { id: 'u1', name: 'Sam' }, amount: '5.00', currency: 'USD', reason: null,
+          lotId: null, kgQuantity: null, bagTypeId: 'bt-1', quantity: 2,
+          bagType: { id: 'bt-1', name: 'Bag A', nominalKg: { toString: () => '10.000' } },
+          packedStock: { lot: { charcoalType: 'Oak', grade: 'A' } },
+        },
+      ]);
+
+      const result = await service.findAllGrouped(1, 20, 'walk_in');
+
+      expect(result.data).toHaveLength(1);
+      const row: any = result.data[0];
+      expect(row.id).toBe('exit-anon-1');
+      expect(row.invoiceId).toBeNull();
+      expect(row.lineCount).toBe(1);
+      expect(row.totalQtyBags).toBe(2);
+      expect(row.totalKg).toBe('20.000');
+      expect(row.rawExit).toBeDefined();
+      expect(row.rawExit.id).toBe('exit-anon-1');
+      expect(mockPrisma.bagType.findMany).not.toHaveBeenCalled(); // no invoice lines to resolve nominalKg for
+    });
+
+    it('preserves the page-key order returned by the database, not natural object-insertion order', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ count: 2n }])
+        .mockResolvedValueOnce([{ key: 'exit-b' }, { key: 'exit-a' }]); // b before a
+      mockPrisma.stockExit.findMany.mockResolvedValue([
+        { id: 'exit-a', invoiceId: null, date: new Date('2026-08-18'), clientId: null, recipient: null, loggedBy: null, amount: null, currency: 'USD', reason: null, lotId: null, kgQuantity: null, bagTypeId: null, quantity: null, bagType: null, packedStock: null },
+        { id: 'exit-b', invoiceId: null, date: new Date('2026-08-19'), clientId: null, recipient: null, loggedBy: null, amount: null, currency: 'USD', reason: null, lotId: null, kgQuantity: null, bagTypeId: null, quantity: null, bagType: null, packedStock: null },
+      ]);
+
+      const result = await service.findAllGrouped(1, 20);
+
+      expect(result.data.map((r: any) => r.id)).toEqual(['exit-b', 'exit-a']);
+    });
+
+    it('returns an empty page without querying stockExit.findMany when no group keys match', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ count: 0n }])
+        .mockResolvedValueOnce([]);
+
+      const result = await service.findAllGrouped(1, 20, 'walk_in');
+
+      expect(result).toEqual({ data: [], total: 0, page: 1, limit: 20 });
       expect(mockPrisma.stockExit.findMany).not.toHaveBeenCalled();
     });
   });

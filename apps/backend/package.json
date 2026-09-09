@@ -12,16 +12,19 @@
     "test:e2e": "jest --config ./jest-e2e.json",
     "test:integration": "jest --config ./jest-integration.json",
     "prisma:generate": "prisma generate",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "cash-handover-correction": "ts-node scripts/cash-handover-correction.ts"
   },
   "dependencies": {
     "@clerk/clerk-sdk-node": "^4.0.0",
+    "@google-cloud/translate": "^9.4.2",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.0.0",
     "@nestjs/core": "^10.0.0",
     "@nestjs/mapped-types": "^2.1.1",
     "@nestjs/passport": "^10.0.0",
     "@nestjs/platform-express": "^10.0.0",
+    "@nestjs/schedule": "^6.1.3",
     "@nestjs/swagger": "^8.1.1",
     "@prisma/client": "^5.14.0",
     "class-transformer": "^0.5.0",

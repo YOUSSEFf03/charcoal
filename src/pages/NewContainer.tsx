@@ -192,7 +192,7 @@ export default function NewContainer() {
                       <span className="lbl">$ / ton</span>
                       <input className="num" type="number" min="0" value={l.dollarPerTon || ''} onChange={e => updateLine(l.id, 'dollarPerTon', parseFloat(e.target.value) || 0)} />
                     </div>
-                    <button className="line-del" onClick={() => removeLine(l.id)} disabled={lines.length === 1}>
+                    <button className="line-del" aria-label="Remove line" onClick={() => removeLine(l.id)} disabled={lines.length === 1}>
                       <i className="ti ti-x" style={{ fontSize: 13 }} />
                     </button>
                   </div>

@@ -296,6 +296,13 @@ body {
 .tab.active .tab-count { background: var(--text); color: #fff; }
 
 /* ── TABLES ── */
+/* Wraps every <table class="data-table"> so a wide table scrolls horizontally
+   INSIDE its own box instead of pushing the whole page into overflow. The
+   table keeps width:100% when it fits, but min-width:max-content stops it
+   from being squeezed narrower than its content once the wrapper is scrolling
+   — see the frontend-wide navigation/overflow audit. */
+.table-scroll { overflow-x: auto; }
+.table-scroll > .data-table { min-width: max-content; }
 .data-table { width: 100%; border-collapse: collapse; }
 .data-table th {
   text-align: left;
@@ -462,6 +469,13 @@ body {
 
 .pd-body { flex: 1; overflow-y: auto; padding: 20px 24px 0; }
 
+/* Production-summary headline — the "5 second" answer to what came out. */
+.pd-headline { padding-bottom: 4px; }
+.pd-headline-main { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+.pd-headline-qty { font-family: 'IBM Plex Mono', monospace; }
+.pd-headline-sep { margin: 0 8px; color: var(--text3); }
+.pd-headline-sub { font-size: 13px; color: var(--text2); margin-top: 3px; }
+
 .pd-section-label {
   font-size: 10.5px;
   font-family: 'IBM Plex Mono', monospace;
@@ -498,6 +512,7 @@ body {
   overflow: hidden;
   margin: 10px 0 4px;
 }
+.pd-waste-bar-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
 .pd-wc { background: var(--surface); padding: 10px 14px; text-align: center; }
 .pd-wc .wl { font-size: 10px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 5px; }
 .pd-wc .wv { font-size: 17px; font-weight: 700; letter-spacing: -0.5px; }
@@ -1012,8 +1027,6 @@ tr.entry-clickable:hover td { background: var(--surface2); }
 .pay-big-input { width:100%; padding:12px 14px; border:1.5px solid var(--border); border-radius:var(--radius); font-size:22px; font-family:'IBM Plex Mono',monospace; font-weight:600; text-align:right; outline:none; background:var(--surface); transition:border-color 0.15s; margin-bottom:10px; }
 .pay-big-input:focus { border-color:var(--text); }
 .two-col-detail { display:grid; grid-template-columns:1fr 340px; gap:20px; align-items:start; }
-.back-btn { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text2); cursor:pointer; padding:5px 10px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); transition:all 0.1s; }
-.back-btn:hover { background:var(--surface2); color:var(--text); }
 
 /* ── WAREHOUSE PAGE ── */
 .summary-bar { display:grid; grid-template-columns:repeat(5,1fr); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:20px; animation:fadeUp 0.3s ease both; }
@@ -1460,6 +1473,10 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 .cost-value { font-family: 'IBM Plex Mono', monospace; }
 .cost-value.green { color: var(--accent); }
 .cost-value.red { color: var(--red); }
+
+/* ── Container detail: compact shipment tracking summary ── */
+.tracking-field-label { font-size: 10.5px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; font-family: 'IBM Plex Mono', monospace; margin-bottom: 3px; }
+.tracking-field-value { font-size: 13px; color: var(--text); font-weight: 500; }
 
 /* product cell inside table */
 .product-cell { display: flex; flex-direction: column; gap: 2px; }
@@ -2230,9 +2247,9 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 .today-head h3 { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; margin: 0; }
 .today-head h3 .day { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text3); font-weight: 400; margin-left: 4px; text-transform: uppercase; letter-spacing: 0.6px; }
 .today-foot { border-top: 1px solid var(--border); background: var(--surface2); display: grid; }
-.today-foot .fc { padding: 12px 14px; border-right: 1px solid var(--border); }
+.today-foot .fc { padding: 12px 14px; border-right: 1px solid var(--border); min-width: 0; }
 .today-foot .fc:last-child { border-right: none; }
-.today-foot .fc .flbl { font-size: 10px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px; }
+.today-foot .fc .flbl { font-size: 10px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .today-foot .fc .fv { font-family: 'IBM Plex Mono', monospace; font-size: 18px; font-weight: 600; color: var(--text); margin-top: 3px; }
 .today-foot .fc.total .fv { color: var(--accent); }
 .qty-chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -2266,33 +2283,66 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 .month-bar { padding: 12px 20px; background: var(--text); color: #fff; font-size: 11.5px; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 1.5px; display: flex; justify-content: space-between; align-items: baseline; }
 .month-bar .month-totals { color: rgba(255,255,255,0.7); font-weight: 400; letter-spacing: 0.5px; }
 .month-bar .month-totals strong { color: #fff; font-weight: 600; }
-.detail-kpis { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 22px; }
-.detail-kpis .dkc { padding: 18px 20px; border-right: 1px solid var(--border); }
+/* Packing Session Detail — laptop-responsive audit (2026-09-07). Root cause
+   of the reported overflow: CSS grid/flex items default to min-width:auto,
+   so a long UNBROKEN bag-type name (e.g. a generated test name with no
+   spaces) refused to shrink below its own intrinsic width — forcing the
+   .detail-kpis grid track (and the whole page) wider than the viewport, and
+   forcing .breakdown-row's fixed-width name column to visually overflow
+   into the quantity column next to it. Every text-bearing cell below now
+   gets min-width:0 (or min-width:0 on its grid/flex item) plus
+   overflow:hidden + text-overflow:ellipsis (or overflow-wrap for
+   already-wrapping chip text), with the full name always available via a
+   title tooltip — never removed from the data, just visually contained. */
+.detail-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 22px; }
+.detail-kpis .dkc { padding: 14px 16px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); min-width: 0; }
 .detail-kpis .dkc:last-child { border-right: none; }
-.detail-kpis .dklbl { font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px; }
-.detail-kpis .dkv { font-size: 26px; font-weight: 600; letter-spacing: -0.6px; margin-top: 4px; line-height: 1; }
-.detail-kpis .dksub { font-size: 11px; color: var(--text3); margin-top: 5px; font-family: 'IBM Plex Mono', monospace; }
+/* Zero-quantity bag types stay visible (the section means "every available
+   bag type") but visually recede so the actually-packed types stand out —
+   business intent confirmed: this list is deliberately exhaustive. */
+.detail-kpis .dkc:not(.green) { opacity: 0.55; }
+.detail-kpis .dklbl { font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-kpis .dkv { font-size: 24px; font-weight: 600; letter-spacing: -0.6px; margin-top: 4px; line-height: 1; }
+.detail-kpis .dksub { font-size: 11px; color: var(--text3); margin-top: 5px; font-family: 'IBM Plex Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail-kpis .dkc.green .dkv { color: var(--accent); }
-.breakdown-row { display: grid; grid-template-columns: 110px 70px 1fr 90px; gap: 14px; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.breakdown-row { display: grid; grid-template-columns: minmax(0, 200px) 64px minmax(90px, 1fr) 90px; gap: 12px; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .breakdown-row:last-child { border-bottom: none; }
-.breakdown-row .btype { font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 14px; }
-.breakdown-row .btype small { font-size: 10.5px; color: var(--text3); font-weight: 400; margin-left: 4px; }
-.breakdown-row .bqty { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 600; text-align: right; letter-spacing: -0.5px; }
+/* Dims an unpacked type without hiding it (see .dkc:not(.green) above). */
+.breakdown-row.zero { opacity: 0.55; }
+.breakdown-row .btype { display: flex; align-items: baseline; gap: 4px; min-width: 0; font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 14px; }
+/* The name is the only part allowed to shrink/truncate — the "· nominal kg"
+   suffix stays fully visible (flex-shrink:0) regardless of name length. */
+.breakdown-row .btype-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.breakdown-row .btype small { flex-shrink: 0; font-size: 10.5px; color: var(--text3); font-weight: 400; white-space: nowrap; }
+.breakdown-row .bqty { font-family: 'IBM Plex Mono', monospace; font-size: 18px; font-weight: 600; text-align: right; letter-spacing: -0.5px; white-space: nowrap; }
 .breakdown-row .bqty small { font-size: 11px; color: var(--text3); font-weight: 400; margin-left: 3px; }
-.breakdown-row .bbar { height: 28px; background: var(--surface2); border-radius: 6px; overflow: hidden; }
-.breakdown-row .bfill { height: 100%; background: var(--accent); opacity: 0.85; border-radius: 6px 0 0 6px; }
-.breakdown-row .bkg { font-family: 'IBM Plex Mono', monospace; font-weight: 500; color: var(--accent); text-align: right; font-size: 14px; }
+/* Compact bar — communicates relative quantity without dominating the row
+   (was 28px tall and stretched to fill the whole 1fr track before). */
+.breakdown-row .bbar { height: 14px; min-width: 80px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.breakdown-row .bfill { height: 100%; background: var(--accent); opacity: 0.85; border-radius: 4px 0 0 4px; }
+.breakdown-row .bkg { font-family: 'IBM Plex Mono', monospace; font-weight: 500; color: var(--accent); text-align: right; font-size: 14px; white-space: nowrap; }
 .breakdown-row.btotal { background: var(--surface2); }
-.entries-list .entry-row { display: grid; grid-template-columns: 80px 1fr 100px 90px; gap: 14px; align-items: center; padding: 11px 20px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.breakdown-row.btotal.zero { opacity: 1; }
+.entries-list .entry-row { display: grid; grid-template-columns: 76px minmax(0, 1fr) 110px 84px; gap: 14px; align-items: center; padding: 11px 20px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .entries-list .entry-row:last-child { border-bottom: none; }
 .entries-list .entry-row.ehead { background: var(--surface2); padding: 8px 20px; font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.6px; }
-.entries-list .entry-row .etime { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text2); }
-.entries-list .entry-row .echips { display: flex; flex-wrap: wrap; gap: 6px; }
+.entries-list .entry-row .etime { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text2); white-space: nowrap; }
+/* The "Bag & charcoal" cell — the row's one flexible column. min-width:0 is
+   required so its content (the chip list) can actually shrink instead of
+   forcing this grid track (and the whole table) wider than the viewport. */
+.entries-list .entry-row .entry-main { min-width: 0; }
+.entries-list .entry-row .echips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .entries-list .entry-row .etot { font-family: 'IBM Plex Mono', monospace; font-weight: 600; text-align: right; font-size: 14px; }
 .entries-list .entry-row .etot small { font-size: 10.5px; color: var(--text3); font-weight: 400; text-transform: uppercase; letter-spacing: 0.5px; margin-left: 3px; }
 .entries-list .entry-row .ekg { font-family: 'IBM Plex Mono', monospace; color: var(--accent); text-align: right; font-weight: 500; }
-.entries-list .entry-row .eworker { font-size: 12.5px; color: var(--text2); }
-.entries-list .entry-row .ewaste { font-family: 'IBM Plex Mono', monospace; font-weight: 600; text-align: right; font-size: 13px; }
+.entries-list .entry-row .eworker { font-size: 12.5px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entries-list .entry-row .ewaste { font-family: 'IBM Plex Mono', monospace; font-weight: 600; text-align: right; font-size: 13px; white-space: nowrap; }
+/* A single chip's own text is one unbroken token in the worst case (a long
+   generated bag-type name) — flex-wrap on .echips already wraps chip-to-chip
+   safely, this is the last line of defense against one chip's TEXT alone
+   being wider than the available column. */
+.qty-chip { min-width: 0; max-width: 100%; }
+.qty-chip .t { overflow-wrap: anywhere; }
 .entries-list .entry-row.clickable { cursor: pointer; }
 .entries-list .entry-row.clickable:hover { background: var(--surface2); }
 .pack-empty { padding: 40px 20px; text-align: center; color: var(--text3); }
@@ -2370,6 +2420,39 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 /* Empty preferred state */
 .pref-empty { padding: 14px 18px; color: var(--text3); font-size: 12.5px; }
 
+/* ── Responsive (Phase 2 UI/UX audit) ─────────────────────────────────
+   The app previously had zero responsive breakpoints — every multi-column
+   KPI/summary grid used a fixed column count regardless of viewport width.
+   On a 1366×768 laptop that's fine, but at 1280×720 and especially
+   1024×768 (both explicitly in scope) a 4-5 column KPI row or a two-column
+   detail layout with a fixed-width side panel gets uncomfortably cramped.
+   These rules only ever REDUCE column count / stack layout at narrower
+   widths — they never change anything at the >1280px sizes the app was
+   designed and visually tuned at. */
+@media (max-width: 1280px) {
+  .kpi-row, .grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .summary-bar, .kpi-strip { grid-template-columns: repeat(3, 1fr); }
+  .supplier-grid, .packed-grid, .grid-3, .three-col { grid-template-columns: repeat(2, 1fr); }
+  .two-col, .two-col-detail { grid-template-columns: 1fr; }
+}
+@media (max-width: 900px) {
+  .kpi-row, .grid-4, .grid-3, .grid-2, .grid-2c, .grid-3c,
+  .three-col, .supplier-grid, .packed-grid, .summary-bar, .kpi-strip, .bal-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .form-row, .form-row-3 { grid-template-columns: 1fr; }
+}
+
+/* Modals and slide-in panels are sized for desktop; on a narrow window
+   (or the mobile driver views) a fixed 480-680px modal or 500-600px panel
+   can run wider than the viewport itself, clipping its own footer actions.
+   These are safety caps only — width is unchanged until the viewport
+   actually gets that narrow. */
+.modal { max-width: calc(100vw - 32px); }
+.slide-panel, .order-panel, .inv-panel, .sup-panel, .lot-panel, .pack-detail-panel {
+  max-width: calc(100vw - 24px);
+}
+
 /* ── Print ─────────────────────────────────────────────────────────────
    App-wide print support. Every window.print() call in the app (Reports'
    Print Report, ClientDetail's/SupplierDetail's statement Print buttons)
@@ -2383,5 +2466,134 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
   .sidebar, .topbar, .no-print { display: none !important; }
   .print-only { display: block !important; }
   body { background: #fff; }
+}
+
+/* ── Delivery Receipt (Order /:id → Print Delivery Receipt) ─────────────
+   Real HTML/CSS document, not a raster export — see
+   src/components/receipt/DeliveryReceiptDocument.tsx and
+   src/pages/DeliveryReceiptPrint.tsx. Width is physical (mm units, matching
+   the selected @page size in DeliveryReceiptPrint.tsx); height is intrinsic
+   content height — never fixed/A4. `[data-w]` scales typography per paper
+   width; `[data-compact]` (80mm only) switches the EN/AR field rows and
+   items table from side-by-side to stacked, since 80mm has no room for two
+   full-width columns. */
+.dr-page {
+  background: #fff;
+  color: #1a1a1a;
+  font-family: 'IBM Plex Sans', sans-serif;
+  box-sizing: border-box;
+  margin: 0 auto;
+  border: 1.5px solid #1a1a1a;
+  padding: 6mm;
+}
+.dr-page[data-w="80"]   { width: 80mm;  padding: 3mm; font-size: 7.3px; }
+.dr-page[data-w="150"]  { width: 150mm; padding: 5mm; font-size: 9.5px; }
+.dr-page[data-w="180"]  { width: 180mm; padding: 6mm; font-size: 10.5px; }
+.dr-page[data-w="210"]  { width: 210mm; padding: 8mm; font-size: 11.5px; }
+
+.dr-logo-row { display: flex; justify-content: center; margin-bottom: 0.6em; }
+.dr-logo { height: 6em; width: auto; }
+
+.dr-title-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.4em; }
+.dr-title-en { font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 2em; letter-spacing: 0.5px; }
+.dr-title-ar { font-family: 'Noto Sans Arabic', sans-serif; font-weight: 700; font-size: 2em; direction: rtl; }
+.dr-page[data-compact] .dr-title-row { flex-direction: column; align-items: center; gap: 0.15em; text-align: center; }
+
+.dr-rule { border: none; border-top: 1.3px solid #1a1a1a; margin: 0.5em 0; }
+.dr-rule-thick { border-top-width: 1.8px; margin-bottom: 0.7em; }
+
+.dr-bi-row { display: flex; gap: 1em; margin: 0.35em 0; }
+.dr-page[data-compact] .dr-bi-row { flex-direction: column; gap: 0.15em; }
+.dr-field { flex: 1 1 50%; display: flex; gap: 0.4em; align-items: baseline; min-width: 0; }
+.dr-field.dr-ar { direction: rtl; font-family: 'Noto Sans Arabic', sans-serif; text-align: right; }
+.dr-label { font-weight: 700; white-space: nowrap; }
+.dr-colon { flex: 0 0 auto; }
+.dr-value { overflow-wrap: anywhere; }
+.dr-th-ar { font-family: 'Noto Sans Arabic', sans-serif; font-weight: 400; }
+
+.dr-table { width: 100%; border-collapse: collapse; margin-top: 0.5em; table-layout: fixed; }
+.dr-table th, .dr-table td { border: 1px solid #1a1a1a; padding: 0.5em 0.4em; text-align: left; vertical-align: top; word-wrap: break-word; }
+.dr-table thead th { background: #f3f2ef; font-size: 0.92em; line-height: 1.35; }
+.dr-table thead .dr-th-ar { display: block; font-size: 0.95em; }
+.dr-c-no { width: 6%; text-align: center; }
+.dr-page[data-compact] .dr-c-no { width: 11%; }
+.dr-page[data-compact] .dr-table thead th { font-size: 0.85em; padding: 0.4em 0.3em; }
+.dr-c-desc { width: auto; }
+.dr-c-type { width: 16%; }
+.dr-c-unit { width: 12%; }
+.dr-c-qty { width: 10%; text-align: right; }
+.dr-c-price { width: 14%; text-align: right; }
+.dr-c-total { width: 14%; text-align: right; }
+.dr-table td.dr-c-no, .dr-table td.dr-c-qty, .dr-table td.dr-c-price, .dr-table td.dr-c-total { text-align: right; }
+.dr-table td.dr-c-no { text-align: center; }
+.dr-desc-ar { direction: rtl; font-family: 'Noto Sans Arabic', sans-serif; text-align: right; font-size: 0.95em; margin-top: 0.15em; }
+.dr-desc-sub { color: #5a5750; font-size: 0.88em; margin-top: 0.15em; }
+
+.dr-totals-row { display: flex; border: 1px solid #1a1a1a; border-top: none; }
+.dr-totals-cell { flex: 1; padding: 0.5em 0.6em; border-left: 1px solid #1a1a1a; font-weight: 700; }
+.dr-totals-cell:first-child { border-left: none; }
+.dr-totals-amount { display: flex; align-items: center; justify-content: space-between; gap: 0.6em; }
+.dr-totals-value { font-size: 1.3em; font-weight: 700; }
+.dr-totals-value-lg { font-size: 1.7em; }
+
+.dr-notes-row { display: flex; align-items: baseline; gap: 0.5em; margin-top: 1em; padding-bottom: 1.4em; border-bottom: 1px solid #1a1a1a; }
+.dr-notes-line { flex: 1; font-family: 'Noto Sans Arabic', sans-serif; direction: rtl; text-align: right; overflow-wrap: anywhere; }
+
+.dr-sig-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 1.5em; margin-top: 1.6em; }
+.dr-sig-block { flex: 1 1 55%; }
+.dr-sig-line { border-top: 1px solid #1a1a1a; width: 70%; margin-top: 2.2em; }
+.dr-sig-total { text-align: right; }
+.dr-page[data-compact] .dr-sig-row { flex-direction: column; align-items: stretch; gap: 1em; }
+.dr-page[data-compact] .dr-sig-total { text-align: left; }
+
+.dr-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.3em 1.2em; margin-top: 1.6em; padding-top: 0.6em; border-top: 1px solid #1a1a1a; font-size: 0.85em; color: #3a3832; }
+.dr-footer .dr-th-ar { margin-left: 0.35em; }
+.dr-page[data-compact] .dr-footer { flex-direction: column; align-items: center; text-align: center; gap: 0.25em; }
+
+@media print {
+  .dr-print-shell { background: #fff !important; padding: 0 !important; }
+  .dr-page { border: none; }
+}
+
+/* ── Full Day Report (Reports → Full Day Report tab → Print) ─────────────
+   Real HTML/CSS document, not a raster export — see
+   src/pages/DailyReportPrint.tsx. Fixed A4 width (210mm); height is
+   intrinsic content height, spanning multiple printed pages via the
+   browser's own pagination — same "no canvas, no fixed A4 height" approach
+   .dr-page already uses. */
+.day-report-shell { background: #e9e8e4; min-height: 100vh; padding: 28px 16px 60px; display: flex; flex-direction: column; align-items: center; }
+.day-report {
+  background: #fff; color: #1a1a1a; font-family: 'IBM Plex Sans', sans-serif;
+  box-sizing: border-box; width: 210mm; max-width: 100%; padding: 12mm; margin: 0 auto;
+  font-size: 11px;
+}
+.day-report-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1a1a1a; padding-bottom: 10px; margin-bottom: 14px; }
+.day-report-logo { height: 3.2em; width: auto; }
+.day-report-title { font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 1.6em; }
+.day-report-meta { text-align: right; font-size: 0.95em; color: #5a5750; }
+
+.day-report-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
+.day-report-kpi { border: 1px solid #ddd9cf; border-radius: 4px; padding: 8px 10px; background: #faf9f6; }
+.day-report-kpi-label { font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.4px; color: #8a877e; }
+.day-report-kpi-value { font-size: 1.25em; font-weight: 700; margin-top: 2px; }
+
+.day-report-section { margin-bottom: 16px; break-inside: avoid; }
+.day-report-section-title { font-size: 1.05em; font-weight: 700; border-bottom: 1.3px solid #1a1a1a; padding-bottom: 4px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: baseline; }
+.day-report-section-count { font-size: 0.75em; color: #8a877e; font-weight: 400; }
+.day-report-empty { color: #9b9890; font-style: italic; padding: 6px 0; font-size: 0.92em; }
+.day-report-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+.day-report table { width: 100%; border-collapse: collapse; font-size: 0.92em; }
+.day-report th, .day-report td { border: 1px solid #ddd9cf; padding: 4px 6px; text-align: left; vertical-align: top; }
+.day-report th { background: #f3f2ef; font-weight: 600; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.3px; color: #5a5750; }
+.day-report td.num, .day-report th.num { text-align: right; font-family: 'IBM Plex Mono', monospace; }
+
+.day-report-exceptions { list-style: none; padding: 0; margin: 0; }
+.day-report-exceptions li { padding: 5px 8px; border-left: 3px solid #b03a2e; background: #fbeceb; margin-bottom: 4px; font-size: 0.92em; }
+
+@media print {
+  .day-report-shell { background: #fff !important; padding: 0 !important; }
+  .day-report { border: none; width: auto; }
+  .day-report-section { break-inside: avoid; }
 }
 

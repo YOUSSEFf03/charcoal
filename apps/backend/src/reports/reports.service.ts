@@ -5,6 +5,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { SubmitPhysicalCountDto } from './dto/physical-count.dto';
 import { buildGeneralExpenseWhere } from '../general-expenses/general-expenses.service';
+import { ClientBalanceService } from '../clients/client-balance.service';
+import { StockExitsService } from '../stock-exits/stock-exits.service';
 
 interface DateRangeFilter {
   /**
@@ -85,6 +87,63 @@ function nextDateOnlyString(dateOnlyStr: string): string {
   return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
 }
 
+/** `dateOnlyStr` ("YYYY-MM-DD") shifted backward by exactly one calendar day, same format. */
+function previousDateOnlyString(dateOnlyStr: string): string {
+  const [year, month, day] = dateOnlyStr.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
+}
+
+/**
+ * Validates an OPTIONAL "YYYY-MM-DD" query param — same format/calendar
+ * check getDailyReport() already applies to its own (required) `date` path
+ * param, generalized for a param that may legitimately be absent.
+ *
+ * Root-cause fix (2026-09 "Invalid time value" audit): getDailyRevenue()
+ * used `filters.dateFrom ?? beirutDay(...)` to decide its loop's start/end
+ * day. `??` only falls back on null/undefined — an EMPTY STRING (a cleared
+ * `<input type="date">` sent as `dateFrom=` rather than omitted entirely,
+ * or any other caller sending `''`) is neither, so it was used LITERALLY as
+ * the loop's starting date string. The very first iteration then called
+ * nextDateOnlyString('') → `''.split('-').map(Number)` → `[0]` → destructures
+ * to `{year: 0, month: undefined, day: undefined}` → `Date.UTC(0, NaN, NaN)`
+ * is `NaN` → `new Date(NaN).toISOString()` throws exactly
+ * `RangeError: Invalid time value` — matching the reported stack trace at
+ * getDailyRevenue()'s loop, not this file's date-range-filter helpers.
+ *
+ * This function closes that gap at the boundary: an empty string is
+ * normalized to "not provided" (preserving this endpoint's existing
+ * contract — omitted dateFrom/dateTo falls back to the default lookback
+ * window), while a non-empty value that is malformed OR names a calendar
+ * date that doesn't exist (e.g. "2026-02-31") is rejected with the SAME
+ * client-error shape getDailyReport() already uses — never silently
+ * defaulted to today, never allowed to reach Date.prototype.toISOString()
+ * in an invalid state.
+ */
+function validateOptionalDateOnly(value: string | undefined, paramName: string): string | undefined {
+  if (value === undefined || value === '') return undefined;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  // Format check first — same shape getDailyReport() already requires.
+  // Calendar-validity check second: unlike getDailyReport()'s plain
+  // `new Date(str).getTime()` check, V8's Date STRING parser silently rolls
+  // an out-of-range day/month over into the next month/year instead of
+  // producing Invalid Date (verified: `new Date('2026-02-31').getTime()` is
+  // a valid number — March 3, 2026 — not NaN). Round-tripping through
+  // Date.UTC's numeric constructor (the SAME technique nextDateOnlyString/
+  // previousDateOnlyString above already use for date-only arithmetic) and
+  // comparing the read-back Y/M/D against the input catches that silent
+  // rollover, so "2026-02-31" is correctly rejected rather than silently
+  // reinterpreted as March 3.
+  if (match) {
+    const [, y, m, d] = match;
+    const year = Number(y), month = Number(m), day = Number(d);
+    const asUtc = new Date(Date.UTC(year, month - 1, day));
+    if (asUtc.getUTCFullYear() === year && asUtc.getUTCMonth() === month - 1 && asUtc.getUTCDate() === day) {
+      return value;
+    }
+  }
+  throw new BadRequestException({ error: `${paramName} must be a valid YYYY-MM-DD string`, code: 'VALIDATION_ERROR' });
+}
+
 /** How far back to look when neither dateFrom nor dateTo is supplied. */
 export const DEFAULT_LOOKBACK_DAYS = 90;
 
@@ -116,6 +175,8 @@ export class ReportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly settingsService: SettingsService,
+    private readonly clientBalanceService: ClientBalanceService,
+    private readonly stockExitsService: StockExitsService,
   ) {}
 
   /**
@@ -474,7 +535,12 @@ export class ReportsService {
    * Every day in the range is included (zero-filled), not just days with
    * revenue, so the chart's x-axis is continuous.
    */
-  async getDailyRevenue(filters: { dateFrom?: string; dateTo?: string }) {
+  async getDailyRevenue(rawFilters: { dateFrom?: string; dateTo?: string }) {
+    // Validate/normalize BEFORE anything below ever reads these values — see
+    // validateOptionalDateOnly()'s doc comment for the exact crash this closes.
+    const dateFrom = validateOptionalDateOnly(rawFilters.dateFrom, 'dateFrom');
+    const dateTo   = validateOptionalDateOnly(rawFilters.dateTo, 'dateTo');
+    const filters = { dateFrom, dateTo };
     const dateFilter = buildDateFilterWithDefault(filters.dateFrom, filters.dateTo);
     // se.date (a @db.Date column) bounds — unchanged, still correct as-is.
     const rangeFrom = dateFilter.gte as Date;
@@ -485,6 +551,27 @@ export class ReportsService {
     // next-day start is later), so this range always fully contains the other.
     const businessRangeFrom = dateFilter.businessGte as Date;
     const businessRangeTo   = dateFilter.businessLt ?? new Date();
+
+    // Resolved start/end of the zero-fill loop below — computed HERE (before
+    // any database query) so an effectively-reversed range can be rejected
+    // up front. Prefer the caller's own date strings directly when given —
+    // they're exactly what businessRangeFrom/businessRangeTo were derived
+    // from, so no round-trip through Intl is needed (or risked) in the
+    // common, explicit-range case. Only the no-args default-lookback path
+    // (an arbitrary "now − N days" instant, not aligned to any day boundary
+    // — a pre-existing imprecision of that default, not something this fix
+    // changes) needs deriving the boundary days from the instants themselves.
+    const beirutDay = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: BUSINESS_TIMEZONE }).format(d);
+    const startDay = filters.dateFrom ?? beirutDay(businessRangeFrom);
+    const endDay   = filters.dateTo   ?? beirutDay(new Date(businessRangeTo.getTime() - 1));
+    // Guard against an effectively-reversed range — e.g. an omitted/empty
+    // dateFrom defaults to TODAY while an explicit past dateTo stays in the
+    // past, which would otherwise start the day-loop below AFTER its own end
+    // and never terminate (the earlier dateFrom>dateTo check above only
+    // catches the case where BOTH were explicitly supplied and reversed).
+    if (startDay > endDay) {
+      throw new BadRequestException({ error: 'dateFrom must not be after dateTo', code: 'VALIDATION_ERROR' });
+    }
 
     // Same single-resolve-per-call rate as getProfitLoss — see its docstring.
     const rate = new Decimal(await this.settingsService.getExchangeRate());
@@ -553,17 +640,7 @@ export class ReportsService {
     // unaffected by this fix), which for an explicit dateFrom/dateTo resolves to
     // exactly [startDay, endDay] too — never wider. So neither source can ever
     // produce a key outside this loop's range; nothing to silently lose.
-    const beirutDay = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: BUSINESS_TIMEZONE }).format(d);
-    // Prefer the caller's own date strings directly when given — they're exactly
-    // what businessRangeFrom/businessRangeTo were derived from, so no round-trip
-    // through Intl is needed (or risked) in the common, explicit-range case.
-    // Only the no-args default-lookback path (an arbitrary "now − N days" instant,
-    // not aligned to any day boundary — a pre-existing imprecision of that default,
-    // not something this fix changes) needs deriving the boundary days from the
-    // instants themselves.
-    const startDay = filters.dateFrom ?? beirutDay(businessRangeFrom);
-    const endDay   = filters.dateTo   ?? beirutDay(new Date(businessRangeTo.getTime() - 1));
-
+    // (startDay/endDay were already resolved and range-checked above.)
     const data: { date: string; revenue: string }[] = [];
     let totalRevenue = new Decimal(0);
     for (let day = startDay; ; day = nextDateOnlyString(day)) {
@@ -1180,19 +1257,30 @@ export class ReportsService {
 
   // ── Ledger description helpers ───────────────────────────────────────────────
 
-  private buildInvoiceDescription(source: string | null, lines: any[]): string {
+  /**
+   * @param locationName - Multiple-locations audit, 2026-08-31: the order's
+   *   ClientLocation.name, when this invoice was raised from an order placed
+   *   for one (see the `order.location` select at this method's call site).
+   *   Always null for a WAREHOUSE_SALE invoice or an order with no location
+   *   selected — never fabricated. Appended to the END of the existing
+   *   description string (never a separate field/column — see
+   *   ClientLedgerEntry: still just one `description` string), so every
+   *   existing reader of this string keeps working, just with more context.
+   */
+  private buildInvoiceDescription(source: string | null, lines: any[], locationName?: string | null): string {
     const prefix = source === 'WAREHOUSE_SALE' ? 'Warehouse Sale' : 'Order Sale';
-    if (!lines || lines.length === 0) return prefix;
-    const lineDescs = lines.map((l: any) => {
-      if (l.saleUnit === 'KG') {
-        return `${l.kgQuantity} kg ${l.description ?? ''}`.trim();
-      }
-      // BAG line — saleUnit may be absent on pre-Phase-3 lines; treat absent as BAG.
-      const qty  = l.qty ?? 0;
-      const name = l.bagTypeName ?? '';
-      return `${qty} × ${name}`;
-    });
-    return `${prefix} · ${lineDescs.join(' · ')}`;
+    const base = (!lines || lines.length === 0)
+      ? prefix
+      : `${prefix} · ${lines.map((l: any) => {
+          if (l.saleUnit === 'KG') {
+            return `${l.kgQuantity} kg ${l.description ?? ''}`.trim();
+          }
+          // BAG line — saleUnit may be absent on pre-Phase-3 lines; treat absent as BAG.
+          const qty  = l.qty ?? 0;
+          const name = l.bagTypeName ?? '';
+          return `${qty} × ${name}`;
+        }).join(' · ')}`;
+    return locationName ? `${base} - ${locationName}` : base;
   }
 
   private buildPaymentDescription(method: string): string {
@@ -1323,6 +1411,29 @@ export class ReportsService {
         select: {
           id: true, displayId: true, issuedAt: true, createdAt: true,
           total: true, source: true, lines: true, status: true,
+          // Forensic audit (2026-08-31): the Statement previously showed
+          // Invoice.displayId ("SI-xxxx") for every invoice entry — including
+          // one raised FROM an order, where the client/business user actually
+          // knows the transaction by its Order reference ("SO-xxxx", shown on
+          // Orders/OrderDetail and already resolved this same way in this
+          // file's own Invoices-tab INVOICES mapping via orderDisplayById).
+          // orderId + order.displayId are added here (not resolved client-side
+          // against a page-capped orders fetch — ClientDetail.tsx's own
+          // useOrders({ limit: 200 }) would silently miss the order for any
+          // client with >200 orders) so the entry can carry the true Order
+          // reference when one exists, and fall back to the invoice's own
+          // displayId otherwise (e.g. WAREHOUSE_SALE, which has no orderId).
+          orderId: true,
+          // Multiple-locations audit, 2026-08-31: order.location.name is the
+          // ONLY new thing read here — it's appended into the Statement's
+          // existing `description` string by buildInvoiceDescription() below
+          // (never a separate column/field on the entry — see that method's
+          // doc comment). Always null for a WAREHOUSE_SALE invoice (no
+          // orderId at all — see the orderId/orderDisplayId comment above),
+          // so a Warehouse Sale can never end up with a location in its
+          // description, structurally, without any Warehouse-Sale-specific
+          // guard code.
+          order: { select: { displayId: true, location: { select: { name: true } } } },
         },
         orderBy: { issuedAt: 'asc' },
       }),
@@ -1349,7 +1460,8 @@ export class ReportsService {
       // see the ClientDetail invoice-scalability audit. Not used in any balance
       // math here; the running-balance fold below is unchanged.
       | { kind: 'invoice'; date: Date; id: string; displayId: string | null;
-          total: Decimal; source: string | null; lines: any[]; status: string }
+          total: Decimal; source: string | null; lines: any[]; status: string;
+          orderId: string | null; orderDisplayId: string | null; locationName: string | null }
       | { kind: 'fillPickup'; date: Date; id: string; amount: Decimal; reason: string | null }
       | { kind: 'payment'; date: Date; id: string; displayId: string | null;
           amount: Decimal; method: string };
@@ -1364,6 +1476,9 @@ export class ReportsService {
         source:    inv.source as string | null,
         lines:     (inv.lines ?? []) as any[],
         status:    inv.status as string,
+        orderId:        inv.orderId,
+        orderDisplayId: inv.order?.displayId ?? null,
+        locationName:   inv.order?.location?.name ?? null,
       })),
       ...fillPickups.map((exit) => ({
         kind:   'fillPickup' as const,
@@ -1404,7 +1519,7 @@ export class ReportsService {
           type:           'invoice' as const,
           reference:      item.id,
           displayId:      item.displayId,
-          description:    this.buildInvoiceDescription(item.source, item.lines),
+          description:    this.buildInvoiceDescription(item.source, item.lines, item.locationName),
           debit:          item.total.toFixed(2),
           credit:         '0.00',
           runningBalance: runningBalance.toFixed(2),
@@ -1412,6 +1527,15 @@ export class ReportsService {
           // "open invoice" count (status not in paid/cancelled) from this
           // already-unbounded-per-client list, with no second invoice query.
           status:         item.status,
+          // Present on invoice entries only. `displayId` above stays the
+          // Invoice's own reference (unchanged — other callers/back-compat);
+          // orderId/orderDisplayId let a caller show the ORDER's reference
+          // instead when this invoice was raised from one (source: 'ORDER'),
+          // which is what the client actually knows the sale by (see
+          // Orders.tsx/OrderDetail.tsx, where order.displayId is the primary
+          // shown reference). null for a WAREHOUSE_SALE invoice (no order).
+          orderId:        item.orderId,
+          orderDisplayId: item.orderDisplayId,
         };
       } else if (item.kind === 'fillPickup') {
         runningBalance = runningBalance.plus(item.amount);
@@ -2014,5 +2138,578 @@ export class ReportsService {
       overdueCount:     Number(overdueResult[0]?.overdue_count   ?? 0),
       oldestOverdueDays: Number(overdueResult[0]?.oldest_days    ?? 0),
     };
+  }
+
+  // ===========================================================================
+  // Full Day Report (forensic audit, 2026-09) — a read-only, printable
+  // end-of-day business summary. Every figure below is READ from an existing
+  // authoritative model/service — nothing here invents a new accounting rule,
+  // and this method never calls create/update/upsert/delete on anything (see
+  // the read-only-proof test in reports.service.spec.ts).
+  //
+  // Date/timezone: uses buildDateFilter()/zonedMidnightUtc() exactly like
+  // every other report in this file. @db.Date columns (payments.date,
+  // stock_exits.date, cash_handovers.date, general_expenses.date,
+  // worker_costs.date, stock_lots.dateReceived, packing_sessions.date) are
+  // bounded by the plain gte/lte UTC-midnight pair; genuine DateTime columns
+  // (invoices.issuedAt, client_orders.createdAt) are bounded by the
+  // Asia/Beirut businessGte/businessLt pair — never mixed.
+  //
+  // Deduplication: a "sale" is either ONE Invoice (source ORDER or
+  // WAREHOUSE_SALE — both use the exact SAME accrual query getProfitLoss()/
+  // getArSummary() already use: issuedAt in range, status ∉ {draft,
+  // cancelled}) or ONE anonymous (no client, no invoice) walk-in StockExit.
+  // Deliberately NOT StockExitsService.findAllGrouped() — that method groups
+  // by COALESCE(invoiceId, id), but an ORDER invoice's StockExit rows never
+  // carry invoiceId at all (only WalkInSalesService ever sets it — see
+  // StockExit.invoiceId's schema doc comment), so a normal Client Order's
+  // FIFO-drain exits would each show up as their own zero-amount "on
+  // account" row instead of the one real Invoice.total sale it actually is.
+  // Reading Invoice directly sidesteps that mismatch entirely and needs no
+  // StockExit join for the (by far the most common) invoiced sale path.
+  // buildInvoiceDescription() is the SAME method the Client Statement of
+  // Account already uses, so a sale's description here can never disagree
+  // with what getClientLedger() would show for the identical invoice.
+  // Client receivables reuse ClientBalanceService.computeBalance()'s exact
+  // formula (date-bounded), the SAME balance figure shown everywhere else in
+  // this app.
+  //
+  // General expenses deliberately do NOT use buildGeneralExpenseWhere()'s
+  // "Option B" forward-recurrence semantics (confirmed business decision,
+  // Full Day Report audit Phase 1 §21.1) — a recurring expense appears ONLY
+  // on its own recorded `date`, never repeated onto every later day.
+  //
+  // Client receivables are scoped to clients with activity on the report day
+  // only (confirmed business decision, Phase 1 §21.2) — an inactive client
+  // never appears, even though its balance is still computable.
+  // ===========================================================================
+
+  async getDailyReport(date: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(new Date(date).getTime())) {
+      throw new BadRequestException({ error: 'date must be a valid YYYY-MM-DD string', code: 'VALIDATION_ERROR' });
+    }
+
+    // Both bounds resolved from the SAME date — gives the exact one-calendar-day
+    // window for every column kind in one call (gte/lte for @db.Date columns,
+    // businessGte/businessLt for genuine DateTime columns).
+    const day = buildDateFilter(date, date)!;
+    const dateColFilter = { gte: day.gte!, lte: day.lte! };
+    const businessFilter = { gte: day.businessGte!, lt: day.businessLt! };
+
+    const rate = new Decimal(await this.settingsService.getExchangeRate());
+    const toUsd = (amount: Decimal, currency: string): Decimal =>
+      currency === 'LBP' ? (rate.gt(0) ? amount.div(rate) : new Decimal(0)) : amount;
+    /** Consistent 2-decimal money formatting for every line-item field below. */
+    const fmt2 = (v: { toString(): string }): string => new Decimal(v.toString()).toFixed(2);
+
+    const [
+      issuedInvoicesToday,
+      anonymousWalkInsToday,
+      payments,
+      cashHandoverExpenses,
+      generalExpenses,
+      workerCosts,
+      cashHandovers,
+      ordersCreated,
+      deliveredOrderExits,
+      allExitsToday,
+      stockLotsReceived,
+      packingSessions,
+      accountEntriesToday,
+      onAccount,
+    ] = await Promise.all([
+      // Sales, part 1 — every invoiced sale (ORDER or WAREHOUSE_SALE), same
+      // accrual definition getProfitLoss()/getArSummary() already use. One
+      // row per Invoice — never touches StockExit, so a multi-lot FIFO drain
+      // can never inflate this.
+      this.prisma.invoice.findMany({
+        where: { issuedAt: businessFilter, status: { notIn: ['draft', 'cancelled'] } },
+        include: {
+          client: { select: { id: true, name: true } },
+          order: { select: { location: { select: { name: true } } } },
+        },
+        orderBy: { issuedAt: 'asc' },
+      }),
+      // Sales, part 2 — anonymous (no client, no invoice) walk-in exits,
+      // where StockExit.amount genuinely IS the sale price (see
+      // StockExitsService.getWarehouseCashSummary()'s own doc comment for
+      // why this is the one case that's authoritative).
+      this.prisma.stockExit.findMany({
+        where: { exitType: 'walk_in', clientId: null, invoiceId: null, amount: { not: null }, date: dateColFilter },
+        select: {
+          id: true, date: true, amount: true, currency: true, recipient: true, quantity: true, kgQuantity: true,
+          bagType: { select: { name: true } },
+          lot: { select: { charcoalType: true, grade: true } },
+        },
+      }),
+      this.prisma.payment.findMany({
+        where: { date: dateColFilter },
+        orderBy: { createdAt: 'asc' },
+        include: {
+          client: { select: { id: true, name: true } },
+          receiver: { select: { id: true, name: true } },
+          allocations: {
+            select: { amount: true, invoiceId: true, invoice: { select: { id: true, displayId: true, source: true } } },
+          },
+        },
+      }),
+      this.prisma.cashHandoverExpense.findMany({
+        where: { cashHandover: { date: dateColFilter } },
+        include: {
+          cashHandover: {
+            select: { id: true, date: true, receiverId: true, receiverName: true, receiver: { select: { id: true, name: true } } },
+          },
+          category: { select: { id: true, name: true } },
+        },
+      }),
+      // Full Day Report audit decision (Phase 1 §21.1): STRICT single-day
+      // filter — deliberately bypasses buildGeneralExpenseWhere()'s
+      // recurring-forward semantics used by the Expenses page / P&L.
+      this.prisma.generalExpense.findMany({ where: { date: dateColFilter }, orderBy: { date: 'asc' } }),
+      // Accrued wage cost only (WorkerCost) — WorkerPayment is a cash
+      // SETTLEMENT of already-accrued labor, never a second expense line
+      // (same exclusion getProfitLoss() already documents and applies).
+      this.prisma.workerCost.findMany({
+        where: { date: dateColFilter },
+        include: { worker: { select: { id: true, name: true } } },
+        orderBy: { date: 'asc' },
+      }),
+      this.prisma.cashHandover.findMany({
+        where: { date: dateColFilter },
+        orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+        include: {
+          receiver: { select: { id: true, name: true } },
+          loggedBy: { select: { id: true, name: true } },
+          expenses: { include: { category: { select: { id: true, name: true } } } },
+        },
+      }),
+      this.prisma.clientOrder.findMany({
+        where: { createdAt: businessFilter },
+        include: { client: { select: { id: true, name: true } }, location: { select: { id: true, name: true } } },
+        orderBy: { createdAt: 'asc' },
+      }),
+      // Delivery-day signal (Phase 1 §3 finding): ClientOrder has no
+      // deliveredAt column, and the now-common no-shipment path never creates
+      // a Shipment either — the exitType='order' StockExit row's own `date`
+      // (stamped at delivery time by both drainShipment() and
+      // drainPackedStockDirect()) is the one signal that works uniformly for
+      // BOTH delivery paths. `distinct` collapses a multi-lot FIFO drain
+      // (several StockExit rows, one order) to one order.
+      this.prisma.stockExit.findMany({
+        where: { exitType: 'order', date: dateColFilter, orderId: { not: null } },
+        select: {
+          orderId: true,
+          order: {
+            select: {
+              id: true, displayId: true, status: true,
+              client: { select: { id: true, name: true } },
+              location: { select: { id: true, name: true } },
+            },
+          },
+        },
+        distinct: ['orderId'],
+      }),
+      // Every exit type, for the stock-movement section — grouped in-memory
+      // below (small, single-day, bounded result set; the charcoal type/grade
+      // join needed for grouping isn't expressible in a plain Prisma groupBy).
+      this.prisma.stockExit.findMany({
+        where: { date: dateColFilter },
+        select: {
+          exitType: true, quantity: true, kgQuantity: true,
+          lot: { select: { charcoalType: true, grade: true } },
+          packedStock: { select: { lot: { select: { charcoalType: true, grade: true } } } },
+        },
+      }),
+      this.prisma.stockLot.findMany({
+        where: { dateReceived: dateColFilter },
+        include: { supplier: { select: { id: true, name: true } } },
+      }),
+      this.prisma.packingSession.findMany({
+        where: { date: dateColFilter },
+        include: { worker: { select: { id: true, name: true } }, workerEntity: { select: { id: true, name: true } } },
+      }),
+      this.prisma.accountEntry.findMany({
+        where: { date: dateColFilter },
+        include: { account: { include: { user: { select: { id: true, name: true } } } } },
+      }),
+      // Existing authoritative "unpaid registered-client walk-in" exception
+      // detector — reused as-is, never re-derived.
+      this.stockExitsService.getOnAccountCount(date),
+    ]);
+
+    // ── Sales — one row per Invoice, plus one row per anonymous walk-in exit (see this method's own doc comment above) ──
+    const invoiceSales = issuedInvoicesToday.map((inv) => ({
+      id: inv.id,
+      invoiceId: inv.id,
+      invoiceDisplayId: inv.displayId,
+      source: inv.source,
+      date: inv.issuedAt,
+      clientId: inv.clientId,
+      client: inv.client,
+      currency: inv.currency,
+      description: this.buildInvoiceDescription(inv.source, inv.lines as any[], inv.order?.location?.name),
+      saleTotal: fmt2(inv.total),
+      paidAmount: fmt2(inv.paidAmount),
+      remaining: fmt2(new Decimal(inv.total.toString()).minus(inv.paidAmount.toString())),
+      status: inv.status,
+    }));
+    const anonymousSales = anonymousWalkInsToday.map((exit) => ({
+      id: exit.id,
+      invoiceId: null,
+      invoiceDisplayId: null,
+      source: 'ANONYMOUS' as const,
+      date: exit.date,
+      clientId: null,
+      client: null,
+      currency: exit.currency,
+      description: exit.lot
+        ? `Anonymous walk-in · ${exit.kgQuantity} kg ${exit.lot.charcoalType} ${exit.lot.grade}${exit.recipient ? ` — ${exit.recipient}` : ''}`
+        : `Anonymous walk-in · ${exit.quantity ?? 0}× ${exit.bagType?.name ?? 'bags'}${exit.recipient ? ` — ${exit.recipient}` : ''}`,
+      saleTotal: fmt2(exit.amount!),
+      paidAmount: fmt2(exit.amount!),
+      remaining: '0.00',
+      status: 'recorded',
+    }));
+    const sales = [...invoiceSales, ...anonymousSales];
+
+    // ── Summary (USD-converted totals — same conversion convention getArSummary/getProfitLoss already use) ──
+    const salesTotalUsd = sales.reduce(
+      (sum, s) => sum.plus(toUsd(new Decimal(s.saleTotal), s.currency)),
+      new Decimal(0),
+    );
+    const cashCollectedUsd = payments.reduce(
+      (sum, p) => sum.plus(toUsd(new Decimal(p.amount.toString()), p.currency)),
+      new Decimal(0),
+    );
+    const handoverExpenseTotal = cashHandoverExpenses.reduce((s, e) => s.plus(e.amount.toString()), new Decimal(0));
+    const generalExpenseTotal = generalExpenses.reduce((s, e) => s.plus(e.amount.toString()), new Decimal(0));
+    const workerCostTotal = workerCosts.reduce((s, w) => s.plus(w.amount.toString()), new Decimal(0));
+    const handedOverTotal = cashHandovers.reduce(
+      (s, h) => s.plus(h.handedAmt.toString()).plus(h.expenses.reduce((es, e) => es.plus(e.amount.toString()), new Decimal(0))),
+      new Decimal(0),
+    );
+
+    // ── Client receivables (active-only, opening/today/closing roll-forward) ──
+    const clientReceivables = await this.getDailyClientReceivables(date, businessFilter, dateColFilter);
+
+    // ── Stock movement — grouped by exitType + charcoalType + grade ──
+    const stockOut = this.groupStockMovement(allExitsToday);
+    const stockIn = {
+      rawLots: stockLotsReceived.map((l) => ({
+        lotId: l.id, charcoalType: l.charcoalType, grade: l.grade,
+        supplier: l.supplier.name, kgReceived: l.kgReceived.toString(), source: l.source,
+      })),
+      packedFromSessions: packingSessions.map((s) => ({
+        sessionId: s.id,
+        worker: s.workerEntity?.name ?? s.worker?.name ?? 'Unknown',
+        kgConsumed: s.kgConsumed.toString(), kgOutputTotal: s.kgOutputTotal.toString(),
+        bagsOutput: s.bagsOutput,
+      })),
+    };
+
+    // ── Employee summary — from the SAME AccountEntry ledger LedgerWriteService writes ──
+    const employeeSummary = await this.getDailyEmployeeSummary(accountEntriesToday, dateColFilter);
+
+    // ── Exceptions — only conditions reliably derivable from existing data ──
+    const exceptions = await this.getDailyExceptions(date, businessFilter, handedOverTotal, cashHandovers, payments, onAccount, deliveredOrderExits);
+
+    return {
+      date,
+      generatedAt: new Date().toISOString(),
+      summary: {
+        totalSales: salesTotalUsd.toFixed(2),
+        totalCashCollected: cashCollectedUsd.toFixed(2),
+        totalCashHandoverExpenses: handoverExpenseTotal.toFixed(2),
+        totalGeneralExpenses: generalExpenseTotal.toFixed(2),
+        totalWorkerCost: workerCostTotal.toFixed(2),
+        totalHandedOver: handedOverTotal.toFixed(2),
+        saleCount: sales.length,
+        paymentCount: payments.length,
+      },
+      sales,
+      payments: payments.map((p) => ({
+        id: p.id, displayId: p.displayId, client: p.client, amount: fmt2(p.amount),
+        currency: p.currency, method: p.method, date: p.date, receiver: p.receiver,
+        allocations: p.allocations.map((a) => ({
+          amount: fmt2(a.amount), invoiceId: a.invoiceId,
+          invoiceDisplayId: a.invoice.displayId, invoiceSource: a.invoice.source,
+        })),
+      })),
+      expenses: {
+        cashHandoverExpenses: cashHandoverExpenses.map((e) => ({
+          id: e.id, amount: fmt2(e.amount), category: e.category?.name ?? e.description,
+          employee: e.cashHandover.receiver ?? { id: e.cashHandover.receiverId, name: e.cashHandover.receiverName },
+          cashHandoverId: e.cashHandoverId,
+        })),
+        generalExpenses: generalExpenses.map((e) => ({
+          id: e.id, description: e.description, amount: fmt2(e.amount),
+          category: e.category, isRecurring: e.isRecurring, notes: e.notes,
+        })),
+        workerCosts: workerCosts.map((w) => ({
+          id: w.id, worker: w.worker, amount: fmt2(w.amount), category: w.category, notes: w.notes,
+        })),
+      },
+      cashHandovers: cashHandovers.map((h) => ({
+        id: h.id, receiver: h.receiver ?? { id: h.receiverId, name: h.receiverName },
+        expectedAmt: fmt2(h.expectedAmt), handedAmt: fmt2(h.handedAmt),
+        difference: fmt2(h.difference), notes: h.notes,
+        expenses: h.expenses.map((e) => ({ id: e.id, category: e.category?.name ?? e.description, amount: fmt2(e.amount) })),
+        settledAmount: new Decimal(h.handedAmt.toString())
+          .plus(h.expenses.reduce((s, e) => s.plus(e.amount.toString()), new Decimal(0))).toFixed(2),
+      })),
+      orders: {
+        created: ordersCreated.map((o) => ({
+          id: o.id, displayId: o.displayId, client: o.client, location: o.location,
+          status: o.status, charcoalType: o.charcoalType, grade: o.grade,
+          totalKgRequested: o.totalKgRequested.toString(),
+        })),
+        delivered: deliveredOrderExits.map((e) => e.order).filter((o): o is NonNullable<typeof o> => o !== null),
+      },
+      stockMovement: { in: stockIn, out: stockOut },
+      clientReceivables,
+      employeeSummary,
+      exceptions,
+    };
+  }
+
+  /**
+   * Client receivable roll-forward for clients with activity on `date` only
+   * (confirmed business decision — Phase 1 §21.2). Opening/closing both reuse
+   * ClientBalanceService.computeBalance()'s exact formula with a point-in-time
+   * upper bound (never a second, divergent balance calculation) — opening is
+   * "as of end of the PREVIOUS day", closing is "as of end of THIS day".
+   */
+  private async getDailyClientReceivables(
+    date: string,
+    businessFilter: { gte: Date; lt: Date },
+    dateColFilter: { gte: Date; lte: Date },
+  ) {
+    const [invoicedClients, paidClients, fillPickupClients] = await Promise.all([
+      this.prisma.invoice.findMany({
+        where: { issuedAt: businessFilter, status: { notIn: ['draft', 'cancelled'] } },
+        distinct: ['clientId'],
+        select: { clientId: true },
+      }),
+      this.prisma.payment.findMany({ where: { date: dateColFilter }, distinct: ['clientId'], select: { clientId: true } }),
+      this.prisma.stockExit.findMany({
+        where: { exitType: 'client_bags_fill', amount: { not: null }, date: dateColFilter, clientId: { not: null } },
+        distinct: ['clientId'],
+        select: { clientId: true },
+      }),
+    ]);
+    const activeClientIds = [...new Set([
+      ...invoicedClients.map((c) => c.clientId),
+      ...paidClients.map((c) => c.clientId),
+      ...fillPickupClients.map((c) => c.clientId!),
+    ])];
+    if (activeClientIds.length === 0) return [];
+
+    const closingCutoff = buildDateFilter(undefined, date)!;
+    const openingCutoff = buildDateFilter(undefined, previousDateOnlyString(date))!;
+    const closingAsOf = { lte: closingCutoff.lte!, businessLt: closingCutoff.businessLt! };
+    const openingAsOf = { lte: openingCutoff.lte!, businessLt: openingCutoff.businessLt! };
+
+    const [clients, todaysInvoicesByClient, todaysPaymentsByClient] = await Promise.all([
+      this.prisma.client.findMany({ where: { id: { in: activeClientIds } }, select: { id: true, name: true, currency: true } }),
+      this.prisma.invoice.groupBy({
+        by: ['clientId'],
+        where: { clientId: { in: activeClientIds }, issuedAt: businessFilter, status: { notIn: ['draft', 'cancelled'] } },
+        _sum: { total: true },
+      }),
+      this.prisma.payment.groupBy({
+        by: ['clientId'],
+        where: { clientId: { in: activeClientIds }, date: dateColFilter },
+        _sum: { amount: true },
+      }),
+    ]);
+    const chargesByClient = new Map(todaysInvoicesByClient.map((r) => [r.clientId, r._sum.total]));
+    const paymentsByClient = new Map(todaysPaymentsByClient.map((r) => [r.clientId, r._sum.amount]));
+
+    return Promise.all(clients.map(async (c) => {
+      const [opening, closing] = await Promise.all([
+        this.clientBalanceService.computeBalance(c.id, undefined, openingAsOf),
+        this.clientBalanceService.computeBalance(c.id, undefined, closingAsOf),
+      ]);
+      return {
+        clientId: c.id, clientName: c.name, currency: c.currency,
+        openingBalance: opening.toFixed(2),
+        todaysCharges: new Decimal(chargesByClient.get(c.id)?.toString() ?? '0').toFixed(2),
+        todaysPayments: new Decimal(paymentsByClient.get(c.id)?.toString() ?? '0').toFixed(2),
+        closingBalance: closing.toFixed(2),
+      };
+    }));
+  }
+
+  /** Groups a day's StockExit rows by (exitType, charcoalType, grade) — pure in-memory fold over an already date-bounded, single-day result set. */
+  private groupStockMovement(
+    exits: Array<{
+      exitType: string; quantity: number | null; kgQuantity: Prisma.Decimal | null;
+      lot: { charcoalType: string; grade: string } | null;
+      packedStock: { lot: { charcoalType: string; grade: string } } | null;
+    }>,
+  ) {
+    const byKey = new Map<string, { exitType: string; charcoalType: string; grade: string; bags: number; kg: Decimal }>();
+    for (const e of exits) {
+      const lot = e.lot ?? e.packedStock?.lot ?? null;
+      const charcoalType = lot?.charcoalType ?? 'Unknown';
+      const grade = lot?.grade ?? 'Unknown';
+      const key = `${e.exitType}::${charcoalType}::${grade}`;
+      const entry = byKey.get(key) ?? { exitType: e.exitType, charcoalType, grade, bags: 0, kg: new Decimal(0) };
+      entry.bags += e.quantity ?? 0;
+      entry.kg = entry.kg.plus(e.kgQuantity?.toString() ?? '0');
+      byKey.set(key, entry);
+    }
+    return [...byKey.values()].map((v) => ({ ...v, kg: v.kg.toFixed(3) }));
+  }
+
+  /**
+   * Per-receiver reconciliation for `date`, built entirely from AccountEntry —
+   * the same ledger LedgerWriteService is the sole writer of. "Active" =
+   * anyone with at least one entry dated today. `outstandingAsOfEndOfDay` is
+   * deliberately NOT the live UserAccount.balance column (that's a running
+   * total that only equals "end of THIS day" when the report day is today) —
+   * it's the cumulative sum of this same ledger up to and including `date`.
+   */
+  private async getDailyEmployeeSummary(
+    entriesToday: Array<{ accountId: string; amount: Prisma.Decimal; type: string; account: { userId: string; user: { id: string; name: string } } }>,
+    dateColFilter: { gte: Date; lte: Date },
+  ) {
+    if (entriesToday.length === 0) return [];
+
+    const byAccount = new Map<string, { receiver: { id: string; name: string }; received: Decimal; handedOver: Decimal }>();
+    for (const e of entriesToday) {
+      const entry = byAccount.get(e.accountId) ?? { receiver: e.account.user, received: new Decimal(0), handedOver: new Decimal(0) };
+      const amt = new Decimal(e.amount.toString());
+      if (e.type === 'handover') entry.handedOver = entry.handedOver.plus(amt.abs());
+      else entry.received = entry.received.plus(amt);
+      byAccount.set(e.accountId, entry);
+    }
+
+    const accountIds = [...byAccount.keys()];
+    const cumulative = await this.prisma.accountEntry.groupBy({
+      by: ['accountId'],
+      where: { accountId: { in: accountIds }, date: { lte: dateColFilter.lte } },
+      _sum: { amount: true },
+    });
+    const outstandingByAccount = new Map(cumulative.map((c) => [c.accountId, c._sum.amount]));
+
+    return accountIds.map((accountId) => {
+      const entry = byAccount.get(accountId)!;
+      return {
+        receiver: entry.receiver,
+        receivedToday: entry.received.toFixed(2),
+        handedOverToday: entry.handedOver.toFixed(2),
+        outstandingAsOfEndOfDay: new Decimal(outstandingByAccount.get(accountId)?.toString() ?? '0').toFixed(2),
+      };
+    });
+  }
+
+  /** Only conditions reliably derivable from existing data — never a new business rule. */
+  private async getDailyExceptions(
+    date: string,
+    businessFilter: { gte: Date; lt: Date },
+    handedOverTotal: Decimal,
+    cashHandovers: Array<{ id: string; difference: Prisma.Decimal; receiver: { id: string; name: string } | null; receiverName: string }>,
+    payments: Array<{ id: string; method: string; receiverId: string | null; client: { id: string; name: string } }>,
+    onAccount: { onAccountCount: number },
+    deliveredOrderExits: Array<{ order: { id: string; displayId: string | null } | null }>,
+  ) {
+    const exceptions: Array<{ type: string; description: string; referenceId?: string }> = [];
+
+    const unpaidInvoices = await this.prisma.invoice.findMany({
+      where: { issuedAt: businessFilter, status: { in: ['issued', 'partially_paid'] } },
+      select: { id: true, displayId: true, total: true, paidAmount: true, client: { select: { name: true } } },
+    });
+    for (const inv of unpaidInvoices) {
+      const remaining = new Decimal(inv.total.toString()).minus(inv.paidAmount.toString());
+      exceptions.push({
+        type: 'unpaid_or_partial_invoice',
+        description: `${inv.displayId ?? inv.id} — ${inv.client.name} — ${remaining.toFixed(2)} outstanding`,
+        referenceId: inv.id,
+      });
+    }
+
+    for (const h of cashHandovers) {
+      const diff = new Decimal(h.difference.toString());
+      if (!diff.isZero()) {
+        exceptions.push({
+          type: 'cash_handover_difference',
+          description: `${h.receiver?.name ?? h.receiverName} — handover difference of ${diff.toFixed(2)}`,
+          referenceId: h.id,
+        });
+      }
+    }
+
+    for (const p of payments) {
+      if (['cash', 'whish', 'omt'].includes(p.method) && !p.receiverId) {
+        exceptions.push({
+          type: 'payment_missing_receiver',
+          description: `Payment for ${p.client.name} (${p.method}) has no receiver on record`,
+          referenceId: p.id,
+        });
+      }
+    }
+
+    if (onAccount.onAccountCount > 0) {
+      exceptions.push({
+        type: 'on_account_walk_in_sales',
+        description: `${onAccount.onAccountCount} registered-client walk-in sale(s) today with no payment recorded yet`,
+      });
+    }
+
+    const deliveredOrderIds = deliveredOrderExits.map((e) => e.order?.id).filter((id): id is string => !!id);
+    if (deliveredOrderIds.length > 0) {
+      const invoicedOrderIds = new Set(
+        (await this.prisma.invoice.findMany({
+          where: { orderId: { in: deliveredOrderIds }, status: { not: 'cancelled' } },
+          select: { orderId: true },
+        })).map((i) => i.orderId),
+      );
+      for (const e of deliveredOrderExits) {
+        if (e.order && !invoicedOrderIds.has(e.order.id)) {
+          exceptions.push({
+            type: 'delivered_without_invoice',
+            description: `Order ${e.order.displayId ?? e.order.id} was delivered today but has no invoice yet`,
+            referenceId: e.order.id,
+          });
+        }
+      }
+    }
+
+    // Cancellation is only ever recorded as a status flip (InvoicesService.cancel()) —
+    // there is no dedicated cancelledAt column, so Invoice.updatedAt is the only
+    // available day signal (same "no exact timestamp" limitation this report already
+    // accepts for delivery-day via StockExit.date). Cancelling never reverses cash or
+    // ledger entries — those simply stop accruing — so this is reported as a factual
+    // status change, not a financial reversal.
+    const cancelledInvoices = await this.prisma.invoice.findMany({
+      where: { status: 'cancelled', updatedAt: businessFilter },
+      select: { id: true, displayId: true, total: true, client: { select: { name: true } } },
+    });
+    for (const inv of cancelledInvoices) {
+      exceptions.push({
+        type: 'invoice_cancelled',
+        description: `${inv.displayId ?? inv.id} — ${inv.client.name} — cancelled (${new Decimal(inv.total.toString()).toFixed(2)})`,
+        referenceId: inv.id,
+      });
+    }
+
+    // Same limitation as above — ShipmentsService.logReturn() has no dedicated
+    // returnedAt column, only the auto-touched updatedAt. A return restores
+    // physical PackedStock quantity only; it never touches the Invoice, so this
+    // is never shown as a financial reversal.
+    const returnedShipments = await this.prisma.shipment.findMany({
+      where: { status: 'returned', updatedAt: businessFilter },
+      select: { id: true, order: { select: { id: true, displayId: true, client: { select: { name: true } } } } },
+    });
+    for (const s of returnedShipments) {
+      exceptions.push({
+        type: 'shipment_returned',
+        description: `Order ${s.order.displayId ?? s.order.id} — ${s.order.client.name} — shipment returned`,
+        referenceId: s.order.id,
+      });
+    }
+
+    return exceptions;
   }
 }

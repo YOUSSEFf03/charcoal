@@ -1,12 +1,83 @@
 import { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useAllExpenses, useDriverExpenses, useGeneralExpenses, useCreateGeneralExpense, useDeleteGeneralExpense, useAllWorkerPayments } from '../hooks/useExpenses'
-import { useAllCashHandoverExpenses } from '../hooks/useCashHandover'
+import { useDriverExpenses, useGeneralExpenses, useCreateGeneralExpense, useUpdateGeneralExpense, useDeleteGeneralExpense, useAllWorkerPayments, useAllWorkerWageExpenses } from '../hooks/useExpenses'
+import type { AggregatedWorkerPayment, AggregatedWorkerWageExpense } from '../hooks/useExpenses'
+import { useBusinessExpenses } from '../hooks/useCashHandover'
 import { useWorkers, useLogWorkerPayment } from '../hooks/useWorkers'
-import type { DriverTrip } from '../types/api'
+import type { DriverTrip, GeneralExpense, BusinessExpense, WorkerCostCategory } from '../types/api'
 import { toDateOnlyString } from '../lib/date'
+import { CATEGORY_LABEL } from '../lib/workerLabels'
 
-type ETab = 'expenses' | 'employees'
+// Business-model audit (2026-09-04): "A Cash Handover is NOT an employee
+// expense." The employee/receiver is only the CASH HOLDER — whoever's
+// custody an amount was deducted from before handover — never the owner of
+// the expense. The expense itself belongs to the business.
+//
+// This page's PRIMARY view used to be an Employee → Category → Occurrence
+// hierarchy (a "your employee spent money" framing). It is now a single flat
+// BUSINESS EXPENSES list — every real expense the business incurred, however
+// it was paid (a direct/company GeneralExpense row, or a CashHandoverExpense
+// row deducted from someone's held cash) — answering "what did the business
+// spend money on?" Both sources are read here exactly as CashHandoversService
+// already stores them; no new accounting record, model, or duplicate total is
+// created.
+//
+// Employee-payments audit (2026-09-05): "Employee payments ARE money the
+// business actually paid out — they belong in Expenses. Wages OWED (earned
+// but not yet paid) do not." Three tabs, matching that distinction exactly:
+//   Business expenses  — GeneralExpense + CashHandoverExpense + employee WAGE
+//                        expense (see the COGS-vs-Expenses audit below)
+//   Employee Payments  — WorkerPayment ONLY, grouped by employee, for the
+//                        SELECTED MONTH — "how much did we actually pay each
+//                        employee this month", never wages earned/owed.
+//   Recurring          — the subset of GeneralExpense with isRecurring=true,
+//                        split out for visibility; same rows/total already
+//                        counted once in Business Expenses, never a second
+//                        accounting total.
+// There is no "Employee Expenses" concept anywhere on this page. Full
+// worker CRUD / earned / owed / history lives on the separate Employees.tsx
+// page (untouched by this redesign) — this page's Employee Payments tab is
+// deliberately narrow: actual cash paid this month, nothing else.
+//
+// COGS-vs-Expenses audit (2026-09-06): employee earnings split into TWO
+// accounting buckets, matching the (unchanged) P&L exactly:
+//   Per-bag / product-direct labor (PackingSession.sessionEarnings) → COGS.
+//     NEVER shown here — it already feeds ReportsService.getProfitLoss()'s
+//     labor cost line; adding it to Business Expenses would double-count it.
+//   Non-product-direct labor (WorkerCost — daily wage, bonus, deduction, fuel,
+//     food, transport, advance, correction, other) → a genuine business
+//     OPERATING EXPENSE. It was already counted in the P&L's labor cost, but
+//     had NO visible line item on this page — that's the gap this audit
+//     closes. Shown as "Employee wage · {name}" rows, sourced from the SAME
+//     WorkerCost rows via useAllWorkerWageExpenses() (which reuses
+//     GET /workers/:id/statement) — no new record, no duplicate total.
+// WorkerPayment (actual cash paid) stays exactly where it already was — the
+// Employee Payments tab, a cash-outgoing view, never counted a second time
+// as a P&L expense here (see totalOutgoing's doc comment below).
+type ETab = 'business-expenses' | 'employee-payments' | 'recurring'
+type SourceFilter = 'all' | 'handover' | 'direct' | 'wage'
+
+/** One employee's WorkerPayment records for the selected month, grouped for
+ *  the Employee Payments tab. Purely a display grouping of the SAME
+ *  WorkerPayment rows useAllWorkerPayments() already fetched — no new
+ *  records, no re-aggregation of wages earned/owed. */
+interface EmployeePaymentGroup {
+  workerId: string
+  workerName: string
+  totalPaid: number
+  payments: AggregatedWorkerPayment[]
+}
+
+function groupWorkerPaymentsByEmployee(payments: AggregatedWorkerPayment[]): EmployeePaymentGroup[] {
+  const byWorker = new Map<string, EmployeePaymentGroup>()
+  for (const p of payments) {
+    const group = byWorker.get(p.workerId) ?? { workerId: p.workerId, workerName: p.workerName, totalPaid: 0, payments: [] }
+    group.totalPaid += parseFloat(p.amount)
+    group.payments.push(p)
+    byWorker.set(p.workerId, group)
+  }
+  return Array.from(byWorker.values()).sort((a, b) => b.totalPaid - a.totalPaid)
+}
 
 const DRIVER_AVATAR_PALETTE = [
   { avatarBg: 'var(--blue-bg,#EFF6FF)', avatarColor: 'var(--blue)' },
@@ -58,6 +129,25 @@ const CATEGORY_COLORS: Record<string, string> = {
   Transport:  '#0891b2',
 }
 
+/** One row of the unified Business Expenses list — a direct GeneralExpense, a
+ *  Cash-Handover-deducted expense, or an employee WAGE expense (WorkerCost —
+ *  never PackingSession.sessionEarnings, which is COGS, not an operating
+ *  expense — see this file's COGS-vs-Expenses doc comment), normalized to
+ *  the same display shape. `source` is display-only; it never changes what
+ *  the underlying record IS. */
+interface CombinedExpenseRow {
+  key: string
+  date: string
+  category: string
+  description: string
+  amount: number
+  isRecurring: boolean
+  source: 'direct' | 'handover' | 'wage'
+  general?: GeneralExpense
+  handover?: BusinessExpense
+  wage?: AggregatedWorkerWageExpense
+}
+
 /** Formats a local calendar date as YYYY-MM-DD without going through UTC (avoids the
  * toISOString() off-by-one when the local timezone is ahead of UTC). */
 function ymd(y: number, m: number, d: number): string {
@@ -65,7 +155,8 @@ function ymd(y: number, m: number, d: number): string {
 }
 
 export default function Expenses() {
-  const [tab, setTab] = useState<ETab>('expenses')
+  const [tab, setTab] = useState<ETab>('business-expenses')
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
 
   // Selected month for the expenses filter — the 1st of the month, local time.
   const [selectedMonth, setSelectedMonth] = useState(() => {
@@ -86,7 +177,7 @@ export default function Expenses() {
     setSelectedMonth(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))
   }
 
-  // Live general expenses (recurring + one-time) — recurring rows are included
+  // Direct/company expenses (recurring + one-time) — recurring rows are included
   // by the backend from their recorded date forward (never before); one-time
   // rows are filtered to the exact selected month. ("Option B" recurrence.)
   const {
@@ -97,16 +188,9 @@ export default function Expenses() {
   } = useGeneralExpenses({ dateFrom: monthDateFrom, dateTo: monthDateTo })
 
   const createExpense = useCreateGeneralExpense()
+  const updateExpense = useUpdateGeneralExpense()
   const deleteExpense = useDeleteGeneralExpense()
   const logWorkerPayment = useLogWorkerPayment()
-
-  // Live container expenses
-  const {
-    data: containerExpenses,
-    isLoading: contLoading,
-    isError: contError,
-    refetch: refetchContainers,
-  } = useAllExpenses({ dateFrom: monthDateFrom, dateTo: monthDateTo })
 
   // Live driver trips
   const {
@@ -119,27 +203,104 @@ export default function Expenses() {
   // Worker data — ALL workers, not just the first (previously only workersData?.[0] was shown)
   const { data: workersData, isLoading: workersLoading } = useWorkers()
 
-  // Aggregated employee payments (all workers, flattened) and cash-handover expenses
-  // (all handovers, flattened) — same WorkerPayment / CashHandoverExpense source-of-truth
-  // records, just fanned out for display; no new records are created for this view.
-  const { data: allWorkerPayments } = useAllWorkerPayments()
-  const { data: allHandoverExpenses } = useAllCashHandoverExpenses({ dateFrom: monthDateFrom, dateTo: monthDateTo })
+  // Aggregated employee payments (all workers, flattened), server-filtered to
+  // the SELECTED MONTH — same WorkerPayment source-of-truth records, just
+  // fanned out for display; no new records are created for this view.
+  // Payments live ONLY on the Employee Payments tab — never folded into
+  // Business Expenses (see this file's top doc comment).
+  const { data: allWorkerPayments } = useAllWorkerPayments({ dateFrom: monthDateFrom, dateTo: monthDateTo })
+
+  // Employee WAGE expense (WorkerCost — daily wage, bonus, deduction, etc.),
+  // server-filtered to the SELECTED MONTH — NEVER PackingSession.sessionEarnings
+  // (per-bag/product-direct labor, which is COGS, not an operating expense —
+  // see this file's COGS-vs-Expenses doc comment). This is a genuine Business
+  // Expense line, distinct from Employee Payments (actual cash paid) below.
+  const { data: allWorkerWageExpenses } = useAllWorkerWageExpenses({ dateFrom: monthDateFrom, dateTo: monthDateTo })
+
+  // Cash-Handover-sourced business expenses (PRIMARY tab, alongside direct
+  // GeneralExpense rows above) — backend-aggregated, unbounded per month, see
+  // useBusinessExpenses()'s doc comment. This is the SAME CashHandoverExpense
+  // occurrence CashHandoversService.create() already persisted — read-only.
+  const businessExpensesQ = useBusinessExpenses({ dateFrom: monthDateFrom, dateTo: monthDateTo })
+  const handoverExpenses = businessExpensesQ.data ?? []
+
+  // Belt-and-suspenders: allWorkerPayments is already server-filtered to this
+  // month (dateFrom/dateTo above), but re-narrowing client-side guards
+  // against ever showing a payment from another month (CASE 5) even if a
+  // caller/cache serves a wider result.
   const monthWorkerPayments = (allWorkerPayments ?? []).filter(p => (p.date ?? '').slice(0, 10) >= monthDateFrom && (p.date ?? '').slice(0, 10) <= monthDateTo)
+
+  // Same belt-and-suspenders re-narrowing as monthWorkerPayments above.
+  const monthWorkerWageExpenses = (allWorkerWageExpenses ?? []).filter(e => (e.date ?? '').slice(0, 10) >= monthDateFrom && (e.date ?? '').slice(0, 10) <= monthDateTo)
+
+  // One group per employee who received a payment this month — the
+  // Employee Payments tab's primary view (CASE 3: totalPaid is the sum of
+  // that employee's own WorkerPayment rows this month, nothing else).
+  const employeePaymentGroups = groupWorkerPaymentsByEmployee(monthWorkerPayments)
 
   const driverGroups = groupDriverTrips(driverTripsResp?.data ?? [])
 
-  // Derived splits
+  // Derived splits (direct/company expenses only)
   const recurring = (generalExpenses ?? []).filter(e => e.isRecurring)
   const onetime   = (generalExpenses ?? []).filter(e => !e.isRecurring)
+  const allGenExp = [...recurring, ...onetime]
 
-  // Add expense modal
+  // ── Unified Business Expenses list — one row per real expense record, from
+  // EITHER source, never merged/deduped/collapsed into a representative value.
+  const combinedRows: CombinedExpenseRow[] = [
+    ...allGenExp.map((e): CombinedExpenseRow => ({
+      key: `g-${e.id}`,
+      date: e.date,
+      category: e.category || 'Other',
+      description: e.description,
+      amount: parseFloat(e.amount),
+      isRecurring: e.isRecurring,
+      source: 'direct',
+      general: e,
+    })),
+    ...handoverExpenses.map((e): CombinedExpenseRow => ({
+      key: `h-${e.id}`,
+      date: e.date,
+      category: e.categoryName,
+      description: e.description,
+      amount: parseFloat(e.amount),
+      isRecurring: false,
+      source: 'handover',
+      handover: e,
+    })),
+    ...monthWorkerWageExpenses.map((e): CombinedExpenseRow => ({
+      key: `w-${e.reference}`,
+      date: e.date,
+      category: CATEGORY_LABEL[e.category as WorkerCostCategory] ?? 'Other',
+      description: e.notes || 'Employee wage',
+      amount: parseFloat(e.earned),
+      isRecurring: false,
+      source: 'wage',
+      wage: e,
+    })),
+  ].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+
+  const filteredRows = combinedRows.filter(r => sourceFilter === 'all' ? true : r.source === sourceFilter)
+
+  // Add/edit expense modal — the same modal handles both; editingExpenseId set
+  // means "Save" calls the update mutation instead of create. Direct/company
+  // expenses only — a Cash-Handover expense is created via the Cash Handover
+  // flow, never edited from here (it's a settlement record, not a standalone one).
   const [addModalType, setAddModalType] = useState<'recurring' | 'onetime' | null>(null)
+  const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
   const [newDesc, setNewDesc] = useState('')
   const [newAmt, setNewAmt] = useState('')
   const [newDate, setNewDate] = useState(toDateOnlyString(new Date()))
   const [newIsRecurring, setNewIsRecurring] = useState(false)
   const [newCategory, setNewCategory] = useState('')
   const [newNotes, setNewNotes] = useState('')
+
+  // Detail panel for a Cash-Handover-sourced row — audit trail / reconciliation context.
+  const [detailRow, setDetailRow] = useState<BusinessExpense | null>(null)
+
+  // Employee Payments drill-down — clicking an employee shows EVERY payment
+  // they received in the selected month (CASE 4), not just the aggregate.
+  const [selectedPaymentGroup, setSelectedPaymentGroup] = useState<EmployeePaymentGroup | null>(null)
 
   // Pay modal
   const [payTarget, setPayTarget] = useState<{ name: string; owed: number; workerId?: string } | null>(null)
@@ -148,11 +309,24 @@ export default function Expenses() {
   const [payMethod, setPayMethod] = useState<'Cash' | 'Whish' | 'OMT'>('Cash')
   const [payNotes, setPayNotes] = useState('')
 
-  // Derived totals
-  // "General expenses" — GeneralExpense table only (recurring + one-time).
+  // ── Derived totals ──
+  // Direct/company expenses (GeneralExpense only — recurring + one-time).
   const totalRecurring = recurring.reduce((s, e) => s + parseFloat(e.amount), 0)
-  const totalOnetime   = onetime.reduce((s, e) => s + parseFloat(e.amount), 0)
-  const totalExpenses  = totalRecurring + totalOnetime
+  const totalDirectExpensesThisMonth = allGenExp.reduce((s, e) => s + parseFloat(e.amount), 0)
+  // Cash-handover-deducted business expenses this month (same total
+  // useExpensesSummary() would sum, read from the flat list instead).
+  const totalHandoverExpensesThisMonth = handoverExpenses.reduce((s, e) => s + parseFloat(e.amount), 0)
+  // Employee WAGE expense this month (WorkerCost — daily wage + every other
+  // non-product-direct category) — a genuine operating expense. NEVER
+  // includes per-bag/product-direct labor (PackingSession.sessionEarnings,
+  // which is COGS — see this file's COGS-vs-Expenses doc comment), and never
+  // the WorkerPayment cash settlement of it (see totalWorkerPaymentsThisMonth
+  // below — a completely separate figure, cash-outgoing only).
+  const totalWageExpensesThisMonth = monthWorkerWageExpenses.reduce((s, e) => s + parseFloat(e.earned), 0)
+  // "Business expenses" — the headline figure: every real business operating
+  // expense regardless of payment source, INCLUDING employee wage expense,
+  // EXCLUDING per-bag/COGS labor and EXCLUDING cash payments (see top doc comment).
+  const totalBusinessExpensesThisMonth = totalDirectExpensesThisMonth + totalHandoverExpensesThisMonth + totalWageExpensesThisMonth
 
   // "Employee wages owed" — a live outstanding-balance figure (earned minus paid,
   // all-time; WorkerPayment already netted out here, never re-added as a second
@@ -162,48 +336,88 @@ export default function Expenses() {
   const totalDriverExpenses = driverGroups.reduce((s, g) => s + g.expensesTotal, 0)
   const totalWagesOwed = totalWorkersOwed + totalDriverExpenses
 
-  // Cash actually paid out THIS MONTH, per category (each a settlement/spend record,
-  // not an accrual) — feeds "Total outgoing" below.
-  const totalContainerExpensesThisMonth = (containerExpenses ?? []).reduce((s, e) => s + parseFloat(e.amount), 0)
+  // Cash actually paid out THIS MONTH to workers (a settlement/spend record, not an
+  // accrual) — feeds "Total outgoing" below. Container expenses are deliberately NOT
+  // included here (or anywhere on this page) — they're already spread into each
+  // StockLot.costPerKg by recalculateContainerCosts() and feed COGS in the P&L that
+  // way. Summing ContainerExpense.amount again here would double-count it.
   const totalWorkerPaymentsThisMonth = monthWorkerPayments.reduce((s, p) => s + parseFloat(p.amount), 0)
-  const totalHandoverExpensesThisMonth = (allHandoverExpenses ?? []).reduce((s, e) => s + parseFloat(e.amount), 0)
 
-  // "Total outgoing" = actual cash outflow this month (cash-basis): general expenses +
-  // employee payments + container expenses + cash-handover expenses. Deliberately
-  // excludes "Employee wages owed" (an accrued, all-time balance, not a period cash
-  // figure) — approved definition, see the Expenses-KPI audit.
-  const totalOutgoing = totalExpenses
-    + totalContainerExpensesThisMonth
+  // "Total outgoing" = actual cash outflow this month (cash-basis): direct/company
+  // expenses + employee payments + cash-handover expenses. Formula UNCHANGED —
+  // deliberately excludes:
+  //   - totalWageExpensesThisMonth (accrued P&L cost, NOT a cash outflow itself —
+  //     only the eventual WorkerPayment settling it is cash; adding both here
+  //     would double-count the same wage as two cash outflows — CASE 3/8/9),
+  //   - "Employee wages owed" (an accrued, all-time balance, not a period cash figure),
+  //   - container expenses (already inside container cost/COGS, never a page-level
+  //     cash total) — approved definitions, see the Expenses-KPI / COGS-vs-Expenses audits.
+  const totalOutgoing = totalDirectExpensesThisMonth
     + totalWorkerPaymentsThisMonth
     + totalHandoverExpensesThisMonth
 
-  // By-category summary (recurring + one-time general expenses only)
-  const allGenExp = [...recurring, ...onetime]
+  // By-category summary — ALL THREE Business Expense sources combined (a
+  // business expense is a business expense regardless of how it was paid or
+  // which employee earned it; the category breakdown must reflect that). Never
+  // includes per-bag/COGS labor or WorkerPayment cash settlements — neither is
+  // ever added to combinedRows in the first place.
   const categoryTotals: Record<string, number> = {}
-  allGenExp.forEach(e => {
-    const cat = e.category || 'Other'
-    categoryTotals[cat] = (categoryTotals[cat] || 0) + parseFloat(e.amount)
+  combinedRows.forEach(r => {
+    categoryTotals[r.category] = (categoryTotals[r.category] || 0) + r.amount
   })
   const categoryRows = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1])
 
   function openAdd(type: 'recurring' | 'onetime') {
+    setEditingExpenseId(null)
     setAddModalType(type)
     setNewIsRecurring(type === 'recurring')
     setNewDesc(''); setNewAmt(''); setNewNotes(''); setNewCategory('')
     setNewDate(toDateOnlyString(new Date()))
   }
 
+  function openEdit(e: GeneralExpense) {
+    setEditingExpenseId(e.id)
+    setAddModalType(e.isRecurring ? 'recurring' : 'onetime')
+    setNewIsRecurring(e.isRecurring)
+    setNewDesc(e.description)
+    setNewAmt(e.amount)
+    setNewCategory(e.category ?? '')
+    setNewNotes(e.notes ?? '')
+    setNewDate(e.date?.slice(0, 10) || toDateOnlyString(new Date()))
+  }
+
+  function closeExpenseModal() {
+    setAddModalType(null)
+    setEditingExpenseId(null)
+  }
+
+  function deleteGeneralExpense(e: GeneralExpense) {
+    if (!confirm(`Delete "${e.description}"?`)) return
+    deleteExpense.mutate(e.id, {
+      onError: (err: any) => window.alert(err?.error ?? 'Failed to delete expense — you may not have permission (owner only).'),
+    })
+  }
+
   async function saveExpense() {
     if (!newDesc.trim() || !newAmt) return
-    await createExpense.mutateAsync({
+    const body = {
       description: newDesc.trim(),
       amount: parseFloat(newAmt).toFixed(2),
       isRecurring: newIsRecurring,
       category: newCategory.trim() || undefined,
       date: newDate,
       notes: newNotes.trim() || undefined,
-    })
-    setAddModalType(null)
+    }
+    try {
+      if (editingExpenseId) {
+        await updateExpense.mutateAsync({ id: editingExpenseId, body })
+      } else {
+        await createExpense.mutateAsync(body)
+      }
+      closeExpenseModal()
+    } catch (err: any) {
+      window.alert(err?.error ?? 'Failed to save expense — you may not have permission (owner only).')
+    }
   }
 
   function openPay(name: string, owed: number, workerId?: string) {
@@ -256,6 +470,13 @@ export default function Expenses() {
     }
   }
 
+  // Reconciliation figures for the open detail row — collected/held is
+  // DERIVED from existing fields (expectedAmt + this handover's expenses
+  // total), never a separately stored/invented field.
+  const detailCollected = detailRow
+    ? parseFloat(detailRow.handoverExpectedAmt) + parseFloat(detailRow.handoverExpensesTotal)
+    : 0
+
   return (
     <>
       <Topbar title="Expenses & Employees">
@@ -268,13 +489,17 @@ export default function Expenses() {
 
       {/* Tabs */}
       <div className="tabs">
-        <div className={`tab${tab === 'expenses' ? ' active' : ''}`} onClick={() => setTab('expenses')}>
-          <i className="ti ti-receipt-2" style={{ fontSize: 14 }} /> Expenses
-          <span className="tab-count">{(generalExpenses?.length ?? 0) + (containerExpenses?.length ?? 0)}</span>
+        <div className={`tab${tab === 'business-expenses' ? ' active' : ''}`} onClick={() => setTab('business-expenses')}>
+          <i className="ti ti-receipt-2" style={{ fontSize: 14 }} /> Business expenses
+          <span className="tab-count">{combinedRows.length}</span>
         </div>
-        <div className={`tab${tab === 'employees' ? ' active' : ''}`} onClick={() => setTab('employees')}>
-          <i className="ti ti-users" style={{ fontSize: 14 }} /> Employees
-          <span className="tab-count">{(workersData?.length ?? 0) + driverGroups.length}</span>
+        <div className={`tab${tab === 'employee-payments' ? ' active' : ''}`} onClick={() => setTab('employee-payments')}>
+          <i className="ti ti-cash" style={{ fontSize: 14 }} /> Employee Payments
+          <span className="tab-count">{employeePaymentGroups.length}</span>
+        </div>
+        <div className={`tab${tab === 'recurring' ? ' active' : ''}`} onClick={() => setTab('recurring')}>
+          <i className="ti ti-repeat" style={{ fontSize: 14 }} /> Recurring
+          <span className="tab-count">{recurring.length}</span>
         </div>
       </div>
 
@@ -283,19 +508,29 @@ export default function Expenses() {
         {/* KPI row */}
         <div className="kpi-row">
           <div className="kpi">
-            <div className="kpi-label">General expenses ({monthShort})</div>
-            <div className="kpi-value" style={{ color: 'var(--red)' }}>${totalExpenses.toLocaleString()}</div>
-            <div className="kpi-sub">{recurring.length + onetime.length} expense entries</div>
+            <div className="kpi-label">Business expenses ({monthShort})</div>
+            <div className="kpi-value" style={{ color: 'var(--red)' }}>${totalBusinessExpensesThisMonth.toLocaleString()}</div>
+            <div className="kpi-sub">{combinedRows.length} entries · direct + cash handover + employee wage</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-label">Cash handover expenses</div>
+            <div className="kpi-value" style={{ color: 'var(--accent2)' }}>${totalHandoverExpensesThisMonth.toLocaleString()}</div>
+            <div className="kpi-sub">{handoverExpenses.length} occurrence{handoverExpenses.length !== 1 ? 's' : ''} · deducted from cash held</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-label">Employee wage expense ({monthShort})</div>
+            <div className="kpi-value" style={{ color: 'var(--red)' }}>${totalWageExpensesThisMonth.toLocaleString()}</div>
+            <div className="kpi-sub">{monthWorkerWageExpenses.length} entries · daily wage + other · not per-bag (COGS)</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Recurring (monthly)</div>
             <div className="kpi-value">${totalRecurring.toLocaleString()}</div>
-            <div className="kpi-sub">rent + fixed costs</div>
+            <div className="kpi-sub">rent + fixed costs · direct only</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Employee wages owed</div>
             <div className="kpi-value" style={{ color: 'var(--accent2)' }}>${totalWagesOwed.toFixed(0)}</div>
-            <div className="kpi-sub">current outstanding · worker + {driverGroups.length} drivers</div>
+            <div className="kpi-sub">current outstanding, all-time · not a business expense</div>
           </div>
           <div className="kpi">
             <div className="kpi-label">Total outgoing ({monthShort})</div>
@@ -304,111 +539,41 @@ export default function Expenses() {
           </div>
         </div>
 
-        {/* ── EXPENSES TAB ── */}
-        {tab === 'expenses' && (
+        {/* ── BUSINESS EXPENSES TAB (primary) ── */}
+        {tab === 'business-expenses' && (
+          <>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 20, alignItems: 'start' }}>
 
             <div>
-
-              {/* Recurring */}
               <div className="card">
                 <div className="card-head">
-                  <div className="card-title"><i className="ti ti-repeat" /> Recurring — monthly</div>
-                  <button className="btn" style={{ fontSize: 12 }} onClick={() => openAdd('recurring')}>
-                    <i className="ti ti-plus" style={{ fontSize: 13 }} /> Add
-                  </button>
-                </div>
-                {genLoading && [0, 1, 2].map(i => (
-                  <div key={`rec-sk-${i}`} className="exp-item">
-                    <div className="exp-icon" style={{ background: 'var(--surface2)' }}><div className="skeleton" style={{ width: 18, height: 18, borderRadius: 4 }} /></div>
-                    <div className="exp-info">
-                      <div className="skeleton" style={{ width: '60%', height: 13, marginBottom: 4 }} />
-                      <div className="skeleton" style={{ width: '40%', height: 11 }} />
-                    </div>
-                    <div className="exp-amount"><div className="skeleton" style={{ width: 60, height: 13 }} /></div>
-                  </div>
-                ))}
-                {genError && (
-                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
-                    Failed to load expenses.
-                    <div><button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={() => refetchGeneral()}>Retry</button></div>
-                  </div>
-                )}
-                {!genLoading && !genError && recurring.map(e => (
-                  <div key={e.id} className="exp-item">
-                    <div className="exp-icon" style={{ background: '#EFF6FF' }}>
-                      <i className="ti ti-repeat" style={{ color: 'var(--blue)' }} />
-                    </div>
-                    <div className="exp-info">
-                      <div className="exp-name">{e.description}</div>
-                      <div className="exp-meta">{e.category ? `${e.category} · ` : ''}Monthly · recurring</div>
-                    </div>
-                    <div className="exp-amount">
-                      <div className="exp-amount-val">${parseFloat(e.amount).toLocaleString()}</div>
-                      <div className="exp-amount-lbl">per month</div>
-                    </div>
-                    {/* No PATCH /general-expenses/:id exists on the backend (only
-                        GET/POST/DELETE) — editing an existing expense isn't possible
-                        yet, so this must not look clickable. */}
-                    <button className="exp-del" disabled style={{ opacity: 0.4, cursor: 'not-allowed' }} title="Editing isn't available yet — delete and re-add instead">
-                      <i className="ti ti-edit" style={{ fontSize: 12 }} />
-                    </button>
-                  </div>
-                ))}
-                {!genLoading && !genError && recurring.length === 0 && (
-                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>No recurring expenses.</div>
-                )}
-                <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                  <span style={{ color: 'var(--text3)' }}>Total recurring</span>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${totalRecurring.toLocaleString()} / month</span>
-                </div>
-              </div>
-
-              {/* One-time */}
-              <div className="card">
-                <div className="card-head">
-                  <div className="card-title"><i className="ti ti-plus-circle" /> One-time — {monthLabel}</div>
+                  <div className="card-title"><i className="ti ti-receipt-2" /> Business expenses — {monthLabel}</div>
                   <button className="btn" style={{ fontSize: 12 }} onClick={() => openAdd('onetime')}>
-                    <i className="ti ti-plus" style={{ fontSize: 13 }} /> Add expense
+                    <i className="ti ti-plus" style={{ fontSize: 13 }} /> Add business expense
                   </button>
                 </div>
-                {!genLoading && !genError && onetime.map(e => (
-                  <div key={e.id} className="exp-item">
-                    <div className="exp-icon" style={{ background: 'var(--surface2)' }}>
-                      <i className="ti ti-receipt-2" style={{ color: 'var(--text2)' }} />
-                    </div>
-                    <div className="exp-info">
-                      <div className="exp-name">{e.description}</div>
-                      <div className="exp-meta">{e.date?.slice(0, 10)} · {e.notes || 'one-time'}</div>
-                    </div>
-                    <div className="exp-amount">
-                      <div className="exp-amount-val">${parseFloat(e.amount).toLocaleString()}</div>
-                    </div>
-                    <button
-                      className="exp-del"
-                      disabled={deleteExpense.isPending}
-                      onClick={() => { if (confirm(`Delete "${e.description}"?`)) deleteExpense.mutate(e.id) }}
-                    >
-                      <i className="ti ti-x" style={{ fontSize: 12 }} />
-                    </button>
-                  </div>
-                ))}
-                {!genLoading && !genError && onetime.length === 0 && (
-                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>No one-time expenses this month.</div>
-                )}
-                <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                  <span style={{ color: 'var(--text3)' }}>Total one-time this month</span>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${totalOnetime.toLocaleString()}</span>
-                </div>
-              </div>
 
-              {/* Container expenses (live) */}
-              <div className="card">
-                <div className="card-head">
-                  <div className="card-title"><i className="ti ti-package" /> Container expenses</div>
+                {/* Payment-source filter */}
+                <div style={{ display: 'flex', gap: 8, padding: '12px 18px 0' }}>
+                  {(['all', 'direct', 'handover', 'wage'] as const).map(f => (
+                    <div
+                      key={f}
+                      onClick={() => setSourceFilter(f)}
+                      style={{
+                        padding: '5px 12px', border: '1px solid', borderRadius: 'var(--radius-lg)', cursor: 'pointer',
+                        fontSize: 12, fontWeight: 500,
+                        background: sourceFilter === f ? 'var(--text)' : 'transparent',
+                        color:      sourceFilter === f ? '#fff' : 'var(--text2)',
+                        borderColor: sourceFilter === f ? 'var(--text)' : 'var(--border)',
+                      }}
+                    >
+                      {f === 'all' ? 'All' : f === 'direct' ? 'Direct / company' : f === 'handover' ? 'Cash handover' : 'Employee wage'}
+                    </div>
+                  ))}
                 </div>
-                {contLoading && [0, 1, 2].map(i => (
-                  <div key={`cont-sk-${i}`} className="exp-item">
+
+                {(genLoading || businessExpensesQ.isLoading) && [0, 1, 2].map(i => (
+                  <div key={`sk-${i}`} className="exp-item">
                     <div className="exp-icon" style={{ background: 'var(--surface2)' }}><div className="skeleton" style={{ width: 18, height: 18, borderRadius: 4 }} /></div>
                     <div className="exp-info">
                       <div className="skeleton" style={{ width: '60%', height: 13, marginBottom: 4 }} />
@@ -417,128 +582,89 @@ export default function Expenses() {
                     <div className="exp-amount"><div className="skeleton" style={{ width: 60, height: 13 }} /></div>
                   </div>
                 ))}
-                {contError && (
+                {(genError || businessExpensesQ.isError) && (
                   <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
-                    Failed to load container expenses.
-                    <div><button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={() => refetchContainers()}>Retry</button></div>
-                  </div>
-                )}
-                {!contLoading && !contError && (containerExpenses?.length ?? 0) === 0 && (
-                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>No container expenses recorded.</div>
-                )}
-                {!contLoading && !contError && (containerExpenses ?? []).map(e => (
-                  <div key={e.id} className="exp-item">
-                    <div className="exp-icon" style={{ background: 'var(--surface2)' }}>
-                      <i className="ti ti-package" style={{ color: 'var(--text2)' }} />
-                    </div>
-                    <div className="exp-info">
-                      <div className="exp-name">{e.description}</div>
-                      <div className="exp-meta">Container {e.containerNumber} · {e.addedAt?.slice(0, 10)}</div>
-                    </div>
-                    <div className="exp-amount">
-                      <div className="exp-amount-val">${parseFloat(e.amount).toLocaleString()}</div>
+                    Failed to load business expenses.
+                    <div>
+                      <button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={() => { refetchGeneral(); businessExpensesQ.refetch() }}>Retry</button>
                     </div>
                   </div>
-                ))}
-                {!contLoading && !contError && (containerExpenses?.length ?? 0) > 0 && (
-                  <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                    <span style={{ color: 'var(--text3)' }}>Total container expenses</span>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>
-                      ${totalContainerExpensesThisMonth.toLocaleString()}
-                    </span>
-                  </div>
                 )}
-              </div>
-
-              {/* Employee payments (live, all workers) — WorkerPayment remains the source
-                  of truth; this is a read-only aggregated view, no new records created. */}
-              <div className="card">
-                <div className="card-head">
-                  <div className="card-title"><i className="ti ti-users" /> Employee payments</div>
-                </div>
-                {monthWorkerPayments.length === 0 && (
-                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>No employee payments this month.</div>
+                {!genLoading && !businessExpensesQ.isLoading && !genError && !businessExpensesQ.isError && filteredRows.length === 0 && (
+                  <div className="empty">No business expenses recorded for {monthLabel}.</div>
                 )}
-                {monthWorkerPayments.map(p => (
-                  <div key={p.id} className="exp-item">
-                    <div className="exp-icon" style={{ background: '#EAF5EF' }}>
-                      <i className="ti ti-cash" style={{ color: 'var(--accent)' }} />
-                    </div>
-                    <div className="exp-info">
-                      <div className="exp-name">Employee payment — {p.workerName}</div>
-                      <div className="exp-meta">{p.date?.slice(0, 10)} · {p.method}{p.referenceNumber ? ` · ${p.referenceNumber}` : ''}</div>
-                    </div>
-                    <div className="exp-amount">
-                      <div className="exp-amount-val">${parseFloat(p.amount).toLocaleString()}</div>
-                    </div>
-                  </div>
-                ))}
-                {monthWorkerPayments.length > 0 && (
-                  <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                    <span style={{ color: 'var(--text3)' }}>Total employee payments</span>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${totalWorkerPaymentsThisMonth.toLocaleString()}</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Cash handover expenses (live) — CashHandoverExpense remains the source of
-                  truth (created atomically with its CashHandover); this is a read-only
-                  aggregated view, no new records created. */}
-              <div className="card">
-                <div className="card-head">
-                  <div className="card-title"><i className="ti ti-wallet" /> Cash handover expenses</div>
-                </div>
-                {(allHandoverExpenses ?? []).length === 0 && (
-                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>No cash-handover expenses this month.</div>
-                )}
-                {(allHandoverExpenses ?? []).map(e => (
-                  <div key={e.id} className="exp-item">
-                    <div className="exp-icon" style={{ background: 'var(--surface2)' }}>
-                      <i className="ti ti-wallet" style={{ color: 'var(--text2)' }} />
-                    </div>
-                    <div className="exp-info">
-                      <div className="exp-name">Cash handover expense — {e.description}</div>
-                      <div className="exp-meta">{e.handoverDate?.slice(0, 10)} · {e.receiverName}</div>
-                    </div>
-                    <div className="exp-amount">
-                      <div className="exp-amount-val">${parseFloat(e.amount).toLocaleString()}</div>
-                    </div>
-                  </div>
-                ))}
-                {(allHandoverExpenses ?? []).length > 0 && (
-                  <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                    <span style={{ color: 'var(--text3)' }}>Total cash handover expenses</span>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${totalHandoverExpensesThisMonth.toLocaleString()}</span>
+                {!genLoading && !businessExpensesQ.isLoading && filteredRows.length > 0 && (
+                  <div className="table-scroll">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Category</th>
+                          <th>Description</th>
+                          <th style={{ textAlign: 'right' }}>Amount</th>
+                          <th>Payment source</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredRows.map(r => (
+                          <tr key={r.key}>
+                            <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text2)' }}>{r.date?.slice(0, 10)}</td>
+                            <td>
+                              {r.category}
+                              {r.isRecurring && <span className="badge badge-blue" style={{ marginLeft: 6, fontSize: 10 }}>Recurring</span>}
+                            </td>
+                            <td style={{ color: 'var(--text2)' }}>{r.description}</td>
+                            <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--red)' }}>
+                              ${r.amount.toLocaleString()}
+                            </td>
+                            <td style={{ fontSize: 12 }}>
+                              {r.source === 'direct' ? (
+                                <span style={{ color: 'var(--text3)' }}>Direct · Company</span>
+                              ) : r.source === 'handover' ? (
+                                <span style={{ color: 'var(--accent2)' }}>Cash Handover · {r.handover!.cashHolderName}</span>
+                              ) : (
+                                // "Employee wage · {name}" — the employee is the
+                                // beneficiary/worker, never framed as owning the
+                                // expense (never "Employee expense" — see this
+                                // file's COGS-vs-Expenses doc comment).
+                                <span style={{ color: 'var(--blue)' }}>Employee wage · {r.wage!.workerName}</span>
+                              )}
+                            </td>
+                            <td style={{ textAlign: 'right' }}>
+                              {r.source === 'direct' ? (
+                                <>
+                                  <button className="exp-del" onClick={() => openEdit(r.general!)} title="Edit">
+                                    <i className="ti ti-edit" style={{ fontSize: 12 }} />
+                                  </button>
+                                  <button className="exp-del" disabled={deleteExpense.isPending} onClick={() => deleteGeneralExpense(r.general!)} title="Delete">
+                                    <i className="ti ti-x" style={{ fontSize: 12 }} />
+                                  </button>
+                                </>
+                              ) : r.source === 'handover' ? (
+                                <button className="btn" style={{ fontSize: 11 }} onClick={() => setDetailRow(r.handover!)}>
+                                  View <i className="ti ti-chevron-right" style={{ fontSize: 11 }} />
+                                </button>
+                              ) : (
+                                // No edit/delete/detail action — WorkerCost is append-only
+                                // (corrections happen via the Employees page's own edit
+                                // window / correction-entry workflow, never from here).
+                                null
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Right: summary + by category */}
+            {/* Right: category breakdown + total-outgoing explanation */}
             <div style={{ position: 'sticky', top: 76 }}>
 
               <div className="card" style={{ marginBottom: 14 }}>
-                <div className="card-head">
-                  <div className="card-title"><i className="ti ti-chart-bar" /> {monthLabel} summary</div>
-                </div>
-                <div style={{ padding: '4px 0 0' }}>
-                  {allGenExp.map(e => (
-                    <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '5px 18px', borderBottom: '1px solid var(--border)' }}>
-                      <span style={{ color: 'var(--text2)' }}>{e.description}</span>
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: 'var(--red)' }}>${parseFloat(e.amount).toLocaleString()}</span>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ padding: '14px 18px', background: 'var(--surface2)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 14, fontWeight: 600 }}>General expenses</span>
-                    <span style={{ fontSize: 20, fontWeight: 600, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--red)' }}>${totalExpenses.toLocaleString()}</span>
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>General expenses only — see Employee wages owed, payments, container and handover cards for the rest</div>
-                </div>
-              </div>
-
-              <div className="card">
                 <div className="card-head">
                   <div className="card-title"><i className="ti ti-category" /> Spending by category</div>
                 </div>
@@ -547,7 +673,7 @@ export default function Expenses() {
                     <div style={{ fontSize: 13, color: 'var(--text3)', padding: '8px 0' }}>No expenses yet.</div>
                   )}
                   {categoryRows.map(([cat, amt]) => {
-                    const pct = totalExpenses > 0 ? Math.round((amt / totalExpenses) * 100) : 0
+                    const pct = totalBusinessExpensesThisMonth > 0 ? Math.round((amt / totalBusinessExpensesThisMonth) * 100) : 0
                     const color = CATEGORY_COLORS[cat] || 'var(--text3)'
                     return (
                       <div key={cat} className="cat-row">
@@ -564,96 +690,53 @@ export default function Expenses() {
                 </div>
               </div>
 
-            </div>
-          </div>
-        )}
-
-        {/* ── EMPLOYEES TAB ── */}
-        {tab === 'employees' && (
-          <div>
-
-            <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
-              Packing workers
-            </div>
-
-            {workersLoading && (
-              <div className="emp-card" style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
-                Loading worker data…
-              </div>
-            )}
-
-            {!workersLoading && (workersData ?? []).map(worker => {
-              const payments = (allWorkerPayments ?? []).filter(p => p.workerId === worker.id)
-              const owed = parseFloat(worker.totalOwed ?? '0')
-              return (
-                <div className="emp-card" key={worker.id} style={{ marginBottom: 14 }}>
-                  <div className="emp-head">
-                    <div className="emp-avatar" style={{ background: '#EAF5EF', color: 'var(--accent)' }}>
-                      {worker.name.slice(0, 2).toUpperCase()}
+              <div className="card">
+                <div className="card-head">
+                  <div className="card-title"><i className="ti ti-chart-bar" /> Total outgoing ({monthShort})</div>
+                </div>
+                <div style={{ padding: '4px 0' }}>
+                  {[
+                    ['Company/general expenses', totalDirectExpensesThisMonth],
+                    ['Cash-handover expenses', totalHandoverExpensesThisMonth],
+                    ['Employee payments', totalWorkerPaymentsThisMonth],
+                  ].map(([label, amt]) => (
+                    <div key={label as string} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '6px 18px' }}>
+                      <span style={{ color: 'var(--text2)' }}>{label}</span>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${(amt as number).toLocaleString()}</span>
                     </div>
-                    <div>
-                      <div className="emp-name">{worker.name}</div>
-                      <div className="emp-role-lbl">packing worker · daily rate + per bag</div>
-                    </div>
-                    <div className="emp-owed">
-                      <div className="emp-owed-val" style={{ color: 'var(--accent2)' }}>${owed.toFixed(2)}</div>
-                      <div className="emp-owed-lbl">total owed</div>
-                    </div>
+                  ))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, padding: '2px 18px 2px', color: 'var(--text3)' }}>
+                    <span>Container expenses</span>
+                    <span>in COGS — not cash outgoing</span>
                   </div>
-
-                  <div className="emp-body">
-                    <div style={{ background: 'var(--surface2)', borderRadius: 'var(--radius)', padding: '12px 14px', marginBottom: 14 }}>
-                      <div className="earn-row">
-                        <span className="earn-label">Total earned this month</span>
-                        <span className="earn-val" style={{ color: 'var(--text)', fontSize: 14 }}>${parseFloat(worker.totalEarned ?? '0').toFixed(2)}</span>
-                      </div>
-                      <div className="earn-row">
-                        <span className="earn-label">Paid this month</span>
-                        <span className="earn-val green">−${parseFloat(worker.totalPaid ?? '0').toFixed(2)}</span>
-                      </div>
-                      <div className="earn-total">
-                        <span>Owed now</span>
-                        <span className="earn-total-mono">${owed.toFixed(2)}</span>
-                      </div>
-                    </div>
-
-                    <button className="pay-btn green" onClick={() => openPay(worker.name, owed, worker.id)}>
-                      <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay {worker.name} — ${owed.toFixed(2)} owed
-                    </button>
-                  </div>
-
-                  <div style={{ borderTop: '1px solid var(--border)', padding: '12px 18px 4px' }}>
-                    <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                      Payment history
-                    </div>
-                    <div className="pay-hist">
-                      {payments.length === 0 && (
-                        <div style={{ fontSize: 12, color: 'var(--text3)', padding: '4px 0' }}>No payments recorded.</div>
-                      )}
-                      {payments.map(p => (
-                        <div key={p.id} className="pay-hist-row">
-                          <div className="pay-hist-info">
-                            <strong style={{ fontWeight: 500, display: 'block' }}>{p.notes || 'Payment'}</strong>
-                            <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>{p.date?.slice(0, 10)}</span>
-                          </div>
-                          <div className="pay-hist-amount">${parseFloat(p.amount).toFixed(2)}</div>
-                        </div>
-                      ))}
-                    </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, padding: '2px 18px 6px', color: 'var(--text3)' }}>
+                    <span>Employee wage expense (${totalWageExpensesThisMonth.toLocaleString()})</span>
+                    <span>accrued cost — cash only when paid</span>
                   </div>
                 </div>
-              )
-            })}
-
-            {!workersLoading && (workersData ?? []).length === 0 && (
-              <div className="emp-card" style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
-                No workers found.
+                <div style={{ padding: '12px 18px', background: 'var(--surface2)', borderTop: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14, fontWeight: 600 }}>Total cash outgoing</span>
+                    <span style={{ fontSize: 18, fontWeight: 600, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--red)' }}>${totalOutgoing.toLocaleString()}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text3)' }}>Wages owed (not yet paid)</span>
+                    <span style={{ fontSize: 13, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--accent2)' }}>${totalWagesOwed.toLocaleString()}</span>
+                  </div>
+                </div>
               </div>
-            )}
 
-            {/* Drivers */}
-            <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, margin: '20px 0 10px' }}>
-              Drivers
+            </div>
+          </div>
+
+          {/* Driver trip expenses — delivery/fuel cost the business paid, same
+              nature as the deliveryCost bucket in the P&L. Relocated here
+              (2026-09-05 employee-payments audit) from the old "Employees" tab:
+              a driver has no WorkerPayment/wage record, so it never belonged
+              alongside actual employee payments — it's a business expense. */}
+          <div style={{ marginTop: 24 }}>
+            <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+              Driver trip expenses
             </div>
             <div className="three-col">
               {drvLoading && [0, 1, 2].map(i => (
@@ -729,23 +812,221 @@ export default function Expenses() {
                 )
               })}
             </div>
+          </div>
+          </>
+        )}
 
+        {/* ── EMPLOYEE PAYMENTS TAB ── actual cash paid to employees this
+            month ONLY — never wages earned/owed (see this file's top doc
+            comment). Full worker CRUD/earned/owed/history lives on the
+            separate Employees page, untouched by this tab. ── */}
+        {tab === 'employee-payments' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 20, alignItems: 'start' }}>
+            <div className="card">
+              <div className="card-head">
+                <div className="card-title"><i className="ti ti-cash" /> Employee payments — {monthLabel}</div>
+              </div>
+
+              {employeePaymentGroups.length === 0 && (
+                <div className="empty">No employee payments this month.</div>
+              )}
+
+              {employeePaymentGroups.length > 0 && (
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Employee</th>
+                        <th style={{ textAlign: 'right' }}>Paid</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {employeePaymentGroups.map(g => (
+                        <tr key={g.workerId} style={{ cursor: 'pointer' }} onClick={() => setSelectedPaymentGroup(g)}>
+                          <td>{g.workerName}</td>
+                          <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>
+                            ${g.totalPaid.toLocaleString()}
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button className="btn" style={{ fontSize: 11 }} onClick={e => { e.stopPropagation(); setSelectedPaymentGroup(g) }}>
+                              View <i className="ti ti-chevron-right" style={{ fontSize: 11 }} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {employeePaymentGroups.length > 0 && (
+                <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                  <span style={{ color: 'var(--text3)' }}>Total employee payments</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${totalWorkerPaymentsThisMonth.toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Right: wages-owed reference — an ALL-TIME outstanding balance,
+                shown for context only. Never added into the payments total
+                above (CASE 6: wages owed are not employee payments). Full
+                per-worker earned/paid/owed detail lives on the Employees page. */}
+            <div style={{ position: 'sticky', top: 76 }}>
+              <div className="card">
+                <div className="card-head">
+                  <div className="card-title"><i className="ti ti-scale" /> Wages owed (all-time)</div>
+                </div>
+                {workersLoading && (
+                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>Loading…</div>
+                )}
+                {!workersLoading && (workersData ?? []).filter(w => parseFloat(w.totalOwed ?? '0') > 0).length === 0 && (
+                  <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>No outstanding wages.</div>
+                )}
+                {!workersLoading && (workersData ?? []).filter(w => parseFloat(w.totalOwed ?? '0') > 0).map(w => (
+                  <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '8px 18px', borderBottom: '1px solid var(--border)' }}>
+                    <span>{w.name}</span>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: 'var(--accent2)' }}>${parseFloat(w.totalOwed ?? '0').toFixed(2)}</span>
+                  </div>
+                ))}
+                <div style={{ padding: '12px 18px', background: 'var(--surface2)', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>not a business expense</span>
+                  <span style={{ fontSize: 14, fontWeight: 600, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--accent2)' }}>${totalWagesOwed.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── RECURRING TAB ── the SAME GeneralExpense rows already counted
+            once in Business Expenses (isRecurring=true), split out here for
+            visibility only — no second total, no accounting change. ── */}
+        {tab === 'recurring' && (
+          <div className="card">
+            <div className="card-head">
+              <div className="card-title"><i className="ti ti-repeat" /> Recurring expenses — {monthLabel}</div>
+              <button className="btn" style={{ fontSize: 12 }} onClick={() => openAdd('recurring')}>
+                <i className="ti ti-plus" style={{ fontSize: 13 }} /> Add recurring expense
+              </button>
+            </div>
+
+            {recurring.length === 0 && (
+              <div className="empty">No recurring expenses recorded for {monthLabel}.</div>
+            )}
+
+            {recurring.length > 0 && (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Category</th>
+                      <th>Description</th>
+                      <th style={{ textAlign: 'right' }}>Amount</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recurring.map(e => (
+                      <tr key={e.id}>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text2)' }}>{e.date?.slice(0, 10)}</td>
+                        <td>{e.category || 'Other'}</td>
+                        <td style={{ color: 'var(--text2)' }}>{e.description}</td>
+                        <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--red)' }}>
+                          ${parseFloat(e.amount).toLocaleString()}
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <button className="exp-del" onClick={() => openEdit(e)} title="Edit">
+                            <i className="ti ti-edit" style={{ fontSize: 12 }} />
+                          </button>
+                          <button className="exp-del" disabled={deleteExpense.isPending} onClick={() => deleteGeneralExpense(e)} title="Delete">
+                            <i className="ti ti-x" style={{ fontSize: 12 }} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {recurring.length > 0 && (
+              <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                <span style={{ color: 'var(--text3)' }}>Total recurring</span>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>${totalRecurring.toLocaleString()}</span>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* ── ADD EXPENSE MODAL ── */}
+      {/* ── EMPLOYEE PAYMENTS DRILL-DOWN — every payment for the selected
+          employee in the selected month (CASE 4), not just the aggregate. ── */}
+      {selectedPaymentGroup && (
+        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setSelectedPaymentGroup(null)}>
+          <div className="modal">
+            <div className="modal-head">
+              <div>
+                <div className="modal-title">{selectedPaymentGroup.workerName}</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{monthLabel} · Total paid ${selectedPaymentGroup.totalPaid.toLocaleString()}</div>
+              </div>
+              <button className="close-btn" aria-label="Close" onClick={() => setSelectedPaymentGroup(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th style={{ textAlign: 'right' }}>Amount</th>
+                      <th>Method</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...selectedPaymentGroup.payments]
+                      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+                      .map(p => (
+                        <tr key={p.id}>
+                          <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text2)' }}>{p.date?.slice(0, 10)}</td>
+                          <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>${parseFloat(p.amount).toFixed(2)}</td>
+                          <td style={{ textTransform: 'capitalize' }}>{p.method}{p.referenceNumber ? ` · ${p.referenceNumber}` : ''}</td>
+                          <td style={{ color: 'var(--text2)' }}>{p.notes || 'Payment'}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setSelectedPaymentGroup(null)}>Close</button>
+              <button
+                className="btn green"
+                onClick={() => {
+                  const owed = parseFloat((workersData ?? []).find(w => w.id === selectedPaymentGroup.workerId)?.totalOwed ?? '0')
+                  openPay(selectedPaymentGroup.workerName, owed, selectedPaymentGroup.workerId)
+                  setSelectedPaymentGroup(null)
+                }}
+              >
+                <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay {selectedPaymentGroup.workerName}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ADD/EDIT EXPENSE MODAL (direct/company expenses only) ── */}
       {addModalType && (
-        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setAddModalType(null)}>
+        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && closeExpenseModal()}>
           <div className="modal">
             <div className="modal-head">
               <div>
                 <div className="modal-title">
-                  {addModalType === 'recurring' ? 'Add recurring expense' : 'Add one-time expense'}
+                  {editingExpenseId ? 'Edit business expense' : 'Add business expense'}
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{monthLabel}</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{monthLabel} · Direct / company</div>
               </div>
-              <button className="close-btn" onClick={() => setAddModalType(null)}>✕</button>
+              <button className="close-btn" aria-label="Close" onClick={closeExpenseModal}>✕</button>
             </div>
             <div className="modal-body">
               <label className="form-label">Description</label>
@@ -796,11 +1077,65 @@ export default function Expenses() {
               />
             </div>
             <div className="modal-footer">
-              <button className="btn" onClick={() => setAddModalType(null)}>Cancel</button>
-              <button className="btn primary" onClick={saveExpense} disabled={createExpense.isPending}>
+              <button className="btn" onClick={closeExpenseModal}>Cancel</button>
+              <button className="btn primary" onClick={saveExpense} disabled={createExpense.isPending || updateExpense.isPending}>
                 <i className="ti ti-check" style={{ fontSize: 14 }} />
-                {createExpense.isPending ? 'Saving…' : 'Add expense'}
+                {createExpense.isPending || updateExpense.isPending ? 'Saving…' : editingExpenseId ? 'Save changes' : 'Add expense'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── CASH-HANDOVER EXPENSE DETAIL MODAL — audit trail / reconciliation ── */}
+      {detailRow && (
+        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setDetailRow(null)}>
+          <div className="modal">
+            <div className="modal-head">
+              <div>
+                <div className="modal-title">{detailRow.categoryName}</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Business expense detail</div>
+              </div>
+              <button className="close-btn" aria-label="Close" onClick={() => setDetailRow(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--red)', marginBottom: 14 }}>
+                ${parseFloat(detailRow.amount).toLocaleString()}
+              </div>
+              {[
+                ['Date', detailRow.date?.slice(0, 10)],
+                ['Category', detailRow.categoryName],
+                ['Description', detailRow.description],
+                ['Payment source', 'Cash Handover'],
+                ['Cash holder', detailRow.cashHolderName],
+                ['Cash handover', detailRow.cashHandoverId.slice(0, 8).toUpperCase()],
+              ].map(([label, val]) => (
+                <div key={label} className="panel-row" style={{ padding: '7px 0' }}>
+                  <span className="panel-row-label">{label}</span>
+                  <span className="panel-row-value" style={{ textAlign: 'right' }}>{val}</span>
+                </div>
+              ))}
+
+              <div style={{ marginTop: 16, padding: '12px 14px', background: 'var(--surface2)', borderRadius: 'var(--radius)' }}>
+                <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                  Reconciliation — this cash handover
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '3px 0' }}>
+                  <span>Cash collected/held</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>${detailCollected.toLocaleString()}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '3px 0' }}>
+                  <span>Business expenses (this handover)</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--red)' }}>−${parseFloat(detailRow.handoverExpensesTotal).toLocaleString()}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '3px 0', borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 8 }}>
+                  <span style={{ fontWeight: 600 }}>Handed to accountant</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>${parseFloat(detailRow.handoverHandedAmt).toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setDetailRow(null)}>Close</button>
             </div>
           </div>
         </div>
@@ -817,7 +1152,7 @@ export default function Expenses() {
                   Total owed: ${payOwed.toFixed(2)}
                 </div>
               </div>
-              <button className="close-btn" onClick={() => setPayTarget(null)}>✕</button>
+              <button className="close-btn" aria-label="Close" onClick={() => setPayTarget(null)}>✕</button>
             </div>
             <div className="modal-body">
               <div style={{ marginBottom: 14 }}>

@@ -523,7 +523,7 @@ export default function Orders() {
           <div className="modal" style={{ width: 440 }}>
             <div className="modal-head">
               <div className="modal-title"><i className="ti ti-filter" style={{ fontSize: 14, marginRight: 6 }} />Filter orders</div>
-              <button className="panel-close-btn" onClick={() => setFilterOpen(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setFilterOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-group" style={{ marginBottom: 0 }}>

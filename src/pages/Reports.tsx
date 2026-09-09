@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useProfitLoss, useVarianceReport, useArSummary, useStockValue, useContainerCosts, useDailyRevenue, useRevenueByType, usePnlByType } from '../hooks/useReports'
+import { useProfitLoss, useVarianceReport, useArSummary, useStockValue, useContainerCosts, useDailyRevenue, useRevenueByType, usePnlByType, useDailyReport } from '../hooks/useReports'
 import DailyRevenueChart from '../components/DailyRevenueChart'
 import RevenueByTypeChart from '../components/RevenueByTypeChart'
 import { useWorkers, useLogWorkerPayment } from '../hooks/useWorkers'
@@ -14,7 +14,7 @@ import { exportExcel, type ExcelColumn } from '../lib/excelExport'
 import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
 import type { Worker } from '../types/api'
 
-type Tab = 'pnl' | 'variance' | 'worker' | 'ledger' | 'stock'
+type Tab = 'pnl' | 'variance' | 'worker' | 'ledger' | 'stock' | 'daily'
 
 const mono = "'IBM Plex Mono', monospace"
 
@@ -57,6 +57,7 @@ const TAB_NAV = [
   { id: 'worker' as const,   icon: 'ti-tools',       label: 'Worker earnings' },
   { id: 'ledger' as const,   icon: 'ti-users',       label: 'Client ledger' },
   { id: 'stock' as const,    icon: 'ti-building-warehouse', label: 'Stock & costs' },
+  { id: 'daily' as const,    icon: 'ti-calendar-event', label: 'Full Day Report' },
 ]
 
 export default function Reports() {
@@ -109,6 +110,11 @@ export default function Reports() {
   const stockValueQ = useStockValue()
   const containerCostsQ = useContainerCosts({ dateFrom, dateTo })
 
+  // Full Day Report tab data — a single calendar day, not the Period range
+  // above (a "what happened on day X" report has no meaningful start/end).
+  const [dailyReportDate, setDailyReportDate] = useState(() => toDateOnlyString(new Date()))
+  const dailyReportQ = useDailyReport(dailyReportDate)
+
   const pnl = pnlQ.data
   const variance = varianceQ.data
 
@@ -123,6 +129,7 @@ export default function Reports() {
     clientsQ.refetch()
     stockValueQ.refetch()
     containerCostsQ.refetch()
+    dailyReportQ.refetch()
     setTimeout(() => setRefreshing(false), 800)
   }
 
@@ -157,7 +164,10 @@ export default function Reports() {
 
       <div style={{ padding: '24px 28px', flex: 1 }}>
 
-        {/* FILTERS */}
+        {/* FILTERS — the Full Day Report tab has its own single-date picker
+            below (a "what happened on day X" report has no meaningful
+            start/end range), so this Period bar is hidden for it. */}
+        {tab !== 'daily' && (
         <div className="no-print" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, padding: '12px 16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: mono }}>Period</span>
           {DATE_PRESETS.map(preset => {
@@ -196,6 +206,7 @@ export default function Reports() {
             <i className={`ti ti-refresh${refreshing ? ' spin' : ''}`} style={{ fontSize: 13 }} /> {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
+        )}
 
         {/* ── P&L ── */}
         {tab === 'pnl' && (
@@ -253,7 +264,7 @@ export default function Reports() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
               {[
                 { title: 'Revenue breakdown', icon: 'ti-trending-up', iconColor: 'var(--accent)', rows: [['Total revenue', formatUsd(pnl?.revenue, { decimals: 0 }), 'green']], total: ['Total revenue', formatUsd(pnl?.revenue, { decimals: 0 })] },
-                { title: 'Cost breakdown', icon: 'ti-trending-down', iconColor: 'var(--red)', ownerTag: true, rows: [['COGS (charcoal cost)', formatUsd(pnl?.cogs, { decimals: 0 }), 'red'], ['Bag costs', formatUsd(pnl?.bagCost, { decimals: 0 }), 'red'], ['Packing variances', formatUsd(pnl?.varianceCost, { decimals: 0 }), 'amber'], ['Delivery expenses', formatUsd(pnl?.deliveryCost, { decimals: 0 }), 'red']], total: ['Total costs', pnl ? formatUsd(roundDp(parseFloat(pnl.cogs) + parseFloat(pnl.bagCost) + parseFloat(pnl.varianceCost) + parseFloat(pnl.deliveryCost), 2), { decimals: 0 }) : '—', 'var(--red)'] },
+                { title: 'Cost breakdown', icon: 'ti-trending-down', iconColor: 'var(--red)', ownerTag: true, rows: [['COGS (charcoal cost)', formatUsd(pnl?.cogs, { decimals: 0 }), 'red'], ['Bag costs (packaging material)', formatUsd(pnl?.bagCost, { decimals: 0 }), 'red'], ['Packing variances', formatUsd(pnl?.varianceCost, { decimals: 0 }), 'amber'], ['Delivery expenses', formatUsd(pnl?.deliveryCost, { decimals: 0 }), 'red']], total: ['Total costs', pnl ? formatUsd(roundDp(parseFloat(pnl.cogs) + parseFloat(pnl.bagCost) + parseFloat(pnl.varianceCost) + parseFloat(pnl.deliveryCost), 2), { decimals: 0 }) : '—', 'var(--red)'] },
               ].map(block => (
                 <div key={block.title} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
                   <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -313,34 +324,36 @@ export default function Reports() {
               {pnlByTypeQ.isError && <div className="empty">Failed to load P&amp;L by charcoal type.<div><button className="btn" style={{ marginTop: 10 }} onClick={() => pnlByTypeQ.refetch()}>Retry</button></div></div>}
               {!pnlByTypeQ.isLoading && !pnlByTypeQ.isError && (pnlByTypeQ.data?.data.length ?? 0) === 0 && <div className="empty">No revenue in this period.</div>}
               {!pnlByTypeQ.isLoading && !pnlByTypeQ.isError && (pnlByTypeQ.data?.data.length ?? 0) > 0 && (
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      {['Charcoal type', 'Revenue', 'COGS', 'Gross profit', 'Margin'].map(h => <th key={h}>{h}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pnlByTypeQ.data!.data.map(row => {
-                      const negative = parseFloat(row.grossProfit) < 0
-                      return (
-                        <tr key={row.charcoalType}>
-                          <td><span style={{ fontWeight: 500 }}>{row.charcoalType}</span></td>
-                          <td><Mono>{formatUsd(row.revenue, { decimals: 0 })}</Mono></td>
-                          <td><Mono color="var(--red)">{formatUsd(row.cogs, { decimals: 0 })}</Mono></td>
-                          <td><Mono bold color={negative ? 'var(--red)' : 'var(--accent)'}>{formatUsd(row.grossProfit, { decimals: 0 })}</Mono></td>
-                          <td><span className={`badge ${negative ? 'badge-red' : 'badge-green'}`}>{row.marginPct}%</span></td>
-                        </tr>
-                      )
-                    })}
-                    <tr style={{ background: 'var(--surface2)' }}>
-                      <td><span style={{ fontWeight: 600 }}>Total</span></td>
-                      <td><Mono bold>{formatUsd(pnlByTypeQ.data!.totalRevenue, { decimals: 0 })}</Mono></td>
-                      <td><Mono bold color="var(--red)">{formatUsd(pnlByTypeQ.data!.totalCogs, { decimals: 0 })}</Mono></td>
-                      <td><Mono bold color={parseFloat(pnlByTypeQ.data!.totalGrossProfit) < 0 ? 'var(--red)' : 'var(--accent)'}>{formatUsd(pnlByTypeQ.data!.totalGrossProfit, { decimals: 0 })}</Mono></td>
-                      <td><span className={`badge ${parseFloat(pnlByTypeQ.data!.totalGrossProfit) < 0 ? 'badge-red' : 'badge-green'}`}>{pnlByTypeQ.data!.totalMarginPct}%</span></td>
-                    </tr>
-                  </tbody>
-                </table>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        {['Charcoal type', 'Revenue', 'COGS', 'Gross profit', 'Margin'].map(h => <th key={h}>{h}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pnlByTypeQ.data!.data.map(row => {
+                        const negative = parseFloat(row.grossProfit) < 0
+                        return (
+                          <tr key={row.charcoalType}>
+                            <td><span style={{ fontWeight: 500 }}>{row.charcoalType}</span></td>
+                            <td><Mono>{formatUsd(row.revenue, { decimals: 0 })}</Mono></td>
+                            <td><Mono color="var(--red)">{formatUsd(row.cogs, { decimals: 0 })}</Mono></td>
+                            <td><Mono bold color={negative ? 'var(--red)' : 'var(--accent)'}>{formatUsd(row.grossProfit, { decimals: 0 })}</Mono></td>
+                            <td><span className={`badge ${negative ? 'badge-red' : 'badge-green'}`}>{row.marginPct}%</span></td>
+                          </tr>
+                        )
+                      })}
+                      <tr style={{ background: 'var(--surface2)' }}>
+                        <td><span style={{ fontWeight: 600 }}>Total</span></td>
+                        <td><Mono bold>{formatUsd(pnlByTypeQ.data!.totalRevenue, { decimals: 0 })}</Mono></td>
+                        <td><Mono bold color="var(--red)">{formatUsd(pnlByTypeQ.data!.totalCogs, { decimals: 0 })}</Mono></td>
+                        <td><Mono bold color={parseFloat(pnlByTypeQ.data!.totalGrossProfit) < 0 ? 'var(--red)' : 'var(--accent)'}>{formatUsd(pnlByTypeQ.data!.totalGrossProfit, { decimals: 0 })}</Mono></td>
+                        <td><span className={`badge ${parseFloat(pnlByTypeQ.data!.totalGrossProfit) < 0 ? 'badge-red' : 'badge-green'}`}>{pnlByTypeQ.data!.totalMarginPct}%</span></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           </div>
@@ -372,67 +385,71 @@ export default function Reports() {
                 <div className="card-head">
                   <div className="card-title"><i className="ti ti-flame" /> Variance by charcoal type</div>
                 </div>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      {['Type', 'Sessions', 'Total var. (kg)', 'Avg %', 'Share of total'].map(h => <th key={h}>{h}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {/* byCharcoalType comes straight from the same GET /reports/variance
-                        response the session log and Variance-by-worker table already use —
-                        no separate request, and it's a full-table breakdown (not limited to
-                        the current page), so it reconciles exactly with totalVarianceKg. */}
-                    {(variance?.byCharcoalType ?? []).map(row => (
-                      <tr key={row.charcoalType}>
-                        <td><Mono>{row.charcoalType}</Mono></td>
-                        <td><Mono>{row.sessions}</Mono></td>
-                        <td><Mono color="var(--accent2)">{parseFloat(row.totalVarianceKg).toFixed(1)} kg</Mono></td>
-                        <td><span className="badge badge-amber">{row.avgVariancePct}%</span></td>
-                        <td><Mono>{row.shareOfTotalPct}%</Mono></td>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        {['Type', 'Sessions', 'Total var. (kg)', 'Avg %', 'Share of total'].map(h => <th key={h}>{h}</th>)}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {/* byCharcoalType comes straight from the same GET /reports/variance
+                          response the session log and Variance-by-worker table already use —
+                          no separate request, and it's a full-table breakdown (not limited to
+                          the current page), so it reconciles exactly with totalVarianceKg. */}
+                      {(variance?.byCharcoalType ?? []).map(row => (
+                        <tr key={row.charcoalType}>
+                          <td><Mono>{row.charcoalType}</Mono></td>
+                          <td><Mono>{row.sessions}</Mono></td>
+                          <td><Mono color="var(--accent2)">{parseFloat(row.totalVarianceKg).toFixed(1)} kg</Mono></td>
+                          <td><span className="badge badge-amber">{row.avgVariancePct}%</span></td>
+                          <td><Mono>{row.shareOfTotalPct}%</Mono></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
                 {(!variance || variance.byCharcoalType.length === 0) && <div className="empty">No variance records for this period.</div>}
               </div>
               <div className="card" style={{ marginBottom: 0 }}>
                 <div className="card-head">
                   <div className="card-title"><i className="ti ti-tools" /> Variance by worker</div>
                 </div>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      {['Worker', 'Sessions', 'Total var.', 'Avg %'].map(h => <th key={h}>{h}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(() => {
-                      // Aggregate the already-fetched per-session variance rows by worker —
-                      // workerId/workerName/varianceKg/kgConsumed all come straight from the
-                      // same GET /reports/variance response the session log below reuses.
-                      const byWorker = new Map<string, { name: string; sessions: number; varianceKg: number; kgConsumed: number }>()
-                      for (const r of variance?.data ?? []) {
-                        const entry = byWorker.get(r.workerId) ?? { name: r.workerName, sessions: 0, varianceKg: 0, kgConsumed: 0 }
-                        entry.sessions += 1
-                        entry.varianceKg += parseFloat(r.varianceKg)
-                        entry.kgConsumed += parseFloat(r.kgConsumed)
-                        byWorker.set(r.workerId, entry)
-                      }
-                      return Array.from(byWorker.entries()).map(([workerId, w]) => {
-                        const avgPct = w.kgConsumed > 0 ? (w.varianceKg / w.kgConsumed) * 100 : 0
-                        return (
-                          <tr key={workerId}>
-                            <td><Mono>{w.name}</Mono></td>
-                            <td><Mono>{w.sessions}</Mono></td>
-                            <td><Mono color="var(--accent2)">{w.varianceKg.toFixed(1)} kg</Mono></td>
-                            <td><span className="badge badge-amber">{avgPct.toFixed(1)}%</span></td>
-                          </tr>
-                        )
-                      })
-                    })()}
-                  </tbody>
-                </table>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        {['Worker', 'Sessions', 'Total var.', 'Avg %'].map(h => <th key={h}>{h}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        // Aggregate the already-fetched per-session variance rows by worker —
+                        // workerId/workerName/varianceKg/kgConsumed all come straight from the
+                        // same GET /reports/variance response the session log below reuses.
+                        const byWorker = new Map<string, { name: string; sessions: number; varianceKg: number; kgConsumed: number }>()
+                        for (const r of variance?.data ?? []) {
+                          const entry = byWorker.get(r.workerId) ?? { name: r.workerName, sessions: 0, varianceKg: 0, kgConsumed: 0 }
+                          entry.sessions += 1
+                          entry.varianceKg += parseFloat(r.varianceKg)
+                          entry.kgConsumed += parseFloat(r.kgConsumed)
+                          byWorker.set(r.workerId, entry)
+                        }
+                        return Array.from(byWorker.entries()).map(([workerId, w]) => {
+                          const avgPct = w.kgConsumed > 0 ? (w.varianceKg / w.kgConsumed) * 100 : 0
+                          return (
+                            <tr key={workerId}>
+                              <td><Mono>{w.name}</Mono></td>
+                              <td><Mono>{w.sessions}</Mono></td>
+                              <td><Mono color="var(--accent2)">{w.varianceKg.toFixed(1)} kg</Mono></td>
+                              <td><span className="badge badge-amber">{avgPct.toFixed(1)}%</span></td>
+                            </tr>
+                          )
+                        })
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
                 {(!variance || variance.data.length === 0) && <div className="empty">No variance records for this period.</div>}
               </div>
             </div>
@@ -440,26 +457,28 @@ export default function Reports() {
               <div className="card-head">
                 <div className="card-title"><i className="ti ti-list" /> Session variance log</div>
               </div>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    {['Session', 'Date', 'Lot', 'kg consumed', 'kg output', 'Variance', 'Var. cost'].map(h => <th key={h}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(variance?.data ?? []).map(r => (
-                    <tr key={r.sessionId}>
-                      <td><Mono>{r.sessionDisplayId ?? r.sessionId.slice(0, 8)}</Mono></td>
-                      <td><span style={{ color: 'var(--text2)' }}>{new Date(r.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span></td>
-                      <td><span>{r.lots.map(l => l.displayId ?? `${l.charcoalType}·${l.grade}`).join(', ') || '—'}</span></td>
-                      <td><Mono>{parseFloat(r.kgConsumed).toFixed(0)} kg</Mono></td>
-                      <td><Mono>{parseFloat(r.kgOutputTotal).toFixed(0)} kg</Mono></td>
-                      <td><Mono color="var(--accent2)">{parseFloat(r.varianceKg).toFixed(1)} kg</Mono></td>
-                      <td><Mono color="var(--red)">{formatUsd(r.varianceCost, { decimals: 0 })}</Mono></td>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      {['Session', 'Date', 'Lot', 'kg consumed', 'kg output', 'Variance', 'Var. cost'].map(h => <th key={h}>{h}</th>)}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {(variance?.data ?? []).map(r => (
+                      <tr key={r.sessionId}>
+                        <td><Mono>{r.sessionDisplayId ?? r.sessionId.slice(0, 8)}</Mono></td>
+                        <td><span style={{ color: 'var(--text2)' }}>{new Date(r.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span></td>
+                        <td><span>{r.lots.map(l => l.displayId ?? `${l.charcoalType}·${l.grade}`).join(', ') || '—'}</span></td>
+                        <td><Mono>{parseFloat(r.kgConsumed).toFixed(0)} kg</Mono></td>
+                        <td><Mono>{parseFloat(r.kgOutputTotal).toFixed(0)} kg</Mono></td>
+                        <td><Mono color="var(--accent2)">{parseFloat(r.varianceKg).toFixed(1)} kg</Mono></td>
+                        <td><Mono color="var(--red)">{formatUsd(r.varianceCost, { decimals: 0 })}</Mono></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               {(!variance || variance.data.length === 0) && <div className="empty">No variance records for this period.</div>}
             </div>
           </div>
@@ -529,28 +548,30 @@ export default function Reports() {
                   )}
                 </div>
                 {(worker.totalBagsPacked ?? []).length > 0 ? (
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        {['Bag type', 'Bags packed', 'Rate / bag', 'Earned'].map(h => <th key={h}>{h}</th>)}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(worker.totalBagsPacked ?? []).map(entry => {
-                        const rateEntry = worker.ratesPerBagType.find(r => r.bagTypeId === entry.bagTypeId)
-                        const rate = parseFloat(rateEntry?.ratePerBag ?? '0')
-                        const earned = entry.count * rate
-                        return (
-                          <tr key={entry.bagTypeId}>
-                            <td><Mono bold>{bagTypeNameById.get(entry.bagTypeId) ?? entry.bagTypeId.slice(0, 8)}</Mono></td>
-                            <td><Mono>{entry.count.toLocaleString('en-US')}</Mono></td>
-                            <td><Mono color="var(--text3)">${rate.toFixed(3)}</Mono></td>
-                            <td><Mono color="var(--accent)" bold>${earned.toFixed(2)}</Mono></td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                  <div className="table-scroll">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          {['Bag type', 'Bags packed', 'Rate / bag', 'Earned'].map(h => <th key={h}>{h}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(worker.totalBagsPacked ?? []).map(entry => {
+                          const rateEntry = worker.ratesPerBagType.find(r => r.bagTypeId === entry.bagTypeId)
+                          const rate = parseFloat(rateEntry?.ratePerBag ?? '0')
+                          const earned = entry.count * rate
+                          return (
+                            <tr key={entry.bagTypeId}>
+                              <td><Mono bold>{bagTypeNameById.get(entry.bagTypeId) ?? entry.bagTypeId.slice(0, 8)}</Mono></td>
+                              <td><Mono>{entry.count.toLocaleString('en-US')}</Mono></td>
+                              <td><Mono color="var(--text3)">${rate.toFixed(3)}</Mono></td>
+                              <td><Mono color="var(--accent)" bold>${earned.toFixed(2)}</Mono></td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 ) : (
                   <div className="empty">No packing sessions recorded yet.</div>
                 )}
@@ -621,29 +642,31 @@ export default function Reports() {
                     {clientsQ.isError && <div className="empty">Failed to load clients.<div><button className="btn" style={{ marginTop: 10 }} onClick={() => clientsQ.refetch()}>Retry</button></div></div>}
                     {!clientsQ.isLoading && allClients.length === 0 && <div className="empty">No clients yet.</div>}
                     {!clientsQ.isLoading && allClients.length > 0 && (
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            {['Client', 'Type', 'Balance', 'Status'].map(h => <th key={h}>{h}</th>)}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {allClients.map(c => {
-                            const bal = parseFloat(c.balance)
-                            const hasBalance = bal > 0
-                            return (
-                              <tr key={c.id}>
-                                <td><span style={{ fontWeight: 500 }}>{c.name}</span></td>
-                                <td><span className="badge badge-gray">{c.type}</span></td>
-                                <td><Mono bold color={hasBalance ? 'var(--accent2)' : 'var(--accent)'}>{formatUsd(c.balance, { decimals: 0 })}</Mono></td>
-                                <td>{hasBalance
-                                  ? <span className="badge badge-amber">Has balance</span>
-                                  : <span className="badge badge-green">Clear</span>}</td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
+                      <div className="table-scroll">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              {['Client', 'Type', 'Balance', 'Status'].map(h => <th key={h}>{h}</th>)}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {allClients.map(c => {
+                              const bal = parseFloat(c.balance)
+                              const hasBalance = bal > 0
+                              return (
+                                <tr key={c.id}>
+                                  <td><span style={{ fontWeight: 500 }}>{c.name}</span></td>
+                                  <td><span className="badge badge-gray">{c.type}</span></td>
+                                  <td><Mono bold color={hasBalance ? 'var(--accent2)' : 'var(--accent)'}>{formatUsd(c.balance, { decimals: 0 })}</Mono></td>
+                                  <td>{hasBalance
+                                    ? <span className="badge badge-amber">Has balance</span>
+                                    : <span className="badge badge-green">Clear</span>}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     )}
                   </div>
                 </>
@@ -672,23 +695,25 @@ export default function Reports() {
               <div className="card-head">
                 <div className="card-title"><i className="ti ti-building-warehouse" /> Stock value by lot</div>
               </div>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    {['Charcoal', 'Remaining', 'Cost / kg', 'Value'].map(h => <th key={h}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(stockValueQ.data?.data ?? []).map(row => (
-                    <tr key={row.lotId}>
-                      <td>{row.charcoalType} · Grade {row.grade}</td>
-                      <td><Mono>{parseFloat(row.kgRemaining).toLocaleString()} kg</Mono></td>
-                      <td><Mono>{formatUsd(row.costPerKg, { decimals: 2 })}</Mono></td>
-                      <td><Mono bold color="var(--accent)">{formatUsd(row.lotValue, { decimals: 0 })}</Mono></td>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      {['Charcoal', 'Remaining', 'Cost / kg', 'Value'].map(h => <th key={h}>{h}</th>)}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {(stockValueQ.data?.data ?? []).map(row => (
+                      <tr key={row.lotId}>
+                        <td>{row.charcoalType} · Grade {row.grade}</td>
+                        <td><Mono>{parseFloat(row.kgRemaining).toLocaleString()} kg</Mono></td>
+                        <td><Mono>{formatUsd(row.costPerKg, { decimals: 2 })}</Mono></td>
+                        <td><Mono bold color="var(--accent)">{formatUsd(row.lotValue, { decimals: 0 })}</Mono></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               {!stockValueQ.isLoading && (stockValueQ.data?.data.length ?? 0) === 0 && (
                 <div className="empty">No stock lots with remaining value.</div>
               )}
@@ -698,30 +723,118 @@ export default function Reports() {
               <div className="card-head">
                 <div className="card-title"><i className="ti ti-ship" /> Container landed costs</div>
               </div>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    {['Container', 'Supplier', 'Charcoal', 'Paid bags', 'Tonnage', 'All-in $/ton', 'All-in $/kg'].map(h => <th key={h}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(containerCostsQ.data?.data ?? []).flatMap(c => c.productLines.map(l => (
-                    <tr key={l.id}>
-                      <td>{c.number}</td>
-                      <td>{c.supplierName}</td>
-                      <td>{l.charcoalType} · Grade {l.grade}</td>
-                      <td><Mono>{l.paidBags.toLocaleString()}</Mono></td>
-                      <td><Mono>{parseFloat(l.computed.tonnage).toFixed(2)} t</Mono></td>
-                      <td><Mono>{formatUsd(l.computed.allInCostPerTon, { decimals: 0 })}</Mono></td>
-                      <td><Mono bold color="var(--accent)">{formatUsd(l.computed.allInCostPerKg, { decimals: 2 })}</Mono></td>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      {['Container', 'Supplier', 'Charcoal', 'Paid bags', 'Tonnage', 'All-in $/ton', 'All-in $/kg'].map(h => <th key={h}>{h}</th>)}
                     </tr>
-                  )))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {(containerCostsQ.data?.data ?? []).flatMap(c => c.productLines.map(l => (
+                      <tr key={l.id}>
+                        <td>{c.number}</td>
+                        <td>{c.supplierName}</td>
+                        <td>{l.charcoalType} · Grade {l.grade}</td>
+                        <td><Mono>{l.paidBags.toLocaleString()}</Mono></td>
+                        <td><Mono>{parseFloat(l.computed.tonnage).toFixed(2)} t</Mono></td>
+                        <td><Mono>{formatUsd(l.computed.allInCostPerTon, { decimals: 0 })}</Mono></td>
+                        <td><Mono bold color="var(--accent)">{formatUsd(l.computed.allInCostPerKg, { decimals: 2 })}</Mono></td>
+                      </tr>
+                    )))}
+                  </tbody>
+                </table>
+              </div>
               {!containerCostsQ.isLoading && (containerCostsQ.data?.data.length ?? 0) === 0 && (
                 <div className="empty">No arrived containers in this period.</div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ── Full Day Report ── read-only end-of-day business summary for one
+            calendar day (forensic audit, 2026-09). Owner only — matches the
+            backend's @Roles('owner') on GET /reports/daily/:date. This tab is
+            a lightweight preview/launcher only; the complete, printable A4
+            report (every section: sales, payments, expenses, cash handovers,
+            orders, stock movement, client receivables, employee summary,
+            exceptions) lives at its own dedicated print route so it can print
+            cleanly with no sidebar/topbar/tab-nav chrome — see
+            DailyReportPrint.tsx. */}
+        {tab === 'daily' && (
+          <div>
+            <div className="no-print" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, padding: '12px 16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: mono }}>Day</span>
+              <input
+                type="date"
+                value={dailyReportDate}
+                onChange={e => setDailyReportDate(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg)', fontSize: 12, color: 'var(--text2)', outline: 'none' }}
+              />
+              <span style={{ fontSize: 11, color: 'var(--text3)', fontStyle: 'italic' }}>
+                (end-of-day summary — not the Period range above)
+              </span>
+              <div style={{ flex: 1 }} />
+              <a
+                className="btn primary"
+                href={`/reports/daily/${dailyReportDate}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: 12, padding: '6px 12px', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <i className="ti ti-printer" style={{ fontSize: 13 }} /> Open printable report
+              </a>
+            </div>
+
+            {dailyReportQ.isLoading ? (
+              <div className="empty">Loading…</div>
+            ) : dailyReportQ.isError ? (
+              <div className="empty">Failed to load — owner access is required for the Full Day Report.</div>
+            ) : dailyReportQ.data && (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 14 }}>
+                  <div className="kpi-tile">
+                    <div className="kpi-tile-label">Total sales</div>
+                    <div className="kpi-tile-value">{formatUsd(dailyReportQ.data.summary.totalSales, { decimals: 0 })}</div>
+                    <div className="kpi-tile-sub">{dailyReportQ.data.summary.saleCount} sale(s)</div>
+                  </div>
+                  <div className="kpi-tile">
+                    <div className="kpi-tile-label">Cash collected</div>
+                    <div className="kpi-tile-value">{formatUsd(dailyReportQ.data.summary.totalCashCollected, { decimals: 0 })}</div>
+                    <div className="kpi-tile-sub">{dailyReportQ.data.summary.paymentCount} payment(s)</div>
+                  </div>
+                  <div className="kpi-tile">
+                    <div className="kpi-tile-label">Cash handed over</div>
+                    <div className="kpi-tile-value">{formatUsd(dailyReportQ.data.summary.totalHandedOver, { decimals: 0 })}</div>
+                    <div className="kpi-tile-sub">{dailyReportQ.data.cashHandovers.length} handover(s)</div>
+                  </div>
+                  <div className="kpi-tile">
+                    <div className="kpi-tile-label">Exceptions</div>
+                    <div className="kpi-tile-value" style={{ color: dailyReportQ.data.exceptions.length > 0 ? 'var(--red)' : undefined }}>
+                      {dailyReportQ.data.exceptions.length}
+                    </div>
+                    <div className="kpi-tile-sub">flagged for this day</div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="card-head">
+                    <div className="card-title"><i className="ti ti-alert-triangle" /> Exceptions</div>
+                  </div>
+                  {dailyReportQ.data.exceptions.length === 0 ? (
+                    <div className="empty">No exceptions flagged for this day.</div>
+                  ) : (
+                    <div style={{ padding: '4px 16px 12px' }}>
+                      {dailyReportQ.data.exceptions.map((x, i) => (
+                        <div key={i} style={{ padding: '6px 10px', borderLeft: '3px solid var(--red)', background: 'var(--red-bg)', marginBottom: 6, fontSize: 12.5, borderRadius: 4 }}>
+                          {x.description}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -737,7 +850,7 @@ export default function Reports() {
                 <div className="modal-title">Pay {selectedWorker.name}</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Total owed: <strong style={{ color: 'var(--accent2)' }}>{formatUsd(selectedWorker.totalOwed, { decimals: 0 })}</strong></div>
               </div>
-              <button className="panel-close-btn" onClick={() => { setPayOpen(false); setSelectedWorker(null) }}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => { setPayOpen(false); setSelectedWorker(null) }}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-group">

@@ -232,7 +232,7 @@ export default function FillClientDetail() {
   const [payDate, setPayDate] = useState(toDateOnlyString(new Date()))
   const [payMethod, setPayMethod] = useState('cash')
   const [payAmt, setPayAmt] = useState(0)
-  const [payBy, setPayBy] = useState('')
+  const [payById, setPayById] = useState('')
   const [payRef, setPayRef] = useState('')
   const [paySaving, setPaySaving] = useState(false)
 
@@ -466,10 +466,7 @@ export default function FillClientDetail() {
 
   return (
     <>
-      <Topbar title={clientName}>
-        <button className="btn" style={{ marginLeft: 'auto' }} onClick={() => navigate('/fill-clients')}>
-          <i className="ti ti-chevron-left" style={{ fontSize: 13 }} /> All fill clients
-        </button>
+      <Topbar title={clientName} back={{ label: 'All fill clients', to: '/fill-clients' }}>
         <button className="btn" onClick={openEditClient}><i className="ti ti-pencil" style={{ fontSize: 15 }} /> Edit</button>
         <button className="btn" onClick={toggleActive}
           style={{ color: (client as any)?.isActive === false ? 'var(--accent)' : 'var(--red)', borderColor: (client as any)?.isActive === false ? 'var(--accent)' : 'var(--red)' }}>
@@ -638,44 +635,46 @@ export default function FillClientDetail() {
                 <div className="empty">No pickups recorded yet.</div>
               )}
               {!pickupsQ.isLoading && pickups.length > 0 && (
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Driver / recipient</th>
-                      <th>Bags</th>
-                      <th className="right">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pickups.map((pk: any) => {
-                      let bagCount = 0
-                      let bagDetail = ''
-                      if (pk.reason) {
-                        try {
-                          const s = JSON.parse(pk.reason) as { specKey?: string; size?: number; charcoal?: string; qty: number }[]
-                          bagCount = s.reduce((acc, i) => acc + i.qty, 0)
-                          bagDetail = s.map(i => `${i.qty}× ${i.size ?? '?'}kg`).join(', ')
-                        } catch { bagDetail = pk.reason }
-                      }
-                      return (
-                        <tr key={pk.id}>
-                          <td className="mono">
-                            {formatDateTime(pk.date, { day: '2-digit' })}
-                          </td>
-                          <td style={{ color: 'var(--text2)' }}>{pk.recipient ?? '—'}</td>
-                          <td>
-                            <span style={{ fontWeight: 600 }}>{bagCount > 0 ? bagCount : '—'}</span>
-                            {bagDetail && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>{bagDetail}</span>}
-                          </td>
-                          <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: pk.amount ? 'var(--accent)' : 'var(--text3)' }}>
-                            {pk.amount ? `$${parseFloat(pk.amount).toFixed(2)}` : '—'}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Driver / recipient</th>
+                        <th>Bags</th>
+                        <th className="right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pickups.map((pk: any) => {
+                        let bagCount = 0
+                        let bagDetail = ''
+                        if (pk.reason) {
+                          try {
+                            const s = JSON.parse(pk.reason) as { specKey?: string; size?: number; charcoal?: string; qty: number }[]
+                            bagCount = s.reduce((acc, i) => acc + i.qty, 0)
+                            bagDetail = s.map(i => `${i.qty}× ${i.size ?? '?'}kg`).join(', ')
+                          } catch { bagDetail = pk.reason }
+                        }
+                        return (
+                          <tr key={pk.id}>
+                            <td className="mono">
+                              {formatDateTime(pk.date, { day: '2-digit' })}
+                            </td>
+                            <td style={{ color: 'var(--text2)' }}>{pk.recipient ?? '—'}</td>
+                            <td>
+                              <span style={{ fontWeight: 600 }}>{bagCount > 0 ? bagCount : '—'}</span>
+                              {bagDetail && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>{bagDetail}</span>}
+                            </td>
+                            <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: pk.amount ? 'var(--accent)' : 'var(--text3)' }}>
+                              {pk.amount ? `$${parseFloat(pk.amount).toFixed(2)}` : '—'}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
 
@@ -695,28 +694,30 @@ export default function FillClientDetail() {
                 <div className="empty">No fill jobs recorded yet. Use "New fill job" to log one.</div>
               )}
               {!fillJobsQ.isLoading && fillJobs.length > 0 && (
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Worker</th>
-                      <th className="right">Charcoal kg</th>
-                      <th className="right">Bags</th>
-                      <th className="right">Cost</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {fillJobs.map(fj => (
-                      <tr key={fj.id}>
-                        <td className="mono">{formatDateTime(fj.date, { day: '2-digit' })}</td>
-                        <td style={{ color: 'var(--text2)' }}>{fj.workerEntity?.name ?? '—'}</td>
-                        <td className="right num">{parseFloat(fj.totalCharcoalKg).toFixed(1)} kg</td>
-                        <td className="right num" style={{ fontWeight: 600 }}>{fj.totalBags}</td>
-                        <td className="right num" style={{ color: 'var(--accent2)' }}>${parseFloat(fj.totalCost).toFixed(2)}</td>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Worker</th>
+                        <th className="right">Charcoal kg</th>
+                        <th className="right">Bags</th>
+                        <th className="right">Cost</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {fillJobs.map(fj => (
+                        <tr key={fj.id}>
+                          <td className="mono">{formatDateTime(fj.date, { day: '2-digit' })}</td>
+                          <td style={{ color: 'var(--text2)' }}>{fj.workerEntity?.name ?? '—'}</td>
+                          <td className="right num">{parseFloat(fj.totalCharcoalKg).toFixed(1)} kg</td>
+                          <td className="right num" style={{ fontWeight: 600 }}>{fj.totalBags}</td>
+                          <td className="right num" style={{ color: 'var(--accent2)' }}>${parseFloat(fj.totalCost).toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
 
@@ -737,26 +738,28 @@ export default function FillClientDetail() {
                 <div className="pay-kpi"><div className="lbl">Total paid</div><div className="val green">${stmtCreditTotal.toFixed(2)}</div></div>
                 <div className="pay-kpi"><div className="lbl">Outstanding</div><div className={`val ${clientBalance > 0 ? 'amber' : 'green'}`}>${clientBalance.toFixed(2)}</div></div>
               </div>
-              <table className="data-table">
-                <thead><tr><th>Date</th><th>Method</th><th>Receiver</th><th>Amount</th><th>Currency</th></tr></thead>
-                <tbody>
-                  {paymentsQ.isLoading && (
-                    <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}>Loading…</td></tr>
-                  )}
-                  {!paymentsQ.isLoading && realPayments.length === 0 && (
-                    <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}>No payments recorded</td></tr>
-                  )}
-                  {!paymentsQ.isLoading && realPayments.map((p) => (
-                    <tr key={p.id}>
-                      <td className="mono">{formatDateTime(p.date, { day: '2-digit' })}</td>
-                      <td><span className="badge badge-gray">{p.method}</span></td>
-                      <td style={{ color: 'var(--text2)', fontSize: 12.5 }}>{p.receiver?.name ?? p.receiverName ?? '—'}</td>
-                      <td className="right num" style={{ fontWeight: 600, color: 'var(--accent)' }}>+${parseFloat(p.amount).toFixed(2)}</td>
-                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)' }}>{p.currency}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead><tr><th>Date</th><th>Method</th><th>Receiver</th><th>Amount</th><th>Currency</th></tr></thead>
+                  <tbody>
+                    {paymentsQ.isLoading && (
+                      <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}>Loading…</td></tr>
+                    )}
+                    {!paymentsQ.isLoading && realPayments.length === 0 && (
+                      <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}>No payments recorded</td></tr>
+                    )}
+                    {!paymentsQ.isLoading && realPayments.map((p) => (
+                      <tr key={p.id}>
+                        <td className="mono">{formatDateTime(p.date, { day: '2-digit' })}</td>
+                        <td><span className="badge badge-gray">{p.method}</span></td>
+                        <td style={{ color: 'var(--text2)', fontSize: 12.5 }}>{p.receiver?.name ?? p.receiverName ?? '—'}</td>
+                        <td className="right num" style={{ fontWeight: 600, color: 'var(--accent)' }}>+${parseFloat(p.amount).toFixed(2)}</td>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)' }}>{p.currency}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
           </div>
@@ -890,7 +893,7 @@ export default function FillClientDetail() {
                 <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.2px' }}><i className="ti ti-edit" style={{ marginRight: 8 }} />Edit bags &amp; pricing</div>
                 <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'IBM Plex Mono',monospace", marginTop: 3 }}>custom sizes · charcoal spec · worker pay · supply · fill price derived from fill jobs</div>
               </div>
-              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} onClick={() => setShowBagEditor(false)}><i className="ti ti-x" /></button>
+              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} aria-label="Close" onClick={() => setShowBagEditor(false)}><i className="ti ti-x" /></button>
             </div>
             <div style={{ padding: 0 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
@@ -993,7 +996,7 @@ export default function FillClientDetail() {
                 <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.2px' }}><i className="ti ti-truck" style={{ marginRight: 8 }} />Pickup goods</div>
                 <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'IBM Plex Mono',monospace", marginTop: 3 }}>enter what's going out · waste comes out of stock too</div>
               </div>
-              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} onClick={() => setShowPickup(false)}><i className="ti ti-x" /></button>
+              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} aria-label="Close" onClick={() => setShowPickup(false)}><i className="ti ti-x" /></button>
             </div>
 
             <div style={{ overflowY: 'auto', flex: 1 }}>
@@ -1025,7 +1028,8 @@ export default function FillClientDetail() {
                     <div className="ssub">set qty picked up and any wasted bags</div>
                   </div>
                 </div>
-                <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ marginTop: 14, overflowX: 'auto' }}>
+                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 720 }}>
                   {allBags.length === 0 && (
                     <div style={{ padding: '16px', fontSize: 13, color: 'var(--text3)', fontStyle: 'italic', textAlign: 'center' }}>
                       No bags in warehouse yet — save a fill job first.
@@ -1097,6 +1101,7 @@ export default function FillClientDetail() {
                       </div>
                     )
                   })}
+                 </div>
                 </div>
               </div>
 
@@ -1151,7 +1156,7 @@ export default function FillClientDetail() {
                 <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.2px' }}><i className="ti ti-tools" style={{ marginRight: 8 }} />New fill job</div>
                 <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'IBM Plex Mono',monospace", marginTop: 3 }}>log bags filled · charcoal from stock · price auto-calculated</div>
               </div>
-              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} onClick={() => setShowFillJob(false)}><i className="ti ti-x" /></button>
+              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} aria-label="Close" onClick={() => setShowFillJob(false)}><i className="ti ti-x" /></button>
             </div>
 
             <div className="compose-section">
@@ -1205,7 +1210,7 @@ export default function FillClientDetail() {
                       style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', paddingRight: 36 }} />
                     <span style={{ position: 'absolute', right: 10, fontSize: 10, color: 'var(--text3)', pointerEvents: 'none', fontFamily: "'IBM Plex Mono',monospace" }}>bags</span>
                   </div>
-                  <button className="icon-btn" style={{ width: 36, height: 36 }} disabled={fjBagRows.length === 1}
+                  <button className="icon-btn" aria-label="Remove bag row" style={{ width: 36, height: 36 }} disabled={fjBagRows.length === 1}
                     onClick={() => setFjBagRows(prev => prev.filter((_, ri) => ri !== i))}>
                     <i className="ti ti-x" style={{ fontSize: 13 }} />
                   </button>
@@ -1253,7 +1258,7 @@ export default function FillClientDetail() {
                           style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', paddingRight: 30 }} />
                         <span style={{ position: 'absolute', right: 10, fontSize: 10, color: 'var(--text3)', pointerEvents: 'none', fontFamily: "'IBM Plex Mono',monospace" }}>kg</span>
                       </div>
-                      <button className="icon-btn" style={{ width: 36, height: 36 }} disabled={fjCharRows.length === 1}
+                      <button className="icon-btn" aria-label="Remove charcoal row" style={{ width: 36, height: 36 }} disabled={fjCharRows.length === 1}
                         onClick={() => setFjCharRows(prev => prev.filter((_, ri) => ri !== i))}>
                         <i className="ti ti-x" style={{ fontSize: 13 }} />
                       </button>
@@ -1313,17 +1318,12 @@ export default function FillClientDetail() {
 
       {/* ── Modal: Log payment ── */}
       {showPay && (() => {
-        // Payment method here is always cash/whish/omt (the 3 pills below) —
-        // all three are personal-custody methods, so a receiver is always
-        // required. Resolved once here so both the inline hint and the
-        // submit button's disabled state agree with what actually gets sent.
-        const resolvedPayById = receivers.find(r => r.name === payBy)?.id
         return (
         <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setShowPay(false)}>
           <div className="modal" style={{ width: 500, maxWidth: '96vw' }}>
             <div className="compose-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0' }}>
               <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.2px' }}><i className="ti ti-receipt" style={{ marginRight: 8 }} />Log payment</div>
-              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} onClick={() => setShowPay(false)}><i className="ti ti-x" /></button>
+              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} aria-label="Close" onClick={() => setShowPay(false)}><i className="ti ti-x" /></button>
             </div>
 
             <div style={{ background: 'rgba(180,83,9,0.07)', borderBottom: '1px solid rgba(180,83,9,0.18)', padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1394,10 +1394,10 @@ export default function FillClientDetail() {
                 </div>
                 <div className="field">
                   <label className="field-label">Received by <span style={{ color: 'var(--red)' }}>*</span></label>
-                  <select className="select" value={payBy} onChange={e => setPayBy(e.target.value)}>
+                  <select className="select" value={payById} onChange={e => setPayById(e.target.value)}>
                     <option value="">— select receiver —</option>
                     {receivers.map(r => (
-                      <option key={r.id} value={r.name}>{r.name} · {r.role}</option>
+                      <option key={r.id} value={r.id}>{r.name} · {r.role}</option>
                     ))}
                   </select>
                   {receivers.length === 0 && (
@@ -1405,7 +1405,7 @@ export default function FillClientDetail() {
                       Add receivers in <strong>Settings → Money receivers</strong>
                     </div>
                   )}
-                  {receivers.length > 0 && !resolvedPayById && (
+                  {receivers.length > 0 && !payById && (
                     <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Receiver is required.</div>
                   )}
                 </div>
@@ -1422,8 +1422,8 @@ export default function FillClientDetail() {
               </span>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn" onClick={() => setShowPay(false)}>Cancel</button>
-                <button className="btn green" disabled={paySaving || payAmt <= 0 || !resolvedPayById} onClick={async () => {
-                  if (!id || payAmt <= 0 || !resolvedPayById) return
+                <button className="btn green" disabled={paySaving || payAmt <= 0 || !payById} onClick={async () => {
+                  if (!id || payAmt <= 0 || !payById) return
                   setPaySaving(true)
                   try {
                     await createPayment.mutateAsync({
@@ -1432,12 +1432,12 @@ export default function FillClientDetail() {
                       currency: (client?.currency ?? 'USD') as any,
                       method: payMethod as any,
                       date: payDate,
-                      receiverId: resolvedPayById,
+                      receiverId: payById,
                       notes: payRef || undefined,
                     })
                     setShowPay(false)
                     setPayAmt(0)
-                    setPayBy('')
+                    setPayById('')
                     setPayRef('')
                     showToast(`Payment $${payAmt.toFixed(2)} logged`)
                     paymentsQ.refetch()
@@ -1474,7 +1474,7 @@ export default function FillClientDetail() {
                   {showContactEditor === 'new' ? 'new person for this client' : 'update details for this contact'}
                 </div>
               </div>
-              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} onClick={() => setShowContactEditor(null)}>
+              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} aria-label="Close" onClick={() => setShowContactEditor(null)}>
                 <i className="ti ti-x" />
               </button>
             </div>
@@ -1526,7 +1526,7 @@ export default function FillClientDetail() {
                 <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.2px' }}><i className="ti ti-notes" style={{ marginRight: 8 }} />Edit notes</div>
                 <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'IBM Plex Mono',monospace", marginTop: 3 }}>internal notes · shown on client page only</div>
               </div>
-              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} onClick={() => setShowNotesEditor(false)}>
+              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} aria-label="Close" onClick={() => setShowNotesEditor(false)}>
                 <i className="ti ti-x" />
               </button>
             </div>
@@ -1578,7 +1578,7 @@ export default function FillClientDetail() {
                 <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.2px' }}><i className="ti ti-user-edit" style={{ marginRight: 8 }} />Edit fill client</div>
                 <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'IBM Plex Mono',monospace", marginTop: 3 }}>update client details</div>
               </div>
-              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} onClick={() => setShowEditClient(false)}><i className="ti ti-x" /></button>
+              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} aria-label="Close" onClick={() => setShowEditClient(false)}><i className="ti ti-x" /></button>
             </div>
             <div className="compose-section" style={{ borderBottom: 'none' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>

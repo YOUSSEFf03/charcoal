@@ -1,10 +1,12 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { ExitType, Prisma } from '@prisma/client';
+import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStockExitDto } from './dto/create-stock-exit.dto';
 import { UpdateStockExitDto } from './dto/update-stock-exit.dto';
@@ -18,6 +20,33 @@ import { SettingsService } from '../settings/settings.service';
 // into this endpoint (@Roles includes 'worker') but @Roles can't see the
 // request body, so the sale-vs-non-sale distinction is enforced here instead.
 const WORKER_ALLOWED_EXIT_TYPES: ExitType[] = ['sample', 'internal', 'gift'];
+
+/**
+ * SHA-256 of the fields that define WHAT is being exited/collected — never
+ * display-only fields (recipient, reason) or the idempotencyKey itself.
+ * Mirrors computeSaleFingerprint() in walk-in-sales.service.ts exactly, for
+ * the sibling endpoint that actually handles anonymous walk-in sales (see
+ * StockExitsService.create()'s doc comment). collectedById takes priority
+ * over collectedBy in create()'s own resolution, so an ignored collectedBy
+ * must not affect the fingerprint. Exported for direct unit testing.
+ */
+export function computeStockExitFingerprint(dto: CreateStockExitDto): string {
+  const canonical = JSON.stringify({
+    exitType: dto.exitType,
+    date: dto.date,
+    packedStockId: dto.packedStockId ?? null,
+    bagTypeId: dto.bagTypeId ?? null,
+    quantity: dto.quantity ?? null,
+    lotId: dto.lotId ?? null,
+    kgQuantity: dto.kgQuantity ?? null,
+    clientId: dto.clientId ?? null,
+    amount: dto.amount ?? null,
+    currency: dto.currency ?? null,
+    collectedById: dto.collectedById ?? null,
+    collectedBy: dto.collectedById ? null : (dto.collectedBy ?? null),
+  });
+  return createHash('sha256').update(canonical).digest('hex');
+}
 
 @Injectable()
 export class StockExitsService {
@@ -100,6 +129,363 @@ export class StockExitsService {
       }),
       this.prisma.stockExit.count({ where }),
     ]);
+
+    return { data, total, page, limit };
+  }
+
+  /**
+   * Same filters as findAll(), but paginated by LOGICAL SALE rather than raw
+   * StockExit row (forensic audit, 2026-08-28 — the confirmed "sale history
+   * grouped by StockExit" bug: a single invoiced walk-in sale whose FIFO draw
+   * spans more than one packed-stock/lot row produces multiple StockExit
+   * rows sharing one `invoiceId`, and every display surface that rendered
+   * one row per StockExit therefore showed one sale as several).
+   *
+   * A "logical sale" is either:
+   *   - every StockExit sharing a non-null invoiceId (a registered-client
+   *     walk-in sale — see StockExit.invoiceId's doc comment; only
+   *     WalkInSalesService ever sets it), collapsed into ONE row whose
+   *     `lines` come from Invoice.lines (the complete, authoritative
+   *     breakdown of that sale — already covers every line regardless of
+   *     how many StockExit rows the FIFO draw actually produced), or
+   *   - a single StockExit with invoiceId=null (anonymous walk-in / sample /
+   *     internal / fill-job exit — never grouped, since nothing else shares
+   *     its key), returned as a one-line row built from its own fields.
+   *
+   * Pagination is computed over the DISTINCT group key
+   * (COALESCE(invoiceId, id)), not raw rows — grouping only the CURRENT PAGE
+   * of raw rows client-side would silently split a sale across a page
+   * boundary once StockExit rows for one invoice landed on different pages,
+   * so the grouping has to happen before pagination, at the database level.
+   */
+  async findAllGrouped(
+    page: number,
+    limit: number,
+    exitType?: ExitType,
+    dateFrom?: string,
+    dateTo?: string,
+    clientId?: string,
+  ) {
+    const skip = (page - 1) * limit;
+
+    const conditions: Prisma.Sql[] = [];
+    if (exitType) conditions.push(Prisma.sql`"exitType" = ${exitType}::"ExitType"`);
+    if (clientId) conditions.push(Prisma.sql`"clientId" = ${clientId}`);
+    if (dateFrom) conditions.push(Prisma.sql`"date" >= ${new Date(dateFrom)}`);
+    if (dateTo) conditions.push(Prisma.sql`"date" <= ${new Date(dateTo)}`);
+    const whereSql = conditions.length
+      ? Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}`
+      : Prisma.empty;
+
+    const [totalRows, pageKeys] = await Promise.all([
+      this.prisma.$queryRaw<{ count: bigint }[]>(Prisma.sql`
+        SELECT COUNT(*)::bigint AS count FROM (
+          SELECT COALESCE("invoiceId", "id") AS key FROM "stock_exits" ${whereSql} GROUP BY key
+        ) t
+      `),
+      this.prisma.$queryRaw<{ key: string }[]>(Prisma.sql`
+        SELECT COALESCE("invoiceId", "id") AS key
+        FROM "stock_exits"
+        ${whereSql}
+        GROUP BY key
+        ORDER BY MAX("date") DESC, key ASC
+        LIMIT ${limit} OFFSET ${skip}
+      `),
+    ]);
+
+    const total = Number(totalRows[0]?.count ?? 0);
+    const orderedKeys = pageKeys.map((k) => k.key);
+    if (orderedKeys.length === 0) {
+      return { data: [], total, page, limit };
+    }
+
+    // Fetch every StockExit belonging to one of this page's groups — either
+    // its invoiceId is one of the page's keys, or (for a standalone exit)
+    // its own id is.
+    const exits = await this.prisma.stockExit.findMany({
+      where: {
+        OR: [
+          { invoiceId: { in: orderedKeys } },
+          { id: { in: orderedKeys }, invoiceId: null },
+        ],
+      },
+      include: {
+        bagType: true,
+        lot: { select: { id: true, charcoalType: true, grade: true } },
+        packedStock: { include: { lot: { select: { id: true, charcoalType: true, grade: true } } } },
+        loggedBy: { select: { id: true, name: true } },
+        client: { select: { id: true, name: true } },
+        invoice: {
+          select: {
+            id: true,
+            displayId: true,
+            lines: true,
+            currency: true,
+            total: true,
+            paidAmount: true,
+            status: true,
+            // Authoritative "what has actually been applied to this invoice" —
+            // same field InvoicesService.findOne() prefers over `payments` for
+            // the identical reason (a client-level payment can be FIFO-split
+            // across several invoices; `payments` alone would misattribute it).
+            allocations: {
+              orderBy: { createdAt: 'asc' },
+              select: {
+                amount: true,
+                payment: {
+                  select: {
+                    id: true,
+                    displayId: true,
+                    date: true,
+                    amount: true,
+                    currency: true,
+                    method: true,
+                    receiverId: true,
+                    receiverName: true,
+                    receiver: { select: { id: true, name: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    // ── Ledger-authoritative receiver credit (forensic audit, warehouse sale
+    // log, 2026-08-31) ───────────────────────────────────────────────────────
+    // "Credited to receiver" must come from the actual AccountEntry
+    // LedgerWriteService wrote — never be recomputed from Payment.amount or
+    // StockExit.amount. LedgerWriteService.creditAccount() is the only writer
+    // of these entries and is always called with the exact same Decimal that
+    // was just stored on the Payment/StockExit, so the two are equal by
+    // construction today — but this reads the real ledger row rather than
+    // re-deriving the figure, so the log can never silently drift from the
+    // ledger if that invariant is ever broken. Never writes anything (pure
+    // read) and never allocates/derives a NEW figure — only surfaces the one
+    // AccountEntry LedgerWriteService already created at sale time.
+    const paymentIds = new Set<string>();
+    for (const exit of exits) {
+      if (exit.invoiceId && exit.invoice) {
+        // Only payments with a receiver ever get an AccountEntry
+        // (LedgerWriteService.creditAccount only runs when receiverId is set)
+        // — skip the rest so this query never asks the ledger about a payment
+        // it can never have an entry for.
+        for (const alloc of exit.invoice.allocations) {
+          if (alloc.payment.receiverId) paymentIds.add(alloc.payment.id);
+        }
+      }
+    }
+    const standaloneExitIds = exits.filter((e) => !e.invoiceId && e.collectedById).map((e) => e.id);
+    const referenceIds = [...paymentIds, ...standaloneExitIds];
+    const ledgerEntries = referenceIds.length
+      ? await this.prisma.accountEntry.findMany({
+          where: { referenceId: { in: referenceIds }, type: { in: ['payment_received', 'sale_collected'] } },
+          select: { referenceId: true, amount: true },
+        })
+      : [];
+    const ledgerAmountByRef = new Map<string, Decimal>();
+    for (const e of ledgerEntries) {
+      if (!e.referenceId) continue;
+      const prev = ledgerAmountByRef.get(e.referenceId) ?? new Decimal(0);
+      ledgerAmountByRef.set(e.referenceId, prev.plus(e.amount.toString()));
+    }
+
+    const byKey = new Map<string, typeof exits>();
+    for (const exit of exits) {
+      const key = exit.invoiceId ?? exit.id;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key)!.push(exit);
+    }
+
+    // Resolve nominalKg/costPerBag/workerRate for every bagTypeId referenced
+    // by an invoice line — invoice.lines only stores bagTypeId/bagTypeName/
+    // qty/pricePerBag (the SALE price, not the internal cost/worker-rate
+    // figures the detail panel also shows), so this needs one extra batched
+    // lookup, same pattern as getWalkInSummary() above.
+    const invoiceLineBagTypeIds = new Set<string>();
+    for (const group of byKey.values()) {
+      const rep = group[0];
+      if (rep?.invoiceId && rep.invoice) {
+        for (const line of (rep.invoice.lines as any[]) ?? []) {
+          if (line.saleUnit !== 'KG' && line.bagTypeId) invoiceLineBagTypeIds.add(line.bagTypeId);
+        }
+      }
+    }
+    const extraBagTypes = invoiceLineBagTypeIds.size
+      ? await this.prisma.bagType.findMany({
+          where: { id: { in: [...invoiceLineBagTypeIds] } },
+          select: { id: true, nominalKg: true, costPerBag: true, workerRate: true },
+        })
+      : [];
+    const bagTypeById = new Map(extraBagTypes.map((bt) => [bt.id, bt]));
+    const nominalKgById = new Map(extraBagTypes.map((bt) => [bt.id, bt.nominalKg]));
+
+    const data = orderedKeys
+      .map((key) => {
+        const group = byKey.get(key) ?? [];
+        const rep = group[0];
+        if (!rep) return null;
+
+        if (rep.invoiceId && rep.invoice) {
+          const invLines = (rep.invoice.lines as any[]) ?? [];
+          const lines = invLines.map((line) => {
+            const bt = line.bagTypeId ? bagTypeById.get(line.bagTypeId) : undefined;
+            return {
+              saleUnit: line.saleUnit ?? 'BAG',
+              bagTypeId: line.bagTypeId ?? null,
+              bagTypeName: line.bagTypeName ?? null,
+              qty: line.qty ?? null,
+              kgQuantity: line.kgQuantity ?? null,
+              pricePerBag: line.pricePerBag ?? null,
+              pricePerKg: line.pricePerKg ?? null,
+              lineTotal: line.lineTotal ?? null,
+              charcoalType: line.charcoalType ?? null,
+              grade: line.grade ?? null,
+              nominalKgPerBag: bt?.nominalKg?.toString() ?? null,
+              costPerBag: bt?.costPerBag?.toString() ?? null,
+              workerRatePerBag: bt?.workerRate?.toString() ?? null,
+            };
+          });
+          let totalQtyBags = 0;
+          let totalKg = new Decimal(0);
+          for (const line of lines) {
+            if (line.saleUnit === 'KG') {
+              totalKg = totalKg.plus(new Decimal(line.kgQuantity ?? '0'));
+            } else {
+              totalQtyBags += line.qty ?? 0;
+              const nomKg = line.bagTypeId ? nominalKgById.get(line.bagTypeId) : undefined;
+              if (nomKg) totalKg = totalKg.plus(new Decimal(nomKg.toString()).mul(line.qty ?? 0));
+            }
+          }
+          return {
+            id: rep.invoiceId,
+            invoiceId: rep.invoiceId,
+            invoiceDisplayId: rep.invoice.displayId,
+            date: rep.date,
+            clientId: rep.clientId,
+            client: rep.client,
+            recipient: rep.recipient,
+            loggedBy: rep.loggedBy,
+            currency: rep.invoice.currency,
+            lines,
+            lineCount: lines.length,
+            totalQtyBags,
+            totalKg: totalKg.toFixed(3),
+            // SALE — the invoice's own authoritative total (InvoiceCalculatorService).
+            saleTotal: new Decimal(rep.invoice.total.toString()).toFixed(2),
+            // PAYMENT/BALANCE — Invoice.paidAmount/status, recomputed by
+            // PaymentAllocationService from `allocations` (never a client-side sum).
+            paidAmount: new Decimal(rep.invoice.paidAmount.toString()).toFixed(2),
+            remaining: Decimal.max(
+              0,
+              new Decimal(rep.invoice.total.toString()).minus(rep.invoice.paidAmount.toString()),
+            ).toFixed(2),
+            status: rep.invoice.status,
+            // RECEIVER — one entry per payment actually applied to THIS invoice
+            // (see `allocations` doc comment above); supports partial/multiple
+            // payments and multiple receivers on the same sale.
+            payments: rep.invoice.allocations.map((a) => ({
+              paymentId: a.payment.id,
+              displayId: a.payment.displayId,
+              date: a.payment.date,
+              // How much of THIS payment applied to THIS invoice (never the
+              // payment's full amount, which may span other invoices too).
+              appliedAmount: new Decimal(a.amount.toString()).toFixed(2),
+              paymentAmount: new Decimal(a.payment.amount.toString()).toFixed(2),
+              currency: a.payment.currency,
+              method: a.payment.method,
+              receiverId: a.payment.receiverId,
+              receiverName: a.payment.receiver?.name ?? a.payment.receiverName ?? null,
+              // Ledger-authoritative — see the ledgerAmountByRef comment above.
+              // Null only when no receiver was assigned (no AccountEntry exists).
+              creditedAmount: ledgerAmountByRef.has(a.payment.id)
+                ? ledgerAmountByRef.get(a.payment.id)!.toFixed(2)
+                : null,
+            })),
+          };
+        }
+
+        // Standalone (non-invoiced) exit — exactly one line, from its own fields.
+        const isRaw = !!rep.lotId;
+        const line = isRaw
+          ? {
+              saleUnit: 'KG' as const,
+              bagTypeId: null, bagTypeName: null, qty: null,
+              kgQuantity: rep.kgQuantity?.toString() ?? null,
+              pricePerBag: null, pricePerKg: null,
+              charcoalType: rep.lot?.charcoalType ?? null,
+              grade: rep.lot?.grade ?? null,
+            }
+          : {
+              saleUnit: 'BAG' as const,
+              bagTypeId: rep.bagTypeId ?? null,
+              bagTypeName: rep.bagType?.name ?? null,
+              qty: rep.quantity ?? null,
+              kgQuantity: null,
+              pricePerBag: null, pricePerKg: null,
+              charcoalType: rep.packedStock?.lot?.charcoalType ?? null,
+              grade: rep.packedStock?.lot?.grade ?? null,
+            };
+        const totalKg = isRaw
+          ? new Decimal(rep.kgQuantity?.toString() ?? '0')
+          : rep.bagType
+            ? new Decimal(rep.bagType.nominalKg.toString()).mul(rep.quantity ?? 0)
+            : new Decimal(0);
+
+        // Anonymous walk-ins have no Invoice/Payment — StockExit.amount IS both
+        // the sale price and the amount collected (there is no separate
+        // "received vs. owed" split for this path; see doSubmitSale() in
+        // WarehouseSales.tsx, which computes ONE `amount` for the whole line).
+        // amount=null means the price was never recorded ("on account" /
+        // unknown) — never treated as $0 paid.
+        const anonAmount = rep.amount != null ? new Decimal(rep.amount.toString()).toFixed(2) : null;
+        return {
+          id: rep.id,
+          invoiceId: null,
+          invoiceDisplayId: null,
+          date: rep.date,
+          clientId: rep.clientId,
+          client: rep.client,
+          recipient: rep.recipient,
+          loggedBy: rep.loggedBy,
+          currency: rep.currency,
+          lines: [line],
+          lineCount: 1,
+          totalQtyBags: isRaw ? 0 : (rep.quantity ?? 0),
+          totalKg: totalKg.toFixed(3),
+          saleTotal: anonAmount,
+          paidAmount: anonAmount ?? '0.00',
+          remaining: anonAmount != null ? '0.00' : null,
+          status: anonAmount != null ? 'recorded' : 'on_account',
+          // No PaymentMethod is captured for anonymous walk-ins today (no
+          // `method` column on StockExit — the Entry tab's payment-method
+          // dropdown is only wired to the registered-client/invoiced path).
+          // Reported honestly as `method: null` rather than guessed.
+          payments: anonAmount != null
+            ? [{
+                paymentId: null,
+                displayId: null,
+                date: rep.date,
+                appliedAmount: anonAmount,
+                paymentAmount: anonAmount,
+                currency: rep.currency,
+                method: null,
+                receiverId: rep.collectedById,
+                receiverName: rep.collectedBy,
+                creditedAmount: rep.collectedById && ledgerAmountByRef.has(rep.id)
+                  ? ledgerAmountByRef.get(rep.id)!.toFixed(2)
+                  : null,
+              }]
+            : [],
+          // The full raw exit — needed by the standalone-exit detail panel /
+          // edit-amount flow (PATCH /stock-exits/:id), which stays exit-level.
+          // Never present on an invoice-grouped row (nothing there is
+          // editable via this endpoint — price comes from the invoice).
+          rawExit: rep,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null);
 
     return { data, total, page, limit };
   }
@@ -364,8 +750,17 @@ export class StockExitsService {
       return Number.isFinite(n) ? n : 0;
     };
 
-    const [totalCount, rawKgSum, byBagType, explicitAmountByCurrency, unresolvedExits] = await Promise.all([
-      this.prisma.stockExit.count({ where: { clientId } }),
+    const [totalCountRows, rawKgSum, byBagType, explicitAmountByCurrency, unresolvedExits] = await Promise.all([
+      // DISTINCT logical sale count (forensic audit, 2026-08-28) — a plain
+      // stockExit.count() over-counts every multi-lot walk-in sale (2+
+      // StockExit rows sharing one invoiceId inflate "Purchases" by however
+      // many lots the FIFO draw touched). Same COALESCE(invoiceId, id) group
+      // key as findAllGrouped() above.
+      this.prisma.$queryRaw<{ count: bigint }[]>(Prisma.sql`
+        SELECT COUNT(*)::bigint AS count FROM (
+          SELECT COALESCE("invoiceId", "id") AS key FROM "stock_exits" WHERE "clientId" = ${clientId} GROUP BY key
+        ) t
+      `),
       this.prisma.stockExit.aggregate({
         where: { clientId, lotId: { not: null } },
         _sum: { kgQuantity: true },
@@ -436,7 +831,7 @@ export class StockExitsService {
     const totalAmount = explicitAmount.plus(unresolvedAmount);
 
     return {
-      totalCount,
+      totalCount: Number(totalCountRows[0]?.count ?? 0),
       totalKg: totalKg.toFixed(3),
       totalAmount: totalAmount.toFixed(2),
     };
@@ -477,6 +872,34 @@ export class StockExitsService {
    * Step 4: Decrement packed stock quantity
    * Step 5: Create StockExit with loggedById = user.id (never from DTO)
    *
+   * ── Idempotency (forensic audit, 2026-08-28) ─────────────────────────────────
+   * This endpoint is what anonymous walk-in sales actually use (WalkInSalesService
+   * / POST /walk-in-sales only ever handles REGISTERED clients — see that
+   * method's own doc comment). A double-click, a slow-network retry, or two
+   * near-simultaneous identical anonymous-sale requests must not create two
+   * independent financial effects — confirmed live against the real dev DB:
+   * two concurrent identical requests each independently succeeded (2 stock
+   * deductions, 2 stock-exit rows, 2 collector ledger credits). The frontend's
+   * disabled-while-pending button (WarehouseSales.tsx) is UX protection only.
+   * This method is the actual guarantee, mirroring
+   * WalkInSalesService.create()'s idempotencyKey/requestFingerprint pattern
+   * exactly (see computeStockExitFingerprint() above):
+   *   1. Application-level guard: if a stock exit with this idempotencyKey
+   *      already exists, compare its stored requestFingerprint — MATCH
+   *      returns the existing exit (no new work); MISMATCH rejects with 409
+   *      IDEMPOTENCY_KEY_REUSED and zero side effects.
+   *   2. DB-level backstop (`stock_exits_idempotencyKey_key`, a plain unique
+   *      index — StockExit has no cancel/void state, so unlike Invoice's
+   *      partial index, a plain one is correct here): if two requests both
+   *      pass check (1) at the same instant, only one INSERT wins; the
+   *      loser's P2002 is caught below and re-runs the same match/mismatch
+   *      comparison against the winner.
+   * `idempotencyKey` is optional (backward-compatible DTO addition) — every
+   * non-sale exit type (sample/internal/gift/fill-job pickup) and any caller
+   * that omits it gets no idempotency protection, exactly as before this fix.
+   * Two genuinely different exits (no key, or two different keys) are NEVER
+   * deduplicated.
+   *
    * @param dto    - Exit creation data; must not include loggedById
    * @param userId - Clerk user ID from @CurrentUser — sole source of loggedById
    * @param role   - Caller's role from @CurrentUser — workers are restricted to
@@ -490,6 +913,23 @@ export class StockExitsService {
         error: 'Workers may only log non-sale exits (sample, internal, gift)',
         code: 'FORBIDDEN',
       });
+    }
+
+    const fingerprint = dto.idempotencyKey ? computeStockExitFingerprint(dto) : undefined;
+    if (dto.idempotencyKey) {
+      const existing = await this.prisma.stockExit.findFirst({
+        where: { idempotencyKey: dto.idempotencyKey },
+      });
+      if (existing) {
+        if (existing.requestFingerprint !== fingerprint) {
+          throw new ConflictException({
+            message: 'This idempotency key was already used for a different exit request',
+            error: 'This idempotency key was already used for a different exit request',
+            code: 'IDEMPOTENCY_KEY_REUSED',
+          });
+        }
+        return existing;
+      }
     }
 
     // Resolve caller before opening a transaction — this read is safe outside
@@ -512,7 +952,8 @@ export class StockExitsService {
       collectorFields = { collectedBy: dto.collectedBy };
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
       // Warning: walk_in exits with amount != null count in P&L walk-in revenue.
       // Only create these for anonymous (no-invoice) sales. Invoice-linked walk-ins
       // use WalkInSalesService with amount=null.
@@ -528,6 +969,7 @@ export class StockExitsService {
         // BUG-K (P5): capture the amount's currency so P&L can convert LBP cash sales.
         // Defaults USD (column default) when omitted; only meaningful when amount != null.
         ...(dto.currency ? { currency: dto.currency } : {}),
+        ...(dto.idempotencyKey ? { idempotencyKey: dto.idempotencyKey, requestFingerprint: fingerprint } : {}),
         ...collectorFields,
       };
 
@@ -619,6 +1061,31 @@ export class StockExitsService {
       }
 
       return exit;
-    });
+      });
+    } catch (e) {
+      // Expected race (see this method's doc comment): two near-simultaneous
+      // requests carrying the SAME idempotencyKey can both pass the
+      // application-level check above — only one tx.stockExit.create() wins,
+      // the other hits stock_exits_idempotencyKey_key (P2002). Return the
+      // winner's exit instead of surfacing a raw constraint violation; if no
+      // matching exit actually exists, this wasn't that race — rethrow
+      // (mirrors WalkInSalesService.create()'s identical P2002-recovery).
+      if (dto.idempotencyKey && e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const winner = await this.prisma.stockExit.findFirst({
+          where: { idempotencyKey: dto.idempotencyKey },
+        });
+        if (winner) {
+          if (winner.requestFingerprint !== fingerprint) {
+            throw new ConflictException({
+              message: 'This idempotency key was already used for a different exit request',
+              error: 'This idempotency key was already used for a different exit request',
+              code: 'IDEMPOTENCY_KEY_REUSED',
+            });
+          }
+          return winner;
+        }
+      }
+      throw e;
+    }
   }
 }

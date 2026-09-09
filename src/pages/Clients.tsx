@@ -159,7 +159,14 @@ export default function Clients() {
   const uninvoicedByClient = useMemo(() => {
     const map = new Map<string, number>()
     for (const o of uninvoicedOrdersQ.data?.data ?? []) {
-      if (!['confirmed', 'partially_delivered', 'delivered'].includes(o.status)) continue
+      // 'draft' is the real, everyday "awaiting delivery" state for almost
+      // every open order — nothing in the app ever writes 'confirmed' (no
+      // create/edit-order flow has a status field at all), so a draft order
+      // sits there as a genuine, uninvoiced commitment until markDelivered().
+      // Excluding it here silently zeroed out the true balance for every
+      // client with only-draft open orders. 'invoiced'/'paid' stay excluded
+      // — those already have an invoice, already reflected in c.balance.
+      if (!['draft', 'confirmed', 'partially_delivered', 'delivered'].includes(o.status)) continue
       const isBag = !!o.bagTypeId
       const totalKg = parseFloat(o.totalKgRequested)
       const pricePerUnit = parseFloat(o.pricePerBag)
@@ -324,71 +331,73 @@ export default function Clients() {
               <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>{totalCount} clients</span>
             </div>
             <div className="card">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <SortHeader label="Client" sortKey="name" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} />
-                    <th>Type</th>
-                    <SortHeader label="Last order" sortKey="lastOrderDate" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} />
-                    <SortHeader label="Avg order" sortKey="avgOrderDays" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} />
-                    <SortHeader label="Orders" sortKey="orderCount" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} align="right" />
-                    <SortHeader label="Total invoiced" sortKey="totalInvoiced" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} align="right" />
-                    <th>Balance (USD equiv.)</th><th>Currency</th><th>Status</th><th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {isLoading && [0, 1, 2].map(i => (
-                    <tr key={i}>
-                      <td><div className="skeleton" style={{ width: '70%', height: 13, marginBottom: 4 }} /><div className="skeleton" style={{ width: '45%', height: 11 }} /></td>
-                      <td><div className="skeleton" style={{ width: 60, height: 16 }} /></td>
-                      <td><div className="skeleton" style={{ width: 70, height: 13 }} /></td>
-                      <td><div className="skeleton" style={{ width: 50, height: 13 }} /></td>
-                      <td><div className="skeleton" style={{ width: 30, height: 13 }} /></td>
-                      <td><div className="skeleton" style={{ width: 70, height: 13 }} /></td>
-                      <td><div className="skeleton" style={{ width: 80, height: 13 }} /></td>
-                      <td><div className="skeleton" style={{ width: 40, height: 13 }} /></td>
-                      <td><div className="skeleton" style={{ width: 60, height: 16 }} /></td>
-                      <td></td>
-                    </tr>
-                  ))}
-                  {isError && (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
                     <tr>
-                      <td colSpan={10} className="empty">
-                        Failed to load clients.
-                        <div><button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={() => refetch()}>Retry</button></div>
-                      </td>
+                      <SortHeader label="Client" sortKey="name" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} />
+                      <th>Type</th>
+                      <SortHeader label="Last order" sortKey="lastOrderDate" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} />
+                      <SortHeader label="Avg order" sortKey="avgOrderDays" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} />
+                      <SortHeader label="Orders" sortKey="orderCount" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} align="right" />
+                      <SortHeader label="Total invoiced" sortKey="totalInvoiced" sort={clientSort} onSort={k => toggleSort(clientSort, setClientSort, k)} align="right" />
+                      <th>Balance (USD equiv.)</th><th>Currency</th><th>Status</th><th></th>
                     </tr>
-                  )}
-                  {!isLoading && !isError && displayClients.map(c => (
-                    <tr key={c.id} onClick={() => navigate('/clients/' + c.id)} style={{ cursor: 'pointer' }}>
-                      <td>
-                        <div style={{ fontWeight: 500 }}>{c.name}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text3)' }}>{c.phones.find(p => p.isActive)?.number ?? c.phones[0]?.number ?? '—'}</div>
-                      </td>
-                      <td><span className={`badge ${typeBadgeClass(c.type)}`}>{c.type}</span></td>
-                      <td style={{ color: 'var(--text2)' }}>{formatDate(c.lastOrderDate)}</td>
-                      <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>{c.avgOrderDays ? `${Math.round(parseFloat(c.avgOrderDays))} days` : '—'}</td>
-                      <td className="right" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>{c.orderCount ?? '—'}</td>
-                      <td className="right" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>{c.totalInvoiced != null ? formatUsd(c.totalInvoiced, { decimals: 0 }) : '—'}</td>
-                      <td>
-                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: trueBalance(c) > 0 ? (c.isOverdue ? 'var(--red)' : 'var(--accent2)') : 'var(--text)' }}>{formatUsd(String(trueBalance(c)))}</div>
-                      </td>
-                      <td><span className="badge badge-gray">{c.currency}</span></td>
-                      <td><span className={`badge ${c.isOverdue ? 'badge-red' : trueBalance(c) > 0 ? 'badge-gray' : 'badge-green'}`}>{c.isOverdue ? 'Overdue' : trueBalance(c) > 0 ? 'On account' : 'Clear'}</span></td>
-                      <td><i className="ti ti-chevron-right" style={{ color: 'var(--text3)' }} /></td>
-                    </tr>
-                  ))}
-                  {!isLoading && !isError && displayClients.length === 0 && (
-                    <tr>
-                      <td colSpan={10} style={{ textAlign: 'center', padding: '40px 24px', color: 'var(--text3)' }}>
-                        <i className="ti ti-users" style={{ fontSize: 28, display: 'block', marginBottom: 8 }} />
-                        <div>No clients match your search</div>
-                        <button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={clearAllFilters}>Clear filters</button>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {isLoading && [0, 1, 2].map(i => (
+                      <tr key={i}>
+                        <td><div className="skeleton" style={{ width: '70%', height: 13, marginBottom: 4 }} /><div className="skeleton" style={{ width: '45%', height: 11 }} /></td>
+                        <td><div className="skeleton" style={{ width: 60, height: 16 }} /></td>
+                        <td><div className="skeleton" style={{ width: 70, height: 13 }} /></td>
+                        <td><div className="skeleton" style={{ width: 50, height: 13 }} /></td>
+                        <td><div className="skeleton" style={{ width: 30, height: 13 }} /></td>
+                        <td><div className="skeleton" style={{ width: 70, height: 13 }} /></td>
+                        <td><div className="skeleton" style={{ width: 80, height: 13 }} /></td>
+                        <td><div className="skeleton" style={{ width: 40, height: 13 }} /></td>
+                        <td><div className="skeleton" style={{ width: 60, height: 16 }} /></td>
+                        <td></td>
+                      </tr>
+                    ))}
+                    {isError && (
+                      <tr>
+                        <td colSpan={10} className="empty">
+                          Failed to load clients.
+                          <div><button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={() => refetch()}>Retry</button></div>
+                        </td>
+                      </tr>
+                    )}
+                    {!isLoading && !isError && displayClients.map(c => (
+                      <tr key={c.id} onClick={() => navigate('/clients/' + c.id)} style={{ cursor: 'pointer' }}>
+                        <td>
+                          <div style={{ fontWeight: 500 }}>{c.name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>{c.phones.find(p => p.isActive)?.number ?? c.phones[0]?.number ?? '—'}</div>
+                        </td>
+                        <td><span className={`badge ${typeBadgeClass(c.type)}`}>{c.type}</span></td>
+                        <td style={{ color: 'var(--text2)' }}>{formatDate(c.lastOrderDate)}</td>
+                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>{c.avgOrderDays ? `${Math.round(parseFloat(c.avgOrderDays))} days` : '—'}</td>
+                        <td className="right" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>{c.orderCount ?? '—'}</td>
+                        <td className="right" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>{c.totalInvoiced != null ? formatUsd(c.totalInvoiced, { decimals: 0 }) : '—'}</td>
+                        <td>
+                          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: trueBalance(c) > 0 ? (c.isOverdue ? 'var(--red)' : 'var(--accent2)') : 'var(--text)' }}>{formatUsd(String(trueBalance(c)))}</div>
+                        </td>
+                        <td><span className="badge badge-gray">{c.currency}</span></td>
+                        <td><span className={`badge ${c.isOverdue ? 'badge-red' : trueBalance(c) > 0 ? 'badge-gray' : 'badge-green'}`}>{c.isOverdue ? 'Overdue' : trueBalance(c) > 0 ? 'On account' : 'Clear'}</span></td>
+                        <td><i className="ti ti-chevron-right" style={{ color: 'var(--text3)' }} /></td>
+                      </tr>
+                    ))}
+                    {!isLoading && !isError && displayClients.length === 0 && (
+                      <tr>
+                        <td colSpan={10} style={{ textAlign: 'center', padding: '40px 24px', color: 'var(--text3)' }}>
+                          <i className="ti ti-users" style={{ fontSize: 28, display: 'block', marginBottom: 8 }} />
+                          <div>No clients match your search</div>
+                          <button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={clearAllFilters}>Clear filters</button>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
               <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface2)' }}>
                 <span style={{ fontSize: 12, color: 'var(--text3)' }}>
                   {fBalance === 'Overdue' ? `${displayClients.length} overdue clients` : `Page ${page} of ${Math.max(1, totalPages)} · ${totalCount} total`}
@@ -489,30 +498,32 @@ export default function Clients() {
               })()}
             </div>
             <div className="card">
-              <table className="data-table">
-                <thead><tr><th>Client</th><th>Type</th><th>Currency</th><th>Balance USD</th><th>Balance LBP</th><th>Status</th></tr></thead>
-                <tbody>
-                  {isLoading && [0, 1, 2].map(i => (
-                    <tr key={i}><td colSpan={6}><div className="skeleton" style={{ width: '100%', height: 16 }} /></td></tr>
-                  ))}
-                  {isError && (
-                    <tr><td colSpan={6} className="empty">Failed to load balances.<div><button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={() => refetch()}>Retry</button></div></td></tr>
-                  )}
-                  {!isLoading && !isError && balanceClients.map(c => (
-                    <tr key={c.id} onClick={() => navigate('/clients/' + c.id)} style={{ cursor: 'pointer' }}>
-                      <td><div style={{ fontWeight: 500 }}>{c.name}</div></td>
-                      <td style={{ fontSize: 12, color: 'var(--text3)' }}>{c.type}</td>
-                      <td><span className="badge badge-gray">{c.currency}</span></td>
-                      <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: c.isOverdue ? 'var(--red)' : 'var(--text)' }}>{formatUsd(String(trueBalance(c)))}</td>
-                      <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text2)' }}>{Math.round(trueBalance(c) * rawRate).toLocaleString()} LL</td>
-                      <td><span className={`badge ${c.isOverdue ? 'badge-red' : 'badge-gray'}`}>{c.isOverdue ? 'Overdue' : 'On account'}</span></td>
-                    </tr>
-                  ))}
-                  {!isLoading && !isError && balanceClients.length === 0 && (
-                    <tr><td colSpan={6} className="empty">No outstanding balances.</td></tr>
-                  )}
-                </tbody>
-              </table>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead><tr><th>Client</th><th>Type</th><th>Currency</th><th>Balance USD</th><th>Balance LBP</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {isLoading && [0, 1, 2].map(i => (
+                      <tr key={i}><td colSpan={6}><div className="skeleton" style={{ width: '100%', height: 16 }} /></td></tr>
+                    ))}
+                    {isError && (
+                      <tr><td colSpan={6} className="empty">Failed to load balances.<div><button className="btn" style={{ marginTop: 10, fontSize: 12 }} onClick={() => refetch()}>Retry</button></div></td></tr>
+                    )}
+                    {!isLoading && !isError && balanceClients.map(c => (
+                      <tr key={c.id} onClick={() => navigate('/clients/' + c.id)} style={{ cursor: 'pointer' }}>
+                        <td><div style={{ fontWeight: 500 }}>{c.name}</div></td>
+                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{c.type}</td>
+                        <td><span className="badge badge-gray">{c.currency}</span></td>
+                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: c.isOverdue ? 'var(--red)' : 'var(--text)' }}>{formatUsd(String(trueBalance(c)))}</td>
+                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text2)' }}>{Math.round(trueBalance(c) * rawRate).toLocaleString()} LL</td>
+                        <td><span className={`badge ${c.isOverdue ? 'badge-red' : 'badge-gray'}`}>{c.isOverdue ? 'Overdue' : 'On account'}</span></td>
+                      </tr>
+                    ))}
+                    {!isLoading && !isError && balanceClients.length === 0 && (
+                      <tr><td colSpan={6} className="empty">No outstanding balances.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
@@ -530,7 +541,7 @@ export default function Clients() {
                   &nbsp;·&nbsp; Rate: <strong>{parseInt(newRate).toLocaleString()} LL/$</strong>
                 </div>
               </div>
-              <button className="close-btn" onClick={() => setPayModalOpen(false)}>✕</button>
+              <button className="close-btn" aria-label="Close" onClick={() => setPayModalOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-group">
@@ -596,7 +607,7 @@ export default function Clients() {
           <div className="modal" style={{ width: 520, maxHeight: '85vh', overflowY: 'auto' }}>
             <div className="modal-head" style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>
               <div className="modal-title">New client</div>
-              <button className="panel-close-btn" onClick={() => { setNewClientOpen(false); setErrName(false); setErrPhone(false) }}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => { setNewClientOpen(false); setErrName(false); setErrPhone(false) }}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-group">
@@ -653,7 +664,7 @@ export default function Clients() {
           <div className="modal" style={{ width: 380 }}>
             <div className="modal-head">
               <div className="modal-title">Update exchange rate</div>
-              <button className="panel-close-btn" onClick={() => setRateOpen(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setRateOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 14 }}>This rate is used to convert LBP payments to USD across all clients and invoices.</div>
@@ -682,7 +693,7 @@ export default function Clients() {
                 <div className="modal-title">Add phone number</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{activeClient?.name ?? ''}</div>
               </div>
-              <button className="panel-close-btn" onClick={() => setAddPhoneOpen(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setAddPhoneOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-group">

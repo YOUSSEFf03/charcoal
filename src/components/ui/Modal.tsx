@@ -31,7 +31,7 @@ export default function Modal({
             <div className="modal-title">{title}</div>
             {subtitle && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{subtitle}</div>}
           </div>
-          <button className="panel-close-btn" onClick={onClose}>✕</button>
+          <button className="panel-close-btn" aria-label="Close" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">{children}</div>
         <div

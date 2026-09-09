@@ -1,0 +1,129 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - text: Delivery Receipt
+      - strong [ref=e6]: SO-0033
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - button "80mm" [ref=e9] [cursor=pointer]
+        - button "150mm" [ref=e10] [cursor=pointer]
+        - button "180mm" [active] [ref=e11] [cursor=pointer]
+        - button "210mm" [ref=e12] [cursor=pointer]
+      - button " Print" [ref=e13] [cursor=pointer]:
+        - generic [ref=e14]: 
+        - text: Print
+  - generic [ref=e15]:
+    - img "Farah Charcoal" [ref=e17]
+    - generic [ref=e18]:
+      - generic [ref=e19]: DELIVERY RECEIPT
+      - generic [ref=e20]: سند تسليم
+    - separator [ref=e21]
+    - generic [ref=e22]:
+      - generic [ref=e23]:
+        - generic [ref=e24]: Receipt No.
+        - generic [ref=e25]: ":"
+        - generic [ref=e26]: SO-0033
+      - generic [ref=e27]:
+        - generic [ref=e28]: رقم السند
+        - generic [ref=e29]: ":"
+        - generic [ref=e30]: SO-0033
+    - generic [ref=e31]:
+      - generic [ref=e32]:
+        - generic [ref=e33]: Date
+        - generic [ref=e34]: ":"
+        - generic [ref=e35]: 28/08/2026
+      - generic [ref=e36]:
+        - generic [ref=e37]: التاريخ
+        - generic [ref=e38]: ":"
+        - generic [ref=e39]: 28/08/2026
+    - separator [ref=e40]
+    - generic [ref=e41]:
+      - generic [ref=e42]:
+        - generic [ref=e43]: Customer
+        - generic [ref=e44]: ":"
+        - generic [ref=e45]: Marina Walk Café
+      - generic [ref=e46]:
+        - generic [ref=e47]: الزبون
+        - generic [ref=e48]: ":"
+        - generic [ref=e49]: Marina Walk Café
+    - generic [ref=e50]:
+      - generic [ref=e51]:
+        - generic [ref=e52]: Address
+        - generic [ref=e53]: ":"
+        - generic [ref=e54]: zgharta
+      - generic [ref=e55]:
+        - generic [ref=e56]: العنوان
+        - generic [ref=e57]: ":"
+        - generic [ref=e58]: zgharta
+    - separator [ref=e59]
+    - table [ref=e60]:
+      - rowgroup [ref=e61]:
+        - row [ref=e119]:
+          - columnheader "No. الرقم" [ref=e63]:
+            - text: No.
+            - generic [ref=e64]: الرقم
+          - columnheader "Item Description اسم الصنف" [ref=e65]:
+            - text: Item Description
+            - generic [ref=e66]: اسم الصنف
+          - columnheader "Type / Size النوع / الحجم" [ref=e120]:
+            - text: Type / Size
+            - generic [ref=e121]: النوع / الحجم
+          - columnheader "Unit الوحدة" [ref=e67]:
+            - text: Unit
+            - generic [ref=e68]: الوحدة
+          - columnheader "Qty الكمية" [ref=e69]:
+            - text: Qty
+            - generic [ref=e70]: الكمية
+          - columnheader "Unit Price سعر الوحدة" [ref=e71]:
+            - text: Unit Price
+            - generic [ref=e72]: سعر الوحدة
+          - columnheader "Total الإجمالي" [ref=e73]:
+            - text: Total
+            - generic [ref=e74]: الإجمالي
+      - rowgroup [ref=e75]:
+        - row [ref=e76]:
+          - cell "1" [ref=e77]
+          - cell "Restaurant Grade" [ref=e122]
+          - cell "5 KG" [ref=e123]
+          - cell "BAG / كيس" [ref=e81]:
+            - text: BAG
+            - generic [ref=e82]: / كيس
+          - cell "90" [ref=e83]
+          - cell "11.00" [ref=e84]
+          - cell "990.00" [ref=e85]
+    - generic [ref=e86]:
+      - generic [ref=e88]:
+        - text: "Total Items: 1"
+        - generic [ref=e89]: "إجمالي الأصناف: 1"
+      - generic [ref=e91]:
+        - text: "Total Quantity: 90"
+        - generic [ref=e92]: "إجمالي الكمية: 90"
+      - generic [ref=e93]:
+        - generic [ref=e94]:
+          - text: TOTAL AMOUNT (USD)
+          - generic [ref=e95]: الإجمالي (USD)
+        - generic [ref=e96]: "990.00"
+    - generic [ref=e97]:
+      - generic [ref=e98]: Notes
+      - generic [ref=e99]: / ملاحظات
+      - generic [ref=e100]: "Seed order #18"
+    - generic [ref=e101]:
+      - generic [ref=e102]: Signature / التوقيع
+      - generic [ref=e105]:
+        - generic [ref=e106]:
+          - text: TOTAL AMOUNT (USD)
+          - generic [ref=e107]: الإجمالي (USD)
+        - generic [ref=e108]: "990.00"
+    - generic [ref=e109]:
+      - generic [ref=e110]:
+        - generic [ref=e111]: 
+        - text: Zgharta, North Lebanon, Lebanon زغرتا، شمال لبنان، لبنان
+      - generic [ref=e112]:
+        - generic [ref=e113]: 
+        - text: +961 70 123 456
+      - generic [ref=e114]:
+        - generic [ref=e115]: 
+        - text: info@farahcharcoal.com
+      - generic [ref=e116]:
+        - generic [ref=e117]: 
+        - text: www.farahcharcoal.com

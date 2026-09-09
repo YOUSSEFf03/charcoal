@@ -169,30 +169,32 @@ export default function BagPurchases() {
             <div className="empty">No purchases yet — add the first one above.</div>
           )}
           {purchases.length > 0 && (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Bag type</th>
-                  <th>Date</th>
-                  <th style={{ textAlign: 'right' }}>Qty</th>
-                  <th style={{ textAlign: 'right' }}>Unit price</th>
-                  <th style={{ textAlign: 'right' }}>Total</th>
-                  <th>Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {purchases.map(p => (
-                  <tr key={p.id}>
-                    <td style={{ fontWeight: 500 }}>{p.bagType?.name ?? '—'}</td>
-                    <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text2)' }}>{fmtDate(p.date)}</td>
-                    <td style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right' }}>{p.quantity.toLocaleString()}</td>
-                    <td style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', color: 'var(--text3)' }}>${parseFloat(p.unitCost).toFixed(4)}</td>
-                    <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, textAlign: 'right', color: 'var(--accent)' }}>${parseFloat(p.totalCost).toFixed(2)}</td>
-                    <td style={{ fontSize: 12, color: 'var(--text3)' }}>{p.notes ?? '—'}</td>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Bag type</th>
+                    <th>Date</th>
+                    <th style={{ textAlign: 'right' }}>Qty</th>
+                    <th style={{ textAlign: 'right' }}>Unit price</th>
+                    <th style={{ textAlign: 'right' }}>Total</th>
+                    <th>Notes</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {purchases.map(p => (
+                    <tr key={p.id}>
+                      <td style={{ fontWeight: 500 }}>{p.bagType?.name ?? '—'}</td>
+                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text2)' }}>{fmtDate(p.date)}</td>
+                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right' }}>{p.quantity.toLocaleString()}</td>
+                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', color: 'var(--text3)' }}>${parseFloat(p.unitCost).toFixed(4)}</td>
+                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, textAlign: 'right', color: 'var(--accent)' }}>${parseFloat(p.totalCost).toFixed(2)}</td>
+                      <td style={{ fontSize: 12, color: 'var(--text3)' }}>{p.notes ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 

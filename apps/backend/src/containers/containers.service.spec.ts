@@ -3,6 +3,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { ContainersService } from './containers.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { buildDateFilter } from '../reports/reports.service';
+import { ContainerNotificationService } from '../notifications/container-notification.service';
 
 // ---------------------------------------------------------------------------
 // Shared mock factory helpers
@@ -57,8 +59,10 @@ describe('ContainersService', () => {
   const mockPrisma = {
     container: {
       findUnique: fn(),
+      findUniqueOrThrow: fn(),
       create: fn(),
       update: fn(),
+      updateMany: fn(),
       delete: fn(),
       findMany: fn(),
       count: fn(),
@@ -92,6 +96,10 @@ describe('ContainersService', () => {
     $transaction: fn(),
   };
 
+  const mockNotifications = {
+    notifyArrivalIfNeeded: fn().mockResolvedValue(undefined),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -99,6 +107,7 @@ describe('ContainersService', () => {
       providers: [
         ContainersService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: ContainerNotificationService, useValue: mockNotifications },
       ],
     }).compile();
 
@@ -710,6 +719,352 @@ describe('ContainersService', () => {
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
 
       await expect(service.update(containerId, { status: 'arrived' }, 'user-clerk')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // =========================================================================
+  // findAll() — containers-list tracking summary (control-center redesign)
+  // =========================================================================
+
+  describe('findAll() - cached tracking summary', () => {
+    it('includes a scoped tracking select (never rawResponse/events) in the query, so the list stays a single JOIN and never over-fetches', async () => {
+      mockPrisma.container.findMany = fn().mockResolvedValue([]);
+      mockPrisma.container.count = fn().mockResolvedValue(0);
+      mockPrisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
+
+      await service.findAll(1, 20);
+
+      const callArgs = mockPrisma.container.findMany.mock.calls[0][0];
+      expect(callArgs.include.tracking).toEqual({
+        select: {
+          status: true,
+          vessel: true,
+          voyage: true,
+          origin: true,
+          destination: true,
+          currentLocation: true,
+          eta: true,
+          lastFetchedAt: true,
+        },
+      });
+      // Guard against silently re-adding these to the select later — the
+      // whole point of `select` over including the full relation is to
+      // exclude the large rawResponse payload and the (list-irrelevant)
+      // per-container events array from every row of the list response.
+      expect(callArgs.include.tracking.select.rawResponse).toBeUndefined();
+      expect(callArgs.include.tracking.select.events).toBeUndefined();
+    });
+
+    it('passes the tracking summary through untouched for a sales_rep (not a cost field, never stripped)', async () => {
+      const containerWithTracking = {
+        id: 'ctr-1',
+        expenses: [],
+        discount: null,
+        productLines: [],
+        tracking: { status: 'IN_TRANSIT', vessel: 'MAERSK ELBA', voyage: '637N', origin: 'Shanghai', destination: 'Antwerp', currentLocation: 'Shanghai', eta: new Date('2026-09-21'), lastFetchedAt: new Date('2026-08-24') },
+      };
+      mockPrisma.container.findMany = fn().mockResolvedValue([containerWithTracking]);
+      mockPrisma.container.count = fn().mockResolvedValue(1);
+      mockPrisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
+
+      const result = await service.findAll(1, 20, undefined, undefined, undefined, 'sales_rep');
+
+      expect(result.data[0].tracking).toEqual(containerWithTracking.tracking);
+    });
+
+    it('does not crash on an arrived container whose stockLots omit costPerKg (the select-scoped shape findAll actually uses)', async () => {
+      // Regression test: findAll()'s stockLots include is select-scoped to
+      // { kgReceived, kgRemaining } only (added for the Finalize summary /
+      // History "Remaining stock" column) — costPerKg is deliberately never
+      // fetched there. computeTotals() previously called
+      // `lot.costPerKg.toString()` unconditionally whenever stockLots was
+      // present and non-empty, which crashed the ENTIRE GET /containers
+      // endpoint (500) for any arrived container the moment stockLots
+      // existed — caught during live browser verification, not a unit test,
+      // which is exactly the gap this test closes.
+      const arrivedContainerNoCostInList = {
+        id: 'ctr-1',
+        expenses: [],
+        discount: null,
+        productLines: [{ paidBags: 100, kgPerBag: { toString: () => '10' } }],
+        stockLots: [{ kgReceived: '1000', kgRemaining: '1000' }], // no costPerKg
+      };
+      mockPrisma.container.findMany = fn().mockResolvedValue([arrivedContainerNoCostInList]);
+      mockPrisma.container.count = fn().mockResolvedValue(1);
+      mockPrisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
+
+      const result = await service.findAll(1, 20);
+
+      expect(result.data[0].totals.averageCostPerKg).toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // finalize() — Container Finalization + History (approved design)
+  // =========================================================================
+
+  describe('finalize()', () => {
+    const CONTAINER_ID = 'ctr-1';
+
+    it('throws NotFoundException when the authenticated user cannot be resolved', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      await expect(service.finalize(CONTAINER_ID, 'clerk-1')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('throws NotFoundException when the container does not exist', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-1' });
+      mockPrisma.container.findUnique.mockResolvedValue(null);
+      await expect(service.finalize(CONTAINER_ID, 'clerk-1')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('throws BadRequestException(CONTAINER_NOT_ARRIVED) when the container is not arrived', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-1' });
+      mockPrisma.container.findUnique.mockResolvedValue({ id: CONTAINER_ID, status: 'transit', finalizedAt: null });
+
+      try {
+        await service.finalize(CONTAINER_ID, 'clerk-1');
+        throw new Error('expected to throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(BadRequestException);
+        expect((e as BadRequestException).getResponse()).toMatchObject({ code: 'CONTAINER_NOT_ARRIVED' });
+      }
+      expect(mockPrisma.container.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('throws ConflictException(CONTAINER_ALREADY_FINALIZED) when already finalized', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-1' });
+      mockPrisma.container.findUnique.mockResolvedValue({
+        id: CONTAINER_ID, status: 'arrived', finalizedAt: new Date('2026-08-20'),
+      });
+
+      try {
+        await service.finalize(CONTAINER_ID, 'clerk-1');
+        throw new Error('expected to throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ConflictException);
+        expect((e as ConflictException).getResponse()).toMatchObject({ code: 'CONTAINER_ALREADY_FINALIZED' });
+      }
+      expect(mockPrisma.container.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('sets finalizedAt/finalizedById via an atomic conditional updateMany, then returns the finalized container', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-1' });
+      mockPrisma.container.findUnique.mockResolvedValue({ id: CONTAINER_ID, status: 'arrived', finalizedAt: null });
+      mockPrisma.container.updateMany.mockResolvedValue({ count: 1 });
+      const finalized = { id: CONTAINER_ID, status: 'arrived', finalizedAt: new Date(), finalizedBy: { id: 'user-1', name: 'Owner' } };
+      mockPrisma.container.findUniqueOrThrow.mockResolvedValue(finalized);
+
+      const result = await service.finalize(CONTAINER_ID, 'clerk-1');
+
+      expect(mockPrisma.container.updateMany).toHaveBeenCalledWith({
+        where: { id: CONTAINER_ID, status: 'arrived', finalizedAt: null },
+        data: { finalizedAt: expect.any(Date), finalizedById: 'user-1' },
+      });
+      expect(result).toEqual(finalized);
+    });
+
+    it('never modifies StockLot, ContainerProductLine, ContainerExpense, or ContainerDiscount rows', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-1' });
+      mockPrisma.container.findUnique.mockResolvedValue({ id: CONTAINER_ID, status: 'arrived', finalizedAt: null });
+      mockPrisma.container.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.container.findUniqueOrThrow.mockResolvedValue({ id: CONTAINER_ID });
+
+      await service.finalize(CONTAINER_ID, 'clerk-1');
+
+      expect(mockPrisma.stockLot.update).not.toHaveBeenCalled();
+      expect(mockPrisma.stockLot.create).not.toHaveBeenCalled();
+      expect(mockPrisma.containerProductLine.update).not.toHaveBeenCalled();
+      expect(mockPrisma.containerExpense.create).not.toHaveBeenCalled();
+      expect(mockPrisma.containerDiscount.upsert).not.toHaveBeenCalled();
+    });
+
+    it('is race-safe: a lost concurrent race (updateMany count=0) reports CONTAINER_ALREADY_FINALIZED, not a generic error', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-1' });
+      mockPrisma.container.findUnique.mockResolvedValue({ id: CONTAINER_ID, status: 'arrived', finalizedAt: null });
+      mockPrisma.container.updateMany.mockResolvedValue({ count: 0 });
+
+      try {
+        await service.finalize(CONTAINER_ID, 'clerk-1');
+        throw new Error('expected to throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ConflictException);
+        expect((e as ConflictException).getResponse()).toMatchObject({ code: 'CONTAINER_ALREADY_FINALIZED' });
+      }
+    });
+  });
+
+  // =========================================================================
+  // Finalization locks — expenses, discount, identity/supplier/carrier/status
+  // =========================================================================
+
+  describe('finalization guards — CONTAINER_FINALIZED rejects writes', () => {
+    const CONTAINER_ID = 'ctr-1';
+    const finalizedContainer = { id: CONTAINER_ID, status: 'arrived', finalizedAt: new Date('2026-08-20') };
+
+    it('createExpense rejects on a finalized container', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(finalizedContainer);
+      await expect(
+        service.createExpense(CONTAINER_ID, { description: 'x', amount: '10' } as any, 'clerk-1'),
+      ).rejects.toMatchObject({ response: { code: 'CONTAINER_FINALIZED' } });
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('updateExpense rejects on a finalized container', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(finalizedContainer);
+      await expect(
+        service.updateExpense(CONTAINER_ID, 'exp-1', { amount: '10' } as any),
+      ).rejects.toMatchObject({ response: { code: 'CONTAINER_FINALIZED' } });
+    });
+
+    it('removeExpense rejects on a finalized container', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(finalizedContainer);
+      await expect(service.removeExpense(CONTAINER_ID, 'exp-1')).rejects.toMatchObject({
+        response: { code: 'CONTAINER_FINALIZED' },
+      });
+    });
+
+    it('upsertDiscount rejects on a finalized container', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(finalizedContainer);
+      await expect(
+        service.upsertDiscount(CONTAINER_ID, { amount: '50' } as any),
+      ).rejects.toMatchObject({ response: { code: 'CONTAINER_FINALIZED' } });
+    });
+
+    it('removeDiscount rejects on a finalized container', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(finalizedContainer);
+      await expect(service.removeDiscount(CONTAINER_ID)).rejects.toMatchObject({
+        response: { code: 'CONTAINER_FINALIZED' },
+      });
+    });
+
+    it('update() rejects a number change on a finalized container', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(finalizedContainer);
+      await expect(
+        service.update(CONTAINER_ID, { number: 'NEW-NUMBER' }, 'clerk-1'),
+      ).rejects.toMatchObject({ response: { code: 'CONTAINER_FINALIZED' } });
+    });
+
+    it('update() rejects a supplier change on a finalized container', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(finalizedContainer);
+      await expect(
+        service.update(CONTAINER_ID, { supplierId: 'other-supplier' }, 'clerk-1'),
+      ).rejects.toMatchObject({ response: { code: 'CONTAINER_FINALIZED' } });
+    });
+
+    it('update() rejects a carrier/sealine change on a finalized container', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(finalizedContainer);
+      await expect(
+        service.update(CONTAINER_ID, { sealine: 'MSCU' }, 'clerk-1'),
+      ).rejects.toMatchObject({ response: { code: 'CONTAINER_FINALIZED' } });
+    });
+
+    it('update() rejects a status change on a finalized container (closes the status-reversal hole for finalized containers)', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(finalizedContainer);
+      await expect(
+        service.update(CONTAINER_ID, { status: 'transit' }, 'clerk-1'),
+      ).rejects.toMatchObject({ response: { code: 'CONTAINER_FINALIZED' } });
+    });
+
+    it('update() ALLOWS a notes-only change on a finalized container (notes carries no financial/identity meaning)', async () => {
+      mockPrisma.container.findUnique.mockResolvedValue(finalizedContainer);
+      mockPrisma.container.update.mockResolvedValue({ ...finalizedContainer, notes: 'updated note' });
+
+      const result = await service.update(CONTAINER_ID, { notes: 'updated note' }, 'clerk-1');
+
+      expect(result).toMatchObject({ notes: 'updated note' });
+      expect(mockPrisma.container.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ notes: 'updated note' }) }),
+      );
+    });
+
+    it('recalculateContainerCosts() silently no-ops on a finalized container (defense-in-depth backstop)', async () => {
+      const tx = makeMockTx();
+      tx.container.findUnique.mockResolvedValue({
+        id: CONTAINER_ID,
+        finalizedAt: new Date('2026-08-20'),
+        productLines: [{ id: 'line-1', paidBags: 100, kgPerBag: { toString: () => '10' }, pricePerTon: { toString: () => '800' } }],
+        expenses: [],
+        discount: null,
+      });
+
+      await service.recalculateContainerCosts(CONTAINER_ID, tx as any);
+
+      expect(tx.stockLot.findMany).not.toHaveBeenCalled();
+      expect(tx.stockLot.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // findAll() — History filtering (finalized / finalizedFrom / finalizedTo)
+  // =========================================================================
+
+  describe('findAll() — finalized filter (History page)', () => {
+    it('finalized=undefined (omitted): no finalizedAt filter applied — backward compatible for existing callers', async () => {
+      mockPrisma.container.findMany = fn().mockResolvedValue([]);
+      mockPrisma.container.count = fn().mockResolvedValue(0);
+      mockPrisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
+
+      await service.findAll(1, 20);
+
+      const where = mockPrisma.container.findMany.mock.calls[0][0].where;
+      expect(where.finalizedAt).toBeUndefined();
+    });
+
+    it('finalized=false: excludes finalized containers (main Containers page)', async () => {
+      mockPrisma.container.findMany = fn().mockResolvedValue([]);
+      mockPrisma.container.count = fn().mockResolvedValue(0);
+      mockPrisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
+
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, false);
+
+      const where = mockPrisma.container.findMany.mock.calls[0][0].where;
+      expect(where.finalizedAt).toEqual(null);
+    });
+
+    it('finalized=true: only finalized containers, sorted finalizedAt desc (History page)', async () => {
+      mockPrisma.container.findMany = fn().mockResolvedValue([]);
+      mockPrisma.container.count = fn().mockResolvedValue(0);
+      mockPrisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
+
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, true);
+
+      const call = mockPrisma.container.findMany.mock.calls[0][0];
+      expect(call.where.finalizedAt).toMatchObject({ not: null });
+      expect(call.orderBy).toEqual({ finalizedAt: 'desc' });
+    });
+
+    it('finalized=true with finalizedFrom/finalizedTo: applies a timezone-safe business-day range on finalizedAt', async () => {
+      mockPrisma.container.findMany = fn().mockResolvedValue([]);
+      mockPrisma.container.count = fn().mockResolvedValue(0);
+      mockPrisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
+
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, true, '2026-08-01', '2026-08-31');
+
+      const where = mockPrisma.container.findMany.mock.calls[0][0].where;
+      expect(where.finalizedAt.not).toBeNull();
+      // Compare against the same buildDateFilter() helper the reports P&L
+      // date filters already use, rather than hand-deriving the expected
+      // UTC instant — the whole point of reuse is one source of truth for
+      // the Asia/Beirut business-day boundary math.
+      const expectedFilter = buildDateFilter('2026-08-01', '2026-08-31');
+      expect(where.finalizedAt.gte).toEqual(expectedFilter?.businessGte);
+      expect(where.finalizedAt.lt).toEqual(expectedFilter?.businessLt);
+      // Sanity: the exclusive upper bound is strictly after the lower bound
+      // and after the naive (wrong) UTC-midnight-of-31st a raw `new
+      // Date('2026-08-31')` comparison would have produced — proving this
+      // is a genuine end-of-day boundary, not an accidental start-of-day one.
+      expect(where.finalizedAt.lt.getTime()).toBeGreaterThan(new Date('2026-08-31T00:00:00.000Z').getTime());
+    });
+
+    it('includes finalizedBy (id, name) on every returned row', async () => {
+      mockPrisma.container.findMany = fn().mockResolvedValue([]);
+      mockPrisma.container.count = fn().mockResolvedValue(0);
+      mockPrisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
+
+      await service.findAll(1, 20);
+
+      const include = mockPrisma.container.findMany.mock.calls[0][0].include;
+      expect(include.finalizedBy).toEqual({ select: { id: true, name: true } });
     });
   });
 });

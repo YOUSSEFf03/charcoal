@@ -56,8 +56,9 @@ vi.mock('../hooks/useReports', () => ({
 }))
 
 const receiverUser = { id: 'receiver-1', name: 'Marie', role: 'receiver' }
+const mockUseCashReceivers = vi.fn(() => ({ data: [receiverUser] }))
 vi.mock('../hooks/useUsers', () => ({
-  useCashReceivers: () => ({ data: [receiverUser] }),
+  useCashReceivers: () => mockUseCashReceivers(),
 }))
 
 import Payment from './Payment'
@@ -100,6 +101,47 @@ describe('Payment page — receiver resolution', () => {
     await new Promise(r => setTimeout(r, 50))
     expect(mockCreatePaymentMutate).not.toHaveBeenCalled()
     expect(screen.getByText('Receiver is required.')).toBeInTheDocument()
+  })
+
+  // Regression (forensic audit, 2026-09): the receiver <select> used to be
+  // keyed by display NAME (`value={r.name}`), resolved to an id only at
+  // submit time via `allReceivers.find(r => r.name === receiverName)`. Two
+  // real users sharing a name (proven live against this exact dev database —
+  // 41 duplicate "Test Owner" rows from leaked test fixtures) made `.find()`
+  // silently resolve to whichever same-named user happened to come first,
+  // crediting a real $2,000+ cash payment to the wrong person's ledger with
+  // no error. The select must now be keyed by the receiver's stable id, so
+  // selecting the SECOND same-named option can never resolve to the first.
+  it('two receivers sharing the same display name — selecting the second one submits ITS id, never the first', async () => {
+    const sameNameA = { id: 'receiver-a', name: 'Test Owner', role: 'owner' }
+    const sameNameB = { id: 'receiver-b', name: 'Test Owner', role: 'owner' }
+    // mockReturnValue (not -Once): the component re-renders multiple times
+    // (client selection, receiver selection) and calls useCashReceivers()
+    // on every render — a -Once value would only survive the first.
+    mockUseCashReceivers.mockReturnValue({ data: [sameNameA, sameNameB] })
+
+    try {
+      const user = userEvent.setup()
+      renderPayment()
+
+      await user.selectOptions(screen.getByDisplayValue('Select a client…'), 'client-1')
+      // Select the SECOND "Test Owner" option by DOM element, not by matching
+      // text/value — two options render identical text, so only picking the
+      // actual second <option> node proves this is a real UI selection of
+      // receiver B, not an artifact of how the test looks it up.
+      const receiverOptions = screen.getAllByText('Test Owner')
+      expect(receiverOptions).toHaveLength(2)
+      await user.selectOptions(screen.getByDisplayValue('— select receiver —'), receiverOptions[1])
+      await user.click(screen.getByRole('button', { name: /Save payment/ }))
+
+      await waitFor(() => expect(mockCreatePaymentMutate).toHaveBeenCalled())
+      const [body] = mockCreatePaymentMutate.mock.calls[0]
+      expect(body.receiverId).toBe('receiver-b')
+      expect(body.receiverId).not.toBe('receiver-a')
+    } finally {
+      // Restore the default single-receiver mock so later tests in this file are unaffected.
+      mockUseCashReceivers.mockReturnValue({ data: [receiverUser] })
+    }
   })
 })
 

@@ -196,6 +196,75 @@ export interface UpdateWorkerRatesDto {
 }
 
 /**
+ * GET /workers/:id/performance — employee performance analytics (Employee
+ * Profile audit, 2026-09-07). Bags/rate/earnings come from
+ * PackingSession.bagsOutput's per-line snapshotted rate — never the current
+ * BagType/Worker rate config, which can't reprice a past session. A working
+ * day is a distinct PackingSession.date; two sessions on the same date count
+ * once. `dailyPerformance`/`packingHistory`/`dailyWages` are `null` for an
+ * unbounded "all time" request (no dateFrom/dateTo) — only `totals` and
+ * `byBagType` (safe aggregates) are ever returned for an unbounded period.
+ */
+export interface WorkerPerformanceTotals {
+  bagsPacked: number
+  sessions: number
+  workingDays: number
+  packingEarnings: string // Decimal
+  avgBagsPerWorkingDay: string | null // Decimal
+  avgBagsPerSession: string | null // Decimal
+  avgEarningsPerWorkingDay: string | null // Decimal
+  avgEarningsPerSession: string | null // Decimal
+}
+
+export interface WorkerPerformanceByBagType {
+  bagTypeId: string
+  bagTypeName: string
+  bags: number
+  /** Qty-weighted average of the real snapshotted rates actually used — equals the single configured rate unless it changed mid-period. */
+  ratePerBag: string // Decimal
+  /** True if this bag type's snapshotted rate differed across sessions within the period. */
+  rateVaries: boolean
+  earned: string // Decimal
+  workingDays: number
+  avgBagsPerWorkingDay: string | null // Decimal
+}
+
+export interface WorkerDailyPerformance {
+  date: string // ISO date
+  bagsPacked: number
+  sessions: number
+  earned: string // Decimal
+}
+
+export interface WorkerPackingHistoryEntry {
+  date: string // ISO date
+  sessionId: string
+  bagTypeId: string
+  bagTypeName: string
+  quantity: number
+  ratePerBag: string // Decimal — the historical snapshot, not the current rate
+  earned: string // Decimal
+}
+
+export interface WorkerDailyWage {
+  id: string
+  date: string // ISO date
+  amount: string // Decimal
+}
+
+export interface WorkerPerformance {
+  workerId: string
+  from: string | null
+  to: string | null
+  totals: WorkerPerformanceTotals
+  byBagType: WorkerPerformanceByBagType[]
+  dailyPerformance: WorkerDailyPerformance[] | null
+  packingHistory: WorkerPackingHistoryEntry[] | null
+  dailyWages: WorkerDailyWage[] | null
+  paymentsTotal: string // Decimal
+}
+
+/**
  * POST /driver-trips/:id/complete — close a trip with final costs.
  * TODO: verify against Swagger.
  */

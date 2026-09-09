@@ -122,28 +122,30 @@ export default function FillClientFillJobs() {
             <div className="empty">No fill jobs {filterActive ? 'in this period' : 'recorded yet'}.</div>
           )}
           {!jobsQ.isLoading && !jobsQ.isError && jobs.length > 0 && (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Worker</th>
-                  <th className="right">Charcoal kg</th>
-                  <th className="right">Bags</th>
-                  <th className="right">Cost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map(fj => (
-                  <tr key={fj.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/fill-clients/${id}/fill-jobs/${fj.id}`)}>
-                    <td className="mono">{formatDateTime(fj.date, { day: '2-digit' })}</td>
-                    <td style={{ color: 'var(--text2)' }}>{fj.workerEntity?.name ?? '—'}</td>
-                    <td className="right num">{parseFloat(fj.totalCharcoalKg).toFixed(1)} kg</td>
-                    <td className="right num" style={{ fontWeight: 600 }}>{fj.totalBags}</td>
-                    <td className="right num" style={{ color: 'var(--accent2)' }}>{formatUsd(fj.totalCost)}</td>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Worker</th>
+                    <th className="right">Charcoal kg</th>
+                    <th className="right">Bags</th>
+                    <th className="right">Cost</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {jobs.map(fj => (
+                    <tr key={fj.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/fill-clients/${id}/fill-jobs/${fj.id}`)}>
+                      <td className="mono">{formatDateTime(fj.date, { day: '2-digit' })}</td>
+                      <td style={{ color: 'var(--text2)' }}>{fj.workerEntity?.name ?? '—'}</td>
+                      <td className="right num">{parseFloat(fj.totalCharcoalKg).toFixed(1)} kg</td>
+                      <td className="right num" style={{ fontWeight: 600 }}>{fj.totalBags}</td>
+                      <td className="right num" style={{ color: 'var(--accent2)' }}>{formatUsd(fj.totalCost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
           {!jobsQ.isLoading && jobs.length > 0 && totalPages > 1 && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>

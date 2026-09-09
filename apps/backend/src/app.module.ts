@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 
 import configuration from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
@@ -35,7 +36,12 @@ import { ReportsModule } from './reports/reports.module';
 import { FillJobsModule } from './fill-jobs/fill-jobs.module';
 import { SettingsModule } from './settings/settings.module';
 import { GeneralExpensesModule } from './general-expenses/general-expenses.module';
+import { ExpenseCategoriesModule } from './expense-categories/expense-categories.module';
 import { WalkInSalesModule } from './walk-in-sales/walk-in-sales.module';
+import { TraqoAccountsModule } from './traqo-accounts/traqo-accounts.module';
+import { TranslationModule } from './translation/translation.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { MobileModule } from './mobile/mobile.module';
 
 @Module({
   imports: [
@@ -45,6 +51,10 @@ import { WalkInSalesModule } from './walk-in-sales/walk-in-sales.module';
       validationSchema: envValidationSchema,
       validationOptions: { abortEarly: true },
     }),
+    // Registers Nest's @Cron infrastructure app-wide. Currently used only by
+    // ContainerTrackingScheduler (containers/tracking) for the hourly
+    // automatic tracking refresh — see that class for the job itself.
+    ScheduleModule.forRoot(),
     PrismaModule,
     AuthModule,
     WebhooksModule,
@@ -71,7 +81,12 @@ import { WalkInSalesModule } from './walk-in-sales/walk-in-sales.module';
     FillJobsModule,
     SettingsModule,
     GeneralExpensesModule,
+    ExpenseCategoriesModule,
     WalkInSalesModule,
+    TraqoAccountsModule,
+    TranslationModule,
+    NotificationsModule,
+    MobileModule,
   ],
   controllers: [HealthController],
   providers: [

@@ -53,6 +53,13 @@ export interface StatementPdfClient {
 
 export interface StatementPdfConfig {
   client: StatementPdfClient
+  /**
+   * What kind of party `client` is — "Client" (default, e.g. a charcoal buyer)
+   * or "Supplier" (a container/charcoal supplier we pay). Drives the "Client:"/
+   * "Supplier:" line under the title and the "CLIENT INFORMATION"/"SUPPLIER
+   * INFORMATION" panel header — purely a label, no effect on any figure.
+   */
+  partyLabel?: 'Client' | 'Supplier'
   /** ISO date, or null for an unbounded start. */
   from: string | null
   /** ISO date, or null for an unbounded end. */
@@ -123,13 +130,13 @@ function fmtDateHuman(iso: string | null): string {
 }
 
 /** Strips characters illegal in Windows/macOS/Linux filenames and trims trailing dots/spaces. */
-export function sanitizeFilenamePart(name: string): string {
+export function sanitizeFilenamePart(name: string, fallback = 'Client'): string {
   const cleaned = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').trim().replace(/\.+$/, '')
-  return cleaned || 'Client'
+  return cleaned || fallback
 }
 
-export function statementPdfFilename(clientName: string): string {
-  return `${sanitizeFilenamePart(clientName)}_Statement of Account.pdf`
+export function statementPdfFilename(clientName: string, fallback = 'Client'): string {
+  return `${sanitizeFilenamePart(clientName, fallback)}_Statement of Account.pdf`
 }
 
 interface Layout {
@@ -187,7 +194,7 @@ function drawTitleAndPeriod(L: Layout, y: number, config: StatementPdfConfig): n
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(11.5)
   doc.setTextColor(...INK)
-  doc.text(`Client: ${config.client.name}`, pageWidth / 2, y, { align: 'center' })
+  doc.text(`${config.partyLabel ?? 'Client'}: ${config.client.name}`, pageWidth / 2, y, { align: 'center' })
   y += 6.5
 
   doc.setFont('helvetica', 'normal')
@@ -208,6 +215,7 @@ function drawTitleAndPeriod(L: Layout, y: number, config: StatementPdfConfig): n
 
 function drawClientInfoPanel(L: Layout, y: number, config: StatementPdfConfig): number {
   const { doc, margin, contentWidth } = L
+  const partyLabel = config.partyLabel ?? 'Client'
   const rows: [string, string][] = [
     ['Name', config.client.name],
     ['Address', config.client.address || '—'],
@@ -226,7 +234,7 @@ function drawClientInfoPanel(L: Layout, y: number, config: StatementPdfConfig): 
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(10.5)
   doc.setTextColor(...INK)
-  doc.text('CLIENT INFORMATION', margin + 6, y + 8)
+  doc.text(`${partyLabel.toUpperCase()} INFORMATION`, margin + 6, y + 8)
 
   let ry = y + headerH + 4
   const labelX = margin + 6
@@ -400,7 +408,7 @@ export async function exportStatementPdf(config: StatementPdfConfig): Promise<vo
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = statementPdfFilename(config.client.name)
+  a.download = statementPdfFilename(config.client.name, config.partyLabel ?? 'Client')
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)

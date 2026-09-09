@@ -28,7 +28,7 @@ import { SettingsService } from '../settings/settings.service';
  * already implied by "receiver is always shown as a field" — now enforced
  * server-side, not just by UI convention.
  */
-const RECEIVER_REQUIRED_METHODS: PaymentMethod[] = [
+export const RECEIVER_REQUIRED_METHODS: PaymentMethod[] = [
   PaymentMethod.cash,
   PaymentMethod.whish,
   PaymentMethod.omt,

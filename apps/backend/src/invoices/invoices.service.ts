@@ -514,6 +514,24 @@ export class InvoicesService {
    * sanctioned reversal is ShipmentsService.logReturn(), which cancellation
    * must never bypass or auto-trigger).
    *
+   * Stock reversal (forensic audit, 2026-08-28): a WAREHOUSE_SALE invoice
+   * unconditionally deducts stock at creation time
+   * (WalkInSalesService.create(), regardless of payment), and PAYMENT_EXISTS
+   * above means cancellation is only ever reachable for exactly that
+   * already-deducted, zero-payment case. Every StockExit this cancellation
+   * touches is looked up by `invoiceId` — only WalkInSalesService ever sets
+   * that field (see StockExit.invoiceId's doc comment in schema.prisma), so
+   * this naturally no-ops for ORDER invoices (which never deduct stock before
+   * delivery, guarded separately by DELIVERED_ORDER above) without needing an
+   * explicit `source` check. Each linked exit's packedStockId/lotId is the
+   * EXACT row it drained — unlike ShipmentsService.logReturn(), which returns
+   * to "the first available PackedStock of that bagType" because
+   * ShipmentBag never recorded which specific row it came from, this can
+   * restore precisely, mirroring logReturn()'s `{ increment }` pattern. The
+   * StockExit rows themselves are left in place (untouched, still linked to
+   * the now-cancelled invoice) as a historical record — same as the Invoice
+   * row itself, which is cancelled, never deleted.
+   *
    * @param id - Invoice UUID
    * @throws BadRequestException if invoice is paid/cancelled (INVALID_TRANSITION),
    *   has an existing payment allocation (PAYMENT_EXISTS), or is an ORDER
@@ -560,6 +578,26 @@ export class InvoicesService {
         hasPayments: !!allocation,
         hasDeliveredOrder,
       });
+
+      // Restore any stock this invoice's creation deducted — see this
+      // method's doc comment. Scoped by invoiceId, so this is a no-op for
+      // ORDER invoices (which never have a linked StockExit before delivery).
+      const linkedExits = await tx.stockExit.findMany({ where: { invoiceId: id } });
+      for (const exit of linkedExits) {
+        if (exit.packedStockId) {
+          await tx.packedStock.update({
+            where: { id: exit.packedStockId },
+            data: { quantity: { increment: exit.quantity ?? 0 } },
+          });
+        }
+        if (exit.lotId) {
+          const kg = exit.kgQuantity ? new Decimal(exit.kgQuantity.toString()) : new Decimal(0);
+          await tx.stockLot.update({
+            where: { id: exit.lotId },
+            data: { kgRemaining: { increment: kg.toFixed(3) } },
+          });
+        }
+      }
 
       return tx.invoice.update({
         where: { id },

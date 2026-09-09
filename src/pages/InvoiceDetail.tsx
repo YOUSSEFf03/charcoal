@@ -128,41 +128,43 @@ export default function InvoiceDetail() {
             {/* INVOICE ITEMS */}
             <div className="card">
               <div className="card-head"><div className="card-title"><i className="ti ti-list" /> Items</div></div>
-              <table className="data-table">
-                <thead>
-                  <tr><th>Item</th><th>Qty</th><th>Unit price</th><th className="right">Total</th></tr>
-                </thead>
-                <tbody>
-                  {invoice.lines.map((line, i) => (
-                    <tr key={i}>
-                      {line.saleUnit === 'KG' ? (
-                        <>
-                          <td>{line.description}</td>
-                          <td>{line.kgQuantity} kg</td>
-                          <td>{fmtAmt(line.pricePerKg)} {invoice.currency}/kg</td>
-                          <td className="right">{fmtAmt(line.lineTotal)} {invoice.currency}</td>
-                        </>
-                      ) : (
-                        <>
-                          <td>{line.bagTypeName ?? line.bagTypeId}</td>
-                          <td>{line.qty} bags</td>
-                          <td>{fmtAmt(line.pricePerBag)} {invoice.currency}</td>
-                          <td className="right">{fmtAmt(line.lineTotal)} {invoice.currency}</td>
-                        </>
-                      )}
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Item</th><th>Qty</th><th>Unit price</th><th className="right">Total</th></tr>
+                  </thead>
+                  <tbody>
+                    {invoice.lines.map((line, i) => (
+                      <tr key={i}>
+                        {line.saleUnit === 'KG' ? (
+                          <>
+                            <td>{line.description}</td>
+                            <td>{line.kgQuantity} kg</td>
+                            <td>{fmtAmt(line.pricePerKg)} {invoice.currency}/kg</td>
+                            <td className="right">{fmtAmt(line.lineTotal)} {invoice.currency}</td>
+                          </>
+                        ) : (
+                          <>
+                            <td>{line.bagTypeName ?? line.bagTypeId}</td>
+                            <td>{line.qty} bags</td>
+                            <td>{fmtAmt(line.pricePerBag)} {invoice.currency}</td>
+                            <td className="right">{fmtAmt(line.lineTotal)} {invoice.currency}</td>
+                          </>
+                        )}
+                      </tr>
+                    ))}
+                    {invoice.lines.length === 0 && (
+                      <tr><td colSpan={4} className="empty">No line items.</td></tr>
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ background: 'var(--surface2)' }}>
+                      <td colSpan={3} style={{ fontWeight: 600 }}>Subtotal</td>
+                      <td className="right" style={{ fontWeight: 600 }}>{fmtAmt(invoice.subtotal)} {invoice.currency}</td>
                     </tr>
-                  ))}
-                  {invoice.lines.length === 0 && (
-                    <tr><td colSpan={4} className="empty">No line items.</td></tr>
-                  )}
-                </tbody>
-                <tfoot>
-                  <tr style={{ background: 'var(--surface2)' }}>
-                    <td colSpan={3} style={{ fontWeight: 600 }}>Subtotal</td>
-                    <td className="right" style={{ fontWeight: 600 }}>{fmtAmt(invoice.subtotal)} {invoice.currency}</td>
-                  </tr>
-                </tfoot>
-              </table>
+                  </tfoot>
+                </table>
+              </div>
             </div>
 
             {/* PAYMENTS — allocations is the authoritative "what's actually
@@ -175,21 +177,23 @@ export default function InvoiceDetail() {
                 <div className="empty" style={{ padding: '20px 18px' }}>No payments applied yet.</div>
               )}
               {invoice.allocations.length > 0 && (
-                <table className="data-table">
-                  <thead>
-                    <tr><th>Receipt #</th><th>Date</th><th>Method</th><th className="right">Applied</th></tr>
-                  </thead>
-                  <tbody>
-                    {invoice.allocations.map(a => (
-                      <tr key={a.id}>
-                        <td className="mono">{a.payment.displayId ?? a.payment.id.slice(0, 8)}</td>
-                        <td>{fmtDate(a.payment.date)}</td>
-                        <td>{methodBadge(a.payment.method)}</td>
-                        <td className="right">{fmtAmt(a.amount)} {invoice.currency}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr><th>Receipt #</th><th>Date</th><th>Method</th><th className="right">Applied</th></tr>
+                    </thead>
+                    <tbody>
+                      {invoice.allocations.map(a => (
+                        <tr key={a.id}>
+                          <td className="mono">{a.payment.displayId ?? a.payment.id.slice(0, 8)}</td>
+                          <td>{fmtDate(a.payment.date)}</td>
+                          <td>{methodBadge(a.payment.method)}</td>
+                          <td className="right">{fmtAmt(a.amount)} {invoice.currency}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           </div>

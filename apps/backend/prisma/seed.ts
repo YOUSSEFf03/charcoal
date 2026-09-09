@@ -343,6 +343,48 @@ async function main() {
   });
 
   console.log(`Seeded invoice for ${client1.name}`);
+
+  // 3 Traqo accounts for multi-account container tracking. Keys are never
+  // seeded here — only envKeyName, a reference to the environment variable
+  // holding the real key (see TraqoKeyResolver). Account 1 falls back to
+  // the legacy TRAQO_API_KEY env var if TRAQO_API_KEY_1 is unset.
+  const traqoAccount1 = await prisma.traqoAccount.upsert({
+    where: { envKeyName: 'TRAQO_API_KEY_1' },
+    update: {},
+    create: {
+      name: 'Traqo Account 1',
+      envKeyName: 'TRAQO_API_KEY_1',
+      priority: 1,
+      maxContainers: 4,
+    },
+  });
+
+  const traqoAccount2 = await prisma.traqoAccount.upsert({
+    where: { envKeyName: 'TRAQO_API_KEY_2' },
+    update: {},
+    create: {
+      name: 'Traqo Account 2',
+      envKeyName: 'TRAQO_API_KEY_2',
+      priority: 2,
+      maxContainers: 4,
+    },
+  });
+
+  const traqoAccount3 = await prisma.traqoAccount.upsert({
+    where: { envKeyName: 'TRAQO_API_KEY_3' },
+    update: {},
+    create: {
+      name: 'Traqo Account 3',
+      envKeyName: 'TRAQO_API_KEY_3',
+      priority: 3,
+      maxContainers: 4,
+    },
+  });
+
+  console.log(
+    `Seeded Traqo accounts: ${traqoAccount1.name}, ${traqoAccount2.name}, ${traqoAccount3.name}`,
+  );
+
   console.log('Seed completed successfully.');
 }
 

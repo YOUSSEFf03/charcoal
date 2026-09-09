@@ -281,7 +281,7 @@ export default function Suppliers() {
                   <div style={{ fontSize: '0.8rem', color: 'var(--text2)' }}>{sup.country}</div>
                 </div>
               </div>
-              <button className="btn" onClick={() => setPanelOpen(false)}><i className="ti ti-x" /></button>
+              <button className="btn" aria-label="Close" onClick={() => setPanelOpen(false)}><i className="ti ti-x" /></button>
             </div>
 
             {/* Quick stats */}
@@ -373,7 +373,7 @@ export default function Suppliers() {
                         <span className="panel-section-label">Account</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span className="mono" style={{ fontSize: '0.82rem' }}>{sup.bankDetails.account_number}</span>
-                          <button className="copy-btn" onClick={() => copyText(sup.bankDetails!.account_number, 'account')}>
+                          <button className="copy-btn" aria-label="Copy account number" onClick={() => copyText(sup.bankDetails!.account_number, 'account')}>
                             <i className={`ti ti-${copied === 'account' ? 'check' : 'copy'}`} />
                           </button>
                         </div>
@@ -382,7 +382,7 @@ export default function Suppliers() {
                         <span className="panel-section-label">IBAN</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span className="mono" style={{ fontSize: '0.82rem' }}>{sup.bankDetails.iban}</span>
-                          <button className="copy-btn" onClick={() => copyText(sup.bankDetails!.iban, 'iban')}>
+                          <button className="copy-btn" aria-label="Copy IBAN" onClick={() => copyText(sup.bankDetails!.iban, 'iban')}>
                             <i className={`ti ti-${copied === 'iban' ? 'check' : 'copy'}`} />
                           </button>
                         </div>
@@ -391,7 +391,7 @@ export default function Suppliers() {
                         <span className="panel-section-label">SWIFT</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span className="mono" style={{ fontSize: '0.82rem' }}>{sup.bankDetails.swift}</span>
-                          <button className="copy-btn" onClick={() => copyText(sup.bankDetails!.swift, 'swift')}>
+                          <button className="copy-btn" aria-label="Copy SWIFT code" onClick={() => copyText(sup.bankDetails!.swift, 'swift')}>
                             <i className={`ti ti-${copied === 'swift' ? 'check' : 'copy'}`} />
                           </button>
                         </div>
@@ -434,7 +434,7 @@ export default function Suppliers() {
           <div className="modal" style={{ width: 560, maxHeight: '85vh', overflowY: 'auto' }}>
             <div className="modal-head" style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>
               <div className="modal-title">New Supplier</div>
-              <button className="panel-close-btn" onClick={() => setNewModalOpen(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setNewModalOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               {/* Basic info */}
@@ -568,7 +568,7 @@ export default function Suppliers() {
                 <div className="modal-title">Edit supplier</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{sup.name}</div>
               </div>
-              <button className="panel-close-btn" onClick={() => setEditModalOpen(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setEditModalOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-group">

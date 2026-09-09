@@ -14,6 +14,8 @@ import { UsersController } from '../users/users.controller';
 import { UsersService } from '../users/users.service';
 import { CashHandoversController } from '../cash-handovers/cash-handovers.controller';
 import { CashHandoversService } from '../cash-handovers/cash-handovers.service';
+import { MobileDevicesAdminController } from '../notifications/mobile-devices-admin.controller';
+import { DeviceRegistryService } from '../notifications/device-registry.service';
 
 // ---------------------------------------------------------------------------
 // Regression coverage for a real, reachable authorization gap found during
@@ -258,5 +260,56 @@ describe('CashHandoversController — role enforcement', () => {
   });
   it('findAll: receiver → ForbiddenException', () => {
     expect(() => rolesGuard.canActivate(mockContext(CashHandoversController, 'receiver', 'findAll'))).toThrow(ForbiddenException);
+  });
+});
+
+// Phase F — Settings "Container Mobile App" device management. Class-level
+// @Roles('owner'), same pattern as TraqoAccountsController's own owner-only
+// admin panel — device rows carry no sensitive business data, but a device's
+// existence/registration pattern is still owner-only Settings information,
+// and revoke is a real state-changing action.
+describe('MobileDevicesAdminController — role enforcement', () => {
+  let rolesGuard: RolesGuard;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [MobileDevicesAdminController],
+      providers: [
+        { provide: DeviceRegistryService, useValue: {} },
+        Reflector,
+        RolesGuard,
+      ],
+    }).compile();
+
+    rolesGuard = new RolesGuard(module.get<Reflector>(Reflector));
+  });
+
+  it('findAll: owner → passes', () => {
+    expect(rolesGuard.canActivate(mockContext(MobileDevicesAdminController, 'owner', 'findAll'))).toBe(true);
+  });
+  it('findAll: accountant → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext(MobileDevicesAdminController, 'accountant', 'findAll'))).toThrow(ForbiddenException);
+  });
+  it('findAll: sales_rep → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext(MobileDevicesAdminController, 'sales_rep', 'findAll'))).toThrow(ForbiddenException);
+  });
+  it('findAll: worker → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext(MobileDevicesAdminController, 'worker', 'findAll'))).toThrow(ForbiddenException);
+  });
+  it('findAll: driver → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext(MobileDevicesAdminController, 'driver', 'findAll'))).toThrow(ForbiddenException);
+  });
+  it('findAll: receiver → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext(MobileDevicesAdminController, 'receiver', 'findAll'))).toThrow(ForbiddenException);
+  });
+
+  it('revoke: owner → passes', () => {
+    expect(rolesGuard.canActivate(mockContext(MobileDevicesAdminController, 'owner', 'revoke'))).toBe(true);
+  });
+  it('revoke: accountant → ForbiddenException (only the owner may revoke a device)', () => {
+    expect(() => rolesGuard.canActivate(mockContext(MobileDevicesAdminController, 'accountant', 'revoke'))).toThrow(ForbiddenException);
+  });
+  it('revoke: driver → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext(MobileDevicesAdminController, 'driver', 'revoke'))).toThrow(ForbiddenException);
   });
 });

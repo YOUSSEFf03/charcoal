@@ -145,6 +145,22 @@ enum WorkerCostCategory {
   other
 }
 
+// Operational health of a TraqoAccount for allocation purposes. Distinct from
+// slot capacity (activeCount vs maxContainers, always computed — never
+// stored) — this tracks whether the account's credentials/quota are usable
+// at all right now. See TraqoAccountAllocationService.
+enum TraqoAccountStatus {
+  healthy
+  rate_limited
+  auth_failed
+  // 402 shipment_limit_reached / payment_overdue — Traqo itself reports the
+  // account has no room or billing is unresolved. Distinct from
+  // rate_limited (a request-pace problem, usually self-clearing in minutes)
+  // and auth_failed (a bad key) — this one usually needs the operator to
+  // check Traqo's own billing/dashboard.
+  payment_required
+}
+
 model User {
   id                       String             @id @default(uuid())
   clerkId                  String             @unique
@@ -156,6 +172,7 @@ model User {
   createdAt                DateTime           @default(now())
   updatedAt                DateTime           @updatedAt
   containersCreated        Container[]        @relation("ContainerCreatedBy")
+  containersFinalized      Container[]        @relation("ContainerFinalizedBy")
   expensesAdded            ContainerExpense[] @relation("ExpenseAddedBy")
   packingSessions          PackingSession[]   @relation("SessionWorker")
   stockAdjustmentsMade     StockAdjustment[]  @relation("AdjustmentCountedBy")
@@ -204,16 +221,53 @@ model CashHandover {
 /// calculated client-side only and discarded on submit. Persisted so these
 /// real business expenses survive and can appear in the Expenses aggregation.
 /// No own `date` field: derives its date from the parent CashHandover.date.
+///
+/// This is the single authoritative "expense occurrence" record for the
+/// Expenses page's Employee → Category → Occurrence hierarchy (forensic
+/// audit, 2026-08-31) — "employee" is this row's CashHandover.receiverId/
+/// receiverName, "category" is `categoryId` below. No separate/duplicate
+/// accounting record is ever created for the same occurrence.
 model CashHandoverExpense {
-  id             String       @id @default(uuid())
+  id             String           @id @default(uuid())
   cashHandoverId String
-  cashHandover   CashHandover @relation(fields: [cashHandoverId], references: [id], onDelete: Cascade)
+  cashHandover   CashHandover     @relation(fields: [cashHandoverId], references: [id], onDelete: Cascade)
+  /// Human-readable label — kept in sync with `category.name` at write time
+  /// (CashHandoversService.create()) so every existing reader of this column
+  /// (reports.service.ts's P&L aggregate, CashHandover.tsx's history table)
+  /// keeps working unchanged. Never independently editable once a category
+  /// is selected — the category IS the description going forward.
   description    String
-  amount         Decimal      @db.Decimal(10, 2)
-  createdAt      DateTime     @default(now())
+  amount         Decimal          @db.Decimal(10, 2)
+  /// Nullable only so a pre-migration historical row (backfilled by
+  /// 20260831000000_add_expense_category, matched from its own `description`)
+  /// or a rare direct-API caller that omits it is never left in an invalid
+  /// state — CreateCashHandoverDto.expenses[] requires it for every NEW row.
+  categoryId     String?
+  /// SetNull (not the default RESTRICT): no category-deletion feature exists
+  /// today, but a historical expense occurrence must never be blocked or
+  /// destroyed by a future category-management change — "nothing should be
+  /// deleted or hidden permanently" (forensic audit, 2026-08-31).
+  category       ExpenseCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdAt      DateTime         @default(now())
 
   @@index([cashHandoverId])
+  @@index([categoryId])
   @@map("cash_handover_expenses")
+}
+
+/// Reusable expense category/type (e.g. "Fuel", "Food") — selected from a
+/// dropdown when logging a Cash Handover expense, or created on the fly via
+/// "+ Add new expense" (ExpenseCategoriesService.findOrCreate(), case-
+/// insensitive so "Fuel"/"fuel"/"FUEL" never become three separate rows).
+/// Reusable ONLY — never itself an accounting record; each actual expense
+/// stays its own CashHandoverExpense occurrence.
+model ExpenseCategory {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  expenses  CashHandoverExpense[]
+
+  @@map("expense_categories")
 }
 
 model Supplier {
@@ -265,6 +319,38 @@ model Container {
   status           ContainerStatus        @default(port)
   arrivalDate      DateTime?
   notes            String?
+  // Ocean carrier (shipping line) this container ships with, as a SCAC code
+  // (e.g. "MAEU") plus its display name — set by the user via the existing
+  // container edit flow, chosen from Traqo's live carrier list (never
+  // free-typed or guessed from the container number). Required by
+  // ContainerTrackingService before a Traqo lookup can be attempted; has no
+  // effect on cost/accounting.
+  sealine          String?
+  sealineName      String?
+  // Finalization: an ADDITIVE fact layered on top of `status`, never a
+  // replacement for it. `status` keeps meaning exactly what it already
+  // means (port/transit/arrived — physical state); finalizedAt/finalizedBy
+  // answer a separate question ("is this arrived container's financial
+  // record locked and historical?"). Both null = active; both set =
+  // finalized. Never set independently of each other (see
+  // ContainersService.finalize()). A finalized container's status is always
+  // 'arrived' — finalization is only reachable from that status — but
+  // status itself is never changed by finalization, by design (Option C of
+  // the approved lifecycle audit).
+  finalizedAt      DateTime?
+  finalizedById    String?
+  finalizedBy      User?                  @relation("ContainerFinalizedBy", fields: [finalizedById], references: [id])
+  // ── Arrival push notification (Phase C — mobile tracking project) ─────
+  // Set exactly once, the moment a "not arrived -> arrived" transition (see
+  // ContainersService.update()) successfully notifies mobile devices. Never
+  // set by container creation (a container created already-arrived has no
+  // prior state to have "transitioned" from — mirrors ContainerTracking's
+  // own 'initial' vs 'became_known' distinction from Phase B) and never set
+  // from Traqo tracking data — only from this field's own business status.
+  // The write is an atomic compare-and-set (`UPDATE ... WHERE status =
+  // 'arrived' AND arrivalNotifiedAt IS NULL`), which is what makes the
+  // notification idempotent even under concurrent update() calls.
+  arrivalNotifiedAt DateTime?
   createdById      String
   createdBy        User                   @relation("ContainerCreatedBy", fields: [createdById], references: [id])
   createdAt        DateTime               @default(now())
@@ -274,10 +360,175 @@ model Container {
   discount         ContainerDiscount?
   stockLots        StockLot[]
   supplierPayments SupplierPayment[]
+  tracking         ContainerTracking?
+  trackingAssignments ContainerTrackingAssignment[]
 
   @@index([status])
   @@index([supplierId])
+  @@index([finalizedAt])
   @@map("containers")
+}
+
+/// Last known shipment-tracking snapshot for a container, sourced from an
+/// external tracking provider (currently Traqo Ocean). One row per
+/// container, overwritten in place on every successful manual refresh —
+/// this is a cache of the provider's last successful response, never a
+/// history log. Purely informational: nothing here feeds cost, stock, or
+/// accounting, and it must never be conflated with Container.status (the
+/// internal port/transit/arrived lifecycle).
+model ContainerTracking {
+  id                String    @id @default(uuid())
+  containerId       String    @unique
+  container         Container @relation(fields: [containerId], references: [id])
+  // "traqo" today; kept so a future second provider (or a swap) doesn't
+  // require a schema change, only a new value here.
+  provider          String    @default("traqo")
+  referenceNumber   String
+  sealine           String
+  sealineName       String?
+  status            String?
+  origin            String?
+  destination       String?
+  vessel            String?
+  voyage            String?
+  currentLocation   String?
+  eta               DateTime?
+  isDelayed         Boolean?
+  shipmentUid       String?
+  shipmentPublicUrl String?
+  // The real Traqo shipment identifier (Frappe doc name, e.g. "SHP-76810"),
+  // extracted from the container response's nested rows. NOT the same as
+  // shipmentUid above (that's a public-share-link token, confirmed by a live
+  // GET /shipments/{shipmentUid} 404 during the multi-account investigation
+  // — GET /shipments/{traqoShipmentName} is what actually resolves). Kept
+  // separate rather than replacing shipmentUid, which the public tracking
+  // link still depends on.
+  traqoShipmentName String?
+  // Traqo's own shipment-lifecycle fields, live-verified on GET
+  // /container/:number (2026-08-26): is_active (0/1) and closed_at
+  // (timestamp|null) are the confirmed signal that Traqo has closed/removed
+  // a shipment — see ContainerTrackingAssignment.releaseReason
+  // "traqo_removed". Never inferred from Container.status.
+  isActive          Boolean?
+  closedAt          DateTime?
+  // Traqo's own `last_updated_at` for this shipment — distinct from
+  // `lastFetchedAt`, which is when WE last successfully called the API.
+  providerUpdatedAt DateTime?
+  lastFetchedAt     DateTime  @default(now())
+  // ── ETA-change detection (Phase B — mobile tracking project) ──────────
+  // Snapshot of `eta` immediately before the most recent successful refresh
+  // overwrote it. Captured on EVERY successful refresh, not only when it
+  // changes — see ContainerTrackingService.persistSuccess()/classifyEtaChange().
+  // Distinct from `eta` (the current authoritative value): this is "what it
+  // used to be," kept so a future notification can say "previous ETA: X,
+  // new ETA: Y" even though `eta` itself has already been overwritten with Y.
+  // Null exactly when there is no known prior ETA (first-ever refresh, or
+  // the prior refresh's eta was itself null).
+  previousEta         DateTime?
+  // Set to the refresh's timestamp only when that refresh's classification
+  // was 'became_known' or 'changed' (see classifyEtaChange) — i.e. an actual
+  // notification-worthy ETA change. Left untouched (keeps whatever it was)
+  // on every other refresh, including 'no_change', the first-ever 'initial'
+  // population, and 'became_unavailable' (ETA reverting to null is
+  // deliberately NOT treated as an ordinary ETA-change event — see the
+  // Phase B design notes). So this always reflects "the last time eta
+  // meaningfully changed," never merely "the last refresh."
+  etaChangedAt        DateTime?
+  // Reserved for Phase C (push notifications) — never written by Phase B.
+  // Set when a notification has actually been sent for the change recorded
+  // at etaChangedAt. Phase C's dedup rule: a not-yet-notified change exists
+  // iff etaChangedAt IS NOT NULL AND (etaChangeNotifiedAt IS NULL OR
+  // etaChangeNotifiedAt < etaChangedAt). Defined now so Phase C needs no
+  // further migration.
+  etaChangeNotifiedAt DateTime?
+  // Business-friendly message from the most recent FAILED refresh attempt,
+  // if any. Cleared on the next successful refresh. The fields above are
+  // never overwritten by a failed refresh — this is the only trace of it.
+  lastError         String?
+  // Full provider response, preserved verbatim. Nested-table field names
+  // (events_table/vessels_table/voyage_plan_table) are best-effort mapped
+  // above from public docs; this lets normalization be corrected later
+  // without another API call, and is never sent to the frontend.
+  rawResponse       Json
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  events            TrackingEvent[]
+
+  @@map("container_trackings")
+}
+
+/// One tracking milestone from the provider's events_table, replaced in full
+/// on every successful refresh (never diffed/appended) since the provider
+/// returns the complete timeline each time, not deltas.
+model TrackingEvent {
+  id          String            @id @default(uuid())
+  trackingId  String
+  tracking    ContainerTracking @relation(fields: [trackingId], references: [id], onDelete: Cascade)
+  description String
+  location    String?
+  occurredAt  DateTime?
+  raw         Json?
+  createdAt   DateTime          @default(now())
+
+  @@index([trackingId])
+  @@map("tracking_events")
+}
+
+/// One Traqo Ocean account/API key our backend can use to track containers.
+/// The raw key itself is NEVER stored here — only `envKeyName`, a reference
+/// to the environment variable holding it (see TraqoKeyResolver). This is a
+/// deliberate structural guarantee: since there is no key column, a key can
+/// never leak into a Prisma response, a DB export, or an admin UI.
+model TraqoAccount {
+  id               String                         @id @default(uuid())
+  name             String
+  envKeyName       String                         @unique
+  baseUrl          String?
+  active           Boolean                        @default(true)
+  maxContainers    Int                             @default(4)
+  // Deterministic tie-break ordering for allocation when multiple accounts
+  // have equal active-container counts. Lower = preferred.
+  priority         Int
+  status           TraqoAccountStatus              @default(healthy)
+  // Cool-down window for a temporary rate_limited state — accounts are
+  // excluded from NEW allocation while this is in the future. Never affects
+  // already-assigned containers.
+  unavailableUntil DateTime?
+  lastFailureAt    DateTime?
+  lastFailureKind  String?
+  createdAt        DateTime                        @default(now())
+  updatedAt        DateTime                        @updatedAt
+  assignments      ContainerTrackingAssignment[]
+
+  @@map("traqo_accounts")
+}
+
+/// Which TraqoAccount a container's Traqo tracking is billed/counted
+/// against. Deliberately separate from Container and ContainerTracking (see
+/// the multi-account architecture plan, §5): account routing is internal
+/// integration plumbing, and release must only ever touch this table so
+/// ContainerTracking/TrackingEvent history is preserved by construction.
+/// Rows are never deleted — releasedAt marks history instead.
+model ContainerTrackingAssignment {
+  id             String        @id @default(uuid())
+  containerId    String
+  container      Container     @relation(fields: [containerId], references: [id], onDelete: Restrict)
+  traqoAccountId String
+  traqoAccount   TraqoAccount  @relation(fields: [traqoAccountId], references: [id], onDelete: Restrict)
+  assignedAt     DateTime      @default(now())
+  // NULL = active, consumes one of the account's maxContainers slots.
+  // Non-null = released; the container no longer counts against the account.
+  releasedAt     DateTime?
+  // "traqo_removed" (Traqo confirmed is_active=0/closed_at!=null on a
+  // refresh) | "manual" (admin override escape hatch). Never "arrived" —
+  // Container.status reaching 'arrived' deliberately does NOT release.
+  releaseReason  String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([traqoAccountId, releasedAt])
+  @@index([containerId])
+  @@map("container_tracking_assignments")
 }
 
 model ContainerProductLine {
@@ -450,6 +701,37 @@ model Setting {
   @@map("settings")
 }
 
+enum DevicePlatform {
+  ios
+  android
+}
+
+/// A registered mobile push-notification target (Phase C — mobile tracking
+/// project). Deliberately has NO relation to User: the mobile app is a
+/// private, single-user, login-free client (see the mobile-app product
+/// decision) authenticated by a shared device credential, not a Clerk
+/// session — there is no per-user identity to attach a device to. `token`
+/// is the Expo push token (never a Traqo key, never a Clerk credential —
+/// this table has nothing to do with either). Unique on `token` so
+/// re-registering the same device (app reinstall, token refresh handled
+/// client-side by re-POSTing) is a plain upsert, never a duplicate row.
+model DeviceToken {
+  id         String         @id @default(uuid())
+  token      String         @unique
+  platform   DevicePlatform
+  appVersion String?
+  // Flipped to false only when the push provider definitively reports this
+  // token as invalid/unregistered (e.g. Expo's DeviceNotRegistered) — never
+  // for a transient send failure. Inactive devices are skipped when sending,
+  // never deleted (keeps the row as a record of "this device existed").
+  active     Boolean        @default(true)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  lastSeenAt DateTime       @default(now())
+
+  @@map("device_tokens")
+}
+
 model PackingSession {
   id              String              @id @default(uuid())
   workerId        String
@@ -540,6 +822,14 @@ model Client {
   /// English notes — separate from `notes` (Arabic) rather than one bilingual field.
   notesEn        String?
   isActive       Boolean       @default(true)
+  /// Multiple-locations audit, 2026-08-31: opt-in switch that reveals the
+  /// Locations management UI (ClientDetail.tsx) — a client stays a normal
+  /// single-location client by default (Order forms never show a location
+  /// selector unless this is true AND at least one active ClientLocation
+  /// exists). The client's own financial account/balance is completely
+  /// unaffected either way — see ClientLocation's doc comment: a location is
+  /// provenance on an order, never a second ledger.
+  multiLocationEnabled Boolean    @default(false)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   orders         ClientOrder[]
@@ -547,8 +837,43 @@ model Client {
   payments       Payment[]
   stockExits     StockExit[]
   fillJobs       FillJob[]
+  locations      ClientLocation[]
 
   @@map("clients")
+}
+
+/// A named branch/location belonging to one client (e.g. "Hamra Branch"),
+/// for provenance on normal Orders only (forensic audit, 2026-08-31 —
+/// "Client Multiple Locations with ONE shared client balance").
+///
+/// CRITICAL — this is NOT an accounting entity: no balance, no ledger, no
+/// AccountEntry ever references a location. The client remains the single
+/// financial account (Client.balance / getClientLedger()) regardless of how
+/// many locations it has or which one an order was placed for. Warehouse/
+/// walk-in sales never reference this model at all (WalkInSalesService never
+/// sets ClientOrder, let alone a location).
+///
+/// Never hard-deleted once it may have orders against it — deactivate
+/// (isActive=false) instead, so ClientOrder.locationId keeps resolving for
+/// historical Statement entries. Name is unique per-client (not globally) —
+/// see ClientsService.createLocation()'s case-insensitive dup check, the
+/// same "Fuel/fuel/FUEL" prevention pattern already used for ExpenseCategory.
+model ClientLocation {
+  id        String        @id @default(uuid())
+  clientId  String
+  client    Client        @relation(fields: [clientId], references: [id])
+  name      String
+  address   String?
+  phone     String?
+  notes     String?
+  isActive  Boolean       @default(true)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  orders    ClientOrder[]
+
+  @@unique([clientId, name])
+  @@index([clientId])
+  @@map("client_locations")
 }
 
 model ClientOrder {
@@ -572,6 +897,15 @@ model ClientOrder {
   updatedAt        DateTime         @updatedAt
   notes            String?
   supplierName     String?          @map("supplier_name")
+  /// Which of the client's branches this order/delivery is for — informational
+  /// provenance only (see ClientLocation's doc comment). Nullable: a normal
+  /// single-location client (the default) never sets this; a historical order
+  /// predating this feature keeps it null forever, never backfilled/invented.
+  /// Never affects the client's shared balance/ledger math — only
+  /// ReportsService.buildInvoiceDescription() reads it, to append the
+  /// location name into the existing Statement description string.
+  locationId       String?
+  location         ClientLocation?  @relation(fields: [locationId], references: [id], onDelete: SetNull)
   shipments        Shipment[]
   packingSessions  PackingSession[]
   stockExits       StockExit[]
@@ -581,6 +915,7 @@ model ClientOrder {
   @@index([clientId])
   @@index([status])
   @@index([createdAt])
+  @@index([locationId])
   @@map("client_orders")
 }
 
@@ -688,6 +1023,30 @@ model StockExit {
   loggedBy        User         @relation("ExitLoggedBy", fields: [loggedById], references: [id])
   date            DateTime     @db.Date
   createdAt       DateTime     @default(now())
+  /// Client-generated key identifying one logical anonymous-walk-in-sale
+  /// submission attempt (WarehouseSales.tsx's saleIdempotencyKey — same
+  /// per-attempt UUID already used for registered-client sales via
+  /// Invoice.idempotencyKey). Only ever set by StockExitsService.create()
+  /// when the caller supplies one; every other exit type/caller (sample,
+  /// internal, gift, fill-job pickup, direct API calls that omit it) leaves
+  /// this null and is completely unaffected. See StockExitsService.create()'s
+  /// doc comment for the full mechanism — it mirrors WalkInSalesService's
+  /// idempotencyKey/requestFingerprint pattern for the anonymous-sale path
+  /// that pattern was never extended to (forensic audit, 2026-08-28).
+  ///
+  /// Nullable + a plain unique index: Postgres allows unlimited NULLs, so
+  /// every existing/other exit is unaffected. Unlike Invoice, StockExit has
+  /// no cancel/void concept — a plain (not partial) unique index is
+  /// therefore sufficient; there is no "cancelled" state that would need a
+  /// key to become reusable.
+  idempotencyKey     String?
+  /// SHA-256 of the fields that define WHAT is being exited/collected —
+  /// never display-only fields (recipient, reason) or the idempotencyKey
+  /// itself. See computeStockExitFingerprint() in stock-exits.service.ts.
+  /// A SECOND request reusing the same idempotencyKey with a genuinely
+  /// DIFFERENT fingerprint is rejected (409 IDEMPOTENCY_KEY_REUSED), never
+  /// silently treated as a retry.
+  requestFingerprint String?
 
   @@index([date])
   @@index([exitType])
@@ -704,6 +1063,39 @@ model Invoice {
   displayId            String?       @unique @map("display_id")
   orderId              String?
   order                ClientOrder?  @relation(fields: [orderId], references: [id])
+  /// Client-generated key identifying one logical creation attempt — currently
+  /// only WalkInSalesService.create() sets this (a walk-in sale has no
+  /// pre-existing persistent entity like ClientOrder to key idempotency off of,
+  /// unlike createFromOrder()'s orderId). This is the DB-level backstop for the
+  /// application-level idempotency guard in WalkInSalesService.create() — see
+  /// that method's doc comment for the full mechanism.
+  ///
+  /// NOT marked @unique here — the real constraint is a PARTIAL unique index,
+  /// `invoices_idempotencyKey_unique_active` (WHERE status <> 'cancelled'),
+  /// applied via raw SQL migration only (Prisma's schema DSL cannot express a
+  /// filtered unique index), exactly mirroring how `orderId` above is a plain
+  /// field with its own partial index (`invoices_orderId_unique_active`)
+  /// applied the same way. Postgres allows unlimited NULLs in a unique index
+  /// regardless, so every other invoice-creation path (ORDER source, any
+  /// walk-in caller that omits the key) stays unaffected. The `<> 'cancelled'`
+  /// clause lets a cancelled invoice keep its historical key permanently while
+  /// still allowing a FRESH sale to reuse that same key — a plain unique index
+  /// would instead permanently block that key on cancellation, which is the
+  /// exact bug this partial-index migration exists to fix (forensic audit,
+  /// 2026-08-27: create → cancel → retry same key must create a NEW live sale,
+  /// not resurrect or get blocked by the cancelled one).
+  idempotencyKey       String?
+  /// SHA-256 of the semantically-relevant fields of the request that created
+  /// this invoice under idempotencyKey (client, date, method, amounts,
+  /// receiver, normalized bag/kg lines — see WalkInSalesService's
+  /// computeSaleFingerprint()). NOT itself unique/constrained — it exists so a
+  /// SECOND request reusing the same idempotencyKey with genuinely DIFFERENT
+  /// sale data can be detected and rejected (IDEMPOTENCY_KEY_REUSED) instead
+  /// of silently handing that caller someone else's sale result. Only ever
+  /// compared, never enforced at the DB level (no legitimate reason two DIFFERENT
+  /// keys would need distinct fingerprints — collisions across unrelated keys
+  /// are harmless and never compared against each other).
+  requestFingerprint   String?
   clientId             String
   client               Client        @relation(fields: [clientId], references: [id])
   lines                Json          @default("[]")

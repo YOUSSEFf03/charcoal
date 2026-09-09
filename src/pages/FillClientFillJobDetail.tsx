@@ -69,36 +69,40 @@ export default function FillClientFillJobDetail() {
 
         <div className="card">
           <div className="card-head"><div className="card-title"><i className="ti ti-package" /> Bags produced</div></div>
-          <table className="data-table">
-            <thead><tr><th>Bag spec</th><th className="right">Qty</th><th className="right">Fill price / bag</th></tr></thead>
-            <tbody>
-              {job.bagOutputs.map((b, i) => (
-                <tr key={i}>
-                  <td>{b.size} kg · {b.charcoal}</td>
-                  <td className="right num" style={{ fontWeight: 600 }}>{b.qty}</td>
-                  <td className="right num" style={{ color: 'var(--accent2)' }}>{formatUsd(b.fillPricePerBag)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead><tr><th>Bag spec</th><th className="right">Qty</th><th className="right">Fill price / bag</th></tr></thead>
+              <tbody>
+                {job.bagOutputs.map((b, i) => (
+                  <tr key={i}>
+                    <td>{b.size} kg · {b.charcoal}</td>
+                    <td className="right num" style={{ fontWeight: 600 }}>{b.qty}</td>
+                    <td className="right num" style={{ color: 'var(--accent2)' }}>{formatUsd(b.fillPricePerBag)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <div className="card">
           <div className="card-head"><div className="card-title"><i className="ti ti-flame" /> Charcoal consumed</div></div>
-          <table className="data-table">
-            <thead><tr><th>Lot</th><th className="right">Kg used</th><th className="right">Cost/kg</th><th className="right">Cost</th></tr></thead>
-            <tbody>
-              {job.fillJobLots.map(l => (
-                <tr key={l.id}>
-                  <td>{l.lot ? `${l.lot.charcoalType} · ${l.lot.grade}` : '—'}</td>
-                  <td className="right num">{parseFloat(l.kgUsed).toFixed(1)} kg</td>
-                  <td className="right num" style={{ color: 'var(--text2)' }}>{formatUsd(l.costPerKg)}</td>
-                  <td className="right num" style={{ fontWeight: 600 }}>{formatUsd(l.cost)}</td>
-                </tr>
-              ))}
-              {job.fillJobLots.length === 0 && <tr><td colSpan={4} className="empty">No lot breakdown recorded</td></tr>}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead><tr><th>Lot</th><th className="right">Kg used</th><th className="right">Cost/kg</th><th className="right">Cost</th></tr></thead>
+              <tbody>
+                {job.fillJobLots.map(l => (
+                  <tr key={l.id}>
+                    <td>{l.lot ? `${l.lot.charcoalType} · ${l.lot.grade}` : '—'}</td>
+                    <td className="right num">{parseFloat(l.kgUsed).toFixed(1)} kg</td>
+                    <td className="right num" style={{ color: 'var(--text2)' }}>{formatUsd(l.costPerKg)}</td>
+                    <td className="right num" style={{ fontWeight: 600 }}>{formatUsd(l.cost)}</td>
+                  </tr>
+                ))}
+                {job.fillJobLots.length === 0 && <tr><td colSpan={4} className="empty">No lot breakdown recorded</td></tr>}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {job.notes && (

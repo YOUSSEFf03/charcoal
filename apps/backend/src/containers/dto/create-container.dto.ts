@@ -6,6 +6,7 @@ import {
   MaxLength,
   IsArray,
   ValidateNested,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -36,6 +37,21 @@ export class CreateContainerDto {
   @IsString()
   @MaxLength(1000)
   notes?: string;
+
+  @ApiPropertyOptional({
+    description: 'Ocean carrier SCAC code for shipment tracking (e.g. "MAEU"). Chosen from the tracking provider\'s carrier list, never free-typed.',
+    maxLength: 4,
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Z0-9]{2,4}$/, { message: 'sealine must be a 2-4 character carrier SCAC code' })
+  sealine?: string;
+
+  @ApiPropertyOptional({ description: 'Display name of the carrier matching sealine (e.g. "Maersk")', maxLength: 120 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  sealineName?: string;
 
   @ApiPropertyOptional({ description: 'Product lines to create with the container', type: [CreateProductLineDto] })
   @IsOptional()

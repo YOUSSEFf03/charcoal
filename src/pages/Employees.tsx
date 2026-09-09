@@ -6,69 +6,52 @@ import {
   useLogWorkerPayment,
   useUpdateWorker,
   useDeleteWorker,
-  useWorkerPayments,
-  useWorkerEarnings,
   useCreateWorkerEarning,
+  useLogDailyWage,
+  useWorkerStatement,
+  useUpdateWorkerRates,
+  useWorkerPerformance,
+  useWorkerPaymentsInPeriod,
 } from '../hooks/useWorkers'
-import { useWorkerPackingSessionsHistory } from '../hooks/usePacking'
+import { useBagTypes } from '../hooks/useBagTypes'
 import { useToast } from '../context/ToastContext'
-import { toDateOnlyString } from '../lib/date'
-import type { Worker, WorkerCostCategory, PaymentMethod } from '../types/api'
+import { toDateOnlyString, formatDate, formatDateTime } from '../lib/date'
+import { formatUsd } from '../lib/money'
+import { CATEGORY_LABEL, CATEGORY_OPTIONS, METHOD_LABEL, PAYMENT_METHODS } from '../lib/workerLabels'
+import type { Worker, WorkerCostCategory, PaymentMethod, WorkerStatementEntry, WorkerRate } from '../types/api'
 
 type View = 'list' | 'worker'
-type HistoryFilter = 'all' | 'earnings' | 'payments' | 'this_month' | 'last_month'
+// Statement of Account presentation (month-based audit, 2026-09-06): the
+// PRIMARY view is always a single calendar month, navigated with ← / →
+// (same convention as Expenses.tsx's month selector) — never "All time" by
+// default. "All time" remains available as a de-emphasized, explicit opt-in
+// (there was never a "Custom range" input in this page to preserve — only
+// the old 'All time'/'This month'/'Last month' <select>, now replaced).
+type StatementMode = 'month' | 'all-time'
+// Employee Profile + Performance Analytics (2026-09-07) — the Performance
+// section (bag-type breakdown, daily performance, packing history, daily
+// wages, period payments) has its OWN month selector, independent of the
+// Statement of Account's — same month/all-time convention, applied
+// separately, so viewing September's performance doesn't force the
+// Statement to September too (and vice versa).
+type PerfMode = 'month' | 'all-time'
 
 function initials(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase()
 }
 
-// Business-language labels — the underlying model is WorkerCost, but factory
-// staff never see the word "cost": this records what a worker earned, not a
-// business expense.
-const CATEGORY_LABEL: Record<WorkerCostCategory, string> = {
-  daily_wage: 'Daily wage',
-  weekly_wage: 'Weekly wage',
-  monthly_salary: 'Monthly salary',
-  bonus: 'Bonus',
-  deduction: 'Deduction',
-  fuel: 'Fuel',
-  food: 'Food',
-  transport: 'Transport',
-  advance: 'Advance',
-  correction: 'Correction',
-  other: 'Other',
-}
-const CATEGORY_OPTIONS = Object.keys(CATEGORY_LABEL) as WorkerCostCategory[]
-
-const METHOD_LABEL: Record<PaymentMethod, string> = {
-  cash: 'Cash', whish: 'Whish', omt: 'OMT', bank_transfer: 'Bank', cheque: 'Cheque',
-}
-const PAYMENT_METHODS = Object.keys(METHOD_LABEL) as PaymentMethod[]
-
-const HISTORY_FILTERS: [HistoryFilter, string][] = [
-  ['all', 'All'],
-  ['earnings', 'Earnings'],
-  ['payments', 'Payments'],
-  ['this_month', 'This month'],
-  ['last_month', 'Last month'],
-]
-
-interface HistoryRow {
-  id: string
-  date: string
-  label: string
-  sub?: string
-  amount: number // signed — earnings/sessions positive, payments negative
-  icon: string
-  color: 'green' | 'red' | 'blue'
-  isPayment: boolean
-}
-
-function dayLabel(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-}
-function monthKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+/** Statement description — built from the SAME authoritative fields the
+ *  entry carries, using the SAME label maps this page already defines.
+ *  Never invents text the underlying record doesn't support. */
+function describeStatementEntry(e: WorkerStatementEntry): string {
+  if (e.source === 'cost') {
+    const label = CATEGORY_LABEL[e.category as WorkerCostCategory] ?? 'Earning'
+    return e.notes ? `${label} — ${e.notes}` : label
+  }
+  if (e.source === 'session') return 'Packing session'
+  // payment
+  const method = e.method ? METHOD_LABEL[e.method] : 'Payment'
+  return e.referenceNumber ? `Payment · ${method} · ${e.referenceNumber}` : `Payment · ${method}`
 }
 
 export default function Employees() {
@@ -81,6 +64,8 @@ export default function Employees() {
   const deleteWorker   = useDeleteWorker()
   const logPayment     = useLogWorkerPayment()
   const createEarning  = useCreateWorkerEarning()
+  const updateRates    = useUpdateWorkerRates()
+  const bagTypesQ      = useBagTypes()
 
   const workers = workersQ.data ?? []
 
@@ -90,6 +75,8 @@ export default function Employees() {
   const [editEmpOpen, setEditEmpOpen]   = useState(false)
   const [editName, setEditName]         = useState('')
   const [editPhone, setEditPhone]       = useState('')
+  const [editNotes, setEditNotes]       = useState('')
+  const [editRates, setEditRates]       = useState<Record<string, string>>({})
   const [empName, setEmpName]           = useState('')
   const [empPhone, setEmpPhone]         = useState('')
 
@@ -104,19 +91,83 @@ export default function Employees() {
   const [earnDate, setEarnDate]           = useState(() => toDateOnlyString(new Date()))
   const [earnNotes, setEarnNotes]         = useState('')
 
-  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all')
+  const logDailyWage = useLogDailyWage()
 
-  // History is a merge of three independently server-paginated feeds
-  // (earnings, payments, packing sessions), each loaded "See more"-style via
-  // useInfiniteQuery — see useWorkers.ts / usePacking.ts. Every "See more"
-  // click fetches only the next page of whichever feed(s) still have more,
-  // appending to what's already loaded; nothing is ever re-fetched from page 1.
-  const earningsQ = useWorkerEarnings(selectedWorker?.id)
-  const paymentsQ = useWorkerPayments(selectedWorker?.id)
-  // Packing sessions appear read-only in the same timeline — still calculated
-  // from PackingSession.sessionEarnings, untouched by this redesign; they're
-  // just another earning event from the user's point of view.
-  const sessionsQ = useWorkerPackingSessionsHistory(selectedWorker?.id)
+  // Statement of Account presentation — defaults to the CURRENT calendar
+  // month (business requirement, 2026-09-06). "All time" is an explicit,
+  // de-emphasized opt-in only — never the default/primary view.
+  const [statementMode, setStatementMode] = useState<StatementMode>('month')
+  const [statementMonth, setStatementMonth] = useState(() => {
+    const d = new Date()
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
+  const statementMonthYear  = statementMonth.getFullYear()
+  const statementMonthIdx   = statementMonth.getMonth()
+  const statementMonthLabel = statementMonth.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+
+  function goToPrevStatementMonth() {
+    setStatementMode('month')
+    setStatementMonth(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))
+  }
+  function goToNextStatementMonth() {
+    setStatementMode('month')
+    setStatementMonth(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))
+  }
+
+  const { dateFrom, dateTo } = statementMode === 'all-time'
+    ? { dateFrom: undefined, dateTo: undefined }
+    : {
+        dateFrom: toDateOnlyString(new Date(statementMonthYear, statementMonthIdx, 1)),
+        dateTo:   toDateOnlyString(new Date(statementMonthYear, statementMonthIdx + 1, 0)),
+      }
+
+  // Statement of Account — chronological earning/payment ledger with a
+  // running balance, correctly opening-balance-adjusted for a partial period
+  // (see WorkersService.getStatement()'s doc comment). Replaces the old
+  // three-source merged "History" feed entirely.
+  const statementQ = useWorkerStatement(selectedWorker?.id, { dateFrom, dateTo })
+  const statementEntries = statementQ.data?.entries ?? []
+  const statementOpening = parseFloat(statementQ.data?.openingBalance ?? '0')
+  const statementClosing = parseFloat(statementQ.data?.balance ?? String(statementOpening))
+  const statementEarnedTotal = statementEntries.reduce((s, e) => s + parseFloat(e.earned), 0)
+  const statementPaidTotal   = statementEntries.reduce((s, e) => s + parseFloat(e.paid), 0)
+
+  // Performance Analytics period — defaults to the CURRENT calendar month,
+  // same ←/→ convention as the Statement above, but tracked independently
+  // (see the PerfMode doc comment).
+  const [perfMode, setPerfMode] = useState<PerfMode>('month')
+  const [perfMonth, setPerfMonth] = useState(() => {
+    const d = new Date()
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
+  const perfMonthYear  = perfMonth.getFullYear()
+  const perfMonthIdx   = perfMonth.getMonth()
+  const perfMonthLabel = perfMonth.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+  function goToPrevPerfMonth() {
+    setPerfMode('month')
+    setPerfMonth(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))
+  }
+  function goToNextPerfMonth() {
+    setPerfMode('month')
+    setPerfMonth(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))
+  }
+  const { dateFrom: perfDateFrom, dateTo: perfDateTo } = perfMode === 'all-time'
+    ? { dateFrom: undefined, dateTo: undefined }
+    : {
+        dateFrom: toDateOnlyString(new Date(perfMonthYear, perfMonthIdx, 1)),
+        dateTo:   toDateOnlyString(new Date(perfMonthYear, perfMonthIdx + 1, 0)),
+      }
+
+  // Performance analytics — server-side aggregated (bags/rate/earnings from
+  // PackingSession.bagsOutput's per-line snapshot; see
+  // WorkersService.getPerformance()'s doc comment). A bounded month also
+  // returns row-level dailyPerformance/packingHistory/dailyWages; "all time"
+  // returns only the safe aggregates (totals/byBagType) — never years of raw
+  // rows shipped to the browser.
+  const performanceQ = useWorkerPerformance(selectedWorker?.id, { dateFrom: perfDateFrom, dateTo: perfDateTo })
+  const perf = performanceQ.data
+  const paymentsInPeriodQ = useWorkerPaymentsInPeriod(selectedWorker?.id, { dateFrom: perfDateFrom, dateTo: perfDateTo })
+  const paymentsInPeriod = paymentsInPeriodQ.data?.data ?? []
 
   const WORKER_OWED   = selectedWorker ? parseFloat(selectedWorker.totalOwed)   : 0
   const workerEarned  = selectedWorker ? parseFloat(selectedWorker.totalEarned) : 0
@@ -129,7 +180,16 @@ export default function Employees() {
 
   function openWorker(w: Worker) {
     setSelectedWorker(w)
-    setHistoryFilter('all')
+    setStatementMode('month')
+    setStatementMonth(() => {
+      const d = new Date()
+      return new Date(d.getFullYear(), d.getMonth(), 1)
+    })
+    setPerfMode('month')
+    setPerfMonth(() => {
+      const d = new Date()
+      return new Date(d.getFullYear(), d.getMonth(), 1)
+    })
     setView('worker')
   }
 
@@ -146,6 +206,55 @@ export default function Employees() {
       { name: empName.trim(), phone: empPhone || null },
       { onSuccess: () => { setAddEmpOpen(false); setEmpName(''); setEmpPhone('') } },
     )
+  }
+
+  /**
+   * Edit Employee audit (2026-09-05): editable fields are every legitimate
+   * profile/configuration field the existing model actually supports — name,
+   * phone, notes (Worker.notes — existing field, previously not exposed in
+   * this form), and per-bag packing rates (Worker.ratesPerBagType, via the
+   * existing PATCH /workers/:id/rates endpoint — previously wired up in
+   * useWorkers.ts but never surfaced in ANY page). Deliberately excludes
+   * daily wage (a GLOBAL Settings figure, not per-employee — see Settings.tsx's
+   * "Employee wages" section) and never touches WorkerCost/WorkerPayment
+   * history — this is profile editing only.
+   */
+  function openEditModal(w: Worker) {
+    setEditName(w.name)
+    setEditPhone(w.phone ?? '')
+    setEditNotes(w.notes ?? '')
+    const rateByBagType = new Map(w.ratesPerBagType.map(r => [r.bagTypeId, r.ratePerBag]))
+    const initial: Record<string, string> = {}
+    for (const bt of bagTypesQ.data ?? []) {
+      initial[bt.id] = rateByBagType.get(bt.id) ?? ''
+    }
+    setEditRates(initial)
+    setEditEmpOpen(true)
+  }
+
+  async function saveEditEmployee() {
+    if (!selectedWorker || !editName.trim()) return
+    try {
+      await updateWorker.mutateAsync({
+        id: selectedWorker.id,
+        body: { name: editName.trim(), phone: editPhone.trim() || null, notes: editNotes.trim() || null },
+      })
+      // Full replacement, not a merge (SetRatesDto/setRates()) — send every
+      // bag type's rate, including ones left blank (defaults to '0'), so an
+      // existing rate is never silently dropped by omission.
+      const ratesPerBagType = (bagTypesQ.data ?? []).map(bt => ({
+        bagTypeId: bt.id,
+        ratePerBag: parseFloat(editRates[bt.id] || '0').toFixed(4),
+      }))
+      if (ratesPerBagType.length > 0) {
+        await updateRates.mutateAsync({ id: selectedWorker.id, body: { ratesPerBagType } })
+      }
+      await refetchSelectedWorker()
+      setEditEmpOpen(false)
+      showToast('Employee updated')
+    } catch (err: any) {
+      showToast(err?.error ?? 'Failed to update employee')
+    }
   }
 
   function submitWorkerPayment() {
@@ -189,86 +298,22 @@ export default function Employees() {
     )
   }
 
-  // ── Merge earnings + payments + packing sessions into one timeline ──────
-  // Each source flattens every page loaded SO FAR (not just the first) —
-  // .pages accumulates as the user clicks "See more"; nothing here re-fetches,
-  // it just re-derives the merged view from whatever's already in the cache.
-  const loadedEarnings = earningsQ.data?.pages.flatMap(p => p.data) ?? []
-  const loadedPayments  = paymentsQ.data?.pages.flatMap(p => p.data) ?? []
-  const loadedSessions  = sessionsQ.data?.pages.flatMap(p => p.data) ?? []
-
-  const historyRows: HistoryRow[] = [
-    ...loadedEarnings.map(e => ({
-      id: `earning-${e.id}`,
-      date: e.date,
-      label: CATEGORY_LABEL[e.category],
-      sub: e.notes ?? undefined,
-      amount: parseFloat(e.amount),
-      icon: 'ti-plus',
-      color: 'green' as const,
-      isPayment: false,
-    })),
-    ...loadedPayments.map(p => ({
-      id: `payment-${p.id}`,
-      date: p.date,
-      label: 'Payment',
-      sub: p.referenceNumber ? `${METHOD_LABEL[p.method]} · ${p.referenceNumber}` : METHOD_LABEL[p.method],
-      amount: -parseFloat(p.amount),
-      icon: 'ti-cash',
-      color: 'red' as const,
-      isPayment: true,
-    })),
-    ...loadedSessions.map(s => ({
-      id: `session-${s.id}`,
-      date: s.date,
-      label: 'Packing session',
-      sub: undefined,
-      amount: parseFloat(s.sessionEarnings ?? '0'),
-      icon: 'ti-box',
-      color: 'blue' as const,
-      isPayment: false,
-    })),
-  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-
-  const now = new Date()
-  const thisMonth = monthKey(now)
-  const lastMonth = monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1))
-
-  const filteredRows = historyRows.filter(r => {
-    if (historyFilter === 'earnings' && r.isPayment) return false
-    if (historyFilter === 'payments' && !r.isPayment) return false
-    if (historyFilter === 'this_month' && !r.date.startsWith(thisMonth)) return false
-    if (historyFilter === 'last_month' && !r.date.startsWith(lastMonth)) return false
-    return true
-  })
-
-  const groupedRows: { date: string; rows: HistoryRow[] }[] = []
-  for (const row of filteredRows) {
-    const last = groupedRows[groupedRows.length - 1]
-    if (last && last.date === row.date) last.rows.push(row)
-    else groupedRows.push({ date: row.date, rows: [row] })
-  }
-
-  const historyLoading = earningsQ.isLoading || paymentsQ.isLoading || sessionsQ.isLoading
-
-  // "See more" only needs to fetch the sources the active filter can actually
-  // show more of — 'payments' shows only payment rows, 'earnings' shows
-  // earning + session rows (both isPayment:false), 'all'/'this_month'/
-  // 'last_month' span every source. Scoping it this way means the button
-  // never appears to do nothing (fetching a source the current filter can't
-  // display) while still fetching all three once the filter is broad enough.
-  const historySourcesForFilter: Array<typeof earningsQ | typeof paymentsQ | typeof sessionsQ> =
-    historyFilter === 'payments' ? [paymentsQ]
-    : historyFilter === 'earnings' ? [earningsQ, sessionsQ]
-    : [earningsQ, paymentsQ, sessionsQ]
-
-  const hasMoreHistory = historySourcesForFilter.some(q => q.hasNextPage)
-  const isLoadingMoreHistory = historySourcesForFilter.some(q => q.isFetchingNextPage)
-
-  function loadMoreHistory() {
-    for (const q of historySourcesForFilter) {
-      if (q.hasNextPage && !q.isFetchingNextPage) q.fetchNextPage()
-    }
+  // "Add daily wage" — records TODAY using the Settings-configured amount;
+  // the amount itself is never entered here (see WorkersService.logDailyWage()).
+  // `date` is this browser's own local "today" (toDateOnlyString(new Date())),
+  // the same convention "Add earnings"/"Pay worker" above already use.
+  function submitDailyWage() {
+    if (!selectedWorker) return
+    logDailyWage.mutate(
+      { id: selectedWorker.id, body: { date: toDateOnlyString(new Date()) } },
+      {
+        onSuccess: async () => {
+          showToast('Daily wage recorded')
+          await refetchSelectedWorker()
+        },
+        onError: (err: any) => showToast(err?.error ?? 'Failed to record daily wage'),
+      },
+    )
   }
 
   // ── LIST VIEW ────────────────────────────────────────────────────────
@@ -331,7 +376,7 @@ export default function Employees() {
             <div className="modal" style={{ width: 460 }}>
               <div className="modal-head">
                 <div className="modal-title">Add employee</div>
-                <button className="panel-close-btn" onClick={() => setAddEmpOpen(false)}>✕</button>
+                <button className="panel-close-btn" aria-label="Close" onClick={() => setAddEmpOpen(false)}>✕</button>
               </div>
               <div className="modal-body">
                 <div className="form-group">
@@ -359,18 +404,18 @@ export default function Employees() {
   // ── WORKER DETAIL VIEW ───────────────────────────────────────────────
   return (
     <>
-      <Topbar title="Employees">
+      <Topbar title="Employees" back={{ label: 'Back to employees', to: () => setView('list') }}>
         <button className="btn" onClick={() => setEarnModalOpen(true)}>
           <i className="ti ti-plus" style={{ fontSize: 14 }} /> Add earnings
+        </button>
+        <button className="btn" onClick={submitDailyWage} disabled={logDailyWage.isPending}>
+          <i className="ti ti-sun" style={{ fontSize: 14 }} /> {logDailyWage.isPending ? 'Recording…' : 'Daily wage'}
         </button>
         <button className="btn primary" onClick={() => setPayModalOpen(true)}>
           <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay worker
         </button>
       </Topbar>
       <div className="content">
-        <button className="back-btn" onClick={() => setView('list')}>
-          <i className="ti ti-arrow-left" /> Back to employees
-        </button>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
           <div className="emp-big-avatar" style={{ background: 'var(--accent)', color: '#fff', width: 56, height: 56, fontSize: 20 }}>{initials(selectedWorker?.name ?? '')}</div>
@@ -378,11 +423,7 @@ export default function Employees() {
             <div style={{ fontWeight: 700, fontSize: 18 }}>{selectedWorker?.name ?? '—'}</div>
             {selectedWorker?.phone && <div style={{ fontSize: 13, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>{selectedWorker.phone}</div>}
           </div>
-          <button className="btn" onClick={() => {
-            setEditName(selectedWorker?.name ?? '')
-            setEditPhone(selectedWorker?.phone ?? '')
-            setEditEmpOpen(true)
-          }}>
+          <button className="btn" onClick={() => selectedWorker && openEditModal(selectedWorker)}>
             <i className="ti ti-edit" style={{ fontSize: 14 }} /> Edit
           </button>
           <button
@@ -408,61 +449,303 @@ export default function Employees() {
           <button className="btn" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setEarnModalOpen(true)}>
             <i className="ti ti-plus" style={{ fontSize: 14 }} /> Add earnings
           </button>
+          <button className="btn" style={{ flex: 1, justifyContent: 'center' }} onClick={submitDailyWage} disabled={logDailyWage.isPending}>
+            <i className="ti ti-sun" style={{ fontSize: 14 }} /> {logDailyWage.isPending ? 'Recording…' : 'Daily wage'}
+          </button>
           <button className="btn primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setPayModalOpen(true)}>
             <i className="ti ti-cash" style={{ fontSize: 14 }} /> Pay ${WORKER_OWED.toFixed(2)}
           </button>
         </div>
 
-        {/* History */}
-        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>History</div>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
-          {HISTORY_FILTERS.map(([key, label]) => (
-            <button
-              key={key}
-              className="btn"
-              style={{
-                padding: '5px 12px', fontSize: 12,
-                background: historyFilter === key ? 'var(--text)' : undefined,
-                color: historyFilter === key ? '#fff' : undefined,
-                borderColor: historyFilter === key ? 'var(--text)' : undefined,
-              }}
-              onClick={() => setHistoryFilter(key)}
-            >
-              {label}
+        {/* ══════════ PERFORMANCE ANALYTICS ══════════
+            Employee Profile audit, 2026-09-07 — bags packed, bag-type
+            breakdown, working days, daily performance, packing history, and
+            daily wages, all sourced from PackingSession.bagsOutput's
+            per-line snapshotted rate (never the current BagType/Worker rate
+            config — see WorkersService.getPerformance()'s doc comment).
+            Month-based by default, own period selector (independent of the
+            Statement's below). */}
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>Performance</div>
+
+        <div className="filter-row" style={{ justifyContent: 'space-between', marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button className="btn" onClick={goToPrevPerfMonth} title="Previous performance month">
+              <i className="ti ti-chevron-left" style={{ fontSize: 14 }} />
             </button>
-          ))}
+            <div style={{ fontWeight: 600, fontSize: 14, minWidth: 140, textAlign: 'center', fontFamily: "'IBM Plex Mono', monospace" }}>
+              {perfMode === 'all-time' ? 'All time' : perfMonthLabel}
+            </div>
+            <button className="btn" onClick={goToNextPerfMonth} title="Next performance month">
+              <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+            </button>
+          </div>
+          <button
+            className="btn"
+            style={{ fontSize: 12, color: 'var(--text3)' }}
+            onClick={() => setPerfMode(m => m === 'all-time' ? 'month' : 'all-time')}
+          >
+            {perfMode === 'all-time' ? <><i className="ti ti-calendar" style={{ fontSize: 13 }} /> Return to monthly performance</> : <><i className="ti ti-infinity" style={{ fontSize: 13 }} /> View all-time performance</>}
+          </button>
         </div>
 
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
-          {historyLoading && <div className="empty">Loading…</div>}
-          {!historyLoading && groupedRows.length === 0 && (
-            <div className="empty">No earnings or payments recorded yet.</div>
-          )}
-          {!historyLoading && groupedRows.map(group => (
-            <div key={group.date}>
-              <div style={{ padding: '8px 18px', fontSize: 11, fontWeight: 600, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", background: 'var(--surface2)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                {dayLabel(group.date)}
+        {performanceQ.isLoading && <div className="card" style={{ marginBottom: 16 }}><div className="empty">Loading performance…</div></div>}
+        {performanceQ.isError && <div className="card" style={{ marginBottom: 16 }}><div className="empty">Failed to load performance data. Please try again.</div></div>}
+
+        {perf && (
+          <>
+            {/* Performance Summary */}
+            <div className="stmt-summary" style={{ marginBottom: 16, gridTemplateColumns: 'repeat(3, 1fr)' }}>
+              <div className="stmt-cell"><div className="l">Total bags packed</div><div className="v">{perf.totals.bagsPacked.toLocaleString()}</div></div>
+              <div className="stmt-cell"><div className="l">Days worked</div><div className="v">{perf.totals.workingDays}</div></div>
+              <div className="stmt-cell"><div className="l">Packing sessions</div><div className="v">{perf.totals.sessions}</div></div>
+              <div className="stmt-cell"><div className="l">Avg bags / working day</div><div className="v">{perf.totals.avgBagsPerWorkingDay ?? '—'}</div></div>
+              <div className="stmt-cell"><div className="l">Total packing earnings</div><div className="v green">{formatUsd(parseFloat(perf.totals.packingEarnings))}</div></div>
+              <div className="stmt-cell"><div className="l">Avg earnings / working day</div><div className="v">{perf.totals.avgEarningsPerWorkingDay != null ? formatUsd(parseFloat(perf.totals.avgEarningsPerWorkingDay)) : '—'}</div></div>
+            </div>
+
+            {/* Performance by Bag Type */}
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div className="card-head">
+                <div className="card-title"><i className="ti ti-package" /> Performance by bag type</div>
               </div>
-              {group.rows.map(row => (
-                <div key={row.id} className="activity-row">
-                  <div className={`act-icon ${row.color}`}><i className={`ti ${row.icon}`} /></div>
-                  <div className="act-body">
-                    <div className="act-text">{row.label}</div>
-                    {row.sub && <div className="act-time">{row.sub}</div>}
-                  </div>
-                  <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: row.isPayment ? 'var(--text3)' : 'var(--accent)' }}>
-                    {row.isPayment ? '-' : '+'}${Math.abs(row.amount).toFixed(2)}
-                  </div>
+              {perf.byBagType.length === 0 ? (
+                <div className="empty">No bags packed {perfMode === 'all-time' ? 'yet' : `in ${perfMonthLabel}`}</div>
+              ) : (
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Bag type</th>
+                        <th className="right">Bags</th>
+                        <th className="right">Rate/bag</th>
+                        <th className="right">Earned</th>
+                        <th className="right">Avg/day</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {perf.byBagType.map(bt => (
+                        <tr key={bt.bagTypeId}>
+                          <td style={{ fontWeight: 500 }}>{bt.bagTypeName}</td>
+                          <td className="right num">{bt.bags.toLocaleString()}</td>
+                          <td className="right num">
+                            {formatUsd(parseFloat(bt.ratePerBag))}
+                            {bt.rateVaries && <span style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 4 }} title="Rate changed during this period — effective average shown">avg</span>}
+                          </td>
+                          <td className="right num" style={{ fontWeight: 600 }}>{formatUsd(parseFloat(bt.earned))}</td>
+                          <td className="right num">{bt.avgBagsPerWorkingDay ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              ))}
+              )}
             </div>
-          ))}
-          {!historyLoading && hasMoreHistory && (
-            <div style={{ padding: 14, textAlign: 'center', borderTop: groupedRows.length > 0 ? '1px solid var(--border)' : 'none' }}>
-              <button className="btn" onClick={loadMoreHistory} disabled={isLoadingMoreHistory}>
-                {isLoadingMoreHistory ? 'Loading…' : 'See more'}
-              </button>
+
+            {/* Daily Performance */}
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div className="card-head">
+                <div className="card-title"><i className="ti ti-chart-bar" /> Daily performance</div>
+              </div>
+              {perf.dailyPerformance === null ? (
+                <div className="empty">Switch to a specific month to see day-by-day detail</div>
+              ) : perf.dailyPerformance.length === 0 ? (
+                <div className="empty">No packing activity in {perfMonthLabel}</div>
+              ) : (
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr><th>Date</th><th className="right">Bags</th><th className="right">Sessions</th><th className="right">Earned</th></tr>
+                    </thead>
+                    <tbody>
+                      {perf.dailyPerformance.map(d => (
+                        <tr key={d.date}>
+                          <td className="mono">{formatDate(d.date, { day: '2-digit' })}</td>
+                          <td className="right num">{d.bagsPacked.toLocaleString()}</td>
+                          <td className="right num">{d.sessions}</td>
+                          <td className="right num" style={{ fontWeight: 600 }}>{formatUsd(parseFloat(d.earned))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
+
+            {/* Packing History */}
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div className="card-head">
+                <div className="card-title"><i className="ti ti-list-details" /> Packing history</div>
+              </div>
+              {perf.packingHistory === null ? (
+                <div className="empty">Switch to a specific month to see packing history</div>
+              ) : perf.packingHistory.length === 0 ? (
+                <div className="empty">No packing sessions in {perfMonthLabel}</div>
+              ) : (
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr><th>Date</th><th>Bag type</th><th className="right">Quantity</th><th className="right">Rate</th><th className="right">Earned</th></tr>
+                    </thead>
+                    <tbody>
+                      {perf.packingHistory.map((row, i) => (
+                        <tr key={`${row.sessionId}-${row.bagTypeId}-${i}`}>
+                          <td className="mono">{formatDate(row.date, { day: '2-digit' })}</td>
+                          <td>{row.bagTypeName}</td>
+                          <td className="right num">{row.quantity.toLocaleString()}</td>
+                          <td className="right num">{formatUsd(parseFloat(row.ratePerBag))}</td>
+                          <td className="right num" style={{ fontWeight: 600 }}>{formatUsd(parseFloat(row.earned))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Daily Wages — authoritative WorkerCost(daily_wage) rows only; never inferred from working days. */}
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div className="card-head">
+                <div className="card-title"><i className="ti ti-sun" /> Daily wages</div>
+              </div>
+              {perf.dailyWages === null ? (
+                <div className="empty">Switch to a specific month to see daily wage history</div>
+              ) : perf.dailyWages.length === 0 ? (
+                <div className="empty">No daily wages recorded in {perfMonthLabel}</div>
+              ) : (
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead><tr><th>Date</th><th>Description</th><th className="right">Amount</th></tr></thead>
+                    <tbody>
+                      {perf.dailyWages.map(w => (
+                        <tr key={w.id}>
+                          <td className="mono">{formatDate(w.date, { day: '2-digit' })}</td>
+                          <td>Daily wage</td>
+                          <td className="right num" style={{ fontWeight: 600 }}>{formatUsd(parseFloat(w.amount))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Payments — authoritative WorkerPayment rows for the selected period. */}
+            <div className="card" style={{ marginBottom: 24 }}>
+              <div className="card-head">
+                <div className="card-title"><i className="ti ti-cash" /> Payments</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                  Total paid {perfMode === 'all-time' ? '(all time)' : perfMonthLabel}: <strong style={{ color: 'var(--text)' }}>{formatUsd(parseFloat(perf.paymentsTotal))}</strong>
+                </div>
+              </div>
+              {paymentsInPeriod.length === 0 ? (
+                <div className="empty">No payments {perfMode === 'all-time' ? 'recorded yet' : `in ${perfMonthLabel}`}</div>
+              ) : (
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead><tr><th>Date</th><th>Method</th><th className="right">Amount</th></tr></thead>
+                    <tbody>
+                      {paymentsInPeriod.map(p => (
+                        <tr key={p.id}>
+                          <td className="mono">{formatDate(p.date, { day: '2-digit' })}</td>
+                          <td>{METHOD_LABEL[p.method]}</td>
+                          <td className="right num" style={{ fontWeight: 600 }}>{formatUsd(parseFloat(p.amount))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ══════════ EMPLOYEE STATEMENT OF ACCOUNT ══════════
+            Statement of Account — month-based by default (business
+            requirement, 2026-09-06): opens on the CURRENT month, navigated
+            with ← / → (same convention as Expenses.tsx). "All time" is a
+            de-emphasized, explicit opt-in — never the default. */}
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>Statement of account</div>
+
+        <div className="filter-row" style={{ justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button className="btn" onClick={goToPrevStatementMonth} title="Previous month">
+              <i className="ti ti-chevron-left" style={{ fontSize: 14 }} />
+            </button>
+            <div style={{ fontWeight: 600, fontSize: 14, minWidth: 140, textAlign: 'center', fontFamily: "'IBM Plex Mono', monospace" }}>
+              {statementMode === 'all-time' ? 'All time' : statementMonthLabel}
+            </div>
+            <button className="btn" onClick={goToNextStatementMonth} title="Next month">
+              <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+            </button>
+          </div>
+          <button
+            className="btn"
+            style={{ fontSize: 12, color: 'var(--text3)' }}
+            onClick={() => setStatementMode(m => m === 'all-time' ? 'month' : 'all-time')}
+          >
+            {statementMode === 'all-time' ? <><i className="ti ti-calendar" style={{ fontSize: 13 }} /> Return to monthly view</> : <><i className="ti ti-infinity" style={{ fontSize: 13 }} /> View all time</>}
+          </button>
+        </div>
+
+        <div className="stmt-summary">
+          <div className="stmt-cell"><div className="l">Opening balance</div><div className="v">{formatUsd(statementOpening)}</div></div>
+          <div className="stmt-cell"><div className="l">Earned {statementMode === 'all-time' ? '(all time)' : 'this month'}</div><div className="v green">{formatUsd(statementEarnedTotal)}</div></div>
+          <div className="stmt-cell"><div className="l">Paid {statementMode === 'all-time' ? '(all time)' : 'this month'}</div><div className="v amber">{formatUsd(statementPaidTotal)}</div></div>
+          <div className="stmt-cell"><div className="l">Closing balance</div><div className={`v ${statementClosing > 0 ? 'amber' : statementClosing < 0 ? 'red' : 'green'}`}>{formatUsd(statementClosing)}</div></div>
+        </div>
+
+        <div className="card" style={{ marginBottom: 0 }}>
+          {statementQ.isLoading && <div className="empty">Loading…</div>}
+          {statementQ.isError && <div className="empty">Failed to load statement. Please try again.</div>}
+          {!statementQ.isLoading && !statementQ.isError && (
+            <table className="data-table stmt-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Description</th>
+                  <th style={{ textAlign: 'right' }}>Earned</th>
+                  <th style={{ textAlign: 'right' }}>Paid</th>
+                  <th style={{ textAlign: 'right' }}>Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {statementMode !== 'all-time' && (
+                  <tr className="opening">
+                    <td className="mono"></td>
+                    <td className="desc">Opening balance</td>
+                    <td className="num"></td><td className="num"></td>
+                    <td className="num">{formatUsd(statementOpening)}</td>
+                  </tr>
+                )}
+                {statementEntries.map((e, i) => {
+                  const earned = parseFloat(e.earned)
+                  const paid = parseFloat(e.paid)
+                  const balance = parseFloat(e.runningBalance)
+                  return (
+                    <tr key={`${e.source}-${e.reference}-${i}`}>
+                      <td className="mono">{formatDateTime(e.date, { day: '2-digit' })}</td>
+                      <td className="desc">{describeStatementEntry(e)}</td>
+                      <td className="num dr">{earned ? formatUsd(earned) : ''}</td>
+                      <td className="num cr">{paid ? formatUsd(paid) : ''}</td>
+                      <td className={`num ${balance < 0 ? 'bal-neg' : 'bal-pos'}`} style={{ fontWeight: 600 }}>{formatUsd(balance)}</td>
+                    </tr>
+                  )
+                })}
+                {statementEntries.length === 0 && (
+                  <tr><td colSpan={5} className="empty">No earnings or payments {statementMode !== 'all-time' ? `in ${statementMonthLabel}` : 'recorded yet'}</td></tr>
+                )}
+              </tbody>
+              {statementEntries.length > 0 && (
+                <tfoot>
+                  <tr>
+                    <td colSpan={2} style={{ textAlign: 'right' }}>Totals</td>
+                    <td className="num dr">{formatUsd(statementEarnedTotal)}</td>
+                    <td className="num cr">{formatUsd(statementPaidTotal)}</td>
+                    <td className="num">{formatUsd(statementClosing)}</td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
           )}
         </div>
       </div>
@@ -507,13 +790,16 @@ export default function Employees() {
         </div>
       )}
 
-      {/* Edit employee modal */}
+      {/* Edit employee modal — every legitimate profile/configuration field
+          the model supports (name, phone, notes, per-bag rates). Never
+          touches WorkerCost/WorkerPayment history — see openEditModal()'s
+          doc comment. */}
       {editEmpOpen && selectedWorker && (
         <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setEditEmpOpen(false)}>
-          <div className="modal" style={{ width: 400 }}>
+          <div className="modal" style={{ width: 440 }}>
             <div className="modal-head">
               <div className="modal-title">Edit — {selectedWorker.name}</div>
-              <button className="panel-close-btn" onClick={() => setEditEmpOpen(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setEditEmpOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-group">
@@ -526,7 +812,7 @@ export default function Employees() {
                   placeholder="Worker name"
                 />
               </div>
-              <div className="form-group" style={{ marginBottom: 0 }}>
+              <div className="form-group">
                 <label className="form-label">Phone</label>
                 <input
                   className="form-input"
@@ -536,26 +822,48 @@ export default function Employees() {
                   placeholder="+961 3 000 000"
                 />
               </div>
+              <div className="form-group" style={{ marginBottom: (bagTypesQ.data ?? []).length > 0 ? 14 : 0 }}>
+                <label className="form-label">Notes (optional)</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  value={editNotes}
+                  onChange={e => setEditNotes(e.target.value)}
+                  placeholder="Any notes about this employee"
+                />
+              </div>
+              {(bagTypesQ.data ?? []).length > 0 && (
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Per-bag packing rates ($/bag)</label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {(bagTypesQ.data ?? []).map(bt => (
+                      <div key={bt.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ flex: 1, fontSize: 13, color: 'var(--text2)' }}>{bt.name}</span>
+                        <input
+                          className="form-input"
+                          style={{ width: 100, margin: 0 }}
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={editRates[bt.id] ?? ''}
+                          onChange={e => setEditRates(p => ({ ...p, [bt.id]: e.target.value }))}
+                          placeholder="0.00"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn" onClick={() => setEditEmpOpen(false)}>Cancel</button>
               <button
                 className="btn primary"
-                disabled={updateWorker.isPending || !editName.trim()}
-                onClick={() => {
-                  updateWorker.mutate(
-                    { id: selectedWorker.id, body: { name: editName.trim(), phone: editPhone.trim() || null } },
-                    {
-                      onSuccess: updated => {
-                        setSelectedWorker(updated)
-                        setEditEmpOpen(false)
-                      },
-                    }
-                  )
-                }}
+                disabled={updateWorker.isPending || updateRates.isPending || !editName.trim()}
+                onClick={saveEditEmployee}
               >
                 <i className="ti ti-check" style={{ fontSize: 14 }} />
-                {updateWorker.isPending ? 'Saving…' : 'Save changes'}
+                {updateWorker.isPending || updateRates.isPending ? 'Saving…' : 'Save changes'}
               </button>
             </div>
           </div>
@@ -568,7 +876,7 @@ export default function Employees() {
           <div className="modal" style={{ width: 380 }}>
             <div className="modal-head">
               <div className="modal-title">Pay {selectedWorker?.name ?? 'worker'}</div>
-              <button className="panel-close-btn" onClick={() => setPayModalOpen(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setPayModalOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div style={{ textAlign: 'center', marginBottom: 20 }}>
@@ -635,7 +943,7 @@ export default function Employees() {
           <div className="modal" style={{ width: 380 }}>
             <div className="modal-head">
               <div className="modal-title">Add earnings — {selectedWorker?.name ?? 'worker'}</div>
-              <button className="panel-close-btn" onClick={() => setEarnModalOpen(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setEarnModalOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-group">

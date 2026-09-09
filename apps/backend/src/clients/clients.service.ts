@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,6 +11,8 @@ import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { AddPhoneDto } from './dto/add-phone.dto';
 import { DeactivatePhoneDto } from './dto/deactivate-phone.dto';
+import { CreateClientLocationDto } from './dto/create-client-location.dto';
+import { UpdateClientLocationDto } from './dto/update-client-location.dto';
 
 interface PhoneEntry {
   number: string;
@@ -320,8 +324,113 @@ export class ClientsService {
         ...(dto.creditLimit !== undefined ? { creditLimit: dto.creditLimit } : {}),
         ...(dto.paymentTerms !== undefined ? { paymentTerms: dto.paymentTerms } : {}),
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+        ...(dto.multiLocationEnabled !== undefined ? { multiLocationEnabled: dto.multiLocationEnabled } : {}),
       },
     });
+  }
+
+  // ===========================================================================
+  // Client Locations (forensic audit, 2026-08-31: "Client Multiple Locations
+  // with ONE shared client balance") — provenance for normal Orders only.
+  // NEVER an accounting entity: no balance, no ledger row, no AccountEntry
+  // ever references a ClientLocation. See ClientLocation's schema.prisma doc
+  // comment for the full read.
+  // ===========================================================================
+
+  /** GET /clients/:id/locations — every location (active + inactive), for the
+   *  Client page's management UI. */
+  async listLocations(clientId: string) {
+    await this.findOneBare(clientId);
+    return this.prisma.clientLocation.findMany({
+      where: { clientId },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  /**
+   * Create a new location — find-or-conflict, case-insensitive within this
+   * client (never globally): the same "Fuel/fuel/FUEL" duplicate prevention
+   * already used for ExpenseCategory, applied per-client here since names
+   * are only unique within a client, not across clients.
+   */
+  async createLocation(clientId: string, dto: CreateClientLocationDto) {
+    await this.findOneBare(clientId);
+    const name = dto.name.trim();
+    if (!name) {
+      throw new BadRequestException({ error: 'Location name is required', code: 'VALIDATION_ERROR' });
+    }
+    const existing = await this.prisma.clientLocation.findFirst({
+      where: { clientId, name: { equals: name, mode: 'insensitive' } },
+    });
+    if (existing) {
+      throw new ConflictException({
+        error: `A location named "${existing.name}" already exists for this client`,
+        code: 'CONFLICT',
+      });
+    }
+    return this.prisma.clientLocation.create({
+      data: {
+        clientId,
+        name,
+        ...(dto.address !== undefined ? { address: dto.address } : {}),
+        ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+        ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+      },
+    });
+  }
+
+  /**
+   * Update (including deactivate/reactivate) a location. There is
+   * deliberately no DELETE endpoint — see ClientLocation's schema.prisma doc
+   * comment: never hard-deleted once it may have orders against it, so
+   * historical Statement entries (Order → ClientLocation.name) always keep
+   * resolving.
+   */
+  async updateLocation(clientId: string, locationId: string, dto: UpdateClientLocationDto) {
+    const location = await this.prisma.clientLocation.findUnique({ where: { id: locationId } });
+    if (!location || location.clientId !== clientId) {
+      throw new NotFoundException({ error: 'Location not found', code: 'NOT_FOUND' });
+    }
+
+    let name = location.name;
+    if (dto.name !== undefined) {
+      name = dto.name.trim();
+      if (!name) {
+        throw new BadRequestException({ error: 'Location name is required', code: 'VALIDATION_ERROR' });
+      }
+      if (name.toLowerCase() !== location.name.toLowerCase()) {
+        const dup = await this.prisma.clientLocation.findFirst({
+          where: { clientId, id: { not: locationId }, name: { equals: name, mode: 'insensitive' } },
+        });
+        if (dup) {
+          throw new ConflictException({
+            error: `A location named "${dup.name}" already exists for this client`,
+            code: 'CONFLICT',
+          });
+        }
+      }
+    }
+
+    return this.prisma.clientLocation.update({
+      where: { id: locationId },
+      data: {
+        ...(dto.name !== undefined ? { name } : {}),
+        ...(dto.address !== undefined ? { address: dto.address } : {}),
+        ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+        ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+      },
+    });
+  }
+
+  /** Existence check only — mirrors findOne() without the balance computation,
+   *  which the location endpoints have no use for. */
+  private async findOneBare(id: string) {
+    const client = await this.prisma.client.findUnique({ where: { id } });
+    if (!client) {
+      throw new NotFoundException({ error: 'Client not found', code: 'NOT_FOUND' });
+    }
+    return client;
   }
 
   /**

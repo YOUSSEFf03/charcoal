@@ -4,10 +4,16 @@ import Topbar from '../components/layout/Topbar'
 import { useClient } from '../hooks/useClients'
 import { useClientLedger } from '../hooks/useReports'
 import { formatUsd } from '../lib/money'
-import { formatDate, formatDateTime, toDateOnlyString, currentMonthToDateRange, currentWeekToDateRange } from '../lib/date'
+import { formatDate, formatDateTime, toDateOnlyString } from '../lib/date'
 import { exportStatementPdf } from '../lib/statementPdf'
 
-type RangePreset = 'This month' | 'This week' | 'Last month' | 'Custom' | 'All time'
+// Statement of Account presentation (monthly-statement unification,
+// 2026-09-07): the PRIMARY view is always a single calendar month, navigated
+// with ← / → — same convention as Employees.tsx's Statement of Account and
+// ClientDetail.tsx's Client Statement tab. "All time" and "Custom" (the
+// free-text range this page used to default to) remain available as
+// de-emphasized, explicit opt-ins — never the default.
+type StatementMode = 'month' | 'all-time' | 'custom'
 
 /**
  * Fill Client Statement of Account — dedicated full-page route.
@@ -24,34 +30,39 @@ export default function FillClientStatement() {
   const clientQ = useClient(id ?? '')
   const client = clientQ.data
 
-  const [rangePreset, setRangePreset] = useState<RangePreset>('All time')
+  const [statementMode, setStatementMode] = useState<StatementMode>('month')
+  const [statementMonth, setStatementMonth] = useState(() => {
+    const d = new Date()
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
 
-  const today = new Date()
-  const { dateFrom, dateTo } = (() => {
-    if (rangePreset === 'This month') return currentMonthToDateRange()
-    if (rangePreset === 'This week') return currentWeekToDateRange()
-    if (rangePreset === 'Last month') return {
-      dateFrom: toDateOnlyString(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
-      dateTo: toDateOnlyString(new Date(today.getFullYear(), today.getMonth(), 0)),
-    }
-    if (rangePreset === 'Custom') return { dateFrom: customFrom || undefined, dateTo: customTo || undefined }
-    return { dateFrom: undefined, dateTo: undefined }
-  })()
-
-  const filterActive = rangePreset !== 'All time'
-  function clearFilters() {
-    setRangePreset('All time')
-    setCustomFrom('')
-    setCustomTo('')
+  const statementMonthYear  = statementMonth.getFullYear()
+  const statementMonthIdx   = statementMonth.getMonth()
+  const statementMonthLabel = statementMonth.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+  function goToPrevMonth() {
+    setStatementMode('month')
+    setStatementMonth(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))
   }
+  function goToNextMonth() {
+    setStatementMode('month')
+    setStatementMonth(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))
+  }
+
+  const { dateFrom, dateTo } =
+    statementMode === 'all-time' ? { dateFrom: undefined, dateTo: undefined } :
+    statementMode === 'custom'   ? { dateFrom: customFrom || undefined, dateTo: customTo || undefined } :
+    {
+      dateFrom: toDateOnlyString(new Date(statementMonthYear, statementMonthIdx, 1)),
+      dateTo:   toDateOnlyString(new Date(statementMonthYear, statementMonthIdx + 1, 0)),
+    }
 
   // Server-side date filtering — getClientLedger already accepts dateFrom/
   // dateTo and computes a correct openingBalance for the filtered window
-  // (aggregate of everything strictly before dateFrom), so unlike the
-  // in-page Client Statement tab this never needs to walk an unbounded
-  // client-side array to find the opening balance.
+  // (aggregate of everything strictly before dateFrom), so this never needs
+  // to walk an unbounded client-side array to find the opening balance, and
+  // a normal monthly view never fetches the client's entire lifetime history.
   const ledgerQ = useClientLedger(id ?? '', { dateFrom, dateTo })
   const entries = ledgerQ.data?.entries ?? []
   const openingBalance = parseFloat(ledgerQ.data?.openingBalance ?? '0')
@@ -60,9 +71,9 @@ export default function FillClientStatement() {
   const closingBalance = parseFloat(ledgerQ.data?.balance ?? String(openingBalance))
 
   const clientName = client?.name ?? '—'
-  const periodLabel = dateFrom || dateTo
-    ? `${dateFrom ? formatDate(dateFrom, { day: '2-digit' }) : 'start'} — ${dateTo ? formatDate(dateTo, { day: '2-digit' }) : 'today'}`
-    : 'All time'
+  const periodLabel = statementMode === 'all-time' ? 'All time'
+    : statementMode === 'custom' ? (dateFrom || dateTo ? `${dateFrom ? formatDate(dateFrom, { day: '2-digit' }) : 'start'} — ${dateTo ? formatDate(dateTo, { day: '2-digit' }) : 'today'}` : 'Custom range')
+    : statementMonthLabel
 
   async function handlePrintPdf() {
     if (!client) return
@@ -76,8 +87,8 @@ export default function FillClientStatement() {
         phone: client.phones?.find((p: any) => p.isActive)?.number ?? null,
         currency: client.currency,
       },
-      from: dateFrom ?? (entries[0]?.date ?? null),
-      to: dateTo ?? (entries[entries.length - 1]?.date ?? null),
+      from: dateFrom ? new Date(dateFrom).toISOString() : (entries[0]?.date ?? null),
+      to: dateTo ? new Date(dateTo).toISOString() : (entries[entries.length - 1]?.date ?? null),
       rows: entries.map((e, i) => ({
         ref: String(i + 1),
         rawDate: e.date,
@@ -112,21 +123,38 @@ export default function FillClientStatement() {
           </div>
         </div>
 
-        <div className="filter-row">
-          <select className="filter-select" value={rangePreset} onChange={e => setRangePreset(e.target.value as RangePreset)}>
-            <option>All time</option>
-            <option>This month</option>
-            <option>This week</option>
-            <option>Last month</option>
-            <option>Custom</option>
-          </select>
-          {rangePreset === 'Custom' && (
-            <>
-              <input type="date" className="filter-select" value={customFrom} onChange={e => setCustomFrom(e.target.value)} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }} />
-              <input type="date" className="filter-select" value={customTo} onChange={e => setCustomTo(e.target.value)} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }} />
-            </>
-          )}
-          {filterActive && <button className="btn" style={{ fontSize: 12 }} onClick={clearFilters}>Clear</button>}
+        {/* Month navigation — same convention as Employees.tsx's Statement of
+            Account and ClientDetail.tsx's Client Statement tab. */}
+        <div className="filter-row" style={{ justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {statementMode === 'month' && (
+              <>
+                <button className="btn" onClick={goToPrevMonth} title="Previous month">
+                  <i className="ti ti-chevron-left" style={{ fontSize: 14 }} />
+                </button>
+                <div style={{ fontWeight: 600, fontSize: 14, minWidth: 140, textAlign: 'center', fontFamily: "'IBM Plex Mono', monospace" }}>
+                  {statementMonthLabel}
+                </div>
+                <button className="btn" onClick={goToNextMonth} title="Next month">
+                  <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                </button>
+              </>
+            )}
+            {statementMode === 'all-time' && (
+              <div style={{ fontWeight: 600, fontSize: 14, fontFamily: "'IBM Plex Mono', monospace" }}>All time</div>
+            )}
+            {statementMode === 'custom' && (
+              <>
+                <input type="date" className="filter-select" value={customFrom} onChange={e => setCustomFrom(e.target.value)} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }} />
+                <input type="date" className="filter-select" value={customTo} onChange={e => setCustomTo(e.target.value)} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }} />
+              </>
+            )}
+          </div>
+          <div className="seg">
+            {([['month', 'Month'], ['all-time', 'All time'], ['custom', 'Custom']] as const).map(([k, lbl]) => (
+              <div key={k} className={`seg-opt ${statementMode === k ? 'sel' : ''}`} onClick={() => setStatementMode(k)}>{lbl}</div>
+            ))}
+          </div>
         </div>
 
         <div className="stmt-summary">
@@ -172,7 +200,7 @@ export default function FillClientStatement() {
                   )
                 })}
                 {entries.length === 0 && (
-                  <tr><td colSpan={5} className="empty">No fill pickups or payments {filterActive ? 'in this period' : 'recorded yet'}</td></tr>
+                  <tr><td colSpan={5} className="empty">No fill pickups or payments {statementMode !== 'all-time' ? 'in this period' : 'recorded yet'}</td></tr>
                 )}
               </tbody>
               <tfoot>

@@ -79,6 +79,7 @@ export default function Sidebar() {
       <div className="sidebar-section">
         <div className="sidebar-section-label">Stock</div>
         <NavItem to="/containers" icon="ti-ship" label="Containers" prefix />
+        <NavItem to="/containers/history" icon="ti-lock" label="Container history" />
         <NavItem to="/warehouse" icon="ti-building-warehouse" label="Warehouse" />
         <NavItem to="/packing" icon="ti-tools" label="Packing" />
         {canSeeBagPurchases && <NavItem to="/bag-purchases" icon="ti-shopping-cart" label="Bag purchases" />}

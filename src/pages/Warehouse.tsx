@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useApproveStockAdjustment, useRejectStockAdjustment, useStockExits, useLotMaterialFlow, useAvailableStockLots } from '../hooks/useWarehouse'
+import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useApproveStockAdjustment, useRejectStockAdjustment, useStockExits, useLotMaterialFlow, useAvailableStockLots, usePackedStock } from '../hooks/useWarehouse'
 import type { StockLot } from '../types/api'
 import { usePackingSessions } from '../hooks/usePacking'
-import { useSuppliers } from '../hooks/useSuppliers'
+import { useBagTypes } from '../hooks/useBagTypes'
 import { formatDate, toDateOnlyString } from '../lib/date'
+
+const PACKED_STOCK_PAGE_SIZE = 20
 
 type WTab = 'raw' | 'packed' | 'adj'
 
@@ -37,6 +39,8 @@ export default function Warehouse() {
   const [adjReason, setAdjReason] = useState('')
   const [adjError, setAdjError] = useState('')
   const [toast, setToast] = useState('')
+  const [selectedBagTypeId, setSelectedBagTypeId] = useState<string | null>(null)
+  const [packedStockPage, setPackedStockPage] = useState(1)
 
   const stockLotsQ = useStockLots({ limit: 100 })
   // Unbounded (no 100-lot page cap) — feeds only the "New stock adjustment" lot
@@ -59,12 +63,33 @@ export default function Warehouse() {
   const [editAdjQty, setEditAdjQty] = useState('')
   const [editAdjReason, setEditAdjReason] = useState('')
   const [editAdjError, setEditAdjError] = useState('')
-  const suppliersQ = useSuppliers({ limit: 100 })
-  const supplierNameById = new Map((suppliersQ.data?.data ?? []).map(s => [s.id, s.name]))
+  const bagTypesQ = useBagTypes()
+  // Per-bag-type source lots for the detail panel — a single bag type's live
+  // batch count is small and bounded (same "safe unbounded per-entity" scale
+  // profile as getFifoDraw()), so this stays a single unpaginated page.
+  const bagTypeSourceLotsQ = usePackedStock(
+    { bagTypeId: selectedBagTypeId ?? '', limit: 100 },
+    { enabled: Boolean(selectedBagTypeId) },
+  )
+  // "Packed stock — by source lot" table — the real per-(lot,bagType) batch
+  // list (replaces the previous session-based rendering, which showed only
+  // the first of a multi-lot session's lots under a header promising "Source
+  // lot"). Server-paginated, 20/page, matching GET /packed-stock's own default.
+  const packedStockTableQ = usePackedStock({ page: packedStockPage, limit: PACKED_STOCK_PAGE_SIZE })
 
   const stockLots = stockLotsQ.data?.data ?? []
   const packedSummary = packedQ.data ?? []
   const sessions = sessionsQ.data?.data ?? []
+  const packedStockRows = packedStockTableQ.data?.data ?? []
+  const packedStockTotal = packedStockTableQ.data?.total ?? 0
+  const packedStockTotalPages = Math.max(1, Math.ceil(packedStockTotal / PACKED_STOCK_PAGE_SIZE))
+
+  // Reset to page 1 whenever the Packed goods tab becomes active, so
+  // switching away and back (or the underlying dataset shrinking) never
+  // leaves the table on a stale/out-of-range page.
+  useEffect(() => {
+    if (tab === 'packed') setPackedStockPage(1)
+  }, [tab])
 
   const lots: LotVM[] = stockLots.map(l => {
     const received = parseFloat(l.kgReceived)
@@ -73,7 +98,12 @@ export default function Warehouse() {
       id: l.id,
       displayId: l.displayId,
       createdAt: l.createdAt ?? l.dateReceived,
-      supplier: supplierNameById.get(l.supplierId) ?? l.supplierId,
+      // Sourced from StockLot's OWN nested `supplier` relation (GET /stock-lots,
+      // GET /stock-lots/available) — never a separate GET /suppliers call, which
+      // is owner/accountant-only (SuppliersController) and would 403 for
+      // sales_rep/worker, silently leaving every Raw Lot's Supplier column
+      // showing a raw UUID instead of a name for those roles (found live).
+      supplier: l.supplier?.name ?? l.supplierId,
       arrival: fmtDate(l.dateReceived),
       rawKg: received,
       remainKg: remaining,
@@ -92,7 +122,12 @@ export default function Warehouse() {
       id: l.id,
       displayId: l.displayId,
       createdAt: l.createdAt ?? l.dateReceived,
-      supplier: supplierNameById.get(l.supplierId) ?? l.supplierId,
+      // Sourced from StockLot's OWN nested `supplier` relation (GET /stock-lots,
+      // GET /stock-lots/available) — never a separate GET /suppliers call, which
+      // is owner/accountant-only (SuppliersController) and would 403 for
+      // sales_rep/worker, silently leaving every Raw Lot's Supplier column
+      // showing a raw UUID instead of a name for those roles (found live).
+      supplier: l.supplier?.name ?? l.supplierId,
       arrival: fmtDate(l.dateReceived),
       rawKg: received,
       remainKg: remaining,
@@ -136,6 +171,10 @@ export default function Warehouse() {
     setLotPanelOpen(true)
   }
 
+  function openPackedGood(bagTypeId: string) {
+    setSelectedBagTypeId(bagTypeId)
+  }
+
   const lotById = new Map(lots.map(l => [l.id, l]))
 
   // `selectedLot` only records WHICH lot the panel is open for — it must never be read for
@@ -146,12 +185,32 @@ export default function Warehouse() {
   const liveLot = selectedLot ? (lotById.get(selectedLot.id) ?? selectedLot) : null
 
   const packedCards = packedSummary.map(p => ({
+    bagTypeId: p.bagTypeId,
     size: p.bagTypeName,
     bags: p.totalBags,
     totalKg: parseFloat(p.totalNominalKg),
-    lots: 0,
+    lots: p.lotCount ?? 0,
   }))
   const totalPackedKg = packedCards.reduce((s, c) => s + c.totalKg, 0) || 1
+
+  // Live-derived detail view-model for the selected bag type — re-reads from the
+  // already-reactive packedSummary/bagTypes lists on every render (same liveLot
+  // pattern above), so it never goes stale after a mutation invalidates the cache.
+  const selectedSummary = selectedBagTypeId ? packedSummary.find(p => p.bagTypeId === selectedBagTypeId) : undefined
+  const selectedBagType = selectedBagTypeId ? (bagTypesQ.data ?? []).find(b => b.id === selectedBagTypeId) : undefined
+  const bagTypeSourceLots = bagTypeSourceLotsQ.data?.data ?? []
+  // Packing history for this bag type — filtered client-side from the already-
+  // loaded sessions list (see sessionsQ above; same limit:100/startedAt-desc
+  // bound the rest of this page already lives with).
+  const bagTypePackingHistory = selectedBagTypeId
+    ? sessions
+        .map(s => {
+          const line = s.bagsOutput.find(b => b.bagTypeId === selectedBagTypeId)
+          if (!line) return null
+          return { sessionId: s.id, date: s.date, qty: line.qty }
+        })
+        .filter((r): r is { sessionId: string; date: string; qty: number } => r !== null)
+    : []
 
   const adjustments = adjQ.data?.data ?? []
   // Lots with at least one APPROVED adjustment — pending/rejected ones never
@@ -266,91 +325,93 @@ export default function Warehouse() {
                 </div>
                 <button className="card-action">Export</button>
               </div>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Lot</th>
-                    <th>Type / grade</th>
-                    <th>Supplier</th>
-                    <th>Received</th>
-                    <th>Remaining</th>
-                    <th>Fill level</th>
-                    <th>Cost / kg</th>
-                    <th>Value</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {stockLotsQ.isLoading && [0, 1, 2].map(i => (
-                    <tr key={i}>
-                      <td colSpan={9}>
-                        <div className="skeleton" style={{ width: '100%', height: 16 }} />
-                      </td>
-                    </tr>
-                  ))}
-                  {stockLotsQ.isError && (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
                     <tr>
-                      <td colSpan={9} className="empty">
-                        Failed to load stock lots.
-                        <div><button className="btn" style={{ marginTop: 10 }} onClick={() => stockLotsQ.refetch()}>Retry</button></div>
-                      </td>
+                      <th>Lot</th>
+                      <th>Type / grade</th>
+                      <th>Supplier</th>
+                      <th>Received</th>
+                      <th>Remaining</th>
+                      <th>Fill level</th>
+                      <th>Cost / kg</th>
+                      <th>Value</th>
+                      <th></th>
                     </tr>
-                  )}
-                  {!stockLotsQ.isLoading && !stockLotsQ.isError && filteredLots.map(lot => {
-                    const pct = lot.rawKg > 0 ? (lot.remainKg / lot.rawKg) * 100 : 0
-                    const barClass = pct >= 60 ? 'bar-high' : pct >= 30 ? 'bar-mid' : 'bar-low'
-                    return (
-                      <tr key={lot.id} style={{ cursor: 'pointer' }} onClick={() => openLot(lot)}>
-                        <td>
-                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text3)' }} title={lot.id}>
-                            {lot.displayId ?? lot.id.slice(0, 8).toUpperCase()}
-                          </span>
+                  </thead>
+                  <tbody>
+                    {stockLotsQ.isLoading && [0, 1, 2].map(i => (
+                      <tr key={i}>
+                        <td colSpan={9}>
+                          <div className="skeleton" style={{ width: '100%', height: 16 }} />
                         </td>
-                        <td>
-                          <div style={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
-                            {lot.charcoalType}
-                            {adjustedLotIds.has(lot.id) && (
-                              <span
-                                className="badge badge-amber"
-                                style={{ fontSize: 10, padding: '1px 6px' }}
-                                title="This lot has at least one approved stock adjustment"
-                              >
-                                <i className="ti ti-adjustments" style={{ fontSize: 10 }} /> Adjusted
-                              </span>
-                            )}
-                          </div>
-                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>Grade {lot.grade}</div>
-                        </td>
-                        <td style={{ color: 'var(--text2)' }}>{lot.supplier}</td>
-                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text2)' }}>
-                          {lot.rawKg.toLocaleString()} kg
-                        </td>
-                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>
-                          {lot.remainKg.toLocaleString()} kg
-                        </td>
-                        <td>
-                          <div className="bar-wrap">
-                            <div className="bar-track">
-                              <div className={`bar-fill ${barClass}`} style={{ width: `${pct}%` }} />
-                            </div>
-                            <span className="bar-pct" style={pct < 30 ? { color: 'var(--red)' } : undefined}>
-                              {pct.toFixed(0)}%
-                            </span>
-                          </div>
-                        </td>
-                        <td style={{ fontFamily: "'IBM Plex Mono', monospace" }}>${lot.costPerKg.toFixed(3)}</td>
-                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>
-                          ${Math.round(lot.remainKg * lot.costPerKg).toLocaleString()}
-                        </td>
-                        <td><i className="ti ti-chevron-right" style={{ color: 'var(--text3)' }} /></td>
                       </tr>
-                    )
-                  })}
-                  {!stockLotsQ.isLoading && !stockLotsQ.isError && filteredLots.length === 0 && (
-                    <tr><td colSpan={9} className="empty">No stock lots found.</td></tr>
-                  )}
-                </tbody>
-              </table>
+                    ))}
+                    {stockLotsQ.isError && (
+                      <tr>
+                        <td colSpan={9} className="empty">
+                          Failed to load stock lots.
+                          <div><button className="btn" style={{ marginTop: 10 }} onClick={() => stockLotsQ.refetch()}>Retry</button></div>
+                        </td>
+                      </tr>
+                    )}
+                    {!stockLotsQ.isLoading && !stockLotsQ.isError && filteredLots.map(lot => {
+                      const pct = lot.rawKg > 0 ? (lot.remainKg / lot.rawKg) * 100 : 0
+                      const barClass = pct >= 60 ? 'bar-high' : pct >= 30 ? 'bar-mid' : 'bar-low'
+                      return (
+                        <tr key={lot.id} style={{ cursor: 'pointer' }} onClick={() => openLot(lot)}>
+                          <td>
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text3)' }} title={lot.id}>
+                              {lot.displayId ?? lot.id.slice(0, 8).toUpperCase()}
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+                              {lot.charcoalType}
+                              {adjustedLotIds.has(lot.id) && (
+                                <span
+                                  className="badge badge-amber"
+                                  style={{ fontSize: 10, padding: '1px 6px' }}
+                                  title="This lot has at least one approved stock adjustment"
+                                >
+                                  <i className="ti ti-adjustments" style={{ fontSize: 10 }} /> Adjusted
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)' }}>Grade {lot.grade}</div>
+                          </td>
+                          <td style={{ color: 'var(--text2)' }}>{lot.supplier}</td>
+                          <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text2)' }}>
+                            {lot.rawKg.toLocaleString()} kg
+                          </td>
+                          <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>
+                            {lot.remainKg.toLocaleString()} kg
+                          </td>
+                          <td>
+                            <div className="bar-wrap">
+                              <div className="bar-track">
+                                <div className={`bar-fill ${barClass}`} style={{ width: `${pct}%` }} />
+                              </div>
+                              <span className="bar-pct" style={pct < 30 ? { color: 'var(--red)' } : undefined}>
+                                {pct.toFixed(0)}%
+                              </span>
+                            </div>
+                          </td>
+                          <td style={{ fontFamily: "'IBM Plex Mono', monospace" }}>${lot.costPerKg.toFixed(3)}</td>
+                          <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>
+                            ${Math.round(lot.remainKg * lot.costPerKg).toLocaleString()}
+                          </td>
+                          <td><i className="ti ti-chevron-right" style={{ color: 'var(--text3)' }} /></td>
+                        </tr>
+                      )
+                    })}
+                    {!stockLotsQ.isLoading && !stockLotsQ.isError && filteredLots.length === 0 && (
+                      <tr><td colSpan={9} className="empty">No stock lots found.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
@@ -366,7 +427,7 @@ export default function Warehouse() {
                 </div>
               ))}
               {!packedQ.isLoading && packedCards.map(card => (
-                <div key={card.size} className="packed-card">
+                <div key={card.bagTypeId} className="packed-card" onClick={() => openPackedGood(card.bagTypeId)}>
                   <div className="pc-header">
                     <span className="pc-size">{card.size}</span>
                     <span className="pc-cost">{card.lots} lot{card.lots !== 1 ? 's' : ''}</span>
@@ -407,42 +468,78 @@ export default function Warehouse() {
                 <div className="card-title"><i className="ti ti-list" /> Packed stock — by source lot</div>
                 <button className="card-action">Export</button>
               </div>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Bag type</th>
-                    <th>Source lot</th>
-                    <th>Qty</th>
-                    <th>kg packed</th>
-                    <th>Packed on</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sessions.map(s => {
-                    const bagCount = s.bagsOutput.reduce((acc, b) => acc + b.qty, 0)
-                    return (
-                      <tr key={s.id}>
-                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>
-                          {s.bagsOutput.length} type{s.bagsOutput.length !== 1 ? 's' : ''}
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Bag type</th>
+                      <th>Source lot</th>
+                      <th>Qty</th>
+                      <th>Nominal kg</th>
+                      <th>Packed on</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {packedStockTableQ.isLoading && [0, 1, 2].map(i => (
+                      <tr key={i}>
+                        <td colSpan={5}>
+                          <div className="skeleton" style={{ width: '100%', height: 16 }} />
                         </td>
-                        <td>
-                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text3)' }}>
-                            {(s.sessionLots?.[0]?.lot?.displayId ?? s.sessionLots?.[0]?.lotId?.slice(0, 8) ?? s.workerId.slice(0, 8))?.toUpperCase()}
-                          </span>
-                        </td>
-                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>{bagCount}</td>
-                        <td style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                          {parseFloat(s.kgOutputTotal).toFixed(0)} kg
-                        </td>
-                        <td style={{ color: 'var(--text2)' }}>{fmtDate(s.date)}</td>
                       </tr>
-                    )
-                  })}
-                  {sessions.length === 0 && (
-                    <tr><td colSpan={5} className="empty">No packing sessions.</td></tr>
-                  )}
-                </tbody>
-              </table>
+                    ))}
+                    {packedStockTableQ.isError && (
+                      <tr>
+                        <td colSpan={5} className="empty">
+                          Failed to load packed stock.
+                          <div><button className="btn" style={{ marginTop: 10 }} onClick={() => packedStockTableQ.refetch()}>Retry</button></div>
+                        </td>
+                      </tr>
+                    )}
+                    {!packedStockTableQ.isLoading && !packedStockTableQ.isError && packedStockRows.map(row => {
+                      const nominalKg = row.bagType ? row.quantity * parseFloat(row.bagType.nominalKg) : null
+                      return (
+                        <tr key={row.id}>
+                          <td style={{ fontWeight: 500 }}>{row.bagType?.name ?? '—'}</td>
+                          <td>
+                            <span
+                              style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text3)' }}
+                              title={row.lotId}
+                            >
+                              {(row.lot?.displayId ?? row.lotId.slice(0, 8)).toUpperCase()}
+                            </span>
+                          </td>
+                          <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>{row.quantity}</td>
+                          <td style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+                            {nominalKg == null ? '—' : `${nominalKg.toLocaleString()} kg`}
+                          </td>
+                          <td style={{ color: 'var(--text2)' }}>{fmtDate(row.session?.date ?? row.createdAt)}</td>
+                        </tr>
+                      )
+                    })}
+                    {!packedStockTableQ.isLoading && !packedStockTableQ.isError && packedStockRows.length === 0 && (
+                      <tr><td colSpan={5} className="empty">No packed stock.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {!packedStockTableQ.isLoading && !packedStockTableQ.isError && packedStockTotal > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px 4px', flexWrap: 'wrap', gap: 10 }}>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                    Showing {(packedStockPage - 1) * PACKED_STOCK_PAGE_SIZE + 1}–{Math.min(packedStockPage * PACKED_STOCK_PAGE_SIZE, packedStockTotal)} of {packedStockTotal}
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <button className="btn" disabled={packedStockPage <= 1} onClick={() => setPackedStockPage(p => Math.max(1, p - 1))}>
+                      <i className="ti ti-chevron-left" style={{ fontSize: 14 }} /> Previous
+                    </button>
+                    <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                      Page {packedStockPage} of {packedStockTotalPages}
+                    </span>
+                    <button className="btn" disabled={packedStockPage >= packedStockTotalPages} onClick={() => setPackedStockPage(p => Math.min(packedStockTotalPages, p + 1))}>
+                      Next <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -463,7 +560,13 @@ export default function Warehouse() {
               </button>
             </div>
             {adjQ.isLoading && <div className="empty">Loading…</div>}
-            {!adjQ.isLoading && adjustments.length === 0 && (
+            {adjQ.isError && (
+              <div className="empty">
+                Failed to load adjustments.
+                <div><button className="btn" style={{ marginTop: 10 }} onClick={() => adjQ.refetch()}>Retry</button></div>
+              </div>
+            )}
+            {!adjQ.isLoading && !adjQ.isError && adjustments.length === 0 && (
               <div className="empty">No adjustments logged yet.</div>
             )}
             {adjustments.map((a: any) => {
@@ -573,8 +676,8 @@ export default function Warehouse() {
           {/* Topbar */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', height: 56, borderBottom: '1px solid var(--border)', background: 'var(--surface)', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <button className="btn" onClick={() => setLotPanelOpen(false)}>
-                <i className="ti ti-arrow-left" style={{ fontSize: 14 }} /> Back to warehouse
+              <button className="back-link" onClick={() => setLotPanelOpen(false)}>
+                <i className="ti ti-chevron-left" /> Back to warehouse
               </button>
               <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
               <div>
@@ -748,56 +851,58 @@ export default function Warehouse() {
                   <div className="empty">No packing sessions.</div>
                 )}
                 {!lotFlowQ.isLoading && (lotFlowQ.data?.sessions.length ?? 0) > 0 && (
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Date</th>
-                        <th className="right">Bags</th>
-                        <th className="right">This lot's input</th>
-                        <th className="right">Share of session</th>
-                        <th className="right">Historical output</th>
-                        <th className="right">Waste</th>
-                        <th className="right">Current stock (batch)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {lotFlowQ.data!.sessions.map(s => (
-                        <tr key={s.sessionId}>
-                          <td style={{ color: 'var(--text2)' }}>{fmtDate(s.date)}</td>
-                          <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{s.bagCount}</td>
-                          <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 500 }}>{parseFloat(s.lotKgUsed).toFixed(1)} kg</td>
-                          <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)' }}>{s.sharePct}%</td>
-                          <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--accent)' }}>
-                            {parseFloat(s.allocatedOutputKg).toFixed(1)} kg
+                  <div className="table-scroll">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th className="right">Bags</th>
+                          <th className="right">This lot's input</th>
+                          <th className="right">Share of session</th>
+                          <th className="right">Historical output</th>
+                          <th className="right">Waste</th>
+                          <th className="right">Current stock (batch)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lotFlowQ.data!.sessions.map(s => (
+                          <tr key={s.sessionId}>
+                            <td style={{ color: 'var(--text2)' }}>{fmtDate(s.date)}</td>
+                            <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{s.bagCount}</td>
+                            <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 500 }}>{parseFloat(s.lotKgUsed).toFixed(1)} kg</td>
+                            <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)' }}>{s.sharePct}%</td>
+                            <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--accent)' }}>
+                              {parseFloat(s.allocatedOutputKg).toFixed(1)} kg
+                            </td>
+                            <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: parseFloat(s.allocatedWasteKg) > 0 ? 'var(--red)' : 'var(--text3)' }}>
+                              {parseFloat(s.allocatedWasteKg).toFixed(1)} kg
+                            </td>
+                            <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)' }} title="Current on-hand stock from this batch — not a production figure">
+                              {parseFloat(s.currentBatchStockKg).toFixed(1)} kg
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ background: 'var(--surface2)' }}>
+                          <td colSpan={2} style={{ padding: '10px 18px', fontWeight: 600, fontSize: 13 }}>Total (this lot only)</td>
+                          <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700 }}>
+                            {lotFlowQ.data!.sessions.reduce((s, r) => s + parseFloat(r.lotKgUsed), 0).toFixed(1)} kg
                           </td>
-                          <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: parseFloat(s.allocatedWasteKg) > 0 ? 'var(--red)' : 'var(--text3)' }}>
-                            {parseFloat(s.allocatedWasteKg).toFixed(1)} kg
+                          <td />
+                          <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent)' }}>
+                            {lotFlowQ.data!.sessions.reduce((s, r) => s + parseFloat(r.allocatedOutputKg), 0).toFixed(1)} kg
                           </td>
-                          <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)' }} title="Current on-hand stock from this batch — not a production figure">
-                            {parseFloat(s.currentBatchStockKg).toFixed(1)} kg
+                          <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700 }}>
+                            {lotFlowQ.data!.sessions.reduce((s, r) => s + parseFloat(r.allocatedWasteKg), 0).toFixed(1)} kg
+                          </td>
+                          <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--text3)' }}>
+                            {lotFlowQ.data!.sessions.reduce((s, r) => s + parseFloat(r.currentBatchStockKg), 0).toFixed(1)} kg
                           </td>
                         </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr style={{ background: 'var(--surface2)' }}>
-                        <td colSpan={2} style={{ padding: '10px 18px', fontWeight: 600, fontSize: 13 }}>Total (this lot only)</td>
-                        <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700 }}>
-                          {lotFlowQ.data!.sessions.reduce((s, r) => s + parseFloat(r.lotKgUsed), 0).toFixed(1)} kg
-                        </td>
-                        <td />
-                        <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent)' }}>
-                          {lotFlowQ.data!.sessions.reduce((s, r) => s + parseFloat(r.allocatedOutputKg), 0).toFixed(1)} kg
-                        </td>
-                        <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700 }}>
-                          {lotFlowQ.data!.sessions.reduce((s, r) => s + parseFloat(r.allocatedWasteKg), 0).toFixed(1)} kg
-                        </td>
-                        <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--text3)' }}>
-                          {lotFlowQ.data!.sessions.reduce((s, r) => s + parseFloat(r.currentBatchStockKg), 0).toFixed(1)} kg
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
+                      </tfoot>
+                    </table>
+                  </div>
                 )}
               </div>
 
@@ -813,82 +918,250 @@ export default function Warehouse() {
                   <div className="empty">No exits recorded from this lot yet.</div>
                 )}
                 {!lotExitsQ.isLoading && (lotExitsQ.data?.data ?? []).length > 0 && (
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Date</th>
-                        <th>Type</th>
-                        <th>Recipient / client</th>
-                        <th>Bag type</th>
-                        <th className="right">Qty / kg</th>
-                        <th className="right">Amount</th>
-                        <th>Logged by</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(lotExitsQ.data?.data ?? []).map((e: any) => {
-                        const isRaw = !!e.lotId
-                        const qty = isRaw
-                          ? `${parseFloat(e.kgQuantity ?? '0').toFixed(1)} kg`
-                          : `${e.quantity}`
-                        const typeLabel = ({
-                          walk_in: 'Walk-in sale',
-                          order: 'Order',
-                          sample: 'Sample',
-                          gift: 'Gift',
-                          internal: 'Internal',
-                          client_bags_fill: 'Fill client',
-                        } as Record<string, string>)[e.exitType] ?? e.exitType
-                        return (
-                          <tr key={e.id}>
-                            <td style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text2)' }}>
-                              {fmtDate(e.date)}
-                            </td>
-                            <td>
-                              <span className={`badge ${e.exitType === 'walk_in' ? 'badge-amber' : e.exitType === 'order' ? 'badge-blue' : 'badge-gray'}`}>
-                                {typeLabel}
-                              </span>
-                            </td>
-                            <td style={{ color: 'var(--text2)' }}>{e.recipient ?? '—'}</td>
-                            <td style={{ color: 'var(--text2)' }}>{isRaw ? <span className="badge badge-gray">By kg</span> : (e.bagType?.name ?? '—')}</td>
-                            <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 500 }}>{qty}</td>
-                            <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: e.amount ? 'var(--accent)' : 'var(--text3)' }}>
-                              {e.amount ? `$${parseFloat(e.amount).toFixed(2)}` : '—'}
-                            </td>
-                            <td style={{ fontSize: 12, color: 'var(--text3)' }}>{e.loggedBy?.name ?? '—'}</td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                    <tfoot>
-                      <tr style={{ background: 'var(--surface2)' }}>
-                        <td colSpan={4} style={{ padding: '10px 18px', fontWeight: 600, fontSize: 13 }}>Total</td>
-                        <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700 }}>
-                          {(() => {
-                            // Unbounded server totals (lotFlowQ), not a reduce over the
-                            // page-limited lotExitsQ list — a lot with more than 200
-                            // exits would otherwise silently undercount here.
-                            const flow = lotFlowQ.data
-                            if (!flow) return '—'
-                            const kg = parseFloat(flow.rawMaterialExitsKg) + parseFloat(flow.packedBagSalesKg)
-                            return `${kg.toFixed(1)} kg`
-                          })()}
-                        </td>
-                        <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent)' }}>
-                          {(() => {
-                            const total = parseFloat(lotFlowQ.data?.totalExitAmount ?? '0')
-                            return total > 0 ? `$${total.toFixed(2)}` : '—'
-                          })()}
-                        </td>
-                        <td />
-                      </tr>
-                    </tfoot>
-                  </table>
+                  <div className="table-scroll">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Type</th>
+                          <th>Recipient / client</th>
+                          <th>Bag type</th>
+                          <th className="right">Qty / kg</th>
+                          <th className="right">Amount</th>
+                          <th>Logged by</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(lotExitsQ.data?.data ?? []).map((e: any) => {
+                          const isRaw = !!e.lotId
+                          const qty = isRaw
+                            ? `${parseFloat(e.kgQuantity ?? '0').toFixed(1)} kg`
+                            : `${e.quantity}`
+                          const typeLabel = ({
+                            walk_in: 'Walk-in sale',
+                            order: 'Order',
+                            sample: 'Sample',
+                            gift: 'Gift',
+                            internal: 'Internal',
+                            client_bags_fill: 'Fill client',
+                          } as Record<string, string>)[e.exitType] ?? e.exitType
+                          return (
+                            <tr key={e.id}>
+                              <td style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text2)' }}>
+                                {fmtDate(e.date)}
+                              </td>
+                              <td>
+                                <span className={`badge ${e.exitType === 'walk_in' ? 'badge-amber' : e.exitType === 'order' ? 'badge-blue' : 'badge-gray'}`}>
+                                  {typeLabel}
+                                </span>
+                              </td>
+                              <td style={{ color: 'var(--text2)' }}>{e.recipient ?? '—'}</td>
+                              <td style={{ color: 'var(--text2)' }}>{isRaw ? <span className="badge badge-gray">By kg</span> : (e.bagType?.name ?? '—')}</td>
+                              <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 500 }}>{qty}</td>
+                              <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: e.amount ? 'var(--accent)' : 'var(--text3)' }}>
+                                {e.amount ? `$${parseFloat(e.amount).toFixed(2)}` : '—'}
+                              </td>
+                              <td style={{ fontSize: 12, color: 'var(--text3)' }}>{e.loggedBy?.name ?? '—'}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ background: 'var(--surface2)' }}>
+                          <td colSpan={4} style={{ padding: '10px 18px', fontWeight: 600, fontSize: 13 }}>Total</td>
+                          <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700 }}>
+                            {(() => {
+                              // Unbounded server totals (lotFlowQ), not a reduce over the
+                              // page-limited lotExitsQ list — a lot with more than 200
+                              // exits would otherwise silently undercount here.
+                              const flow = lotFlowQ.data
+                              if (!flow) return '—'
+                              const kg = parseFloat(flow.rawMaterialExitsKg) + parseFloat(flow.packedBagSalesKg)
+                              return `${kg.toFixed(1)} kg`
+                            })()}
+                          </td>
+                          <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent)' }}>
+                            {(() => {
+                              const total = parseFloat(lotFlowQ.data?.totalExitAmount ?? '0')
+                              return total > 0 ? `$${total.toFixed(2)}` : '—'
+                            })()}
+                          </td>
+                          <td />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
                 )}
               </div>
               </div>
 
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Packed-good detail — full screen overlay, same pattern as the Lot detail panel above */}
+      {selectedBagTypeId && (
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--bg)', zIndex: 100, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+
+          {/* Topbar */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', height: 56, borderBottom: '1px solid var(--border)', background: 'var(--surface)', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <button className="back-link" onClick={() => setSelectedBagTypeId(null)}>
+                <i className="ti ti-chevron-left" /> Back to warehouse
+              </button>
+              <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
+              <span style={{ fontSize: 15, fontWeight: 600, wordBreak: 'break-word' }}>
+                {selectedSummary?.bagTypeName ?? selectedBagType?.name ?? 'Packed good'}
+              </span>
+            </div>
+            <span className="badge badge-green">{(selectedSummary?.lotCount ?? 0)} lot{(selectedSummary?.lotCount ?? 0) !== 1 ? 's' : ''}</span>
+          </div>
+
+          {/* Body */}
+          <div style={{ padding: '24px', flex: 1 }}>
+
+            {!packedQ.isLoading && !selectedSummary && (
+              <div className="empty">No stock data found for this bag type.</div>
+            )}
+
+            {selectedSummary && (
+              <>
+                {/* KPI row */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 14 }}>
+                  {[
+                    { label: 'Current stock', value: `${selectedSummary.totalBags.toLocaleString()} bags`, color: '' },
+                    { label: 'Available', value: `${selectedSummary.availableBags.toLocaleString()} bags`, color: 'var(--accent)' },
+                    { label: 'Reserved', value: `${selectedSummary.reservedBags.toLocaleString()} bags`, color: selectedSummary.reservedBags > 0 ? 'var(--accent2)' : '' },
+                    { label: 'Nominal weight', value: `${parseFloat(selectedSummary.totalNominalKg).toLocaleString()} kg`, color: '' },
+                    { label: 'Lots', value: `${selectedSummary.lotCount ?? 0}`, color: '' },
+                  ].map(k => (
+                    <div key={k.label} className="kpi-tile">
+                      <div className="kpi-tile-label">{k.label}</div>
+                      <div className="kpi-tile-value" style={k.color ? { color: k.color } : {}}>{k.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16, alignItems: 'start' }}>
+
+                  {/* Left: bag type details */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div className="card">
+                      <div className="card-head"><div className="card-title">Bag type details</div></div>
+                      {[
+                        ['Nominal weight (per bag)', selectedBagType ? `${parseFloat(selectedBagType.nominalKg).toLocaleString()} kg` : '—'],
+                        ...(selectedBagType?.costPerBag != null ? [['Cost per bag', `$${parseFloat(selectedBagType.costPerBag).toFixed(2)}`]] : []),
+                        ...(selectedBagType?.workerRate != null ? [['Worker rate (per bag)', `$${parseFloat(selectedBagType.workerRate).toFixed(2)}`]] : []),
+                        ...(selectedBagType?.note ? [['Note', selectedBagType.note]] : []),
+                      ].map(([l, v]) => (
+                        <div key={l} className="panel-row" style={{ padding: '7px 18px' }}>
+                          <span className="panel-row-label">{l}</span>
+                          <span className="panel-row-value" style={{ wordBreak: 'break-word', textAlign: 'right', marginLeft: 12 }}>{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Right: source lots + packing history */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div className="card">
+                      <div className="card-head">
+                        <div className="card-title"><i className="ti ti-stack-2" /> Source lots</div>
+                        <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>
+                          {bagTypeSourceLots.length} batch{bagTypeSourceLots.length !== 1 ? 'es' : ''}
+                        </span>
+                      </div>
+                      {bagTypeSourceLotsQ.isLoading && <div className="empty">Loading…</div>}
+                      {bagTypeSourceLotsQ.isError && (
+                        <div className="empty">
+                          Failed to load source lots.
+                          <div><button className="btn" style={{ marginTop: 10 }} onClick={() => bagTypeSourceLotsQ.refetch()}>Retry</button></div>
+                        </div>
+                      )}
+                      {!bagTypeSourceLotsQ.isLoading && !bagTypeSourceLotsQ.isError && bagTypeSourceLots.length === 0 && (
+                        <div className="empty">No source lots for this bag type.</div>
+                      )}
+                      {!bagTypeSourceLotsQ.isLoading && !bagTypeSourceLotsQ.isError && bagTypeSourceLots.length > 0 && (
+                        <div className="table-scroll">
+                          <table className="data-table">
+                            <thead>
+                              <tr>
+                                <th>Source lot</th>
+                                <th>Type / grade</th>
+                                <th className="right">Qty</th>
+                                <th className="right">Nominal kg</th>
+                                <th>Packed on</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {bagTypeSourceLots.map(row => {
+                                const nominalKg = row.bagType ? row.quantity * parseFloat(row.bagType.nominalKg) : null
+                                return (
+                                  <tr key={row.id}>
+                                    <td>
+                                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text3)' }} title={row.lotId}>
+                                        {(row.lot?.displayId ?? row.lotId.slice(0, 8)).toUpperCase()}
+                                      </span>
+                                    </td>
+                                    <td style={{ color: 'var(--text2)', wordBreak: 'break-word' }}>
+                                      {row.lot ? `${row.lot.charcoalType} · Grade ${row.lot.grade}` : '—'}
+                                    </td>
+                                    <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 500 }}>{row.quantity}</td>
+                                    <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                                      {nominalKg == null ? '—' : `${nominalKg.toLocaleString()} kg`}
+                                    </td>
+                                    <td style={{ color: 'var(--text2)' }}>{fmtDate(row.session?.date ?? row.createdAt)}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="card">
+                      <div className="card-head">
+                        <div className="card-title"><i className="ti ti-tools" /> Packing history</div>
+                        <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>
+                          most recent sessions
+                        </span>
+                      </div>
+                      {sessionsQ.isLoading && <div className="empty">Loading…</div>}
+                      {!sessionsQ.isLoading && bagTypePackingHistory.length === 0 && (
+                        <div className="empty">No packing history for this bag type.</div>
+                      )}
+                      {!sessionsQ.isLoading && bagTypePackingHistory.length > 0 && (
+                        <div className="table-scroll">
+                          <table className="data-table">
+                            <thead>
+                              <tr>
+                                <th>Date</th>
+                                <th className="right">Qty</th>
+                                <th className="right">Nominal kg</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {bagTypePackingHistory.map(row => (
+                                <tr key={row.sessionId}>
+                                  <td style={{ color: 'var(--text2)' }}>{fmtDate(row.date)}</td>
+                                  <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 500 }}>{row.qty}</td>
+                                  <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                                    {selectedBagType ? `${(row.qty * parseFloat(selectedBagType.nominalKg)).toLocaleString()} kg` : '—'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -911,7 +1184,7 @@ export default function Warehouse() {
             <div className="modal" style={{ width: 460 }} onClick={e => e.stopPropagation()}>
               <div className="modal-head">
                 <span className="modal-title">New stock adjustment</span>
-                <button className="panel-close" onClick={() => setAdjModalOpen(false)}><i className="ti ti-x" /></button>
+                <button className="panel-close" aria-label="Close" onClick={() => setAdjModalOpen(false)}><i className="ti ti-x" /></button>
               </div>
               <div className="modal-body">
                 <div className="form-group">
@@ -1016,7 +1289,7 @@ export default function Warehouse() {
           <div className="modal" style={{ width: 440 }} onClick={e => e.stopPropagation()}>
             <div className="modal-head">
               <span className="modal-title">Edit adjustment</span>
-              <button className="panel-close" onClick={() => setEditAdj(null)}><i className="ti ti-x" /></button>
+              <button className="panel-close" aria-label="Close" onClick={() => setEditAdj(null)}><i className="ti ti-x" /></button>
             </div>
             <div className="modal-body">
               <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '10px 14px', fontSize: 12, fontFamily: "'IBM Plex Mono',monospace", marginBottom: 14 }}>

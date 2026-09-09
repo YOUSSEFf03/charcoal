@@ -20,6 +20,8 @@ interface Entry {
   time: string
   bagTypeIdx: number
   bagQty: number
+  /** Bag type label, but only when every bagsOutput line agrees — null means "mixed". */
+  bagTypeUniformLabel: string | null
   charcoal: { lotId: string; label: string; kg: number }[]
   charIn: number
   bagOut: number
@@ -46,6 +48,84 @@ function fmt(n: number, digits = 0): string {
 let rowCounter = 0
 function newRow(): CharRow { return { id: String(rowCounter++), lotIdx: -1, kg: '' } }
 
+/**
+ * Finished-weight ÷ charcoal-consumed, as a percentage. Pure re-framing of the
+ * existing kgOutputTotal/kgConsumed fields already on PackingSession — no new
+ * accounting concept, same inputs the waste % has always used.
+ */
+export function computeYieldPct(kgOutputTotal: number, kgConsumed: number): number {
+  if (kgConsumed <= 0) return 0
+  return (kgOutputTotal / kgConsumed) * 100
+}
+
+/**
+ * A session's bagsOutput can legitimately contain more than one bag type
+ * (CreatePackingSessionDto.bagsOutput is an array). A compact summary chip
+ * has room for only one label — this returns the single bag type's label
+ * ONLY when every line in bagsOutput agrees, and null when the session
+ * produced more than one bag type, so a caller can fall back to a "Mixed" /
+ * "N bag types" badge instead of silently naming just the first one.
+ * Mirrors the uniformBagType/uniformCharcoal guard already proven correct in
+ * WarehouseSales.tsx's sales-log rows.
+ */
+export function uniformBagTypeLabel(
+  bagsOutput: { bagTypeId: string }[],
+  typeLabelById: Map<string, string>,
+): string | null {
+  if (bagsOutput.length === 0) return null
+  const first = bagsOutput[0].bagTypeId
+  if (!bagsOutput.every(b => b.bagTypeId === first)) return null
+  return typeLabelById.get(first) ?? null
+}
+
+/**
+ * Every charcoal lot a session consumed, as separate rows — never blended
+ * into one label. Source: PackingSessionLot (junction table), one row per
+ * DISTINCT lot, each carrying its own charcoalType/grade/kgUsed.
+ */
+export function mapSessionCharcoal(
+  sessionLots: { lotId: string; kgUsed: string; lot?: { charcoalType: string; grade: string; costPerKg?: string | null } | null }[],
+): { lotId: string; charcoalType: string; grade: string; kg: number; costPerKg: number }[] {
+  return sessionLots.map(sl => ({
+    lotId: sl.lotId,
+    charcoalType: sl.lot?.charcoalType ?? sl.lotId.slice(0, 8) + '…',
+    grade: sl.lot?.grade ?? '',
+    kg: parseFloat(sl.kgUsed),
+    costPerKg: parseFloat(sl.lot?.costPerKg ?? '0'),
+  }))
+}
+
+/**
+ * Charcoal cost (COGS), bag cost, and worker cost for one session — the
+ * single definition used by both the compact "today"/"history" rows
+ * (toEntry()) and the full detail panel, so the two views can never drift
+ * apart on the same formula.
+ *   - Charcoal cost = Σ(kgUsed × lot.costPerKg) across every DISTINCT lot the
+ *     session consumed — correctly weighted per lot, never one blended rate.
+ *   - Bag cost = Σ(qty × bagType.costPerBag) — packaging cost, not charcoal.
+ *   - Worker cost = session.sessionEarnings — backend-snapshotted at session
+ *     creation/edit time (packing-sessions.service.ts), never recomputed from
+ *     a bag type's CURRENT workerRate, so a later rate change can never
+ *     silently reprice a historical session's displayed cost.
+ */
+export function computeSessionCosts(
+  sessionLots: { kgUsed: string; lot?: { costPerKg?: string | null } | null }[],
+  bagsOutput: { bagTypeId: string; qty: number }[],
+  bagTypeCostMap: Map<string, { costPerBag: number; workerRate: number }>,
+  sessionEarnings: string | null | undefined,
+): { charcoalCost: number; bagCost: number; workerCost: number; totalCost: number } {
+  const charcoalCost = sessionLots.reduce(
+    (total, sl) => total + parseFloat(sl.kgUsed) * parseFloat(sl.lot?.costPerKg ?? '0'),
+    0,
+  )
+  const bagCost = bagsOutput.reduce((sum, b) => {
+    const info = bagTypeCostMap.get(b.bagTypeId)
+    return sum + b.qty * (info?.costPerBag ?? 0)
+  }, 0)
+  const workerCost = parseFloat(sessionEarnings ?? '0')
+  return { charcoalCost, bagCost, workerCost, totalCost: charcoalCost + bagCost + workerCost }
+}
+
 // ── component ──────────────────────────────────────────────────────────────
 
 export default function Packing() {
@@ -59,6 +139,7 @@ export default function Packing() {
 
   // Bag-type dropdown options derived from the API bag types.
   const TYPES = (bagTypesQ.data ?? []).map(b => ({ id: b.id, kg: parseFloat(b.nominalKg), label: b.name, ref: b.nominalKg }))
+  const typeLabelById = new Map(TYPES.map(t => [t.id, t.label]))
   // Charcoal-lot dropdown options derived from in-stock lots.
   const LOTS = (stockLotsQ.data?.data ?? []).map(l => ({
     id: l.id,
@@ -112,36 +193,29 @@ export default function Packing() {
     const charIn = parseFloat(s.kgConsumed)
     const bagOut = parseFloat(s.kgOutputTotal)
 
-    // COGS = Σ(kgUsed × lot.costPerKg) across all lot inputs — correct multi-lot weighting
-    const cogs = (s.sessionLots ?? []).reduce((total, sl) => {
-      const lotCostPerKg = parseFloat(sl.lot?.costPerKg ?? '0')
-      return total + parseFloat(sl.kgUsed) * lotCostPerKg
-    }, 0)
-
-    // Bag cost = Σ qty × bagType.costPerBag
-    const bagCost = s.bagsOutput.reduce((sum, b) => {
-      const info = bagTypeCostMap.get(b.bagTypeId)
-      return sum + b.qty * (info?.costPerBag ?? 0)
-    }, 0)
-
-    // Worker cost = sessionEarnings (pre-computed by backend)
-    const workerCost = parseFloat(s.sessionEarnings ?? '0')
+    const { charcoalCost, bagCost, workerCost } = computeSessionCosts(
+      s.sessionLots ?? [], s.bagsOutput, bagTypeCostMap, s.sessionEarnings,
+    )
 
     return {
       id: s.id,
       time: new Date(s.startedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
       bagTypeIdx: bagTypeIdx >= 0 ? bagTypeIdx : 0,
       bagQty,
-      charcoal: (s.sessionLots ?? []).map(sl => ({
-        lotId: sl.lotId,
-        label: sl.lot ? `${sl.lot.charcoalType} · ${sl.lot.grade}` : sl.lotId,
-        kg: parseFloat(sl.kgUsed),
+      // Not necessarily one uniform bag type — see uniformBagTypeLabel(), used
+      // by the table/list rows to decide whether TYPES[bagTypeIdx] is safe to
+      // show alone or must fall back to a "mixed" badge.
+      bagTypeUniformLabel: uniformBagTypeLabel(s.bagsOutput, typeLabelById),
+      charcoal: mapSessionCharcoal(s.sessionLots ?? []).map(c => ({
+        lotId: c.lotId,
+        label: `${c.charcoalType} · ${c.grade}`,
+        kg: c.kg,
       })),
       charIn,
       bagOut,
       waste: parseFloat(s.varianceKg),
       workerName: s.workerEntity?.name ?? s.worker?.name ?? s.workerId.slice(0, 8),
-      cogs,
+      cogs: charcoalCost,
       bagCost,
       workerCost,
     }
@@ -353,23 +427,24 @@ export default function Packing() {
     const variance = parseFloat(s.varianceKg)
     const vPct     = charIn > 0 ? (variance / charIn) * 100 : 0
     const vColor   = variance < 0 || vPct > 5 ? 'var(--red)' : 'var(--accent2)'
+    const yieldPct = computeYieldPct(bagOut, charIn)
+    const totalBags = s.bagsOutput.reduce((a, b) => a + b.qty, 0)
 
-    // COGS: weighted by actual kg used from each lot
-    const cogs = (s.sessionLots ?? []).reduce((total, sl) => {
-      return total + parseFloat(sl.kgUsed) * parseFloat(sl.lot?.costPerKg ?? '0')
-    }, 0)
-    const bagCost = s.bagsOutput.reduce((sum, b) => {
-      const info = bagTypeCostMap.get(b.bagTypeId)
-      return sum + b.qty * (info?.costPerBag ?? 0)
-    }, 0)
-    const workerCost = parseFloat(s.sessionEarnings ?? '0')
-    const totalCost  = cogs + bagCost + workerCost
+    const { charcoalCost, bagCost, workerCost, totalCost } = computeSessionCosts(
+      s.sessionLots ?? [], s.bagsOutput, bagTypeCostMap, s.sessionEarnings,
+    )
 
-    // Resolve lot labels from sessionLots (which include the lot relation)
-    const lotInputsDisplay = (s.sessionLots ?? []).map(sl => ({
-      label: sl.lot ? `${sl.lot.charcoalType} · ${sl.lot.grade}` : sl.lotId.slice(0, 8) + '…',
-      kg: parseFloat(sl.kgUsed),
-    }))
+    // Every charcoal lot the session consumed, kept as separate rows — never
+    // collapsed into one label, and never used to infer a grade for the
+    // output below (bagsOutput has no per-lot breakdown; see mapSessionCharcoal
+    // doc comment). Output and input are deliberately two independent lists.
+    const charcoalUsed = mapSessionCharcoal(s.sessionLots ?? [])
+
+    // A session legitimately has room for more than one bag type; only show
+    // the "Output Details" section when it actually does, to avoid restating
+    // the single bag type the headline already shows.
+    const bagTypeUniform = uniformBagTypeLabel(s.bagsOutput, typeLabelById)
+    const hasMultipleBagTypes = bagTypeUniform === null && s.bagsOutput.length > 0
 
     return (
       <>
@@ -378,67 +453,82 @@ export default function Packing() {
             <div className="pd-head-title">Packing Entry · {timeStr}</div>
             <div className="pd-head-sub">{dateStr}</div>
           </div>
-          <button className="close-btn" onClick={closeDetail}><i className="ti ti-x" /></button>
+          <button className="close-btn" aria-label="Close" onClick={closeDetail}><i className="ti ti-x" /></button>
         </div>
 
         <div className="pd-body">
 
-          <div className="pd-section-label">Overview</div>
+          {/* PRODUCTION SUMMARY — what a business owner needs in 5 seconds:
+              how much came out, of what, packed by whom, when. */}
+          <div className="pd-headline">
+            <div className="pd-headline-main">
+              <span className="pd-headline-qty">{totalBags.toLocaleString()}</span> bags
+              <span className="pd-headline-sep">·</span>
+              <span className="pd-headline-qty">{fmt(bagOut, 1)}</span> kg
+            </div>
+            <div className="pd-headline-sub">
+              {bagTypeUniform ?? `${s.bagsOutput.length} bag types`}
+            </div>
+          </div>
+
+          <div className="pd-section-label">Production summary</div>
           <div className="pd-row"><span className="pd-label">Worker</span><span className="pd-value">{workerName}</span></div>
           <div className="pd-row"><span className="pd-label">Date</span><span className="pd-value">{dateStr}</span></div>
           <div className="pd-row"><span className="pd-label">Time</span><span className="pd-value">{timeStr}</span></div>
           <div className="pd-row"><span className="pd-label">Mode</span><span className="pd-value" style={{ textTransform: 'capitalize' }}>{s.mode}</span></div>
 
-          <div className="pd-section-label">Bag Output</div>
-          {s.bagsOutput.map((b, i) => {
-            const bt = TYPES.find(t => t.id === b.bagTypeId)
-            return (
-              <div key={i} className="pd-row">
-                <span className="pd-label">{bt?.label ?? b.bagTypeId.slice(0, 8)}</span>
-                <span className="pd-value">{b.qty} bags · {bt ? fmt(b.qty * bt.kg, 1) : '?'} kg</span>
-              </div>
-            )
-          })}
-          <div className="pd-row"><span className="pd-label">Total output</span><span className="pd-value" style={{ color: 'var(--accent)' }}>{fmt(bagOut, 1)} kg</span></div>
-
-          <div className="pd-section-label">Charcoal Used</div>
-          {lotInputsDisplay.map((inp, i) => (
+          {/* CHARCOAL USED (input) — every lot/grade listed separately, on
+              purpose: a session can draw from more than one lot, and the
+              finished output below is never attributed to just one of them. */}
+          <div className="pd-section-label">Charcoal used</div>
+          {charcoalUsed.map((inp, i) => (
             <div key={i} className="pd-row">
-              <span className="pd-label">{inp.label}</span>
+              <div className="pd-label">
+                <div style={{ fontWeight: 500, color: 'var(--text)' }}>{inp.charcoalType}</div>
+                {inp.grade && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 1 }}>Grade {inp.grade}</div>}
+              </div>
               <span className="pd-value">{fmt(inp.kg, 1)} kg</span>
             </div>
           ))}
-          <div className="pd-row"><span className="pd-label">Total charcoal in</span><span className="pd-value">{fmt(charIn, 1)} kg</span></div>
+          <div className="pd-row"><span className="pd-label">Total material used</span><span className="pd-value">{fmt(charIn, 1)} kg</span></div>
 
-          <div className="pd-section-label">Waste / Variance</div>
-          <div className="pd-waste-bar">
+          {/* PRODUCTION RESULT — reconciles input vs finished output vs loss,
+              in one place, so nothing needs to be mentally cross-referenced. */}
+          <div className="pd-section-label">Production result</div>
+          <div className="pd-waste-bar pd-waste-bar-4">
             <div className="pd-wc">
-              <div className="wl">Charcoal in</div>
+              <div className="wl">Material used</div>
               <div className="wv">{fmt(charIn, 0)} kg</div>
-              <div className="ws">{lotInputsDisplay.length} lot{lotInputsDisplay.length !== 1 ? 's' : ''}</div>
+              <div className="ws">{charcoalUsed.length} lot{charcoalUsed.length !== 1 ? 's' : ''}</div>
             </div>
             <div className="pd-wc">
-              <div className="wl">Bag output</div>
+              <div className="wl">Finished product</div>
               <div className="wv" style={{ color: 'var(--accent)' }}>{fmt(bagOut, 1)} kg</div>
-              <div className="ws">{s.bagsOutput.reduce((a, b) => a + b.qty, 0)} bags</div>
+              <div className="ws">{totalBags} bags</div>
             </div>
             <div className="pd-wc">
               <div className="wl">Waste / loss</div>
               <div className="wv" style={{ color: vColor }}>{fmt(Math.abs(variance), 1)} kg</div>
               <div className="ws" style={{ color: vColor }}>{vPct.toFixed(1)}%</div>
             </div>
+            <div className="pd-wc">
+              <div className="wl">Yield</div>
+              <div className="wv" style={{ color: vColor }}>{yieldPct.toFixed(1)}%</div>
+              <div className="ws">of material in</div>
+            </div>
           </div>
           {s.varianceNote && (
             <div className="pd-row"><span className="pd-label">Variance note</span><span style={{ fontSize: 12, color: 'var(--text2)', textAlign: 'right' }}>{s.varianceNote}</span></div>
           )}
 
-          <div className="pd-section-label">Cost Breakdown</div>
+          {/* COST BREAKDOWN — plain business labels; COGS spelled out once. */}
+          <div className="pd-section-label">Cost breakdown</div>
           <div className="pd-cost-grid">
             {[
-              { label: 'COGS', value: cogs > 0 ? `$${cogs.toFixed(2)}` : '—', color: cogs > 0 ? 'var(--red)' : undefined },
+              { label: 'Charcoal cost (COGS)', value: charcoalCost > 0 ? `$${charcoalCost.toFixed(2)}` : '—', color: charcoalCost > 0 ? 'var(--red)' : undefined },
               { label: 'Bag cost', value: bagCost > 0 ? `$${bagCost.toFixed(2)}` : '—', color: bagCost > 0 ? 'var(--accent2)' : undefined },
               { label: 'Worker cost', value: workerCost > 0 ? `$${workerCost.toFixed(2)}` : '—', color: workerCost > 0 ? 'var(--accent)' : undefined },
-              { label: 'Total cost', value: totalCost > 0 ? `$${totalCost.toFixed(2)}` : '—', color: undefined },
+              { label: 'Total production cost', value: totalCost > 0 ? `$${totalCost.toFixed(2)}` : '—', color: undefined },
             ].map(c => (
               <div key={c.label} className="pd-cost-cell">
                 <div className="cl">{c.label}</div>
@@ -446,6 +536,24 @@ export default function Packing() {
               </div>
             ))}
           </div>
+
+          {/* OUTPUT DETAILS — only when the session actually produced more
+              than one bag type; the headline above already covers the common
+              single-type case, so this avoids restating it. */}
+          {hasMultipleBagTypes && (
+            <>
+              <div className="pd-section-label">Output details</div>
+              {s.bagsOutput.map((b, i) => {
+                const bt = TYPES.find(t => t.id === b.bagTypeId)
+                return (
+                  <div key={i} className="pd-row">
+                    <span className="pd-label">{bt?.label ?? b.bagTypeId.slice(0, 8)}</span>
+                    <span className="pd-value">{b.qty} bags · {bt ? fmt(b.qty * bt.kg, 1) : '?'} kg</span>
+                  </div>
+                )
+              })}
+            </>
+          )}
 
           {s.notes && (
             <>
@@ -474,7 +582,7 @@ export default function Packing() {
             <div className="pd-head-title">Edit Packing Entry</div>
             <div className="pd-head-sub">changes will update stock, packed bags, and worker earnings</div>
           </div>
-          <button className="close-btn" onClick={() => setIsEditMode(false)}><i className="ti ti-arrow-left" /></button>
+          <button className="close-btn" aria-label="Back" onClick={() => setIsEditMode(false)}><i className="ti ti-arrow-left" /></button>
         </div>
 
         <div className="pd-body">
@@ -540,7 +648,7 @@ export default function Packing() {
                       <span className="o-val">{stockAfter !== null ? `${fmt(stockAfter, 0)} kg` : '—'}</span>
                     </div>
                   </div>
-                  <button className="row-remove" disabled={editCharRows.length === 1} onClick={() => removeEditCharRow(row.id)}>
+                  <button className="row-remove" title="Remove" disabled={editCharRows.length === 1} onClick={() => removeEditCharRow(row.id)}>
                     <i className="ti ti-x" style={{ fontSize: 15 }} />
                   </button>
                 </div>
@@ -810,88 +918,92 @@ export default function Packing() {
             <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>newest first</span>
           </div>
 
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th style={{ width: 74 }}>Time</th>
-                <th style={{ width: 160 }}>Bag produced</th>
-                <th>Charcoal used</th>
-                <th style={{ width: 110 }}>Worker</th>
-                <th className="right" style={{ width: 90 }}>In</th>
-                <th className="right" style={{ width: 90 }}>Out</th>
-                <th className="right" style={{ width: 100 }}>Waste</th>
-                <th className="right" style={{ width: 90 }}>COGS</th>
-                <th className="right" style={{ width: 80 }}>Bags $</th>
-                <th className="right" style={{ width: 80 }}>Worker $</th>
-                <th style={{ width: 46 }} />
-              </tr>
-            </thead>
-            <tbody>
-              {sessionsQ.isLoading ? (
-                <tr><td colSpan={11}><div className="skeleton" style={{ width: '100%', height: 40, margin: '8px 0' }} /></td></tr>
-              ) : sessionsQ.isError ? (
-                <tr><td colSpan={11}><div className="empty">Failed to load packing sessions.<div><button className="btn" style={{ marginTop: 10 }} onClick={() => sessionsQ.refetch()}>Retry</button></div></div></td></tr>
-              ) : entries.length === 0 ? (
-                <tr><td colSpan={11}>
-                  <div className="pack-empty">
-                    <i className="ti ti-package" />
-                    <div className="t">No entries yet</div>
-                    <div className="s">Add your first batch above</div>
-                  </div>
-                </td></tr>
-              ) : entries.map(e => {
-                const wpct = e.charIn > 0 ? (e.waste / e.charIn) * 100 : 0
-                const wcolor = e.waste < 0 || wpct > 5 ? 'var(--red)' : 'var(--accent2)'
-                return (
-                  <tr key={e.id} className="entry-clickable" onClick={() => setDetailId(e.id)} title="Click to view details">
-                    <td className="mono" style={{ color: 'var(--text2)' }}>{e.time}</td>
-                    <td>
-                      <span className="qty-chip" style={{ background: 'var(--surface2)', borderColor: 'var(--border)' }}>
-                        <span className="q">{e.bagQty}</span>
-                        <span className="t">× {TYPES[e.bagTypeIdx].label}</span>
-                      </span>
-                    </td>
-                    <td>
-                      {e.charcoal.length > 0 ? (
-                        <div className="qty-chips">
-                          {e.charcoal.map((c, i) => (
-                            <span key={i} className="qty-chip">
-                              <span className="q">{fmt(c.kg, 0)}</span>
-                              <span className="t">kg · {c.label}</span>
-                            </span>
-                          ))}
-                        </div>
-                      ) : <span style={{ color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>— not recorded</span>}
-                    </td>
-                    <td style={{ fontSize: 12, color: 'var(--text2)' }}>{e.workerName}</td>
-                    <td className="right num" style={{ fontWeight: 500, color: 'var(--text2)' }}>{fmt(e.charIn, 0)} kg</td>
-                    <td className="right num" style={{ color: 'var(--accent)', fontWeight: 500 }}>{fmt(e.bagOut, 1)} kg</td>
-                    <td className="right num">
-                      <span style={{ color: wcolor, fontWeight: 600 }}>{fmt(e.waste, 1)} kg</span>
-                      {e.charIn > 0 && <div style={{ fontSize: 10.5, color: 'var(--text3)', fontWeight: 400, marginTop: 1 }}>{wpct.toFixed(1)}%</div>}
-                    </td>
-                    <td className="right num" style={{ color: 'var(--red)', fontSize: 12 }}>
-                      {e.cogs > 0 ? `$${e.cogs.toFixed(2)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
-                    </td>
-                    <td className="right num" style={{ color: 'var(--accent2)', fontSize: 12 }}>
-                      {e.bagCost > 0 ? `$${e.bagCost.toFixed(2)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
-                    </td>
-                    <td className="right num" style={{ color: 'var(--accent)', fontSize: 12 }}>
-                      {e.workerCost > 0 ? `$${e.workerCost.toFixed(2)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
-                    </td>
-                    <td className="right" />
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 74 }}>Time</th>
+                  <th style={{ width: 160 }}>Bag produced</th>
+                  <th>Charcoal used</th>
+                  <th style={{ width: 110 }}>Worker</th>
+                  <th className="right" style={{ width: 90 }}>In</th>
+                  <th className="right" style={{ width: 90 }}>Out</th>
+                  <th className="right" style={{ width: 100 }}>Waste</th>
+                  <th className="right" style={{ width: 90 }}>COGS</th>
+                  <th className="right" style={{ width: 80 }}>Bags $</th>
+                  <th className="right" style={{ width: 80 }}>Worker $</th>
+                  <th style={{ width: 46 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {sessionsQ.isLoading ? (
+                  <tr><td colSpan={11}><div className="skeleton" style={{ width: '100%', height: 40, margin: '8px 0' }} /></td></tr>
+                ) : sessionsQ.isError ? (
+                  <tr><td colSpan={11}><div className="empty">Failed to load packing sessions.<div><button className="btn" style={{ marginTop: 10 }} onClick={() => sessionsQ.refetch()}>Retry</button></div></div></td></tr>
+                ) : entries.length === 0 ? (
+                  <tr><td colSpan={11}>
+                    <div className="pack-empty">
+                      <i className="ti ti-package" />
+                      <div className="t">No entries yet</div>
+                      <div className="s">Add your first batch above</div>
+                    </div>
+                  </td></tr>
+                ) : entries.map(e => {
+                  const wpct = e.charIn > 0 ? (e.waste / e.charIn) * 100 : 0
+                  const wcolor = e.waste < 0 || wpct > 5 ? 'var(--red)' : 'var(--accent2)'
+                  return (
+                    <tr key={e.id} className="entry-clickable" onClick={() => setDetailId(e.id)} title="Click to view details">
+                      <td className="mono" style={{ color: 'var(--text2)' }}>{e.time}</td>
+                      <td>
+                        <span className="qty-chip" style={{ background: 'var(--surface2)', borderColor: 'var(--border)' }}>
+                          <span className="q">{e.bagQty}</span>
+                          <span className="t">
+                            {e.bagTypeUniformLabel ? `× ${e.bagTypeUniformLabel}` : 'mixed bag types'}
+                          </span>
+                        </span>
+                      </td>
+                      <td>
+                        {e.charcoal.length > 0 ? (
+                          <div className="qty-chips">
+                            {e.charcoal.map((c, i) => (
+                              <span key={i} className="qty-chip">
+                                <span className="q">{fmt(c.kg, 0)}</span>
+                                <span className="t">kg · {c.label}</span>
+                              </span>
+                            ))}
+                          </div>
+                        ) : <span style={{ color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>— not recorded</span>}
+                      </td>
+                      <td style={{ fontSize: 12, color: 'var(--text2)' }}>{e.workerName}</td>
+                      <td className="right num" style={{ fontWeight: 500, color: 'var(--text2)' }}>{fmt(e.charIn, 0)} kg</td>
+                      <td className="right num" style={{ color: 'var(--accent)', fontWeight: 500 }}>{fmt(e.bagOut, 1)} kg</td>
+                      <td className="right num">
+                        <span style={{ color: wcolor, fontWeight: 600 }}>{fmt(e.waste, 1)} kg</span>
+                        {e.charIn > 0 && <div style={{ fontSize: 10.5, color: 'var(--text3)', fontWeight: 400, marginTop: 1 }}>{wpct.toFixed(1)}%</div>}
+                      </td>
+                      <td className="right num" style={{ color: 'var(--red)', fontSize: 12 }}>
+                        {e.cogs > 0 ? `$${e.cogs.toFixed(2)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
+                      </td>
+                      <td className="right num" style={{ color: 'var(--accent2)', fontSize: 12 }}>
+                        {e.bagCost > 0 ? `$${e.bagCost.toFixed(2)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
+                      </td>
+                      <td className="right num" style={{ color: 'var(--accent)', fontSize: 12 }}>
+                        {e.workerCost > 0 ? `$${e.workerCost.toFixed(2)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
+                      </td>
+                      <td className="right" />
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
 
           {/* Footer rollup */}
           {entries.length > 0 && (
-            <div className="today-foot" style={{ gridTemplateColumns: `repeat(${TYPES.length}, 1fr) auto` }}>
+            <div className="today-foot" style={{ gridTemplateColumns: `repeat(${TYPES.length}, minmax(0, 1fr)) auto` }}>
               {TYPES.map((t, i) => (
                 <div key={t.label} className="fc">
-                  <div className="flbl">{t.label}</div>
+                  <div className="flbl" title={t.label}>{t.label}</div>
                   <div className="fv">{dayTotals[i] || 0}</div>
                 </div>
               ))}
@@ -991,7 +1103,7 @@ export default function Packing() {
       <>
         <div className="view-header">
           <button className="pack-back" onClick={() => setView('today')}>
-            <i className="ti ti-arrow-left" style={{ fontSize: 18 }} />
+            <i className="ti ti-chevron-left" style={{ fontSize: 18 }} />
           </button>
           <div>
             <h1>Packing history</h1>
@@ -1022,7 +1134,7 @@ export default function Packing() {
       <>
         <div className="view-header">
           <button className="pack-back" onClick={() => setView('history')}>
-            <i className="ti ti-arrow-left" style={{ fontSize: 18 }} />
+            <i className="ti ti-chevron-left" style={{ fontSize: 18 }} />
           </button>
           <div>
             <h1>{selDay.dow} {selDay.date} 2026</h1>
@@ -1033,7 +1145,7 @@ export default function Packing() {
         <div className="detail-kpis">
           {TYPES.map((t, i) => (
             <div key={t.label} className={`dkc ${selDay.counts[i] > 0 ? 'green' : ''}`}>
-              <div className="dklbl">{t.label}</div>
+              <div className="dklbl" title={t.label}>{t.label}</div>
               <div className="dkv">{selDay.counts[i] || 0}</div>
               <div className="dksub">{fmt((selDay.counts[i] || 0) * t.kg, 1)} kg</div>
             </div>
@@ -1045,14 +1157,20 @@ export default function Packing() {
             <h3><i className="ti ti-chart-bar" style={{ fontSize: 16, color: 'var(--text2)' }} /> Bags by type</h3>
             <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>how many of each bag size</span>
           </div>
-          {TYPES.map((t, i) => (
-            <div key={t.label} className="breakdown-row">
-              <span className="btype">{t.label} <small>· {t.ref}</small></span>
-              <span className="bqty">{selDay.counts[i] || 0} <small>×</small></span>
-              <div className="bbar"><div className="bfill" style={{ width: `${((selDay.counts[i] || 0) / maxCount) * 100}%` }} /></div>
-              <span className="bkg">{fmt((selDay.counts[i] || 0) * t.kg, 1)} kg</span>
-            </div>
-          ))}
+          {TYPES.map((t, i) => {
+            const qty = selDay.counts[i] || 0
+            return (
+              <div key={t.label} className={`breakdown-row ${qty === 0 ? 'zero' : ''}`}>
+                <span className="btype" title={t.label}>
+                  <span className="btype-name">{t.label}</span>
+                  <small>· {t.ref}</small>
+                </span>
+                <span className="bqty">{qty.toLocaleString()} <small>×</small></span>
+                <div className="bbar"><div className="bfill" style={{ width: `${(qty / maxCount) * 100}%` }} /></div>
+                <span className="bkg">{fmt(qty * t.kg, 1)} kg</span>
+              </div>
+            )
+          })}
           <div className="breakdown-row btotal">
             <span className="btype" style={{ color: 'var(--text)' }}>Total</span>
             <span className="bqty">{totalBags}</span>
@@ -1084,21 +1202,23 @@ export default function Packing() {
                   return (
                     <div key={e.id} className="entry-row clickable" onClick={() => setDetailId(e.id)} title="Click to view details">
                       <span className="etime">{e.time}</span>
-                      <span>
+                      <span className="entry-main">
                         <div className="echips">
-                          <span className="qty-chip">
+                          <span className="qty-chip" title={e.bagTypeUniformLabel ?? undefined}>
                             <span className="q">{e.bagQty}</span>
-                            <span className="t">× {TYPES[e.bagTypeIdx]?.label ?? '?'}</span>
+                            <span className="t">
+                              {e.bagTypeUniformLabel ? `× ${e.bagTypeUniformLabel}` : 'mixed bag types'}
+                            </span>
                           </span>
                           {e.charcoal.map((c, i) => (
-                            <span key={i} className="qty-chip">
+                            <span key={i} className="qty-chip" title={c.label}>
                               <span className="q">{fmt(c.kg, 0)}</span>
                               <span className="t">kg · {c.label}</span>
                             </span>
                           ))}
                         </div>
                       </span>
-                      <span className="eworker">{e.workerName}</span>
+                      <span className="eworker" title={e.workerName}>{e.workerName}</span>
                       <span className="ewaste" style={{ color: wcolor }}>{fmt(e.waste, 1)} kg</span>
                     </div>
                   )

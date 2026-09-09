@@ -30,9 +30,14 @@ vi.mock('../hooks/useOrders', () => ({
 
 const mockUseClients = vi.fn()
 const mockUseClient = vi.fn()
+const mockUseClientLocations = vi.fn()
 vi.mock('../hooks/useClients', () => ({
   useClients: (...args: unknown[]) => mockUseClients(...args),
   useClient: (id: string) => mockUseClient(id),
+  // Multiple-locations audit, 2026-08-31 — controllable so the location-
+  // selector describe block below can exercise it; defaults to an empty
+  // list so every pre-existing test keeps showLocationSelector false.
+  useClientLocations: (...args: unknown[]) => mockUseClientLocations(...args),
 }))
 
 vi.mock('../hooks/useBagTypes', () => ({
@@ -113,6 +118,7 @@ beforeEach(() => {
   mockUseOrder.mockReturnValue({ data: makeOrder(), isLoading: false, isError: false, refetch: vi.fn() })
   mockUseClient.mockReturnValue({ data: makeClient() })
   mockUseClients.mockReturnValue({ data: { data: [] }, isLoading: false })
+  mockUseClientLocations.mockReturnValue({ data: [], isLoading: false })
   // Real, in-stock lots — the authoritative source the KG-mode "Charcoal
   // lot" selector reads from (same shape/format as NewOrder's own picker).
   mockUseAvailableStockLots.mockReturnValue({
@@ -469,5 +475,109 @@ describe('EditOrder — KG order line', () => {
     const [{ body }] = mockUpdateOrderMutate.mock.calls[0]
     expect(body.charcoalType).toBe('Olive')
     expect(body).not.toHaveProperty('bagTypeId') // still locked, unaffected by this fix
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Forensic audit (2026-08-31): "Client Multiple Locations with ONE shared
+// client balance" — CASE numbers reference the task's own test matrix.
+// ---------------------------------------------------------------------------
+describe('EditOrder — Location selector (forensic audit, 2026-08-31)', () => {
+  it('is hidden entirely for a client not enabled for multiple locations (default fixture)', () => {
+    renderEditOrder()
+    expect(screen.queryByLabelText('Location')).not.toBeInTheDocument()
+  })
+
+  it('is hidden for a multi-location-enabled client with zero active locations', () => {
+    mockUseClient.mockReturnValue({ data: makeClient({ multiLocationEnabled: true }) })
+    mockUseClientLocations.mockReturnValue({ data: [], isLoading: false })
+    renderEditOrder()
+    expect(screen.queryByLabelText('Location')).not.toBeInTheDocument()
+  })
+
+  it('CASE 4/5 — shown with Location A and Location B for a multi-location-enabled client', () => {
+    mockUseClient.mockReturnValue({ data: makeClient({ multiLocationEnabled: true }) })
+    mockUseClientLocations.mockReturnValue({
+      data: [
+        { id: 'loc-a', clientId: 'client-1', name: 'Hamra Branch', address: null, phone: null, notes: null, isActive: true, createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+        { id: 'loc-b', clientId: 'client-1', name: 'Jounieh Branch', address: null, phone: null, notes: null, isActive: true, createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+      ],
+      isLoading: false,
+    })
+    renderEditOrder()
+    const select = screen.getByLabelText('Location') as HTMLSelectElement
+    expect(select).toBeInTheDocument()
+    expect(screen.getByText('Hamra Branch')).toBeInTheDocument()
+    expect(screen.getByText('Jounieh Branch')).toBeInTheDocument()
+  })
+
+  it('a deactivated location is excluded from the selector options', () => {
+    mockUseClient.mockReturnValue({ data: makeClient({ multiLocationEnabled: true }) })
+    mockUseClientLocations.mockReturnValue({
+      data: [
+        { id: 'loc-a', clientId: 'client-1', name: 'Hamra Branch', address: null, phone: null, notes: null, isActive: true, createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+        { id: 'loc-old', clientId: 'client-1', name: 'Old Closed Branch', address: null, phone: null, notes: null, isActive: false, createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+      ],
+      isLoading: false,
+    })
+    renderEditOrder()
+    expect(screen.getByText('Hamra Branch')).toBeInTheDocument()
+    expect(screen.queryByText('Old Closed Branch')).not.toBeInTheDocument()
+  })
+
+  it('pre-selects the order\'s existing locationId', () => {
+    mockUseClient.mockReturnValue({ data: makeClient({ multiLocationEnabled: true }) })
+    mockUseClientLocations.mockReturnValue({
+      data: [
+        { id: 'loc-a', clientId: 'client-1', name: 'Hamra Branch', address: null, phone: null, notes: null, isActive: true, createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+        { id: 'loc-b', clientId: 'client-1', name: 'Jounieh Branch', address: null, phone: null, notes: null, isActive: true, createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+      ],
+      isLoading: false,
+    })
+    mockUseOrder.mockReturnValue({ data: makeOrder({ locationId: 'loc-b' }), isLoading: false, isError: false, refetch: vi.fn() })
+    renderEditOrder()
+    expect(screen.getByLabelText('Location')).toHaveValue('loc-b')
+  })
+
+  it('CASE 14 — a historical order with no locationId shows "— Not specified —", never a fabricated location', () => {
+    mockUseClient.mockReturnValue({ data: makeClient({ multiLocationEnabled: true }) })
+    mockUseClientLocations.mockReturnValue({
+      data: [{ id: 'loc-a', clientId: 'client-1', name: 'Hamra Branch', address: null, phone: null, notes: null, isActive: true, createdAt: '2026-01-01', updatedAt: '2026-01-01' }],
+      isLoading: false,
+    })
+    mockUseOrder.mockReturnValue({ data: makeOrder({ locationId: null }), isLoading: false, isError: false, refetch: vi.fn() })
+    renderEditOrder()
+    expect(screen.getByLabelText('Location')).toHaveValue('')
+  })
+
+  it('selecting a location includes locationId in the save payload', async () => {
+    mockUseClient.mockReturnValue({ data: makeClient({ multiLocationEnabled: true }) })
+    mockUseClientLocations.mockReturnValue({
+      data: [{ id: 'loc-a', clientId: 'client-1', name: 'Hamra Branch', address: null, phone: null, notes: null, isActive: true, createdAt: '2026-01-01', updatedAt: '2026-01-01' }],
+      isLoading: false,
+    })
+    const user = userEvent.setup()
+    renderEditOrder()
+
+    await user.selectOptions(screen.getByLabelText('Location'), 'loc-a')
+    await user.click(screen.getAllByRole('button', { name: /Save changes/ })[0])
+
+    const [{ body }] = mockUpdateOrderMutate.mock.calls[0]
+    expect(body.locationId).toBe('loc-a')
+  })
+
+  it('leaving the selector at "— Not specified —" sends locationId: null, never omitted', async () => {
+    mockUseClient.mockReturnValue({ data: makeClient({ multiLocationEnabled: true }) })
+    mockUseClientLocations.mockReturnValue({
+      data: [{ id: 'loc-a', clientId: 'client-1', name: 'Hamra Branch', address: null, phone: null, notes: null, isActive: true, createdAt: '2026-01-01', updatedAt: '2026-01-01' }],
+      isLoading: false,
+    })
+    const user = userEvent.setup()
+    renderEditOrder()
+
+    await user.click(screen.getAllByRole('button', { name: /Save changes/ })[0])
+
+    const [{ body }] = mockUpdateOrderMutate.mock.calls[0]
+    expect(body.locationId).toBeNull()
   })
 })

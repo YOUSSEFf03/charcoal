@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import Topbar from '../components/layout/Topbar'
 import { useDailyPayments, useCashHandovers, useCreateCashHandover, useReceiverBalance, useAllBalances } from '../hooks/useCashHandover'
+import { useExpenseCategories, useCreateExpenseCategory } from '../hooks/useExpenseCategories'
 import { useStockExits } from '../hooks/useWarehouse'
 import { formatUsd } from '../lib/money'
 import { formatDate, toDateOnlyString, currentMonthToDateRange } from '../lib/date'
@@ -9,7 +10,14 @@ function fmt2(n: number) { return formatUsd(n, { decimals: 2 }) }
 function fmt0(n: number) { return formatUsd(n, { decimals: 0 }) }
 function fmtDate(iso: string) { return formatDate(iso) }
 
-interface Expense { id: number; desc: string; amount: number }
+// Forensic audit (2026-08-31): "Expenses + Cash Handover expense selection
+// redesign" — an expense row now selects an existing, reusable
+// ExpenseCategory (or creates one via "+ Add new expense") instead of typing
+// free text. categoryName is display-only, kept alongside categoryId purely
+// so the row can render its label without a lookup — categoryId is the only
+// field actually sent to the backend (see confirmHandover()).
+interface Expense { id: number; categoryId: string; categoryName: string; amount: number }
+const NEW_CATEGORY_VALUE = '__new__'
 
 export default function CashHandover() {
   const [selectedDate, setSelectedDate] = useState(toDateOnlyString(new Date()))
@@ -90,6 +98,37 @@ export default function CashHandover() {
   const createHandover = useCreateCashHandover()
   const receiverBalanceQ = useReceiverBalance(selectedReceiver)
   const receiverBalance = receiverBalanceQ.data
+  const categoriesQ = useExpenseCategories()
+  const categories = categoriesQ.data ?? []
+  const createCategory = useCreateExpenseCategory()
+
+  // "+ Add new expense" — which expense row (by id) is currently prompting
+  // for a new category name. null when no such prompt is open.
+  const [newCategoryForRowId, setNewCategoryForRowId] = useState<number | null>(null)
+  const [newCategoryName, setNewCategoryName] = useState('')
+
+  function handleCategorySelect(rowId: number, value: string) {
+    if (value === NEW_CATEGORY_VALUE) {
+      setNewCategoryForRowId(rowId)
+      setNewCategoryName('')
+      return
+    }
+    const cat = categories.find(c => c.id === value)
+    setExpenses(p => p.map(x => x.id === rowId ? { ...x, categoryId: value, categoryName: cat?.name ?? '' } : x))
+  }
+
+  async function confirmNewCategory() {
+    const name = newCategoryName.trim()
+    if (!name || newCategoryForRowId == null) return
+    try {
+      const cat = await createCategory.mutateAsync(name)
+      setExpenses(p => p.map(x => x.id === newCategoryForRowId ? { ...x, categoryId: cat.id, categoryName: cat.name } : x))
+      setNewCategoryForRowId(null)
+      setNewCategoryName('')
+    } catch (err: any) {
+      showToast(err?.error ?? 'Failed to create category')
+    }
+  }
 
   // selectedReceiver is a User ID; look up name from balances list
   const selectedReceiverName = allBalances.find(b => b.userId === selectedReceiver)?.name ?? ''
@@ -132,8 +171,8 @@ export default function CashHandover() {
     // itemized deductions survive (previously discarded on submit) and stay consistent
     // with the expectedAmt they produced. Blank/zero rows (an unfilled "+" row) are dropped.
     const expenseItems = expenses
-      .filter(e => e.desc.trim() && e.amount > 0)
-      .map(e => ({ description: e.desc.trim(), amount: e.amount.toFixed(2) }))
+      .filter(e => e.categoryId && e.amount > 0)
+      .map(e => ({ categoryId: e.categoryId, amount: e.amount.toFixed(2) }))
     createHandover.mutate(
       {
         date: selectedDate,
@@ -261,45 +300,47 @@ export default function CashHandover() {
             </div>
 
             {receiverBalance && (receiverBalance.payments.length > 0 || receiverBalance.exits.length > 0) ? (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>From / description</th>
-                    <th>Type</th>
-                    <th style={{ textAlign: 'right' }}>Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {receiverBalance.payments.map(p => (
-                    <tr key={p.id}>
-                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text2)' }}>{fmtDate(p.date)}</td>
-                      <td style={{ fontWeight: 500 }}>{p.clientName}</td>
-                      <td><span className="badge badge-blue">{p.method}</span></td>
-                      <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>${parseFloat(p.amount).toFixed(2)}</td>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>From / description</th>
+                      <th>Type</th>
+                      <th style={{ textAlign: 'right' }}>Amount</th>
                     </tr>
-                  ))}
-                  {receiverBalance.exits.map(e => (
-                    <tr key={e.id}>
-                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text2)' }}>{fmtDate(e.date)}</td>
-                      <td>
-                        <div style={{ fontWeight: 500 }}>{e.recipient ?? 'Walk-in'}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text3)' }}>{e.description}</div>
+                  </thead>
+                  <tbody>
+                    {receiverBalance.payments.map(p => (
+                      <tr key={p.id}>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text2)' }}>{fmtDate(p.date)}</td>
+                        <td style={{ fontWeight: 500 }}>{p.clientName}</td>
+                        <td><span className="badge badge-blue">{p.method}</span></td>
+                        <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>${parseFloat(p.amount).toFixed(2)}</td>
+                      </tr>
+                    ))}
+                    {receiverBalance.exits.map(e => (
+                      <tr key={e.id}>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text2)' }}>{fmtDate(e.date)}</td>
+                        <td>
+                          <div style={{ fontWeight: 500 }}>{e.recipient ?? 'Walk-in'}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>{e.description}</div>
+                        </td>
+                        <td><span className="badge badge-amber">Sale</span></td>
+                        <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>${parseFloat(e.amount).toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ background: 'var(--surface2)' }}>
+                      <td colSpan={3} style={{ padding: '10px 18px', fontWeight: 600 }}>Total held by {selectedReceiverName}</td>
+                      <td style={{ padding: '10px 18px', textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent2)' }}>
+                        ${parseFloat(receiverBalance.balance).toFixed(2)}
                       </td>
-                      <td><span className="badge badge-amber">Sale</span></td>
-                      <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>${parseFloat(e.amount).toFixed(2)}</td>
                     </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr style={{ background: 'var(--surface2)' }}>
-                    <td colSpan={3} style={{ padding: '10px 18px', fontWeight: 600 }}>Total held by {selectedReceiverName}</td>
-                    <td style={{ padding: '10px 18px', textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent2)' }}>
-                      ${parseFloat(receiverBalance.balance).toFixed(2)}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
+                  </tfoot>
+                </table>
+              </div>
             ) : (
               !receiverBalanceQ.isLoading && (
                 <div className="empty">{selectedReceiverName} has no uncollected cash — balance is $0.00.</div>
@@ -324,40 +365,42 @@ export default function CashHandover() {
                 <div className="empty">No warehouse sales with recorded amounts on this day.</div>
               )}
               {dailyExits.length > 0 && (
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Recipient</th>
-                      <th>Type</th>
-                      <th style={{ textAlign: 'right' }}>Amount</th>
-                      <th>Logged by</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dailyExits.map((e: any) => (
-                      <tr key={e.id}>
-                        <td style={{ fontWeight: 500 }}>{e.recipient ?? '—'}</td>
-                        <td>
-                          {e.lotId
-                            ? <span className="badge badge-amber">By kg — {parseFloat(e.kgQuantity ?? '0').toFixed(1)} kg</span>
-                            : <span>{e.bagType?.name ?? '—'} × {e.quantity}</span>
-                          }
-                        </td>
-                        <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>
-                          {fmt2(parseFloat(e.amount))}
-                        </td>
-                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{e.loggedBy?.name ?? '—'}</td>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Recipient</th>
+                        <th>Type</th>
+                        <th style={{ textAlign: 'right' }}>Amount</th>
+                        <th>Logged by</th>
                       </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr style={{ background: 'var(--surface2)' }}>
-                      <td colSpan={2} style={{ padding: '10px 18px', fontSize: 13, fontWeight: 600 }}>Total sales</td>
-                      <td style={{ padding: '10px 18px', textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent)' }}>{fmt2(saleCash)}</td>
-                      <td />
-                    </tr>
-                  </tfoot>
-                </table>
+                    </thead>
+                    <tbody>
+                      {dailyExits.map((e: any) => (
+                        <tr key={e.id}>
+                          <td style={{ fontWeight: 500 }}>{e.recipient ?? '—'}</td>
+                          <td>
+                            {e.lotId
+                              ? <span className="badge badge-amber">By kg — {parseFloat(e.kgQuantity ?? '0').toFixed(1)} kg</span>
+                              : <span>{e.bagType?.name ?? '—'} × {e.quantity}</span>
+                            }
+                          </td>
+                          <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>
+                            {fmt2(parseFloat(e.amount))}
+                          </td>
+                          <td style={{ fontSize: 12, color: 'var(--text3)' }}>{e.loggedBy?.name ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ background: 'var(--surface2)' }}>
+                        <td colSpan={2} style={{ padding: '10px 18px', fontSize: 13, fontWeight: 600 }}>Total sales</td>
+                        <td style={{ padding: '10px 18px', textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent)' }}>{fmt2(saleCash)}</td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
               )}
             </div>
 
@@ -368,32 +411,34 @@ export default function CashHandover() {
                   <div className="card-title"><i className="ti ti-cash" /> Order payments — {selectedDate}</div>
                   <span className="badge badge-gray">{dailyPayments.length} payment{dailyPayments.length !== 1 ? 's' : ''}</span>
                 </div>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Client</th>
-                      <th>Method</th>
-                      <th style={{ textAlign: 'right' }}>Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dailyPayments.map(p => (
-                      <tr key={p.id}>
-                        <td style={{ fontWeight: 500 }}>{(p as any).client?.name ?? p.clientId.slice(0, 8)}</td>
-                        <td><span className="badge badge-gray">{p.method}</span></td>
-                        <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>
-                          {fmt2(parseFloat(p.amount))}
-                        </td>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Client</th>
+                        <th>Method</th>
+                        <th style={{ textAlign: 'right' }}>Amount</th>
                       </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr style={{ background: 'var(--surface2)' }}>
-                      <td colSpan={2} style={{ padding: '10px 18px', fontSize: 13, fontWeight: 600 }}>Total payments</td>
-                      <td style={{ padding: '10px 18px', textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent)' }}>{fmt2(orderCash)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
+                    </thead>
+                    <tbody>
+                      {dailyPayments.map(p => (
+                        <tr key={p.id}>
+                          <td style={{ fontWeight: 500 }}>{(p as any).client?.name ?? p.clientId.slice(0, 8)}</td>
+                          <td><span className="badge badge-gray">{p.method}</span></td>
+                          <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>
+                            {fmt2(parseFloat(p.amount))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ background: 'var(--surface2)' }}>
+                        <td colSpan={2} style={{ padding: '10px 18px', fontSize: 13, fontWeight: 600 }}>Total payments</td>
+                        <td style={{ padding: '10px 18px', textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent)' }}>{fmt2(orderCash)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
               </div>
             )}
 
@@ -401,7 +446,7 @@ export default function CashHandover() {
             <div className="card">
               <div className="card-head">
                 <div className="card-title"><i className="ti ti-gas-station" /> Expenses (kept from collection)</div>
-                <button className="btn" style={{ fontSize: 12 }} onClick={() => { setExpenses(p => [...p, { id: nextExpId, desc: '', amount: 0 }]); setNextExpId(n => n + 1) }}>
+                <button className="btn" style={{ fontSize: 12 }} onClick={() => { setExpenses(p => [...p, { id: nextExpId, categoryId: '', categoryName: '', amount: 0 }]); setNextExpId(n => n + 1) }}>
                   <i className="ti ti-plus" style={{ fontSize: 13 }} /> Add
                 </button>
               </div>
@@ -409,11 +454,17 @@ export default function CashHandover() {
               {expenses.map(exp => (
                 <div key={exp.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 18px', borderBottom: '1px solid var(--border)' }}>
                   <i className="ti ti-notes" style={{ fontSize: 14, color: 'var(--text3)' }} />
-                  <input
-                    value={exp.desc} placeholder="Expense description"
-                    onChange={e => setExpenses(p => p.map(x => x.id === exp.id ? { ...x, desc: e.target.value } : x))}
-                    style={{ flex: 1, border: 'none', outline: 'none', fontSize: 13, fontFamily: "'IBM Plex Sans',sans-serif", color: 'var(--text)', background: 'transparent' }}
-                  />
+                  <select
+                    value={exp.categoryId}
+                    onChange={e => handleCategorySelect(exp.id, e.target.value)}
+                    style={{ flex: 1, border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '5px 8px', outline: 'none', fontSize: 13, fontFamily: "'IBM Plex Sans',sans-serif", color: 'var(--text)', background: 'var(--surface)' }}
+                  >
+                    <option value="" disabled>Select expense…</option>
+                    {categories.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                    <option value={NEW_CATEGORY_VALUE}>+ Add new expense</option>
+                  </select>
                   <input
                     type="number" value={exp.amount || ''}
                     onChange={e => setExpenses(p => p.map(x => x.id === exp.id ? { ...x, amount: parseFloat(e.target.value) || 0 } : x))}
@@ -421,6 +472,7 @@ export default function CashHandover() {
                   />
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>$</span>
                   <button onClick={() => setExpenses(p => p.filter(x => x.id !== exp.id))}
+                    aria-label="Remove expense"
                     style={{ width: 24, height: 24, borderRadius: 5, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)' }}>
                     <i className="ti ti-x" style={{ fontSize: 11 }} />
                   </button>
@@ -553,61 +605,63 @@ export default function CashHandover() {
                 )}
               </div>
 
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Receiver</th>
-                    <th>Logged by</th>
-                    <th style={{ textAlign: 'right' }}>Expected</th>
-                    <th style={{ textAlign: 'right' }}>Handed over</th>
-                    <th style={{ textAlign: 'right' }}>Difference</th>
-                    <th>Expenses deducted</th>
-                    <th>Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {historyQ.isLoading && [0, 1, 2].map(i => (
-                    <tr key={i}><td colSpan={8}><div className="skeleton" style={{ width: '100%', height: 18 }} /></td></tr>
-                  ))}
-                  {historyQ.isError && (
-                    <tr><td colSpan={8} className="empty">
-                      Failed to load handover history.
-                      <div><button className="btn" style={{ marginTop: 10 }} onClick={() => historyQ.refetch()}>Retry</button></div>
-                    </td></tr>
-                  )}
-                  {!historyQ.isLoading && !historyQ.isError && historyRows.map(h => {
-                    const d = parseFloat(h.difference)
-                    const hExpenses = h.expenses ?? []
-                    return (
-                      <tr key={h.id}>
-                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>{fmtDate(h.date)}</td>
-                        {/* receiver is the live User relation (falls back to
-                            the receiverName snapshot for legacy rows with no
-                            receiverId) — never a hardcoded/frontend-only name. */}
-                        <td style={{ fontWeight: 500 }}>{h.receiver?.name ?? h.receiverName}</td>
-                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{h.loggedBy?.name ?? '—'}</td>
-                        <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace" }}>{fmt2(parseFloat(h.expectedAmt))}</td>
-                        <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>{fmt2(parseFloat(h.handedAmt))}</td>
-                        <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", color: Math.abs(d) < 0.01 ? 'var(--accent)' : d < 0 ? 'var(--red)' : 'var(--accent2)' }}>
-                          {Math.abs(d) < 0.01 ? '✓' : d > 0 ? `+${fmt2(d)}` : fmt2(d)}
-                        </td>
-                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>
-                          {hExpenses.length === 0
-                            ? '—'
-                            : hExpenses.map(e => `${e.description} ${fmt2(parseFloat(e.amount))}`).join(', ')}
-                        </td>
-                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{h.notes ?? '—'}</td>
-                      </tr>
-                    )
-                  })}
-                  {!historyQ.isLoading && !historyQ.isError && historyRows.length === 0 && (
-                    <tr><td colSpan={8} className="empty">
-                      {historyFilterActive ? 'No handovers match this filter.' : 'No handovers recorded yet.'}
-                    </td></tr>
-                  )}
-                </tbody>
-              </table>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Receiver</th>
+                      <th>Logged by</th>
+                      <th style={{ textAlign: 'right' }}>Expected</th>
+                      <th style={{ textAlign: 'right' }}>Handed over</th>
+                      <th style={{ textAlign: 'right' }}>Difference</th>
+                      <th>Expenses deducted</th>
+                      <th>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historyQ.isLoading && [0, 1, 2].map(i => (
+                      <tr key={i}><td colSpan={8}><div className="skeleton" style={{ width: '100%', height: 18 }} /></td></tr>
+                    ))}
+                    {historyQ.isError && (
+                      <tr><td colSpan={8} className="empty">
+                        Failed to load handover history.
+                        <div><button className="btn" style={{ marginTop: 10 }} onClick={() => historyQ.refetch()}>Retry</button></div>
+                      </td></tr>
+                    )}
+                    {!historyQ.isLoading && !historyQ.isError && historyRows.map(h => {
+                      const d = parseFloat(h.difference)
+                      const hExpenses = h.expenses ?? []
+                      return (
+                        <tr key={h.id}>
+                          <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>{fmtDate(h.date)}</td>
+                          {/* receiver is the live User relation (falls back to
+                              the receiverName snapshot for legacy rows with no
+                              receiverId) — never a hardcoded/frontend-only name. */}
+                          <td style={{ fontWeight: 500 }}>{h.receiver?.name ?? h.receiverName}</td>
+                          <td style={{ fontSize: 12, color: 'var(--text3)' }}>{h.loggedBy?.name ?? '—'}</td>
+                          <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace" }}>{fmt2(parseFloat(h.expectedAmt))}</td>
+                          <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: 'var(--accent)' }}>{fmt2(parseFloat(h.handedAmt))}</td>
+                          <td style={{ textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", color: Math.abs(d) < 0.01 ? 'var(--accent)' : d < 0 ? 'var(--red)' : 'var(--accent2)' }}>
+                            {Math.abs(d) < 0.01 ? '✓' : d > 0 ? `+${fmt2(d)}` : fmt2(d)}
+                          </td>
+                          <td style={{ fontSize: 12, color: 'var(--text3)' }}>
+                            {hExpenses.length === 0
+                              ? '—'
+                              : hExpenses.map(e => `${e.description} ${fmt2(parseFloat(e.amount))}`).join(', ')}
+                          </td>
+                          <td style={{ fontSize: 12, color: 'var(--text3)' }}>{h.notes ?? '—'}</td>
+                        </tr>
+                      )
+                    })}
+                    {!historyQ.isLoading && !historyQ.isError && historyRows.length === 0 && (
+                      <tr><td colSpan={8} className="empty">
+                        {historyFilterActive ? 'No handovers match this filter.' : 'No handovers recorded yet.'}
+                      </td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
 
               {!historyQ.isLoading && !historyQ.isError && historyRows.length > 0 && historyTotalPages > 1 && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
@@ -634,7 +688,7 @@ export default function CashHandover() {
           <div className="modal" style={{ width: 440 }}>
             <div className="modal-head">
               <div className="modal-title">Confirm handover — {selectedReceiverName}</div>
-              <button className="panel-close-btn" onClick={() => setShowModal(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setShowModal(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
@@ -663,6 +717,37 @@ export default function CashHandover() {
               <button className="btn" style={{ background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)' }}
                 onClick={confirmHandover} disabled={createHandover.isPending}>
                 <i className="ti ti-check" style={{ fontSize: 14 }} /> Confirm &amp; log handover
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* "+ Add new expense" — creates a new reusable ExpenseCategory (find-or-create,
+          so typing an existing name just selects it rather than duplicating). */}
+      {newCategoryForRowId != null && (
+        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setNewCategoryForRowId(null)}>
+          <div className="modal" style={{ width: 360 }}>
+            <div className="modal-head">
+              <div className="modal-title">Add new expense category</div>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setNewCategoryForRowId(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <label className="form-label">Category name</label>
+              <input
+                className="form-input"
+                type="text"
+                placeholder="e.g. Vehicle Repair"
+                autoFocus
+                value={newCategoryName}
+                onChange={e => setNewCategoryName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && newCategoryName.trim()) confirmNewCategory() }}
+              />
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setNewCategoryForRowId(null)}>Cancel</button>
+              <button className="btn primary" onClick={confirmNewCategory} disabled={createCategory.isPending || !newCategoryName.trim()}>
+                <i className="ti ti-check" style={{ fontSize: 14 }} /> {createCategory.isPending ? 'Adding…' : 'Add category'}
               </button>
             </div>
           </div>

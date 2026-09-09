@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useOrder, useUpdateOrder } from '../hooks/useOrders'
-import { useClients, useClient } from '../hooks/useClients'
+import { useClients, useClient, useClientLocations } from '../hooks/useClients'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { usePackedStockSummary, useAvailableStockLots } from '../hooks/useWarehouse'
 import { useUsers } from '../hooks/useUsers'
@@ -98,12 +98,19 @@ export default function EditOrder() {
   // Full Client record (currency/balance/paymentTerms) for the order's
   // CURRENT client — order.client from useOrder() is a narrow Pick<>.
   const currentClientQ = useClient(order?.clientId ?? '')
+  // Multiple-locations audit, 2026-08-31 — locations belong to whichever
+  // client the order is CURRENTLY for (selectedClient, which tracks
+  // clientId changes while draft — see the client-picker section below).
+  const locationsQ = useClientLocations(selectedClient?.id ?? '')
+  const activeLocations = (locationsQ.data ?? []).filter(l => l.isActive)
+  const showLocationSelector = !!selectedClient?.multiLocationEnabled && activeLocations.length > 0
 
   // ── Order-level fields, editable in any status ─────────────────────────
   const [charcoalType, setCharcoalType] = useState('')
   const [grade, setGrade] = useState('')
   const [supplierName, setSupplierName] = useState('')
   const [driverId, setDriverId] = useState('')
+  const [locationId, setLocationId] = useState('')
   const [notes, setNotes] = useState('')
 
   // ── The one line — bag or kg, only meaningful/editable while draft ─────
@@ -125,6 +132,7 @@ export default function EditOrder() {
     setGrade(order.grade)
     setSupplierName(order.supplierName ?? '')
     setDriverId(order.driverId ?? '')
+    setLocationId(order.locationId ?? '')
     setNotes(order.notes ?? '')
     if (order.bagTypeId && order.bagType) {
       setOrderMode('bag')
@@ -240,6 +248,7 @@ export default function EditOrder() {
       grade: grade.trim(),
       supplierName: supplierName.trim() || null,
       driverId: driverId || null,
+      locationId: locationId || null,
       notes: notes || null,
       // Financially/relationally significant fields are only ever included
       // when the order is still draft — OrdersService.update() rejects the
@@ -343,6 +352,9 @@ export default function EditOrder() {
                               onMouseDown={e => {
                                 e.preventDefault()
                                 setSelectedClient(c)
+                                // A location belongs to ONE specific client —
+                                // switching clients invalidates any previous pick.
+                                setLocationId('')
                                 setClientSearch('')
                                 setShowClientDrop(false)
                               }}
@@ -567,6 +579,20 @@ export default function EditOrder() {
             {/* Delivery */}
             <div className="form-card">
               <div className="form-card-head">delivery</div>
+              {/* Multiple-locations audit, 2026-08-31 — same gating as New
+                  Order: only shown for a client actually enabled for
+                  multiple locations with at least one active branch. */}
+              {showLocationSelector && (
+                <div className="field">
+                  <label className="field-label" htmlFor="edit-order-location">Location</label>
+                  <select id="edit-order-location" className="select" value={locationId} onChange={e => setLocationId(e.target.value)}>
+                    <option value="">— Not specified —</option>
+                    {activeLocations.map(l => (
+                      <option key={l.id} value={l.id}>{l.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="field">
                 <label className="field-label" htmlFor="edit-order-driver">Driver</label>
                 <select id="edit-order-driver" className="select" value={driverId} onChange={e => setDriverId(e.target.value)}>

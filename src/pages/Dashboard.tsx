@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useWarehouseSummary, useStockLots } from '../hooks/useWarehouse'
-import { useOrders } from '../hooks/useOrders'
+import { useDeliveryQueue } from '../hooks/useOrders'
 import { useOverdueClients } from '../hooks/useClients'
 import { useContainers } from '../hooks/useContainers'
 import { useProfitLoss, useArSummary, useActivity, useDailyRevenue } from '../hooks/useReports'
@@ -87,7 +87,14 @@ export default function Dashboard() {
 
   // Live dashboard data sources.
   const summaryQ = useWarehouseSummary()
-  const activeOrdersQ = useOrders({ status: 'confirmed' })
+  // "Active orders" = the delivery queue's total (draft/confirmed/
+  // partially_delivered — see OrdersService.DELIVERY_QUEUE_STATUSES). Was
+  // previously `useOrders({ status: 'confirmed' })`, which undercounted to
+  // ~zero: `confirmed` is never actually written anywhere in the app —
+  // every order sits in `draft` while awaiting delivery (that status is the
+  // real everyday "active" state, not merely an unsubmitted draft). limit:1
+  // since only the `.total` count is used here.
+  const activeOrdersQ = useDeliveryQueue({ limit: 1 })
   const overdueQ = useOverdueClients()
   const portContainersQ = useContainers({ status: 'port' })
   const stockLotsQ = useStockLots({ limit: 5 })
@@ -106,7 +113,11 @@ export default function Dashboard() {
   // since receivables are a point-in-time balance, not a period flow like gross profit.
   const arQ = useArSummary()
 
-  const inDeliveryQ = useOrders({ status: 'partially_delivered', limit: 10 })
+  // Same statuses as the "Active orders" KPI's delivery queue (draft/
+  // confirmed/partially_delivered) — was previously filtered to just
+  // 'partially_delivered', which hid the common case of a draft order still
+  // awaiting delivery.
+  const inDeliveryQ = useDeliveryQueue({ limit: 10 })
   const inDeliveryOrders = inDeliveryQ.data?.data ?? []
 
   const activityQ = useActivity(30)
@@ -252,7 +263,7 @@ export default function Dashboard() {
               ? <div className="kpi-value" style={{ fontSize: 13, color: 'var(--text3)' }}><i className="ti ti-lock" /> restricted</div>
               : <div className="kpi-value">{activeOrderCount}</div>}
             <div className="kpi-sub">
-              <span>{isForbidden(activeOrdersQ) ? 'not available for your role' : 'confirmed, awaiting delivery'}</span>
+              <span>{isForbidden(activeOrdersQ) ? 'not available for your role' : 'draft & awaiting delivery'}</span>
             </div>
           </div>
           <div className="kpi" style={{ animationDelay: '0.20s' }}>
@@ -279,51 +290,53 @@ export default function Dashboard() {
               <div className="card-title"><i className="ti ti-package" /> Raw stock — open lots</div>
               <button className="card-action" onClick={() => navigate('/warehouse')}>View all</button>
             </div>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Type / grade</th>
-                  <th>Remaining</th>
-                  <th>Cost/kg</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stockLotsQ.isLoading && [0, 1, 2, 3, 4].map(i => (
-                  <tr key={i}>
-                    <td><div className="skeleton" style={{ width: '80%', height: 13 }} /></td>
-                    <td><div className="skeleton" style={{ width: '60%', height: 13 }} /></td>
-                    <td><div className="skeleton" style={{ width: '40%', height: 13 }} /></td>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Type / grade</th>
+                    <th>Remaining</th>
+                    <th>Cost/kg</th>
                   </tr>
-                ))}
-                {!stockLotsQ.isLoading && (stockLotsQ.data?.data ?? []).slice(0, 5).map(lot => {
-                  const remaining = parseFloat(lot.kgRemaining)
-                  const received = parseFloat(lot.kgReceived)
-                  const pct = received > 0 ? Math.round((remaining / received) * 100) : 0
-                  const barCls = pct >= 60 ? 'bar-high' : pct >= 30 ? 'bar-mid' : 'bar-low'
-                  return (
-                    <tr key={lot.id}>
-                      <td>
-                        <div style={{ fontWeight: 500 }}>{lot.charcoalType}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text3)' }}>{lot.grade}</div>
-                      </td>
-                      <td>
-                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>{fmtKg(lot.kgRemaining)} kg</span>
-                        <div className="bar-track" style={{ marginTop: 5, width: 80 }}>
-                          <div className={`bar-fill ${barCls}`} style={{ width: `${pct}%` }} />
-                        </div>
-                      </td>
-                      <td style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{lot.costPerKg != null ? `$${parseFloat(lot.costPerKg).toFixed(2)}` : '—'}</td>
+                </thead>
+                <tbody>
+                  {stockLotsQ.isLoading && [0, 1, 2, 3, 4].map(i => (
+                    <tr key={i}>
+                      <td><div className="skeleton" style={{ width: '80%', height: 13 }} /></td>
+                      <td><div className="skeleton" style={{ width: '60%', height: 13 }} /></td>
+                      <td><div className="skeleton" style={{ width: '40%', height: 13 }} /></td>
                     </tr>
-                  )
-                })}
-                {isForbidden(stockLotsQ) && (
-                  <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}><i className="ti ti-lock" style={{ marginRight: 6 }} />Not available for your role</td></tr>
-                )}
-                {!stockLotsQ.isLoading && !isForbidden(stockLotsQ) && (stockLotsQ.data?.data ?? []).length === 0 && (
-                  <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}>No open lots</td></tr>
-                )}
-              </tbody>
-            </table>
+                  ))}
+                  {!stockLotsQ.isLoading && (stockLotsQ.data?.data ?? []).slice(0, 5).map(lot => {
+                    const remaining = parseFloat(lot.kgRemaining)
+                    const received = parseFloat(lot.kgReceived)
+                    const pct = received > 0 ? Math.round((remaining / received) * 100) : 0
+                    const barCls = pct >= 60 ? 'bar-high' : pct >= 30 ? 'bar-mid' : 'bar-low'
+                    return (
+                      <tr key={lot.id}>
+                        <td>
+                          <div style={{ fontWeight: 500 }}>{lot.charcoalType}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>{lot.grade}</div>
+                        </td>
+                        <td>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>{fmtKg(lot.kgRemaining)} kg</span>
+                          <div className="bar-track" style={{ marginTop: 5, width: 80 }}>
+                            <div className={`bar-fill ${barCls}`} style={{ width: `${pct}%` }} />
+                          </div>
+                        </td>
+                        <td style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{lot.costPerKg != null ? `$${parseFloat(lot.costPerKg).toFixed(2)}` : '—'}</td>
+                      </tr>
+                    )
+                  })}
+                  {isForbidden(stockLotsQ) && (
+                    <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}><i className="ti ti-lock" style={{ marginRight: 6 }} />Not available for your role</td></tr>
+                  )}
+                  {!stockLotsQ.isLoading && !isForbidden(stockLotsQ) && (stockLotsQ.data?.data ?? []).length === 0 && (
+                    <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--text3)', padding: '14px 0' }}>No open lots</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {/* Orders in delivery */}
@@ -343,6 +356,7 @@ export default function Dashboard() {
             )}
             {inDeliveryOrders.map(order => {
               const initials = order.client.name.trim().split(/\s+/).slice(0, 2).map((w: string) => w[0]).join('').toUpperCase()
+              const isPartial = order.status === 'partially_delivered'
               return (
                 <div className="delivery-row" key={order.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/orders/${order.id}`)}>
                   <div className="driver-avatar">{initials}</div>
@@ -350,7 +364,7 @@ export default function Dashboard() {
                     <div className="del-driver">{order.client.name}</div>
                     <div className="del-stops">{parseFloat(order.totalKgRequested).toLocaleString()} kg · {order.charcoalType}</div>
                   </div>
-                  <span className="badge badge-blue">In delivery</span>
+                  <span className={`badge ${isPartial ? 'badge-blue' : 'badge-amber'}`}>{isPartial ? 'Partially delivered' : 'Awaiting delivery'}</span>
                 </div>
               )
             })}
@@ -480,6 +494,26 @@ export default function Dashboard() {
                     <div className="pb-item"><div className="pb-label">Packaging</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.bagCost, { decimals: 0 })}</div></div>
                     <div className="pb-item"><div className="pb-label">Variance</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.varianceCost, { decimals: 0 })}</div></div>
                     <div className="pb-item"><div className="pb-label">Delivery</div><div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.deliveryCost, { decimals: 0 })}</div></div>
+                    <div className="pb-item">
+                      <div className="pb-label">
+                        Labor
+                        <i className="ti ti-info-circle info-icon" title="Worker piece-rate packing pay + other worker costs. Not part of COGS — deducted separately below in Net profit." />
+                      </div>
+                      <div className="pb-value red">{plQ.isLoading ? '—' : formatUsd(plQ.data?.laborCost, { decimals: 0 })}</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <div className="profit-period" style={{ marginBottom: 0 }}>
+                      Net Profit
+                      <i
+                        className="ti ti-info-circle info-icon"
+                        title="Gross profit − labor cost − general expenses − cash-handover expenses."
+                      />
+                    </div>
+                    <div className={`pb-value ${plQ.data && parseFloat(plQ.data.netProfit) < 0 ? 'red' : 'green'}`} style={{ fontSize: 16 }}>
+                      {plQ.isLoading ? '—' : formatUsd(plQ.data?.netProfit, { decimals: 0 })}
+                    </div>
                   </div>
 
                   <div className="section-divider" style={{ margin: 0 }} />
@@ -614,7 +648,7 @@ export default function Dashboard() {
           <div className="modal" style={{ width: 420, maxHeight: '80vh', overflowY: 'auto', position: 'absolute', top: 60, right: 24, left: 'auto', transform: 'none' }}>
             <div className="modal-head" style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>
               <div className="modal-title"><i className="ti ti-bell" style={{ fontSize: 15, marginRight: 6 }} />Notifications</div>
-              <button className="panel-close-btn" onClick={() => setNotifOpen(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setNotifOpen(false)}>✕</button>
             </div>
             <div className="modal-body" style={{ padding: 0 }}>
               {[
@@ -648,7 +682,7 @@ export default function Dashboard() {
                 <div className="modal-title"><i className="ti ti-activity" style={{ fontSize: 15, marginRight: 6 }} />Activity log</div>
                 <div className="modal-sub">{activityItems.length} recent events · auto-refreshes every 60 s</div>
               </div>
-              <button className="panel-close-btn" onClick={() => setLogsOpen(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setLogsOpen(false)}>✕</button>
             </div>
             <div style={{ overflowY: 'auto', flex: 1 }}>
               {activityQ.isLoading && (
@@ -674,7 +708,7 @@ export default function Dashboard() {
                 <div className="modal-title">Pay worker — {firstWorker.name}</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Total owed: <strong style={{ color: 'var(--accent2)' }}>{formatUsd(firstWorker.totalOwed, { decimals: 0 })}</strong></div>
               </div>
-              <button className="panel-close-btn" onClick={() => setPayOpen(false)}>✕</button>
+              <button className="panel-close-btn" aria-label="Close" onClick={() => setPayOpen(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-group">

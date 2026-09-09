@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ReportsService, DEFAULT_LOOKBACK_DAYS, buildDateFilter, buildDateFilterWithDefault } from './reports.service';
 import { ReportsController } from './reports.controller';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { ClientBalanceService } from '../clients/client-balance.service';
+import { StockExitsService } from '../stock-exits/stock-exits.service';
 import { RolesGuard } from '../auth/roles.guard';
 import { Reflector } from '@nestjs/core';
 
@@ -20,8 +21,16 @@ describe('ReportsService', () => {
     getExchangeRate: fn(),
   };
 
+  // Full Day Report audit, 2026-09 — getDailyReport() delegates to these two
+  // existing services rather than re-deriving their logic (see ReportsModule's
+  // own doc comment). Only the getDailyReport()-specific describe block below
+  // exercises them; every pre-existing test in this file never calls
+  // getDailyReport(), so these mocks are otherwise inert.
+  const mockClientBalanceService = { computeBalance: fn() };
+  const mockStockExitsService = { findAllGrouped: fn(), getOnAccountCount: fn() };
+
   const mockPrisma = {
-    invoice:              { findMany: fn(), aggregate: fn() },
+    invoice:              { findMany: fn(), aggregate: fn(), groupBy: fn() },
     stockExit:            { findMany: fn(), aggregate: fn() },
     bagPurchase:          { findMany: fn(), aggregate: fn() },
     packingSession:       { findMany: fn(), aggregate: fn(), count: fn() },
@@ -31,13 +40,17 @@ describe('ReportsService', () => {
     containerProductLine: { findMany: fn() },
     supplier:             { findUnique: fn() },
     supplierPayment:      { findMany: fn() },
-    client:               { findUnique: fn() },
-    payment:              { findMany: fn(), aggregate: fn() },
+    client:               { findUnique: fn(), findMany: fn() },
+    payment:              { findMany: fn(), aggregate: fn(), groupBy: fn() },
     worker:               { findUnique: fn() },
     workerPayment:        { findMany: fn(), aggregate: fn() },
-    workerCost:           { aggregate: fn() },
-    generalExpense:       { aggregate: fn() },
-    cashHandoverExpense:  { aggregate: fn() },
+    workerCost:           { findMany: fn(), aggregate: fn() },
+    generalExpense:       { findMany: fn(), aggregate: fn() },
+    cashHandoverExpense:  { findMany: fn(), aggregate: fn() },
+    cashHandover:         { findMany: fn() },
+    clientOrder:          { findMany: fn() },
+    shipment:             { findMany: fn() },
+    accountEntry:         { findMany: fn(), groupBy: fn() },
     packedStock:          { findMany: fn(), findUnique: fn(), update: fn() },
     stockAdjustment:      { create: fn() },
     user:                 { findUnique: fn() },
@@ -61,6 +74,8 @@ describe('ReportsService', () => {
         ReportsService,
         { provide: PrismaService,  useValue: mockPrisma   },
         { provide: SettingsService, useValue: mockSettings },
+        { provide: ClientBalanceService, useValue: mockClientBalanceService },
+        { provide: StockExitsService, useValue: mockStockExitsService },
       ],
     }).compile();
 
@@ -1136,6 +1151,99 @@ describe('ReportsService', () => {
       expect(summed.toFixed(2)).toBe(result.totalRevenue);
       expect(result.totalRevenue).toBe('175.00');
     });
+
+    // =======================================================================
+    // "Invalid time value" RangeError audit (2026-09) — root cause: an EMPTY
+    // STRING dateFrom/dateTo (`??` only catches null/undefined) was used
+    // literally as the day-loop's starting/ending date, and the first
+    // nextDateOnlyString('') call threw RangeError: Invalid time value
+    // before ever reaching a database query. CASE numbers reference the
+    // audit's own test matrix.
+    // =======================================================================
+    describe('date validation (RangeError regression)', () => {
+      it('CASE 1 — a valid YYYY-MM-DD dateFrom/dateTo range behaves exactly as before', async () => {
+        setupDailyRevenue([{ day: '2026-08-08', revenue: '42.00' }]);
+        const result = await service.getDailyRevenue({ dateFrom: '2026-08-08', dateTo: '2026-08-08' });
+        expect(result.data).toEqual([{ date: '2026-08-08', revenue: '42.00' }]);
+        expect(result.from).toBe('2026-08-08');
+        expect(result.to).toBe('2026-08-08');
+      });
+
+      it('CASE 2 — a malformed dateFrom throws a controlled BadRequestException, never a raw RangeError', async () => {
+        await expect(service.getDailyRevenue({ dateFrom: 'not-a-date', dateTo: '2026-08-08' }))
+          .rejects.toThrow(BadRequestException);
+      });
+
+      it('CASE 2b — a malformed dateTo throws a controlled BadRequestException', async () => {
+        await expect(service.getDailyRevenue({ dateFrom: '2026-08-01', dateTo: '08/08/2026' }))
+          .rejects.toThrow(BadRequestException);
+      });
+
+      it('CASE 3 — an EMPTY STRING dateFrom/dateTo (the exact reported trigger) is treated as "not provided", never as a literal date, and never throws RangeError', async () => {
+        setupDailyRevenue();
+        // Previously: startDay = '' (since '' ?? fallback still yields ''),
+        // then nextDateOnlyString('') threw RangeError: Invalid time value.
+        await expect(service.getDailyRevenue({ dateFrom: '', dateTo: '' })).resolves.not.toThrow();
+      });
+
+      it('CASE 3b — empty dateFrom with a real (not-in-the-past) dateTo resolves the start to TODAY, never a literal ""', async () => {
+        setupDailyRevenue();
+        // dateTo a few days out (margin for Beirut being up to a day ahead of
+        // UTC) so this never collides with the reversed-range guard below —
+        // this test is specifically about the empty-string normalization.
+        const dateTo = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+        const result = await service.getDailyRevenue({ dateFrom: '', dateTo });
+        expect(result.data.every(d => /^\d{4}-\d{2}-\d{2}$/.test(d.date))).toBe(true);
+        expect(result.data.some(d => d.date === '')).toBe(false);
+      });
+
+      it('an empty dateFrom combined with a dateTo already in the past resolves to an effectively-reversed range and is rejected — never a silent "today" default masking the caller\'s real intent, and never an infinite loop', async () => {
+        // Without the range guard, startDay would default to beirutDay(now)
+        // ("today") while endDay stays the caller's past date — the day-loop
+        // would then start AFTER its own end and never terminate.
+        await expect(service.getDailyRevenue({ dateFrom: '', dateTo: '2020-01-01' }))
+          .rejects.toThrow(BadRequestException);
+      });
+
+      it('CASE 4 — undefined/missing dateFrom and dateTo fall back to the existing default-lookback contract, unchanged', async () => {
+        setupDailyRevenue();
+        const result = await service.getDailyRevenue({});
+        expect(result.from).toBeNull();
+        expect(result.to).toBeNull();
+        expect(result.data.length).toBeGreaterThan(0);
+      });
+
+      it('CASE 5 — an invalid calendar date (2026-02-31) is rejected with a controlled validation error', async () => {
+        await expect(service.getDailyRevenue({ dateFrom: '2026-02-31', dateTo: '2026-03-05' }))
+          .rejects.toThrow(BadRequestException);
+      });
+
+      it('CASE 5b — an invalid month (2026-13-01) is rejected', async () => {
+        await expect(service.getDailyRevenue({ dateFrom: '2026-13-01', dateTo: '2026-13-05' }))
+          .rejects.toThrow(BadRequestException);
+      });
+
+      it('CASE 6 — valid month/day boundaries (Feb 28 non-leap, Dec 31 → Jan 1) still work correctly', async () => {
+        setupDailyRevenue();
+        const feb = await service.getDailyRevenue({ dateFrom: '2026-02-27', dateTo: '2026-02-28' });
+        expect(feb.data.map(d => d.date)).toEqual(['2026-02-27', '2026-02-28']);
+
+        setupDailyRevenue();
+        const yearEnd = await service.getDailyRevenue({ dateFrom: '2026-12-31', dateTo: '2027-01-01' });
+        expect(yearEnd.data.map(d => d.date)).toEqual(['2026-12-31', '2027-01-01']);
+      });
+
+      it('CASE 7 — an invalid date can never reach the day-loop\'s toISOString() call — the database is never queried for a rejected request', async () => {
+        await expect(service.getDailyRevenue({ dateFrom: 'garbage', dateTo: '2026-08-08' }))
+          .rejects.toThrow(BadRequestException);
+        expect(mockPrisma.$queryRaw).not.toHaveBeenCalled();
+      });
+
+      it('a reversed range (dateFrom after dateTo) is rejected rather than looping unboundedly', async () => {
+        await expect(service.getDailyRevenue({ dateFrom: '2026-08-10', dateTo: '2026-08-01' }))
+          .rejects.toThrow(BadRequestException);
+      });
+    });
   });
 
   // =========================================================================
@@ -1771,6 +1879,209 @@ describe('ReportsService', () => {
       expect(result.entries[0].displayId).toBe('INV-001');
       expect(result.entries[1].description).toBe('Cash Payment');
       expect(result.entries[1].displayId).toBe('PAY-001');
+    });
+
+    // =========================================================================
+    // Forensic audit (2026-08-31): "Statement of Account shows the wrong ID
+    // for orders" — the Statement previously exposed ONLY Invoice.displayId
+    // ("SI-xxxx") for an invoice entry, even when that invoice was raised
+    // FROM an order and the client/business user actually knows the sale by
+    // its Order reference ("SO-xxxx", shown on Orders.tsx/OrderDetail.tsx —
+    // the canonical, pre-existing Order reference; see also this file's own
+    // ClientDetail.tsx INVOICES-tab mapping, which already resolves the same
+    // orderDisplayById pattern for the same relationship). getClientLedger()
+    // now additionally resolves and exposes orderId/orderDisplayId via the
+    // invoice's own `orderId` FK → ClientOrder.displayId — never invented,
+    // never recomputed, never touching debit/credit/runningBalance/displayId.
+    // =========================================================================
+
+    it('CASE 1 — an order-sourced invoice entry carries the SAME Order reference the Order page shows, not the invoice number', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
+      const d = new Date('2026-08-20');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        {
+          id: 'inv-order-1', displayId: 'SI-0648', issuedAt: d, createdAt: d,
+          total: dec('500.00'), source: 'ORDER', lines: [], status: 'paid',
+          orderId: 'order-1', order: { displayId: 'SO-0168' },
+        },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-1', {});
+
+      // Break/prove: BEFORE this fix, getClientLedger() never selected
+      // orderId/order at all, so `orderDisplayId` would be `undefined` here
+      // and any consumer rendering `entry.orderDisplayId ?? entry.displayId`
+      // would silently fall back to 'SI-0648' — the wrong, invoice-internal
+      // reference — exactly the reported bug.
+      expect(result.entries[0].orderId).toBe('order-1');
+      expect(result.entries[0].orderDisplayId).toBe('SO-0168');
+      // The invoice's own reference must be untouched (back-compat / other consumers).
+      expect(result.entries[0].displayId).toBe('SI-0648');
+      // Accounting fields never touched by this fix.
+      expect(result.entries[0].debit).toBe('500.00');
+      expect(result.entries[0].runningBalance).toBe('500.00');
+    });
+
+    it('CASE 2 — two different orders with similar amounts/dates resolve to two DIFFERENT, correct Order references', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-2', currency: 'USD' });
+      const d = new Date('2026-08-20');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        { id: 'inv-a', displayId: 'SI-0100', issuedAt: d, createdAt: d, total: dec('300.00'), source: 'ORDER', lines: [], status: 'paid', orderId: 'order-a', order: { displayId: 'SO-0050' } },
+        { id: 'inv-b', displayId: 'SI-0101', issuedAt: d, createdAt: d, total: dec('300.00'), source: 'ORDER', lines: [], status: 'paid', orderId: 'order-b', order: { displayId: 'SO-0051' } },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-2', {});
+
+      expect(result.entries[0].orderDisplayId).toBe('SO-0050');
+      expect(result.entries[1].orderDisplayId).toBe('SO-0051');
+      expect(result.entries[0].orderDisplayId).not.toBe(result.entries[1].orderDisplayId);
+    });
+
+    it('CASE 3 — order → invoice: the entry never conflates the invoice\'s internal displayId with the order reference field', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-3', currency: 'USD' });
+      const d = new Date('2026-08-20');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        { id: 'inv-c', displayId: 'SI-0648', issuedAt: d, createdAt: d, total: dec('500.00'), source: 'ORDER', lines: [], status: 'paid', orderId: 'order-c', order: { displayId: 'SO-0168' } },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-3', {});
+
+      expect(result.entries[0].orderDisplayId).not.toBe(result.entries[0].displayId);
+    });
+
+    it('CASE 5 — a non-order (warehouse-sale) invoice never fabricates an order reference', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-5', currency: 'USD' });
+      const d = new Date('2026-08-20');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        { id: 'inv-ws', displayId: 'SI-0900', issuedAt: d, createdAt: d, total: dec('80.00'), source: 'WAREHOUSE_SALE', lines: [], status: 'paid', orderId: null, order: null },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-5', {});
+
+      expect(result.entries[0].orderId).toBeNull();
+      expect(result.entries[0].orderDisplayId).toBeNull();
+      expect(result.entries[0].displayId).toBe('SI-0900'); // unchanged — invoice reference stands alone
+    });
+
+    it('CASE 6 — payment entries never carry an orderId/orderDisplayId field (order resolution is invoice-only)', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-6', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([
+        { id: 'pmt-6', displayId: 'RV-0001', date: new Date('2026-08-20'), amount: dec('50.00'), method: 'cash' },
+      ]);
+
+      const result = await service.getClientLedger('c-6', {});
+
+      expect(result.entries[0]).not.toHaveProperty('orderId');
+      expect(result.entries[0]).not.toHaveProperty('orderDisplayId');
+    });
+
+    // =========================================================================
+    // Multiple-locations audit (2026-08-31): "Client Multiple Locations with
+    // ONE shared client balance" — the Statement description gains the
+    // location name, appended to the EXISTING description string, never a
+    // separate field/column. CASE numbers reference the task's own matrix.
+    // =========================================================================
+
+    it('CASE 7 — an order-sourced invoice for Location A includes "Location A" inside the existing description, not a separate field', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-8', currency: 'USD' });
+      const d = new Date('2026-08-20');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        {
+          id: 'inv-loc-a', displayId: 'SI-1001', issuedAt: d, createdAt: d,
+          total: dec('100.00'), source: 'ORDER', lines: [{ saleUnit: 'BAG', qty: 10, bagTypeName: 'Standard' }], status: 'paid',
+          orderId: 'order-a', order: { displayId: 'SO-0100', location: { name: 'Hamra Branch' } },
+        },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-8', {});
+
+      expect(result.entries[0].description).toBe('Order Sale · 10 × Standard - Hamra Branch');
+      // Location is inside the description string — never a sibling field.
+      expect(result.entries[0]).not.toHaveProperty('location');
+      expect(result.entries[0]).not.toHaveProperty('locationName');
+    });
+
+    it('CASE 8 — a DIFFERENT invoice for Location B includes "Location B" in its own description', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-8', currency: 'USD' });
+      const d = new Date('2026-08-21');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        {
+          id: 'inv-loc-b', displayId: 'SI-1002', issuedAt: d, createdAt: d,
+          total: dec('80.00'), source: 'ORDER', lines: [{ saleUnit: 'BAG', qty: 8, bagTypeName: 'Standard' }], status: 'paid',
+          orderId: 'order-b', order: { displayId: 'SO-0101', location: { name: 'Jounieh Branch' } },
+        },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-8', {});
+
+      expect(result.entries[0].description).toBe('Order Sale · 8 × Standard - Jounieh Branch');
+    });
+
+    it('CASE 9 — the ledger entry shape never gains a separate location column/field, for a location OR no-location invoice alike', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-9', currency: 'USD' });
+      const d = new Date('2026-08-22');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        { id: 'inv-with-loc', displayId: 'SI-1003', issuedAt: d, createdAt: d, total: dec('50.00'), source: 'ORDER', lines: [], status: 'paid', orderId: 'order-c', order: { displayId: 'SO-0102', location: { name: 'Batroun Branch' } } },
+        { id: 'inv-no-loc', displayId: 'SI-1004', issuedAt: d, createdAt: d, total: dec('30.00'), source: 'ORDER', lines: [], status: 'paid', orderId: 'order-d', order: { displayId: 'SO-0103', location: null } },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-9', {});
+
+      const expectedKeys = ['date', 'type', 'reference', 'displayId', 'description', 'debit', 'credit', 'runningBalance', 'status', 'orderId', 'orderDisplayId'];
+      expect(Object.keys(result.entries[0]).sort()).toEqual([...expectedKeys].sort());
+      expect(Object.keys(result.entries[1]).sort()).toEqual([...expectedKeys].sort());
+    });
+
+    it('a WAREHOUSE_SALE invoice never gains a location in its description — structurally impossible (no orderId at all)', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-10', currency: 'USD' });
+      const d = new Date('2026-08-23');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        { id: 'inv-ws-loc', displayId: 'SI-1005', issuedAt: d, createdAt: d, total: dec('40.00'), source: 'WAREHOUSE_SALE', lines: [], status: 'paid', orderId: null, order: null },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-10', {});
+
+      expect(result.entries[0].description).toBe('Warehouse Sale');
+      expect(result.entries[0].description).not.toContain(' - ');
+    });
+
+    it('CASE 14 — a historical order-sourced invoice with NO location keeps its existing description unchanged, never a fabricated location', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-11', currency: 'USD' });
+      const d = new Date('2026-08-24');
+      mockPrisma.invoice.findMany.mockResolvedValue([
+        {
+          id: 'inv-hist', displayId: 'SI-1006', issuedAt: d, createdAt: d,
+          total: dec('60.00'), source: 'ORDER', lines: [{ saleUnit: 'BAG', qty: 6, bagTypeName: 'Standard' }], status: 'paid',
+          orderId: 'order-hist', order: { displayId: 'SO-0104', location: null },
+        },
+      ]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('c-11', {});
+
+      expect(result.entries[0].description).toBe('Order Sale · 6 × Standard');
+      expect(result.entries[0].description).not.toContain(' - ');
+    });
+
+    it('resolves the order reference via the invoice\'s own orderId FK — one join, no separate/page-capped order query', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-7', currency: 'USD' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      await service.getClientLedger('c-7', {});
+
+      const args = mockPrisma.invoice.findMany.mock.calls[0][0];
+      expect(args.select.orderId).toBe(true);
+      expect(args.select.order).toEqual({ select: { displayId: true, location: { select: { name: true } } } });
     });
 
     it('P5: description is "Warehouse Sale" when source is WAREHOUSE_SALE', async () => {
@@ -2684,6 +2995,324 @@ describe('ReportsService', () => {
     });
   });
 
+  // ===========================================================================
+  // getDailyReport() — Full Day Report (forensic audit, 2026-09). Read-only
+  // end-of-day summary; every figure is read from an existing authoritative
+  // source. This describe block covers: empty day, read-only proof, sale
+  // dedup delegation, the confirmed general-expense strict-date decision, and
+  // client-receivable active-only + roll-forward. Real-Postgres integration
+  // tests (test/daily-report.integration-spec.ts) cover the cross-service
+  // accounting/reconciliation cases per the audit's own test-strategy section.
+  // ===========================================================================
+  describe('getDailyReport()', () => {
+    const REPORT_DATE = '2026-08-31';
+
+    function setupEmptyDay() {
+      mockStockExitsService.findAllGrouped.mockResolvedValue({ data: [], total: 0, page: 1, limit: 5000 });
+      mockStockExitsService.getOnAccountCount.mockResolvedValue({ date: REPORT_DATE, onAccountCount: 0 });
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+      mockPrisma.payment.groupBy.mockResolvedValue([]);
+      mockPrisma.cashHandoverExpense.findMany.mockResolvedValue([]);
+      mockPrisma.generalExpense.findMany.mockResolvedValue([]);
+      mockPrisma.workerCost.findMany.mockResolvedValue([]);
+      mockPrisma.cashHandover.findMany.mockResolvedValue([]);
+      mockPrisma.clientOrder.findMany.mockResolvedValue([]);
+      mockPrisma.shipment.findMany.mockResolvedValue([]);
+      mockPrisma.stockExit.findMany.mockResolvedValue([]);
+      mockPrisma.stockLot.findMany.mockResolvedValue([]);
+      mockPrisma.packingSession.findMany.mockResolvedValue([]);
+      mockPrisma.accountEntry.findMany.mockResolvedValue([]);
+      mockPrisma.accountEntry.groupBy.mockResolvedValue([]);
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.invoice.groupBy.mockResolvedValue([]);
+      mockPrisma.client.findMany.mockResolvedValue([]);
+    }
+
+    it('rejects an invalid date string without querying anything', async () => {
+      await expect(service.getDailyReport('not-a-date')).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'VALIDATION_ERROR' }),
+      });
+      expect(mockPrisma.payment.findMany).not.toHaveBeenCalled();
+      expect(mockStockExitsService.findAllGrouped).not.toHaveBeenCalled();
+    });
+
+    it('empty day: every section is empty, summary totals are zero', async () => {
+      setupEmptyDay();
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.date).toBe(REPORT_DATE);
+      expect(result.sales).toEqual([]);
+      expect(result.payments).toEqual([]);
+      expect(result.expenses.cashHandoverExpenses).toEqual([]);
+      expect(result.expenses.generalExpenses).toEqual([]);
+      expect(result.expenses.workerCosts).toEqual([]);
+      expect(result.cashHandovers).toEqual([]);
+      expect(result.orders.created).toEqual([]);
+      expect(result.orders.delivered).toEqual([]);
+      expect(result.clientReceivables).toEqual([]);
+      expect(result.employeeSummary).toEqual([]);
+      expect(result.exceptions).toEqual([]);
+      expect(result.summary.totalSales).toBe('0.00');
+      expect(result.summary.totalCashCollected).toBe('0.00');
+    });
+
+    it('READ-ONLY PROOF: generating a report never calls any write-capable Prisma method (none exist on the mock — a stray call would throw, not silently no-op)', async () => {
+      setupEmptyDay();
+
+      await service.getDailyReport(REPORT_DATE);
+
+      // $transaction IS defined on the mock (used elsewhere in this file) —
+      // explicitly confirm getDailyReport() never opens one (nothing to wrap,
+      // since it never writes).
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      // Every model getDailyReport() actually touches has NO write method
+      // defined on this mock at all (cashHandover/clientOrder/accountEntry
+      // have no create/update/upsert/delete keys whatsoever) — if the
+      // implementation ever called one, the awaited Promise.all above would
+      // have rejected with "... is not a function" and this test would have
+      // failed before reaching this line, rather than silently passing.
+      expect((mockPrisma.cashHandover as Record<string, unknown>).create).toBeUndefined();
+      expect((mockPrisma.clientOrder as Record<string, unknown>).create).toBeUndefined();
+      expect((mockPrisma.accountEntry as Record<string, unknown>).create).toBeUndefined();
+      expect((mockPrisma.cashHandoverExpense as Record<string, unknown>).create).toBeUndefined();
+      expect((mockPrisma.generalExpense as Record<string, unknown>).create).toBeUndefined();
+      expect((mockPrisma.workerCost as Record<string, unknown>).create).toBeUndefined();
+    });
+
+    it('sales section reads Invoice directly (accrual: issuedAt in range, status not in draft/cancelled) — an ORDER-sourced invoice counts even though its StockExit rows carry no invoiceId', async () => {
+      setupEmptyDay();
+      // Regression fixture: an ORDER invoice with ZERO linked StockExit rows —
+      // StockExit.invoiceId is only ever set by WalkInSalesService (see that
+      // field's schema doc comment), so an ORDER sale must never depend on it.
+      mockPrisma.invoice.findMany.mockImplementation(async (args: any) => {
+        if (args.distinct) return []; // getDailyClientReceivables' active-client probe
+        return [{
+          id: 'inv-order-1', displayId: 'SI-0977', orderId: 'order-1', source: 'ORDER',
+          issuedAt: new Date(REPORT_DATE), clientId: 'client-1', client: { id: 'client-1', name: 'bendi skandar' },
+          currency: 'USD', total: dec('125.00'), paidAmount: dec('0.00'), status: 'issued',
+          lines: [{ saleUnit: 'BAG', qty: 250, bagTypeName: '1.8 bag jezor', pricePerBag: '0.50', lineTotal: '125.00' }],
+          order: { location: null },
+        }];
+      });
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.sales).toHaveLength(1);
+      expect(result.sales[0]).toMatchObject({
+        id: 'inv-order-1', invoiceId: 'inv-order-1', source: 'ORDER', saleTotal: '125.00', remaining: '125.00',
+      });
+      expect(result.sales[0].description).toContain('250');
+      expect(result.summary.totalSales).toBe('125.00');
+      expect(result.summary.saleCount).toBe(1);
+      // Never touches StockExitsService.findAllGrouped() for this — an ORDER
+      // invoice's own total is authoritative on its own, no StockExit join needed.
+      expect(mockStockExitsService.findAllGrouped).not.toHaveBeenCalled();
+    });
+
+    it('sales section includes an anonymous (no client, no invoice) walk-in exit as its own sale, priced by StockExit.amount', async () => {
+      setupEmptyDay();
+      mockPrisma.stockExit.findMany.mockImplementation(async (args: any) => {
+        if (args.where?.exitType === 'walk_in' && args.where?.clientId === null) {
+          return [{
+            id: 'exit-anon-1', date: new Date(REPORT_DATE), amount: dec('40.00'), currency: 'USD',
+            recipient: 'Walk-in customer', quantity: 5, kgQuantity: null,
+            bagType: { name: '5kg Bag' }, lot: null,
+          }];
+        }
+        return [];
+      });
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.sales).toHaveLength(1);
+      expect(result.sales[0]).toMatchObject({ id: 'exit-anon-1', invoiceId: null, source: 'ANONYMOUS', saleTotal: '40.00', client: null });
+      expect(result.summary.totalSales).toBe('40.00');
+    });
+
+    it('CASE — general expenses use a STRICT single-day filter, never the recurring-forward semantics (confirmed business decision, Phase 1 §21.1)', async () => {
+      setupEmptyDay();
+      const rentRow = { id: 'ge-1', description: 'Rent', amount: dec('500.00'), isRecurring: true, category: 'rent', notes: null, date: new Date(REPORT_DATE) };
+      mockPrisma.generalExpense.findMany.mockResolvedValue([rentRow]);
+
+      await service.getDailyReport(REPORT_DATE);
+
+      // The call must be a plain date-range filter on `date` — never routed
+      // through buildGeneralExpenseWhere()'s isRecurring OR-branch (which
+      // would have no upper-bounded, single-field `date` where clause).
+      const call = mockPrisma.generalExpense.findMany.mock.calls[0][0];
+      expect(call.where).toHaveProperty('date');
+      expect(call.where).not.toHaveProperty('OR');
+      expect(call.where).not.toHaveProperty('isRecurring');
+    });
+
+    it('CASE — a recurring GeneralExpense dated on an EARLIER day never leaks into a LATER day\'s report (proves the strict-date decision end-to-end, not just the query shape)', async () => {
+      setupEmptyDay();
+      // Mock behaves like the real DB would under a strict `date = reportDate`
+      // filter: a row dated 2026-08-01 never matches a query for 2026-08-31,
+      // recurring or not.
+      mockPrisma.generalExpense.findMany.mockImplementation(async () => []);
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.expenses.generalExpenses).toEqual([]);
+    });
+
+    it('CASE — worker labor cost uses WorkerCost (accrued), never WorkerPayment (settlement) — matches getProfitLoss()\'s own exclusion', async () => {
+      setupEmptyDay();
+      mockPrisma.workerCost.findMany.mockResolvedValue([
+        { id: 'wc-1', amount: dec('80.00'), category: 'daily_wage', notes: null, worker: { id: 'w-1', name: 'Ali' } },
+      ]);
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.expenses.workerCosts).toHaveLength(1);
+      expect(result.summary.totalWorkerCost).toBe('80.00');
+      // workerPayment is never even present on mockPrisma — if the
+      // implementation queried it, this whole test would throw.
+      expect((mockPrisma as any).workerPayment.findMany).not.toHaveBeenCalled();
+    });
+
+    it('CASE — cash handover settled amount includes expenses (handedAmt + Σ expenses), matching CashHandoversService.create()\'s own formula', async () => {
+      setupEmptyDay();
+      mockPrisma.cashHandover.findMany.mockResolvedValue([{
+        id: 'ch-1', receiverId: 'u-1', receiverName: 'Marie',
+        receiver: { id: 'u-1', name: 'Marie' },
+        expectedAmt: dec('500.00'), handedAmt: dec('460.00'), difference: dec('-40.00'), notes: null,
+        expenses: [{ id: 'che-1', amount: dec('40.00'), description: 'Fuel', category: { id: 'cat-1', name: 'Fuel' } }],
+      }]);
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.cashHandovers[0].settledAmount).toBe('500.00');
+      expect(result.summary.totalHandedOver).toBe('500.00');
+    });
+
+    it('CASE — a non-zero cash handover difference is surfaced as an exception', async () => {
+      setupEmptyDay();
+      mockPrisma.cashHandover.findMany.mockResolvedValue([{
+        id: 'ch-1', receiverId: 'u-1', receiverName: 'Marie',
+        receiver: { id: 'u-1', name: 'Marie' },
+        expectedAmt: dec('500.00'), handedAmt: dec('450.00'), difference: dec('-50.00'), notes: null,
+        expenses: [],
+      }]);
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.exceptions).toContainEqual(expect.objectContaining({ type: 'cash_handover_difference', referenceId: 'ch-1' }));
+    });
+
+    it('CASE — an invoice cancelled today (Invoice.updatedAt is the only day signal — no dedicated cancelledAt column) is surfaced as an exception, never as a sale', async () => {
+      setupEmptyDay();
+      mockPrisma.invoice.findMany.mockImplementation(async (args: any) => {
+        if (args.where?.status === 'cancelled') {
+          return [{ id: 'inv-cancelled-1', displayId: 'SI-0999', total: dec('75.00'), client: { name: 'Test Client' } }];
+        }
+        return [];
+      });
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.exceptions).toContainEqual(expect.objectContaining({ type: 'invoice_cancelled', referenceId: 'inv-cancelled-1' }));
+      expect(result.sales).toEqual([]);
+    });
+
+    it('CASE — a shipment returned today (Shipment.updatedAt is the only day signal — no dedicated returnedAt column) is surfaced as an exception, never as a reversed invoice', async () => {
+      setupEmptyDay();
+      mockPrisma.shipment.findMany.mockResolvedValue([{
+        id: 'ship-1', order: { id: 'order-9', displayId: 'SO-0009', client: { name: 'Test Client' } },
+      }]);
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.exceptions).toContainEqual(expect.objectContaining({ type: 'shipment_returned', referenceId: 'order-9' }));
+    });
+
+    it('CASE — client receivables: only clients with activity on the report date appear (confirmed business decision, Phase 1 §21.2)', async () => {
+      setupEmptyDay();
+      mockPrisma.invoice.findMany.mockImplementation(async (args: any) => {
+        // distinct-clientId call (getDailyClientReceivables) vs. unpaid-invoice
+        // call (getDailyExceptions) — distinguish by the `distinct` option.
+        if (args.distinct) return [{ clientId: 'client-active' }];
+        return [];
+      });
+      mockPrisma.invoice.groupBy.mockResolvedValue([{ clientId: 'client-active', _sum: { total: dec('300.00') } }]);
+      mockPrisma.payment.groupBy.mockResolvedValue([{ clientId: 'client-active', _sum: { amount: dec('100.00') } }]);
+      mockPrisma.client.findMany.mockResolvedValue([{ id: 'client-active', name: 'Active Client', currency: 'USD' }]);
+      mockClientBalanceService.computeBalance
+        .mockResolvedValueOnce({ toFixed: () => '200.00' } as any)  // opening
+        .mockResolvedValueOnce({ toFixed: () => '400.00' } as any); // closing
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.clientReceivables).toEqual([{
+        clientId: 'client-active', clientName: 'Active Client', currency: 'USD',
+        openingBalance: '200.00', todaysCharges: '300.00', todaysPayments: '100.00', closingBalance: '400.00',
+      }]);
+      // Never queried the full client table — only the active set.
+      expect(mockPrisma.client.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: { in: ['client-active'] } } }),
+      );
+    });
+
+    it('CASE — client receivables: opening balance is computed "as of end of the PREVIOUS day", closing "as of end of THIS day" — both via ClientBalanceService.computeBalance()', async () => {
+      setupEmptyDay();
+      mockPrisma.invoice.findMany.mockImplementation(async (args: any) => (args.distinct ? [{ clientId: 'c-1' }] : []));
+      mockPrisma.client.findMany.mockResolvedValue([{ id: 'c-1', name: 'C', currency: 'USD' }]);
+      mockClientBalanceService.computeBalance.mockResolvedValue({ toFixed: () => '0.00' } as any);
+
+      await service.getDailyReport(REPORT_DATE);
+
+      expect(mockClientBalanceService.computeBalance).toHaveBeenCalledTimes(2);
+      const [openingCall, closingCall] = mockClientBalanceService.computeBalance.mock.calls;
+      const openingAsOf = openingCall[2] as { lte: Date; businessLt: Date };
+      const closingAsOf = closingCall[2] as { lte: Date; businessLt: Date };
+      // The opening cutoff must be strictly earlier than the closing cutoff —
+      // opening excludes the report day's own activity, closing includes it.
+      expect(openingAsOf.businessLt.getTime()).toBeLessThan(closingAsOf.businessLt.getTime());
+      expect(openingAsOf.lte.getTime()).toBeLessThan(closingAsOf.lte.getTime());
+    });
+
+    it('CASE — employee summary is built from AccountEntry only, never the live UserAccount.balance column', async () => {
+      setupEmptyDay();
+      mockPrisma.accountEntry.findMany.mockResolvedValue([
+        { accountId: 'acc-1', amount: dec('100.00'), type: 'payment_received', account: { userId: 'u-1', user: { id: 'u-1', name: 'Marie' } } },
+        { accountId: 'acc-1', amount: dec('-40.00'), type: 'handover', account: { userId: 'u-1', user: { id: 'u-1', name: 'Marie' } } },
+      ]);
+      mockPrisma.accountEntry.groupBy.mockResolvedValue([{ accountId: 'acc-1', _sum: { amount: dec('260.00') } }]);
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.employeeSummary).toEqual([{
+        receiver: { id: 'u-1', name: 'Marie' },
+        receivedToday: '100.00', handedOverToday: '40.00', outstandingAsOfEndOfDay: '260.00',
+      }]);
+      // outstandingAsOfEndOfDay comes from the cumulative accountEntry.groupBy
+      // query (date <= reportDate), never a live UserAccount read — no
+      // `userAccount` model even exists on this mock.
+      expect((mockPrisma as any).userAccount).toBeUndefined();
+    });
+
+    it('CASE — a delivered order (via the StockExit exitType=order proxy) with no invoice yet is flagged as an exception', async () => {
+      setupEmptyDay();
+      mockPrisma.stockExit.findMany.mockImplementation(async (args: any) => {
+        if (args.where?.exitType === 'order') {
+          return [{ orderId: 'order-1', order: { id: 'order-1', displayId: 'SO-0001', status: 'delivered', client: { id: 'c-1', name: 'C' }, location: null } }];
+        }
+        return [];
+      });
+      mockPrisma.invoice.findMany.mockImplementation(async (args: any) => {
+        if (args.distinct) return [];
+        if (args.where?.orderId) return []; // no invoice exists for order-1
+        return [];
+      });
+
+      const result = await service.getDailyReport(REPORT_DATE);
+
+      expect(result.orders.delivered).toEqual([{ id: 'order-1', displayId: 'SO-0001', status: 'delivered', client: { id: 'c-1', name: 'C' }, location: null }]);
+      expect(result.exceptions).toContainEqual(expect.objectContaining({ type: 'delivered_without_invoice', referenceId: 'order-1' }));
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2702,6 +3331,7 @@ describe('ReportsController — role enforcement', () => {
     getClientLedger:     fn(),
     getPhysicalCount:    fn(),
     submitPhysicalCount: fn(),
+    getDailyReport:      fn(),
   };
 
   beforeEach(async () => {
@@ -2747,5 +3377,15 @@ describe('ReportsController — role enforcement', () => {
   });
   it('stock-value: accountant → passes', () => {
     expect(rolesGuard.canActivate(mockContext('accountant', 'getStockValue'))).toBe(true);
+  });
+
+  it('daily report: accountant → ForbiddenException (owner-only, same tier as profit-loss/daily-revenue)', () => {
+    expect(() => rolesGuard.canActivate(mockContext('accountant', 'getDailyReport'))).toThrow(ForbiddenException);
+  });
+  it('daily report: sales_rep → ForbiddenException', () => {
+    expect(() => rolesGuard.canActivate(mockContext('sales_rep', 'getDailyReport'))).toThrow(ForbiddenException);
+  });
+  it('daily report: owner → passes', () => {
+    expect(rolesGuard.canActivate(mockContext('owner', 'getDailyReport'))).toBe(true);
   });
 });

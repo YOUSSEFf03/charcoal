@@ -47,7 +47,7 @@ export default function OrderDetail() {
   if (orderQ.isLoading) {
     return (
       <>
-        <Topbar title="Order" />
+        <Topbar title="Order" back={{ label: 'Orders', to: '/orders' }} />
         <div className="content">
           <div className="skeleton" style={{ width: '40%', height: 28, marginBottom: 16 }} />
           <div className="skeleton" style={{ width: '100%', height: 120, marginBottom: 14 }} />
@@ -59,7 +59,7 @@ export default function OrderDetail() {
   if (orderQ.isError || !order) {
     return (
       <>
-        <Topbar title="Order" />
+        <Topbar title="Order" back={{ label: 'Orders', to: '/orders' }} />
         <div className="content">
           <div className="empty">
             Failed to load order.
@@ -88,7 +88,10 @@ export default function OrderDetail() {
 
   return (
     <>
-      <Topbar title={orderDisplay}>
+      <Topbar title={orderDisplay} back={{ label: 'Orders', to: '/orders' }}>
+        <a className="btn" href={`/orders/${order.id}/delivery-receipt`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+          <i className="ti ti-file-invoice" style={{ fontSize: 15 }} /> Print Delivery Receipt
+        </a>
         {invoice && (
           <a className="btn" href={`/invoice/${invoice.id}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
             <i className="ti ti-printer" style={{ fontSize: 15 }} /> Print invoice
@@ -150,10 +153,6 @@ export default function OrderDetail() {
         <div className="page-header">
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <button className="back-link" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }} onClick={() => navigate('/orders')}>
-                <i className="ti ti-chevron-left" /> Orders
-              </button>
-              <span style={{ color: 'var(--text3)' }}>·</span>
               <span className={`badge ${statusMeta.cls}`}>{statusMeta.label}</span>
             </div>
             <h1 style={{ fontSize: 22, fontWeight: 600, letterSpacing: -0.5 }} title={order.id}>{orderDisplay} · {order.client.name}</h1>
@@ -163,6 +162,10 @@ export default function OrderDetail() {
               <span className="meta-row"><i className="ti ti-currency-dollar" /> {order.currency}</span>
               <span className="meta-row"><i className="ti ti-package" /> {order.charcoalType} · {order.grade}{order.supplierName ? ` · ${order.supplierName}` : ''}</span>
               {order.driver && <span className="meta-row"><i className="ti ti-user" /> {order.driver.name}</span>}
+              {/* Multiple-locations audit, 2026-08-31 — which branch this
+                  order/delivery is for; null for a normal single-location
+                  client or a historical order (never fabricated). */}
+              {order.location && <span className="meta-row"><i className="ti ti-map-pin" /> {order.location.name}</span>}
             </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, minWidth: 300 }}>

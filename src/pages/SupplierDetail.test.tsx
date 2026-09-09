@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import type { SupplierDetail as SupplierDetailType, SupplierLedger } from '../types/api'
 
@@ -11,10 +11,26 @@ import type { SupplierDetail as SupplierDetailType, SupplierLedger } from '../ty
 // Topbar (Clerk auth) and every data hook, so these tests exercise the
 // Supplier Statement's own date-filter / export-column-selection contract
 // without a real API, QueryClient, or Clerk session.
+//
+// The Topbar mock still resolves `back` the same way the real component does
+// (string → navigate, function → call directly) so the P0 navigation fix —
+// Supplier detail must expose a real way back to /suppliers, and Statement
+// must return to the detail sub-view, not the list — stays covered even
+// though the rest of Topbar's chrome is stubbed out.
 // ---------------------------------------------------------------------------
 
 vi.mock('../components/layout/Topbar', () => ({
-  default: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  default: ({ back, children }: { title?: string; back?: { label: string; to: string | (() => void) }; children?: ReactNode }) => {
+    const navigate = useNavigate()
+    return (
+      <div>
+        {back && (
+          <button onClick={() => (typeof back.to === 'function' ? back.to() : navigate(back.to))}>{back.label}</button>
+        )}
+        {children}
+      </div>
+    )
+  },
 }))
 
 const mockUseSupplierLedger = vi.fn()
@@ -88,6 +104,7 @@ function renderSupplierDetail() {
   return render(
     <MemoryRouter initialEntries={['/suppliers/sup-1']}>
       <Routes>
+        <Route path="/suppliers" element={<div>Suppliers list page</div>} />
         <Route path="/suppliers/:id" element={<SupplierDetail />} />
       </Routes>
     </MemoryRouter>,
@@ -124,16 +141,74 @@ beforeEach(() => {
   })
 })
 
+function toDateOnlyString(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+describe('SupplierDetail — back navigation (P0 fix: detail view had no way back to /suppliers)', () => {
+  it('the primary detail view exposes a working back link to /suppliers', async () => {
+    const user = userEvent.setup()
+    renderSupplierDetail()
+    await user.click(screen.getByText('Back to suppliers'))
+    expect(screen.getByText('Suppliers list page')).toBeInTheDocument()
+  })
+
+  it('Statement of account returns to the supplier detail sub-view, not the suppliers list', async () => {
+    const { user } = await openStatementView()
+    expect(screen.getByText('Statement of account')).toBeInTheDocument()
+
+    await user.click(screen.getByText('Back to supplier'))
+    // Back in the detail sub-view: the statement-only "Statement of account"
+    // trigger button is showing again, and we never navigated to the list.
+    expect(screen.getByText('Statement of account')).toBeInTheDocument()
+    expect(screen.queryByText('Suppliers list page')).not.toBeInTheDocument()
+  })
+})
+
 describe('SupplierDetail — Statement of account: date filtering', () => {
-  it('sends no dateFrom/dateTo by default', async () => {
+  it('defaults to the CURRENT calendar month, not "All time" or unbounded', async () => {
     await openStatementView()
+    const now = new Date()
     await waitFor(() => {
-      expect(mockUseSupplierLedger).toHaveBeenCalledWith('sup-1', { dateFrom: undefined, dateTo: undefined })
+      expect(mockUseSupplierLedger).toHaveBeenCalledWith('sup-1', {
+        dateFrom: toDateOnlyString(new Date(now.getFullYear(), now.getMonth(), 1)),
+        dateTo:   toDateOnlyString(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+      })
     })
   })
 
-  it('typing a From date passes dateFrom while leaving dateTo undefined', async () => {
+  it('Previous/Next month move the requested range by one calendar month', async () => {
+    const { user } = await openStatementView()
+    const now = new Date()
+
+    await user.click(screen.getByTitle('Previous month'))
+    await waitFor(() => {
+      expect(mockUseSupplierLedger).toHaveBeenLastCalledWith('sup-1', {
+        dateFrom: toDateOnlyString(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+        dateTo:   toDateOnlyString(new Date(now.getFullYear(), now.getMonth(), 0)),
+      })
+    })
+
+    await user.click(screen.getByTitle('Next month'))
+    await waitFor(() => {
+      expect(mockUseSupplierLedger).toHaveBeenLastCalledWith('sup-1', {
+        dateFrom: toDateOnlyString(new Date(now.getFullYear(), now.getMonth(), 1)),
+        dateTo:   toDateOnlyString(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+      })
+    })
+  })
+
+  it('"All time" sends no dateFrom/dateTo', async () => {
+    const { user } = await openStatementView()
+    await user.click(screen.getByText('All time'))
+    await waitFor(() => {
+      expect(mockUseSupplierLedger).toHaveBeenLastCalledWith('sup-1', { dateFrom: undefined, dateTo: undefined })
+    })
+  })
+
+  it('"Custom" reveals From/To inputs — typing a From date passes dateFrom while leaving dateTo undefined', async () => {
     const { user, container } = await openStatementView()
+    await user.click(screen.getByText('Custom'))
     const [fromInput] = dateInputs(container)
     await user.type(fromInput, '2026-01-01')
 
@@ -142,8 +217,9 @@ describe('SupplierDetail — Statement of account: date filtering', () => {
     })
   })
 
-  it('a full date range passes both dateFrom and dateTo', async () => {
+  it('a full Custom date range passes both dateFrom and dateTo', async () => {
     const { user, container } = await openStatementView()
+    await user.click(screen.getByText('Custom'))
     const [fromInput, toInput] = dateInputs(container)
     await user.type(fromInput, '2026-01-01')
     await user.type(toInput, '2026-01-31')

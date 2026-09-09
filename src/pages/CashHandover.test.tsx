@@ -26,12 +26,27 @@ vi.mock('../hooks/useWarehouse', () => ({
 }))
 
 const mockUseCashHandovers = vi.fn()
+const mockUseAllBalances = vi.fn()
+const mockUseReceiverBalance = vi.fn()
+const mockCreateHandoverMutate = vi.fn()
 vi.mock('../hooks/useCashHandover', () => ({
   useDailyPayments: () => ({ data: { data: [], total: 0 }, isLoading: false, isError: false }),
-  useAllBalances: () => ({ data: [], isLoading: false }),
-  useReceiverBalance: () => ({ data: undefined, isLoading: false }),
-  useCreateCashHandover: () => ({ mutate: vi.fn(), isPending: false }),
+  useAllBalances: () => mockUseAllBalances(),
+  useReceiverBalance: (id: string) => mockUseReceiverBalance(id),
+  useCreateCashHandover: () => ({ mutate: mockCreateHandoverMutate, isPending: false }),
   useCashHandovers: (params: unknown) => mockUseCashHandovers(params),
+}))
+
+const FUEL_CATEGORY = { id: 'cat-fuel', name: 'Fuel' }
+// Mutable so a simulated create-category call can extend the list, mirroring
+// what the real query-invalidation-triggered refetch would return — a plain
+// static mock would leave a newly "created" category permanently absent from
+// its own dropdown's <option> list.
+let mockCategoriesList: { id: string; name: string }[] = [FUEL_CATEGORY]
+const mockCreateCategoryMutateAsync = vi.fn()
+vi.mock('../hooks/useExpenseCategories', () => ({
+  useExpenseCategories: () => ({ data: mockCategoriesList, isLoading: false }),
+  useCreateExpenseCategory: () => ({ mutateAsync: mockCreateCategoryMutateAsync, isPending: false }),
 }))
 
 import CashHandover from './CashHandover'
@@ -65,6 +80,9 @@ async function openHistory() {
 beforeEach(() => {
   vi.clearAllMocks()
   mockUseCashHandovers.mockReturnValue({ data: { data: [], total: 0, page: 1, limit: 20 }, isLoading: false, isError: false, refetch: vi.fn() })
+  mockUseAllBalances.mockReturnValue({ data: [], isLoading: false })
+  mockUseReceiverBalance.mockReturnValue({ data: undefined, isLoading: false })
+  mockCategoriesList = [FUEL_CATEGORY]
 })
 
 describe('CashHandover — History', () => {
@@ -205,5 +223,182 @@ describe('CashHandover — History', () => {
 
     await user.click(screen.getByRole('button', { name: /Retry/ }))
     expect(refetch).toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Forensic audit (2026-08-30): "$40 expense reduces the day's EXPECTED
+// HANDOVER on screen but the receiver's underlying cash balance shows $40
+// left over the next day." The root cause was backend-only (the ledger debit
+// at handover time never included itemized expenses — fixed in
+// CashHandoversService.create()); these tests prove the FRONTEND side of the
+// contract was already correct and stays correct: the "Expected handover"
+// display already subtracts expenses from the receiver's balance (CASE 6,
+// pre-handover), and the receiver balance card already renders whatever
+// balance the backend reports — including the correct $0 post-fix (CASE 8).
+// ---------------------------------------------------------------------------
+describe('CashHandover — Reconciliation panel (forensic audit, 2026-08-30)', () => {
+  async function selectReceiver(user: ReturnType<typeof userEvent.setup>, name: string) {
+    await user.click(screen.getByText(name))
+  }
+
+  it('CASE 6 — no physical handover yet: $500 held, $40 expense logged → "Expected handover" shows $460', async () => {
+    mockUseAllBalances.mockReturnValue({
+      data: [{ userId: 'user-1', name: 'youssef', role: 'sales_rep', balance: '500.00' }],
+      isLoading: false,
+    })
+    mockUseReceiverBalance.mockReturnValue({
+      data: { receiverId: 'user-1', receiverName: 'youssef', balance: '500.00', total: '500.00', payments: [], exits: [], lastHandover: null },
+      isLoading: false,
+    })
+
+    const user = userEvent.setup()
+    render(<CashHandover />)
+    await selectReceiver(user, 'youssef')
+
+    await user.click(screen.getByRole('button', { name: /Add/ }))
+    await user.selectOptions(screen.getByRole('combobox'), FUEL_CATEGORY.id)
+    const amountInputs = screen.getAllByRole('spinbutton')
+    const expenseAmountInput = amountInputs.find(el => (el as HTMLInputElement).placeholder !== '0.00') ?? amountInputs[0]
+    await user.type(expenseAmountInput, '40')
+
+    await waitFor(() => {
+      // Reconciliation total reflects held(500) − expense(40) — the exact
+      // value the receiver's ledger must also settle to $0 against once the
+      // handover is confirmed (proven server-side in
+      // cash-handovers.service.spec.ts / cash-handover-expenses.integration-spec.ts).
+      // (The KPI row above shows the same figure rounded to whole dollars —
+      // "$460" — so "$460.00" uniquely identifies the reconciliation total.)
+      expect(screen.getByText('$460.00')).toBeInTheDocument()
+    })
+  })
+
+  it('CASE 8 — after a settled handover, reselecting the receiver shows a $0 balance and the "no uncollected cash" empty state', async () => {
+    mockUseAllBalances.mockReturnValue({ data: [], isLoading: false }) // fixed: $0 balance no longer appears in pending balances
+    mockUseReceiverBalance.mockReturnValue({
+      data: { receiverId: 'user-1', receiverName: 'youssef', balance: '0.00', total: '0.00', payments: [], exits: [], lastHandover: '2026-08-29T18:00:00.000Z' },
+      isLoading: false,
+    })
+
+    render(<CashHandover />)
+
+    // Pending-balances card is empty — youssef is no longer listed as holding cash.
+    expect(screen.getByText(/no one is holding unaccounted cash/i)).toBeInTheDocument()
+  })
+
+  it('confirming a handover sends the itemized expenses alongside expectedAmt/handedAmt — same payload the backend now settles against the ledger', async () => {
+    mockUseAllBalances.mockReturnValue({
+      data: [{ userId: 'user-1', name: 'youssef', role: 'sales_rep', balance: '500.00' }],
+      isLoading: false,
+    })
+    mockUseReceiverBalance.mockReturnValue({
+      data: { receiverId: 'user-1', receiverName: 'youssef', balance: '500.00', total: '500.00', payments: [], exits: [], lastHandover: null },
+      isLoading: false,
+    })
+
+    const user = userEvent.setup()
+    render(<CashHandover />)
+    await selectReceiver(user, 'youssef')
+
+    await user.click(screen.getByRole('button', { name: /Add/ }))
+    await user.selectOptions(screen.getByRole('combobox'), FUEL_CATEGORY.id)
+    const amountInputs = screen.getAllByRole('spinbutton')
+    const expenseAmountInput = amountInputs.find(el => (el as HTMLInputElement).placeholder !== '0.00') ?? amountInputs[0]
+    await user.type(expenseAmountInput, '40')
+
+    const handoverInput = screen.getByPlaceholderText('0.00')
+    await user.type(handoverInput, '460')
+
+    await user.click(screen.getByRole('button', { name: /Confirm handover/ }))
+    await user.click(screen.getByRole('button', { name: /Confirm & log handover/ }))
+
+    expect(mockCreateHandoverMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        receiverId: 'user-1',
+        expectedAmt: '460.00',
+        handedAmt: '460.00',
+        expenses: [{ categoryId: FUEL_CATEGORY.id, amount: '40.00' }],
+      }),
+      expect.anything(),
+    )
+  })
+
+  // ---------------------------------------------------------------------------
+  // Forensic audit (2026-08-31): "Expenses + Cash Handover expense selection
+  // redesign" — the expense field now selects an existing reusable category
+  // (or creates one via "+ Add new expense") instead of free text.
+  // ---------------------------------------------------------------------------
+  it('CASE 9 — "+ Add new expense" creates a category and selects it on the row', async () => {
+    mockCreateCategoryMutateAsync.mockImplementation(async (name: string) => {
+      const cat = { id: 'cat-new', name }
+      mockCategoriesList = [...mockCategoriesList, cat]
+      return cat
+    })
+    mockUseAllBalances.mockReturnValue({
+      data: [{ userId: 'user-1', name: 'youssef', role: 'sales_rep', balance: '500.00' }],
+      isLoading: false,
+    })
+    mockUseReceiverBalance.mockReturnValue({
+      data: { receiverId: 'user-1', receiverName: 'youssef', balance: '500.00', total: '500.00', payments: [], exits: [], lastHandover: null },
+      isLoading: false,
+    })
+
+    const user = userEvent.setup()
+    render(<CashHandover />)
+    await selectReceiver(user, 'youssef')
+    await user.click(screen.getByRole('button', { name: /Add/ }))
+
+    await user.selectOptions(screen.getByRole('combobox'), '__new__')
+    await user.type(screen.getByPlaceholderText('e.g. Vehicle Repair'), 'Vehicle Repair')
+    await user.click(screen.getByRole('button', { name: /Add category/ }))
+
+    await waitFor(() => {
+      expect(mockCreateCategoryMutateAsync).toHaveBeenCalledWith('Vehicle Repair')
+    })
+    // The row now shows the newly-created category selected.
+    await waitFor(() => {
+      expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('cat-new')
+    })
+  })
+
+  it('CASE 10 — selecting an existing category twice creates two occurrences of it, not two categories', async () => {
+    mockUseAllBalances.mockReturnValue({
+      data: [{ userId: 'user-1', name: 'youssef', role: 'sales_rep', balance: '500.00' }],
+      isLoading: false,
+    })
+    mockUseReceiverBalance.mockReturnValue({
+      data: { receiverId: 'user-1', receiverName: 'youssef', balance: '500.00', total: '500.00', payments: [], exits: [], lastHandover: null },
+      isLoading: false,
+    })
+
+    const user = userEvent.setup()
+    render(<CashHandover />)
+    await selectReceiver(user, 'youssef')
+
+    await user.click(screen.getByRole('button', { name: /Add/ }))
+    await user.click(screen.getByRole('button', { name: /Add/ }))
+    const [row1, row2] = screen.getAllByRole('combobox')
+    await user.selectOptions(row1, FUEL_CATEGORY.id)
+    await user.selectOptions(row2, FUEL_CATEGORY.id)
+    const amountInputs = screen.getAllByRole('spinbutton').filter(el => (el as HTMLInputElement).placeholder !== '0.00')
+    await user.type(amountInputs[0], '20')
+    await user.type(amountInputs[1], '15')
+
+    const handoverInput = screen.getByPlaceholderText('0.00')
+    await user.type(handoverInput, '465')
+    await user.click(screen.getByRole('button', { name: /Confirm handover/ }))
+    await user.click(screen.getByRole('button', { name: /Confirm & log handover/ }))
+
+    expect(mockCreateHandoverMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expenses: [
+          { categoryId: FUEL_CATEGORY.id, amount: '20.00' },
+          { categoryId: FUEL_CATEGORY.id, amount: '15.00' },
+        ],
+      }),
+      expect.anything(),
+    )
+    // Never created a new category — both rows reused the existing one.
+    expect(mockCreateCategoryMutateAsync).not.toHaveBeenCalled()
   })
 })

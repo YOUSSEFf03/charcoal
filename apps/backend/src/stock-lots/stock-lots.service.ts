@@ -3,6 +3,19 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStockLotDto } from './dto/create-stock-lot.dto';
 
+// GET /suppliers (contactPersons, bankDetails, paymentTerms) is owner/accountant
+// only (SuppliersController) — but /stock-lots and its siblings below are also
+// reachable by sales_rep/worker (and StockLot.supplier was being returned as the
+// FULL Supplier record, unredacted, to every one of those roles: a real data leak
+// found live — worker/sales_rep received the supplier's bank IBAN/SWIFT/account
+// number verbatim). Only `id`/`name` are ever displayed from this relation
+// anywhere in the app (Warehouse.tsx's Raw Lots "Supplier" column) — scoping the
+// query itself to that projection is safe for every role, matches StockLot's own
+// declared `supplier?: Pick<Supplier, 'id' | 'name'>` type, and needs no
+// role-conditional stripping since nothing sensitive is ever fetched in the
+// first place.
+const SAFE_SUPPLIER_SELECT = { select: { id: true, name: true } } as const;
+
 @Injectable()
 export class StockLotsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -64,7 +77,7 @@ export class StockLotsService {
         skip,
         take: limit,
         orderBy: { createdAt: 'desc' },
-        include: { supplier: true },
+        include: { supplier: SAFE_SUPPLIER_SELECT },
       }),
       this.prisma.stockLot.count({ where }),
     ]);
@@ -102,7 +115,7 @@ export class StockLotsService {
     const lots = await this.prisma.stockLot.findMany({
       where: { kgRemaining: { gt: 0 } },
       orderBy: { createdAt: 'desc' },
-      include: { supplier: true },
+      include: { supplier: SAFE_SUPPLIER_SELECT },
     });
     return lots.map((lot) => this.maybeStrip(lot, userRole));
   }
@@ -117,7 +130,7 @@ export class StockLotsService {
   async findOne(id: string, userRole?: string) {
     const lot = await this.prisma.stockLot.findUnique({
       where: { id },
-      include: { supplier: true },
+      include: { supplier: SAFE_SUPPLIER_SELECT },
     });
 
     if (!lot) {
@@ -161,7 +174,7 @@ export class StockLotsService {
         dateReceived: dto.dateReceived ? new Date(dto.dateReceived) : new Date(),
         notes: dto.notes,
       },
-      include: { supplier: true },
+      include: { supplier: SAFE_SUPPLIER_SELECT },
     });
   }
 }

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useClients, useClient } from '../hooks/useClients'
+import { useClients, useClient, useClientLocations } from '../hooks/useClients'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { usePackedStockSummary, useStockLots } from '../hooks/useWarehouse'
 import { useCreateOrder } from '../hooks/useOrders'
@@ -53,6 +53,12 @@ export default function NewOrder() {
   const stockLotsQ = useStockLots({ hasStock: true, limit: 100 })
   const createOrder = useCreateOrder()
   const driversQ = useUsers({ role: 'driver' })
+  // Multiple-locations audit, 2026-08-31 — only fetched once a client is
+  // actually selected; never for Warehouse/Walk-in Sales (this page is
+  // normal Orders only — see NewOrder's own route, distinct from
+  // WarehouseSales.tsx, which never imports this hook at all).
+  const selectedClientId = selectedClient?.id ?? ''
+  const locationsQ = useClientLocations(selectedClientId)
 
   const clients = clientsQ.data?.data ?? []
   const bagTypes = bagTypesQ.data ?? []
@@ -60,6 +66,11 @@ export default function NewOrder() {
   const stockLots = (stockLotsQ.data?.data ?? []) as StockLotFull[]
   const driverList = driversQ.data?.data ?? []
   const availableByBagType = new Map(packedSummary.map(p => [p.bagTypeId, p.totalBags]))
+  // Only ever shown/used when the selected client is actually enabled for
+  // multiple locations AND has at least one active one — a normal
+  // single-location client's form never grows this extra field.
+  const activeLocations = (locationsQ.data ?? []).filter(l => l.isActive)
+  const showLocationSelector = !!selectedClient?.multiLocationEnabled && activeLocations.length > 0
 
   const [toast, setToast] = useState('')
   function showToast(msg: string) {
@@ -70,6 +81,7 @@ export default function NewOrder() {
   // ── Shared form fields ────────────────────────────────────────────────────
   const [orderDate, setOrderDate] = useState(toDateOnlyString(new Date()))
   const [driverId, setDriverId] = useState('')
+  const [locationId, setLocationId] = useState('')
   const [notes, setNotes] = useState('')
 
   // ── Bag lines ─────────────────────────────────────────────────────────────
@@ -99,6 +111,10 @@ export default function NewOrder() {
     }
   }, [preselectedClientQ.data])
 
+  // Switching clients invalidates any previously-picked location — a
+  // location belongs to ONE specific client (never global).
+  useEffect(() => { setLocationId('') }, [selectedClientId])
+
   // ── Summaries ─────────────────────────────────────────────────────────────
   const bagSubtotal = bagLines.reduce((s, l) => s + Math.round(l.qty * l.price * 100), 0) / 100
   const bagTotalKg  = bagLines.reduce((s, l) => s + l.qty * l.kgPerBag, 0)
@@ -122,6 +138,11 @@ export default function NewOrder() {
   const activeLineCount = orderMode === 'bag' ? validBagLines.length : validKgLines.length
   const multiLineBlocked = activeLineCount > 1
   const multiLineMessage = 'Multi-line orders are not supported yet — please create a separate order for each line.'
+
+  // Required-location audit, 2026-09 — UX mirror of the backend's
+  // authoritative rule; see showLocationSelector's own doc comment above.
+  const locationRequiredBlocked = showLocationSelector && !locationId
+  const locationRequiredMessage = 'Select a location for this client'
 
   // ── Bag line actions ──────────────────────────────────────────────────────
   function addBagLine() {
@@ -172,6 +193,11 @@ export default function NewOrder() {
     // multi-line order can never reach the backend. See multiLineBlocked's
     // doc comment above for why.
     if (multiLineBlocked) { showToast(multiLineMessage); return }
+    // Required-location audit, 2026-09 — UX-only mirror of the backend's
+    // authoritative rule (OrdersService.create()): once a client is enabled
+    // for multiple locations, every NEW order must pick one of its active
+    // locations. Never shown/enforced for a single-location client.
+    if (locationRequiredBlocked) { showToast(locationRequiredMessage); return }
 
     if (orderMode === 'bag') {
       const lines = bagLines.filter(l => l.bagTypeId && l.qty > 0)
@@ -188,6 +214,7 @@ export default function NewOrder() {
           currency: selectedClient.currency as any,
           notes: notes || null,
           ...(driverId ? { driverId } : {}),
+          ...(locationId ? { locationId } : {}),
         },
         {
           onSuccess: (created) => navigate(navTo === 'detail' ? '/orders/' + created.id : '/orders'),
@@ -208,6 +235,7 @@ export default function NewOrder() {
           currency: selectedClient.currency as any,
           notes: notes || null,
           ...(driverId ? { driverId } : {}),
+          ...(locationId ? { locationId } : {}),
           ...(firstLot?.supplier?.name ? { supplierName: firstLot.supplier.name } : {}),
         },
         {
@@ -224,10 +252,10 @@ export default function NewOrder() {
       <Topbar title="New order">
         <span className="badge badge-gray" style={{ marginLeft: 4 }}>draft</span>
         <button className="btn" onClick={() => navigate('/orders')} style={{ marginLeft: 'auto' }}>Cancel</button>
-        <button className="btn" onClick={() => submitOrder('list')} disabled={createOrder.isPending} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : undefined}>
+        <button className="btn" onClick={() => submitOrder('list')} disabled={createOrder.isPending || locationRequiredBlocked} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : locationRequiredBlocked ? locationRequiredMessage : undefined}>
           Save draft
         </button>
-        <button className="btn primary" onClick={() => submitOrder('detail')} disabled={createOrder.isPending} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : undefined}>
+        <button className="btn primary" onClick={() => submitOrder('detail')} disabled={createOrder.isPending || locationRequiredBlocked} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : locationRequiredBlocked ? locationRequiredMessage : undefined}>
           <i className="ti ti-check" style={{ fontSize: 15 }} /> {createOrder.isPending ? 'Creating…' : 'Confirm order'}
         </button>
       </Topbar>
@@ -412,7 +440,7 @@ export default function NewOrder() {
                         <span className="lbl">Line total</span>
                         <div className="line-total">${roundDp(l.qty * l.price).toFixed(2)}</div>
                       </div>
-                      <button className="line-del" onClick={() => removeBagLine(l.id)} disabled={bagLines.length === 1}>
+                      <button className="line-del" aria-label="Remove line" onClick={() => removeBagLine(l.id)} disabled={bagLines.length === 1}>
                         <i className="ti ti-x" style={{ fontSize: 13 }} />
                       </button>
                     </div>
@@ -486,6 +514,7 @@ export default function NewOrder() {
                           </div>
                         </div>
                         <button
+                          aria-label="Remove line"
                           style={{ width: 32, height: 36, borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', flexShrink: 0, marginBottom: 0 }}
                           onClick={() => removeKgLine(l.id)}
                           disabled={kgLines.length === 1}
@@ -505,6 +534,24 @@ export default function NewOrder() {
             {/* Delivery */}
             <div className="form-card">
               <div className="form-card-head">delivery</div>
+              {/* Multiple-locations audit, 2026-08-31 — only shown for a
+                  client actually enabled for multiple locations with at
+                  least one active branch. A normal single-location client's
+                  form stays exactly as it was. Required-location audit,
+                  2026-09 — once shown, a location must actually be picked;
+                  "— Not specified —" is no longer a valid resting choice
+                  (see locationRequiredBlocked). */}
+              {showLocationSelector && (
+                <div className="field">
+                  <label className="field-label">Location *</label>
+                  <select className="select" value={locationId} onChange={e => setLocationId(e.target.value)}>
+                    <option value="">Select a location…</option>
+                    {activeLocations.map(l => (
+                      <option key={l.id} value={l.id}>{l.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="field">
                 <label className="field-label">Driver</label>
                 <select className="select" value={driverId} onChange={e => setDriverId(e.target.value)}>
@@ -597,13 +644,13 @@ export default function NewOrder() {
               </div>
             )}
             <div className="sum-actions">
-              <button className="btn green" onClick={() => submitOrder('detail')} disabled={createOrder.isPending} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : undefined}>
+              <button className="btn green" onClick={() => submitOrder('detail')} disabled={createOrder.isPending || locationRequiredBlocked} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : locationRequiredBlocked ? locationRequiredMessage : undefined}>
                 <i className="ti ti-check" style={{ fontSize: 14 }} /> {createOrder.isPending ? 'Creating…' : 'Confirm order'}
               </button>
-              <button className="btn" onClick={() => submitOrder('detail')} disabled={createOrder.isPending} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : undefined}>
+              <button className="btn" onClick={() => submitOrder('detail')} disabled={createOrder.isPending || locationRequiredBlocked} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : locationRequiredBlocked ? locationRequiredMessage : undefined}>
                 Confirm + go to detail
               </button>
-              <button className="btn" onClick={() => submitOrder('list')} disabled={createOrder.isPending} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : undefined}>
+              <button className="btn" onClick={() => submitOrder('list')} disabled={createOrder.isPending || locationRequiredBlocked} title={!selectedClient ? 'Select a client first' : multiLineBlocked ? multiLineMessage : locationRequiredBlocked ? locationRequiredMessage : undefined}>
                 Save as draft
               </button>
             </div>

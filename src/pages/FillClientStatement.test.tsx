@@ -9,8 +9,10 @@ import type { ReactNode } from 'react'
 // Fill Client Statement — dedicated route regression coverage.
 //
 // Highest-risk items (break/prove):
-//   1. Date-filter behavior (This month / This week / Clear) drives
-//      useClientLedger's dateFrom/dateTo params — server-side, not a
+//   1. Monthly-statement unification (2026-09-07): defaults to the CURRENT
+//      calendar month (never "All time"), navigates with ←/→, and "All
+//      time"/"Custom" remain available as explicit opt-ins — driving
+//      useClientLedger's dateFrom/dateTo params server-side, never a
 //      client-side re-filter of an unbounded fetch.
 //   2. Print PDF passes exactly what's on screen to the SAME
 //      exportStatementPdf() the normal Client Statement uses — no separate
@@ -70,10 +72,18 @@ beforeEach(() => {
   mockUseClientLedger.mockReturnValue({ data: baseLedger(), isLoading: false, isError: false })
 })
 
+function toDateOnlyString(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 describe('FillClientStatement', () => {
-  it('loads the ledger scoped to the :id route param', () => {
+  it('defaults to the CURRENT calendar month, not "All time"', () => {
     renderAt('fc-1')
-    expect(mockUseClientLedger).toHaveBeenCalledWith('fc-1', { dateFrom: undefined, dateTo: undefined })
+    const now = new Date()
+    expect(mockUseClientLedger).toHaveBeenCalledWith('fc-1', {
+      dateFrom: toDateOnlyString(new Date(now.getFullYear(), now.getMonth(), 1)),
+      dateTo:   toDateOnlyString(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+    })
   })
 
   it('renders the backend-computed opening/closing balance and totals — no client-side recompute', () => {
@@ -82,21 +92,30 @@ describe('FillClientStatement', () => {
     expect(screen.getAllByText('$250.00').length).toBeGreaterThan(0) // closing
   })
 
-  it('"This month" selects the current-month preset and passes dateFrom/dateTo to useClientLedger', async () => {
+  it('Previous/Next month move the requested range by one calendar month', async () => {
     const user = userEvent.setup({ delay: null })
     renderAt('fc-1')
-    await user.selectOptions(screen.getByRole('combobox'), 'This month')
+    const now = new Date()
 
-    const lastCall = mockUseClientLedger.mock.calls[mockUseClientLedger.mock.calls.length - 1]
-    expect(lastCall![1].dateFrom).toBeDefined()
-    expect(lastCall![1].dateTo).toBeDefined()
+    await user.click(screen.getByTitle('Previous month'))
+    let lastCall = mockUseClientLedger.mock.calls[mockUseClientLedger.mock.calls.length - 1]
+    expect(lastCall![1]).toEqual({
+      dateFrom: toDateOnlyString(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+      dateTo:   toDateOnlyString(new Date(now.getFullYear(), now.getMonth(), 0)),
+    })
+
+    await user.click(screen.getByTitle('Next month'))
+    lastCall = mockUseClientLedger.mock.calls[mockUseClientLedger.mock.calls.length - 1]
+    expect(lastCall![1]).toEqual({
+      dateFrom: toDateOnlyString(new Date(now.getFullYear(), now.getMonth(), 1)),
+      dateTo:   toDateOnlyString(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+    })
   })
 
-  it('Clear resets the filter back to unbounded (dateFrom/dateTo undefined)', async () => {
+  it('"All time" switches to an unbounded request (dateFrom/dateTo undefined)', async () => {
     const user = userEvent.setup({ delay: null })
     renderAt('fc-1')
-    await user.selectOptions(screen.getByRole('combobox'), 'This week')
-    await user.click(screen.getByRole('button', { name: 'Clear' }))
+    await user.click(screen.getByText('All time'))
 
     const lastCall = mockUseClientLedger.mock.calls[mockUseClientLedger.mock.calls.length - 1]
     expect(lastCall![1]).toEqual({ dateFrom: undefined, dateTo: undefined })

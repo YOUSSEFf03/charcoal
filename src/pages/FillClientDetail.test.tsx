@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 
@@ -20,10 +20,23 @@ import type { ReactNode } from 'react'
 //      navigation into the dedicated pages.
 // ---------------------------------------------------------------------------
 
+// Resolves `back` the same way the real Topbar does (navigate for a route
+// string) so the fix moving FillClientDetail's "All fill clients" link out
+// of the Topbar's right-side action row and into the proper `back` prop
+// stays covered.
 vi.mock('../components/layout/Topbar', () => ({
-  default: ({ title, children }: { title: string; children?: ReactNode }) => (
-    <div><span>{title}</span>{children}</div>
-  ),
+  default: ({ title, back, children }: { title: string; back?: { label: string; to: string | (() => void) }; children?: ReactNode }) => {
+    const navigate = useNavigate()
+    return (
+      <div>
+        <span>{title}</span>
+        {back && (
+          <button onClick={() => (typeof back.to === 'function' ? back.to() : navigate(back.to))}>{back.label}</button>
+        )}
+        {children}
+      </div>
+    )
+  },
 }))
 
 const mockUseClient = vi.fn()
@@ -77,7 +90,10 @@ function renderAt(id: string) {
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[`/fill-clients/${id}`]}>
-        <Routes><Route path="/fill-clients/:id" element={<FillClientDetail />} /></Routes>
+        <Routes>
+          <Route path="/fill-clients" element={<div>Fill clients list page</div>} />
+          <Route path="/fill-clients/:id" element={<FillClientDetail />} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -99,6 +115,17 @@ beforeEach(() => {
     isLoading: false,
   })
   mockUseCashReceivers.mockReturnValue({ data: [{ id: 'receiver-1', name: 'Marie', role: 'receiver' }] })
+})
+
+describe('FillClientDetail — back navigation', () => {
+  it('"All fill clients" (now on Topbar\'s `back` prop, not the right-side action row) returns to /fill-clients', async () => {
+    const user = userEvent.setup()
+    renderAt('fc-1')
+    await waitFor(() => expect(screen.getAllByText('Cedar Fill Co').length).toBeGreaterThan(0))
+
+    await user.click(screen.getByText('All fill clients'))
+    expect(screen.getByText('Fill clients list page')).toBeInTheDocument()
+  })
 })
 
 describe('FillClientDetail overview', () => {
@@ -195,12 +222,41 @@ describe('FillClientDetail — Log payment modal', () => {
     const user = userEvent.setup()
     await openLogPayment(user)
 
-    await user.selectOptions(screen.getByDisplayValue('— select receiver —'), 'Marie')
+    await user.selectOptions(screen.getByDisplayValue('— select receiver —'), 'receiver-1')
     expect(screen.queryByText('Receiver is required.')).not.toBeInTheDocument()
     await user.click(submitButton())
 
     await waitFor(() => expect(mockCreatePaymentMutateAsync).toHaveBeenCalled())
     const [body] = mockCreatePaymentMutateAsync.mock.calls[0]
     expect(body.receiverId).toBe('receiver-1')
+  })
+
+  // Regression (forensic audit, 2026-09): the receiver <select> used to be
+  // keyed by display NAME, resolved to an id only at submit time via
+  // `receivers.find(r => r.name === payBy)` — silently ambiguous whenever
+  // two cash-capable users share a name (proven live against real data: 41
+  // duplicate "Test Owner" rows from leaked test fixtures credited a real
+  // $2,000+ payment to the wrong person's ledger). The select is now keyed
+  // by id, so picking the SECOND same-named option must submit ITS id.
+  it('two receivers sharing the same display name — selecting the second one submits ITS id, never the first', async () => {
+    mockUseCashReceivers.mockReturnValue({
+      data: [
+        { id: 'receiver-a', name: 'Test Owner', role: 'owner' },
+        { id: 'receiver-b', name: 'Test Owner', role: 'owner' },
+      ],
+    })
+    const user = userEvent.setup()
+    await openLogPayment(user)
+
+    // Options render as "{name} · {role}" — both share the identical text.
+    const receiverOptions = screen.getAllByText('Test Owner · owner')
+    expect(receiverOptions).toHaveLength(2)
+    await user.selectOptions(screen.getByDisplayValue('— select receiver —'), receiverOptions[1])
+    await user.click(submitButton())
+
+    await waitFor(() => expect(mockCreatePaymentMutateAsync).toHaveBeenCalled())
+    const [body] = mockCreatePaymentMutateAsync.mock.calls[0]
+    expect(body.receiverId).toBe('receiver-b')
+    expect(body.receiverId).not.toBe('receiver-a')
   })
 })

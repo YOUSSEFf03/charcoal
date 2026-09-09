@@ -74,17 +74,19 @@ export default function FillClientPaymentDetail() {
           {!payment.allocations || payment.allocations.length === 0 ? (
             <div className="empty">Applied at the client level — not linked to a specific invoice.</div>
           ) : (
-            <table className="data-table">
-              <thead><tr><th>Invoice</th><th className="right">Amount applied</th></tr></thead>
-              <tbody>
-                {payment.allocations.map(a => (
-                  <tr key={a.id}>
-                    <td>{a.invoice?.displayId ?? a.invoiceId}</td>
-                    <td className="right num" style={{ fontWeight: 600 }}>{formatUsd(a.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead><tr><th>Invoice</th><th className="right">Amount applied</th></tr></thead>
+                <tbody>
+                  {payment.allocations.map(a => (
+                    <tr key={a.id}>
+                      <td>{a.invoice?.displayId ?? a.invoiceId}</td>
+                      <td className="right num" style={{ fontWeight: 600 }}>{formatUsd(a.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 

@@ -13,6 +13,7 @@ import type {
   SupplierLedger,
   PhysicalCountReport,
   SubmitPhysicalCountDto,
+  DailyReport,
 } from '../types/api'
 
 /** Date-range params accepted by GET /reports/profit-loss. */
@@ -280,6 +281,24 @@ export function useSubmitPhysicalCount() {
       qc.invalidateQueries({ queryKey: ['packed-stock'] })
       qc.invalidateQueries({ queryKey: ['stock-adjustments'] })
     },
+  })
+}
+
+/**
+ * Full Day Report (forensic audit, 2026-09) — read-only end-of-day business
+ * summary for one calendar day. Owner only (matches profit-loss/daily-revenue's
+ * sensitivity tier — see ReportsController). Never refetched on an interval —
+ * this is a point-in-time snapshot, not a live dashboard tile.
+ * GET /reports/daily/:date
+ */
+export function useDailyReport(date: string) {
+  return useQuery({
+    queryKey: ['reports', 'daily', date],
+    queryFn: async () => {
+      const res = await api.get<DailyReport>(`/reports/daily/${date}`)
+      return res.data
+    },
+    enabled: Boolean(date),
   })
 }
 

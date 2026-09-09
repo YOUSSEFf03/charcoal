@@ -27,7 +27,7 @@ export default function Payment() {
   const [notes, setNotes] = useState('')
   const [selectedClientId, setSelectedClientId] = useState('')
   const [selectedInvoiceId, setSelectedInvoiceId] = useState('')
-  const [receiverName, setReceiverName] = useState('')
+  const [receiverId, setReceiverId] = useState('')
 
   const { data: clientsRes } = useClients()
   const clients = clientsRes?.data ?? []
@@ -42,7 +42,6 @@ export default function Payment() {
   // "Owner" (no id) the way the old allReceivers construction did.
   const receiversQ = useCashReceivers()
   const allReceivers = receiversQ.data ?? []
-  const resolvedReceiverId = allReceivers.find(r => r.name === receiverName)?.id
 
   // Invoices are fetched reactively once a client is selected (hook is gated by clientId).
   const { data: invoicesRes } = useInvoices(selectedClientId ? { clientId: selectedClientId } : undefined)
@@ -76,7 +75,7 @@ export default function Payment() {
     // anyway; this check exists purely so the user gets an honest inline
     // message instead of a round-trip 400. Never auto-select a default —
     // the user must explicitly choose who received the cash.
-    if (!resolvedReceiverId) {
+    if (!receiverId) {
       showToast('Receiver is required.')
       return
     }
@@ -88,7 +87,7 @@ export default function Payment() {
       method,
       date: payDate,
       notes: notes || null,
-      ...(resolvedReceiverId ? { receiverId: resolvedReceiverId } : receiverName ? { receiverName } : {}),
+      receiverId,
     }
     createPayment.mutate(body, {
       onSuccess: () => {
@@ -97,7 +96,7 @@ export default function Payment() {
         setRef('')
         setNotes('')
         setSelectedInvoiceId('')
-        setReceiverName('')
+        setReceiverId('')
         setPayDate(toDateOnlyString(new Date()))
       },
       onError: (err) => {
@@ -230,11 +229,11 @@ export default function Payment() {
             <div className="field-card">
               <div className="field-card-head">received by <span style={{ color: 'var(--red)' }}>*</span></div>
               <div className="field">
-                <select className="input" value={receiverName} onChange={e => setReceiverName(e.target.value)}>
+                <select className="input" value={receiverId} onChange={e => setReceiverId(e.target.value)}>
                   <option value="">— select receiver —</option>
-                  {allReceivers.map(r => <option key={r.id || r.name} value={r.name}>{r.name}</option>)}
+                  {allReceivers.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                 </select>
-                {!resolvedReceiverId && (
+                {!receiverId && (
                   <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Receiver is required.</div>
                 )}
               </div>

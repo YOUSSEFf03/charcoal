@@ -18,6 +18,14 @@ export interface AppConfig {
     jwksUrl: string;
     publishableKey?: string;
   };
+  tracking: {
+    traqoApiKey?: string;
+    traqoBaseUrl: string;
+  };
+  translation: {
+    /** Undefined = translation feature not configured; GoogleTranslateProvider fails cleanly at call time, app still boots. */
+    googleCloudProjectId?: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -32,5 +40,13 @@ export default (): AppConfig => ({
     jwksUrl:
       process.env.CLERK_JWKS_URL ?? 'https://api.clerk.com/v1/jwks',
     publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
+  },
+  tracking: {
+    traqoApiKey: process.env.TRAQO_API_KEY,
+    traqoBaseUrl:
+      process.env.TRAQO_BASE_URL ?? 'https://traqocontainer.com/api/v1',
+  },
+  translation: {
+    googleCloudProjectId: process.env.GOOGLE_CLOUD_PROJECT_ID,
   },
 });

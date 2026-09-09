@@ -4,9 +4,13 @@ import { useUsers, useUpdateUserRole, useUpdateUserName, useCreateLocalUser, use
 import { useBagTypes, useCreateBagType, useUpdateBagType, useDeleteBagType } from '../hooks/useBagTypes'
 import { useReceivers } from '../hooks/useReceivers'
 import { useRate } from '../context/RateContext'
-import type { User, Role, BagType } from '../types/api'
+import { useTraqoAccounts, useUpdateTraqoAccount } from '../hooks/useTraqoAccounts'
+import { useCompanyInfo, useUpdateCompanyInfo, useDailyWageRate, useSetDailyWageRate } from '../hooks/useSettings'
+import { useMobileDevices, useRevokeMobileDevice } from '../hooks/useMobileDevices'
+import { formatDateTime } from '../lib/date'
+import type { User, Role, BagType, MobileDevice } from '../types/api'
 
-type Section = 'company' | 'currency' | 'bagtypes' | 'driverrates' | 'receivers' | 'users' | 'preferences' | 'danger'
+type Section = 'company' | 'currency' | 'wages' | 'bagtypes' | 'driverrates' | 'receivers' | 'users' | 'traqo' | 'mobiledevices' | 'preferences' | 'danger'
 
 interface PrefToggle { label: string; desc: string; on: boolean }
 
@@ -40,10 +44,13 @@ type NavItem = { section: Section; label: string; icon: string; group?: string; 
 const NAV: NavItem[] = [
   { section: 'company', label: 'Company info', icon: 'ti-building', group: 'Business' },
   { section: 'currency', label: 'Currency & rate', icon: 'ti-currency-dollar' },
+  { section: 'wages', label: 'Employee wages', icon: 'ti-wallet' },
   { section: 'bagtypes',    label: 'Bag types',    icon: 'ti-box',   group: 'Stock' },
   { section: 'driverrates', label: 'Driver rates', icon: 'ti-truck' },
   { section: 'receivers', label: 'Money receivers', icon: 'ti-cash', group: 'Finance' },
   { section: 'users', label: 'Users & roles', icon: 'ti-users', group: 'Access' },
+  { section: 'traqo', label: 'Traqo accounts', icon: 'ti-map-pin', group: 'Integrations' },
+  { section: 'mobiledevices', label: 'Container Mobile App', icon: 'ti-device-mobile' },
   { section: 'preferences', label: 'Preferences', icon: 'ti-adjustments', group: 'System' },
   { section: 'danger', label: 'Danger zone', icon: 'ti-alert-triangle', danger: true },
 ]
@@ -62,6 +69,11 @@ export default function Settings() {
   const updateBagType = useUpdateBagType()
   const deleteBagType = useDeleteBagType()
   const driversQ = useUsers({ role: 'driver' })
+  const traqoAccountsQ = useTraqoAccounts()
+  const updateTraqoAccount = useUpdateTraqoAccount()
+  const mobileDevicesQ = useMobileDevices()
+  const revokeMobileDevice = useRevokeMobileDevice()
+  const [revokeTarget, setRevokeTarget] = useState<MobileDevice | null>(null)
 
   const [section, setSection] = useState<Section>('company')
   const [toast, setToast] = useState(false)
@@ -88,7 +100,12 @@ export default function Settings() {
   const [editingRole, setEditingRole] = useState<Role>('accountant')
   const [editingName, setEditingName] = useState('')
   const [driverRates, setDriverRates] = useState<Record<string, string>>({})
-  const [company, setCompany] = useState({ name: 'Farah Charcoal', phone: '+961 1 234 567', address: 'Beirut, Lebanon', addressAr: 'بيروت، لبنان', taxNo: '', email: 'contact@farahcharcoal.lb', footer: '' })
+  const companyInfoQ = useCompanyInfo()
+  const updateCompanyInfo = useUpdateCompanyInfo()
+  const [company, setCompany] = useState({ name: '', phone: '', address: '', addressAr: '', taxNo: '', email: '', footer: '' })
+  const dailyWageQ = useDailyWageRate()
+  const setDailyWage = useSetDailyWageRate()
+  const [newDailyWage, setNewDailyWage] = useState('')
 
   function showToast(msg?: string) {
     setToastMsg(msg || 'Changes saved')
@@ -109,6 +126,35 @@ export default function Settings() {
     ;(bagTypesQ.data ?? []).forEach(b => { initial[b.id] = b.workerRate ?? '' })
     setEditedBagRates(initial)
   }, [bagTypesQ.data])
+
+  React.useEffect(() => {
+    if (companyInfoQ.data) setCompany(companyInfoQ.data)
+  }, [companyInfoQ.data])
+
+  React.useEffect(() => {
+    if (!revokeTarget) return
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape' && !revokeMobileDevice.isPending) setRevokeTarget(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [revokeTarget, revokeMobileDevice.isPending])
+
+  function saveCompanyInfo() {
+    updateCompanyInfo.mutate(company, {
+      onSuccess: () => showToast('Company info saved'),
+      onError: (err: any) => showToast(err?.error ?? 'Failed to save company info'),
+    })
+  }
+
+  function saveDailyWage() {
+    const val = parseFloat(newDailyWage)
+    if (!newDailyWage || isNaN(val) || val < 0) return
+    setDailyWage.mutate(val, {
+      onSuccess: () => { setNewDailyWage(''); showToast('Daily wage amount saved') },
+      onError: (err: any) => showToast(err?.error ?? 'Failed to save daily wage amount'),
+    })
+  }
 
   function saveBagRates() {
     const bagTypes = bagTypesQ.data ?? []
@@ -210,12 +256,7 @@ export default function Settings() {
                 </div>
                 <div><label style={lbl}>Invoice footer note (optional)</label><input style={inp} value={company.footer} onChange={e => setCompany(c => ({ ...c, footer: e.target.value }))} placeholder="e.g. Thank you for your business" /></div>
               </div>
-              {/* No backend endpoint stores company info anywhere (only exchange-rate
-                  is persisted via SettingsController) — this used to claim "Changes
-                  saved" and silently discard everything. Flagged for a product
-                  decision on whether to add real persistence; until then this says
-                  so honestly instead of lying. */}
-              <div style={ftr}><button style={saveBtn} onClick={() => showToast('Not saved — company info isn’t stored by the backend yet')}><i className="ti ti-check" style={{ fontSize: 14 }} /> Save changes</button></div>
+              <div style={ftr}><button style={saveBtn} onClick={saveCompanyInfo} disabled={updateCompanyInfo.isPending}><i className="ti ti-check" style={{ fontSize: 14 }} /> {updateCompanyInfo.isPending ? 'Saving…' : 'Save changes'}</button></div>
             </div>
           </>}
 
@@ -251,6 +292,38 @@ export default function Settings() {
                 <thead><tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>{['Rate (LBP/$)', 'Date set', 'Set by'].map(h => <th key={h} style={{ textAlign: 'left', padding: '8px 18px', fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', fontWeight: 400, textTransform: 'uppercase' as const, letterSpacing: 0.6 }}>{h}</th>)}</tr></thead>
                 <tbody><tr><td colSpan={3} style={{ padding: '12px 18px', fontSize: 12, color: 'var(--text3)', textAlign: 'center' }}>Rate change history coming soon</td></tr></tbody>
               </table>
+            </div>
+          </>}
+
+          {section === 'wages' && <>
+            <SectionHeader title="Employee wages" desc={'The daily wage amount used by the "Daily wage" button on Employee Detail — one shop-wide figure, applied whenever it\'s pressed for any employee.'} />
+            <div style={card}>
+              <div style={cardHd}><div style={cardTl}><i className="ti ti-wallet" style={{ fontSize: 15, color: 'var(--text2)' }} /> Daily wage</div></div>
+              <div style={{ padding: 18 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', marginBottom: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 2 }}>Current daily wage</div>
+                    <div style={{ fontSize: 24, fontWeight: 600, letterSpacing: -1, fontFamily: "'IBM Plex Mono',monospace" }}>
+                      {dailyWageQ.isLoading ? '—' : `$${(dailyWageQ.data ?? 0).toFixed(2)}`}
+                    </div>
+                  </div>
+                  {!dailyWageQ.isLoading && (dailyWageQ.data ?? 0) === 0 && (
+                    <span className="badge badge-amber">Not configured</span>
+                  )}
+                </div>
+                <div>
+                  <label style={lbl}>Update daily wage ($)</label>
+                  <span style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 5, display: 'block' }}>
+                    Every employee's "Daily wage" button on Employee Detail uses this amount. Past earnings already recorded are unaffected.
+                  </span>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <input style={{ ...inp, fontFamily: "'IBM Plex Mono',monospace", fontSize: 16 }} type="number" min="0" step="0.01" value={newDailyWage} onChange={e => setNewDailyWage(e.target.value)} placeholder="e.g. 20.00" />
+                    <button style={{ ...saveBtn, whiteSpace: 'nowrap' }} onClick={saveDailyWage} disabled={setDailyWage.isPending}>
+                      <i className="ti ti-check" style={{ fontSize: 14 }} /> {setDailyWage.isPending ? 'Saving…' : 'Update'}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </>}
 
@@ -336,7 +409,7 @@ export default function Settings() {
                 <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 440, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
                   <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ fontSize: 15, fontWeight: 600 }}>Add bag type</div>
-                    <button onClick={() => setShowAddBag(false)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }}>✕</button>
+                    <button onClick={() => setShowAddBag(false)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }} aria-label="Close">✕</button>
                   </div>
                   <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
                     <div><label style={lbl}>Name</label><input style={inp} value={newBag.name} onChange={e => setNewBag(p => ({ ...p, name: e.target.value }))} placeholder="e.g. 10kg Bag" /></div>
@@ -386,7 +459,7 @@ export default function Settings() {
                 <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 440, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
                   <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ fontSize: 15, fontWeight: 600 }}>Edit bag type</div>
-                    <button onClick={() => setEditBagType(null)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }}>✕</button>
+                    <button onClick={() => setEditBagType(null)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }} aria-label="Close">✕</button>
                   </div>
                   <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
                     <div><label style={lbl}>Name</label><input style={inp} value={editBagForm.name} onChange={e => setEditBagForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g. 10kg Bag" /></div>
@@ -511,7 +584,7 @@ export default function Settings() {
                 <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 420, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
                   <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ fontSize: 15, fontWeight: 600 }}>Edit receiver</div>
-                    <button onClick={() => setEditReceiver(null)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }}>✕</button>
+                    <button onClick={() => setEditReceiver(null)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }} aria-label="Close">✕</button>
                   </div>
                   <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
                     <div><label style={lbl}>Full name</label><input style={inp} value={editReceiver.name} onChange={e => setEditReceiver(p => p ? { ...p, name: e.target.value } : p)} /></div>
@@ -605,6 +678,101 @@ export default function Settings() {
             </div>
           </>}
 
+          {section === 'traqo' && <>
+            <SectionHeader title="Traqo accounts" desc="Ocean container tracking is load-balanced across up to 3 Traqo Ocean accounts, max 4 active containers each. API keys are set as server environment variables and are never shown here — only whether one is configured." />
+            <div style={card}>
+              <div style={cardHd}><div style={cardTl}><i className="ti ti-map-pin" style={{ fontSize: 15, color: 'var(--text2)' }} /> Accounts</div></div>
+              {traqoAccountsQ.isLoading && (
+                <div style={{ padding: 18, fontSize: 13, color: 'var(--text3)', textAlign: 'center' }}>Loading…</div>
+              )}
+              {traqoAccountsQ.isSuccess && traqoAccountsQ.data.length === 0 && (
+                <div style={{ padding: 18, fontSize: 13, color: 'var(--text3)', textAlign: 'center' }}>
+                  No Traqo accounts configured yet.
+                </div>
+              )}
+              {traqoAccountsQ.data?.map((a, i) => {
+                const statusMeta: Record<string, { label: string; badgeClass: string }> = {
+                  healthy: { label: 'Healthy', badgeClass: 'badge-green' },
+                  rate_limited: { label: 'Rate limited', badgeClass: 'badge-amber' },
+                  auth_failed: { label: 'Auth failed', badgeClass: 'badge-red' },
+                  payment_required: { label: 'Payment required', badgeClass: 'badge-red' },
+                }
+                const meta = statusMeta[a.status] ?? { label: a.status, badgeClass: 'badge-gray' }
+                return (
+                  <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderBottom: i < traqoAccountsQ.data!.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {a.name}
+                        <span className={`badge ${meta.badgeClass}`} style={{ fontSize: 11 }}>{meta.label}</span>
+                        {!a.keyConfigured && <span className="badge badge-gray" style={{ fontSize: 11 }}>No key configured</span>}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", marginTop: 2 }}>
+                        {a.envKeyName} · Active containers: {a.activeContainers} / {a.maxContainers}
+                      </div>
+                    </div>
+                    <div onClick={() => updateTraqoAccount.mutate({ id: a.id, active: !a.active }, {
+                      onError: (err: any) => showToast(err?.error ?? 'Failed to update account'),
+                    })} style={{ width: 40, height: 22, borderRadius: 100, background: a.active ? 'var(--accent)' : 'var(--border)', cursor: 'pointer', position: 'relative', transition: 'background 0.15s', flexShrink: 0 }} title={a.active ? 'Enabled — click to disable' : 'Disabled — click to enable'}>
+                      <div style={{ position: 'absolute', top: 3, left: 3, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'transform 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.2)', transform: a.active ? 'translateX(18px)' : 'none' }} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>}
+
+          {section === 'mobiledevices' && <>
+            <SectionHeader
+              title="Container Mobile App"
+              desc="Devices registered to the read-only container-tracking mobile app. The app only displays containers and their tracking status — it can never create, edit, or delete anything. Every device authenticates with one shared key held on the server; that key is never shown here."
+            />
+            <div style={card}>
+              <div style={cardHd}><div style={cardTl}><i className="ti ti-device-mobile" style={{ fontSize: 15, color: 'var(--text2)' }} /> Registered devices</div></div>
+              {mobileDevicesQ.isLoading && (
+                <div style={{ padding: 18, fontSize: 13, color: 'var(--text3)', textAlign: 'center' }}>Loading…</div>
+              )}
+              {mobileDevicesQ.isError && !mobileDevicesQ.isLoading && (
+                <div style={{ padding: 18, fontSize: 13, color: 'var(--red)', textAlign: 'center' }}>Couldn't load devices. Please try again.</div>
+              )}
+              {mobileDevicesQ.isSuccess && mobileDevicesQ.data.length === 0 && (
+                <div style={{ padding: 18, fontSize: 13, color: 'var(--text3)', textAlign: 'center' }}>
+                  No devices have registered yet. Open the mobile app once to register this device.
+                </div>
+              )}
+              {mobileDevicesQ.data?.map((d, i) => {
+                const platformMeta: Record<MobileDevice['platform'], { label: string; icon: string }> = {
+                  ios: { label: 'iOS', icon: 'ti-brand-apple' },
+                  android: { label: 'Android', icon: 'ti-brand-android' },
+                }
+                const pm = platformMeta[d.platform]
+                return (
+                  <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderBottom: i < mobileDevicesQ.data!.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                    <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'var(--surface2)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'var(--text2)' }}>
+                      <i className={`ti ${pm.icon}`} style={{ fontSize: 16 }} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' as const }}>
+                        {pm.label}{d.appVersion ? ` · v${d.appVersion}` : ''}
+                        <span className={`badge ${d.active ? 'badge-green' : 'badge-gray'}`} style={{ fontSize: 11 }}>{d.active ? 'Active' : 'Revoked'}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", marginTop: 2 }}>
+                        Registered {formatDateTime(d.createdAt)} · Last seen {formatDateTime(d.lastSeenAt)}
+                      </div>
+                    </div>
+                    <button
+                      className="btn"
+                      style={d.active ? { fontSize: 12, padding: '5px 10px', background: 'var(--red-bg)', color: 'var(--red)', borderColor: '#fca5a5' } : { fontSize: 12, padding: '5px 10px', opacity: 0.5, cursor: 'not-allowed' }}
+                      disabled={!d.active}
+                      onClick={() => d.active && setRevokeTarget(d)}
+                    >
+                      <i className="ti ti-ban" style={{ fontSize: 13 }} /> {d.active ? 'Revoke' : 'Revoked'}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </>}
+
           {section === 'danger' && <>
             <SectionHeader title="Danger zone" desc="Irreversible actions. Proceed with caution." />
             <div style={{ border: '1px solid #fca5a5', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
@@ -633,7 +801,7 @@ export default function Settings() {
           <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 460, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
             <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
               <div style={{ fontSize: 15, fontWeight: 600 }}>Add team member</div>
-              <button onClick={() => setShowAddUser(false)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }}>✕</button>
+              <button onClick={() => setShowAddUser(false)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }} aria-label="Close">✕</button>
             </div>
             <div style={{ padding: 20 }}>
               <div style={{ marginBottom: 16 }}>
@@ -690,7 +858,7 @@ export default function Settings() {
           <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 460, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
             <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
               <div style={{ fontSize: 15, fontWeight: 600 }}>Edit user — {editingUser.name}</div>
-              <button onClick={() => setEditUserOpen(false)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }}>✕</button>
+              <button onClick={() => setEditUserOpen(false)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text2)' }} aria-label="Close">✕</button>
             </div>
             <div style={{ padding: 20 }}>
               <div style={{ marginBottom: 16 }}><label style={lbl}>Full name</label><input style={inp} type="text" value={editingName} onChange={e => setEditingName(e.target.value)} /></div>
@@ -758,6 +926,44 @@ export default function Settings() {
                 }}
               >
                 <i className="ti ti-trash" style={{ fontSize: 14 }} /> Remove user
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Revoke mobile device confirm modal */}
+      {revokeTarget && (
+        <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && !revokeMobileDevice.isPending && setRevokeTarget(null)}>
+          <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 440, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }} role="alertdialog" aria-modal="true" aria-labelledby="revoke-device-title">
+            <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)' }}>
+              <div id="revoke-device-title" style={{ fontSize: 15, fontWeight: 600, color: 'var(--red)' }}><i className="ti ti-alert-triangle" style={{ marginRight: 6 }} />Revoke device</div>
+            </div>
+            <div style={{ padding: 20 }}>
+              <p style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, margin: 0 }}>
+                This stops push notifications (ETA changes, arrivals) from being sent to this device. It does <strong>not</strong> block the device from reading container data — the mobile app authenticates with one shared key common to every install, not a credential tied to this specific device. If this device's app is still installed and opened again, it will automatically re-register and become active again.
+              </p>
+            </div>
+            <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn" disabled={revokeMobileDevice.isPending} onClick={() => setRevokeTarget(null)}>Cancel</button>
+              <button
+                className="btn"
+                style={{ background: 'var(--red)', color: '#fff', borderColor: 'var(--red)' }}
+                disabled={revokeMobileDevice.isPending}
+                onClick={() => {
+                  if (!revokeTarget || revokeMobileDevice.isPending) return
+                  revokeMobileDevice.mutate(revokeTarget.id, {
+                    onSuccess: () => {
+                      setRevokeTarget(null)
+                      showToast('Device revoked — it will no longer receive push notifications')
+                    },
+                    onError: (err: any) => {
+                      showToast(err?.error ?? 'Failed to revoke device')
+                    },
+                  })
+                }}
+              >
+                <i className="ti ti-ban" style={{ fontSize: 14 }} /> {revokeMobileDevice.isPending ? 'Revoking…' : 'Revoke device'}
               </button>
             </div>
           </div>

@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Currency, Prisma } from '@prisma/client';
+import { createHash } from 'crypto';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoiceCalculatorService } from '../invoices/invoice-calculator.service';
@@ -11,7 +13,45 @@ import { PaymentAllocationService } from '../invoices/payment-allocation.service
 import { SettingsService } from '../settings/settings.service';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { UsersService } from '../users/users.service';
+import { RECEIVER_REQUIRED_METHODS } from '../payments/payments.service';
 import { CreateWalkInSaleDto } from './dto/create-walk-in-sale.dto';
+
+/**
+ * SHA-256 of the fields that define WHAT is being sold and collected — never
+ * display-only fields (recipient, notes) or the idempotencyKey itself. Bags/
+ * kgLines are sorted so the SAME logical request submitted twice with lines
+ * in a different array order (never happens from this app's own frontend,
+ * but a direct API retry conceivably could reorder a JSON array) still
+ * fingerprints identically — a real retry must never be mistaken for reused
+ * data. Exported for direct unit testing (determinism, sort-independence).
+ */
+export function computeSaleFingerprint(dto: CreateWalkInSaleDto): string {
+  const bags = (dto.bags ?? [])
+    .map((b) => ({
+      packedStockId: b.packedStockId, bagTypeId: b.bagTypeId,
+      quantity: b.quantity, pricePerBag: b.pricePerBag, currency: b.currency,
+    }))
+    .sort((a, b) => (a.packedStockId + a.bagTypeId).localeCompare(b.packedStockId + b.bagTypeId));
+  const kgLines = (dto.kgLines ?? [])
+    .map((k) => ({
+      lotId: k.lotId, kgQuantity: k.kgQuantity,
+      pricePerKg: k.pricePerKg, currency: k.currency, description: k.description,
+    }))
+    .sort((a, b) => a.lotId.localeCompare(b.lotId));
+
+  const canonical = JSON.stringify({
+    clientId: dto.clientId,
+    date: dto.date,
+    method: dto.method,
+    receivedUsd: dto.receivedUsd ?? null,
+    receivedLbp: dto.receivedLbp ?? null,
+    receiverId: dto.receiverId ?? null,
+    receiverName: dto.receiverId ? null : (dto.receiverName ?? null), // receiverId takes priority (matches create()'s own resolution — see below), so an ignored receiverName must not affect the fingerprint
+    bags,
+    kgLines,
+  });
+  return createHash('sha256').update(canonical).digest('hex');
+}
 
 @Injectable()
 export class WalkInSalesService {
@@ -42,10 +82,93 @@ export class WalkInSalesService {
    *
    * Anonymous walk-ins are out of scope — they continue to use POST /stock-exits.
    *
+   * ── Idempotency (forensic audit, 2026-08-27) ─────────────────────────────────
+   * A double-click, a slow-network browser retry, or two near-simultaneous
+   * identical requests must never create two independent sales — confirmed live
+   * against the real dev DB: two concurrent requests each independently
+   * succeeded (2 invoices, 2 stock deductions, 2 payments, 2 receiver credits).
+   * The frontend's disabled-while-pending button (WarehouseSales.tsx) is UX
+   * protection only — it cannot stop a genuinely separate HTTP request (a second
+   * tab, a retrying proxy, curl). This method is the actual guarantee, mirroring
+   * InvoicesService.createFromOrder()'s existing check-then-act +
+   * unique-index-backstop pattern (that method keys off `orderId`; a walk-in
+   * sale has no equivalent pre-existing persistent entity, so the caller
+   * supplies `dto.idempotencyKey` instead — see CreateWalkInSaleDto):
+   *   1. Application-level guard: if an invoice with this idempotencyKey
+   *      already exists, compare its stored requestFingerprint (see
+   *      computeSaleFingerprint() above) against THIS request's fingerprint:
+   *        - MATCH    → this is a genuine retry of the same submission.
+   *                     Return the existing invoice — no new work, nothing
+   *                     re-validated.
+   *        - MISMATCH → the key was reused with different sale data (e.g. a
+   *                     stale/copy-pasted key, a client bug, or a bad-faith
+   *                     replay attempt). Reject with 409 IDEMPOTENCY_KEY_REUSED
+   *                     and ZERO side effects — silently returning the FIRST
+   *                     request's result to a caller who asked for something
+   *                     different would be far worse than an error.
+   *   2. DB-level backstop (`invoices_idempotencyKey_unique_active`, a PARTIAL
+   *      unique index — WHERE status <> 'cancelled', see the "Cancelled
+   *      invoices" note below — Postgres allows unlimited NULLs regardless,
+   *      so every other invoice/caller is unaffected): if two requests both
+   *      pass check (1) at the same instant — a genuine race — only one
+   *      INSERT wins; the loser's P2002 is caught below, re-runs the same
+   *      match/mismatch comparison against the winner, and either returns it
+   *      (match) or rejects (mismatch).
+   * `idempotencyKey` is optional (backward-compatible DTO addition, no existing
+   * caller broken) — a caller that omits it simply gets no idempotency
+   * protection, exactly like every walk-in sale before this fix. Two genuinely
+   * different sales (no key, or two different keys) are NEVER deduplicated.
+   *
+   * Why no separate idempotency table: the key+fingerprint live on the SAME
+   * Invoice row created inside the SAME transaction as the stock exit(s)/
+   * payment/ledger credit — there is no separate commit boundary, so no
+   * "idempotency record exists but the sale it points to doesn't" state is
+   * reachable by construction (a failed transaction rolls back the invoice
+   * too, key and all — Postgres's own atomicity, not app-level bookkeeping).
+   * A separate table would only earn its keep by tracking IN-FLIGHT attempts
+   * (e.g. to return "still processing" instead of blocking on Postgres's row
+   * lock) — real complexity (stale-PENDING cleanup after a crash, expiry)
+   * this app doesn't need: the FOR UPDATE locks already taken below (step 0)
+   * naturally serialize two concurrent identical requests, and a slow request
+   * is no different from a slow request today.
+   *
+   * Cancelled invoices (forensic audit, 2026-08-27): a zero-payment walk-in
+   * sale can later be cancelled (InvoicesService.cancel() — allowed when
+   * status='issued', no payment yet, no order). BOTH idempotency lookups
+   * below filter `status: { not: 'cancelled' }` so a cancelled invoice is
+   * treated as if it never existed — retrying its key creates a genuinely
+   * NEW live sale, rather than silently handing back the dead cancelled one
+   * (the confirmed bug this filter fixes) or being permanently blocked from
+   * ever reusing that key again. The cancelled row itself is never touched —
+   * it keeps its historical idempotencyKey/requestFingerprint forever, for
+   * audit purposes. The DB-level backstop
+   * (`invoices_idempotencyKey_unique_active`) is a PARTIAL unique index with
+   * the identical `WHERE status <> 'cancelled'` clause, so two LIVE invoices
+   * can still never share a key — only a cancelled one can coexist with a
+   * live one under the same key.
+   *
    * @param dto    Walk-in sale payload.
    * @param userId Clerk user id of the caller — resolved to loggedById on exits/payment.
    */
   async create(dto: CreateWalkInSaleDto, userId: string) {
+    const fingerprint = dto.idempotencyKey ? computeSaleFingerprint(dto) : undefined;
+    if (dto.idempotencyKey) {
+      const existing = await this.prisma.invoice.findFirst({
+        where: { idempotencyKey: dto.idempotencyKey, status: { not: 'cancelled' } },
+        include: { client: { select: { id: true, name: true } }, payments: true },
+      });
+      if (existing) {
+        if (existing.requestFingerprint !== fingerprint) {
+          throw new ConflictException({
+            message: 'This idempotency key was already used for a different sale request',
+            error: 'This idempotency key was already used for a different sale request',
+            code: 'IDEMPOTENCY_KEY_REUSED',
+          });
+        }
+        return existing;
+      }
+    }
+
     const bags    = dto.bags    ?? [];
     const kgLines = dto.kgLines ?? [];
 
@@ -124,7 +247,25 @@ export class WalkInSalesService {
     if (receivedUsd.gt(0)) received = received.plus(toClientCurrency(receivedUsd, 'USD'));
     if (receivedLbp.gt(0)) received = received.plus(toClientCurrency(receivedLbp, 'LBP'));
 
-    return this.prisma.$transaction(async (tx) => {
+    // A payment must not silently lose WHO RECEIVED IT — same rule
+    // PaymentsService.create() enforces (RECEIVER_REQUIRED_METHODS' doc
+    // comment there), reused here rather than re-invented so cash/whish/omt
+    // has exactly one definition of "requires a receiver" across the app.
+    // Checked before the transaction opens (same "validate before writing
+    // anything" placement as the stock-availability checks below) — without
+    // this, a walk-in cash/whish/omt sale could be recorded as paid with no
+    // receiver at all, invisible to Cash Handover reconciliation, since
+    // LedgerWriteService.creditAccount() only runs when a receiverId is set.
+    if (received.gt(0) && RECEIVER_REQUIRED_METHODS.includes(dto.method) && !dto.receiverId) {
+      throw new BadRequestException({
+        message: 'Receiver is required for cash, Whish, and OMT payments',
+        error: 'Receiver is required for cash, Whish, and OMT payments',
+        code: 'RECEIVER_REQUIRED',
+      });
+    }
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
       // ── 0) Lock every StockLot/PackedStock row this transaction will read
       // and write, BEFORE any read — same FOR UPDATE pattern already used by
       // stock-exits.service.ts / payments.service.ts / payment-allocation
@@ -230,6 +371,11 @@ export class WalkInSalesService {
           paidAmount:           '0',
           // BUG-J (P5): snapshot the issue-time rate for stable historical P&L.
           exchangeRateSnapshot: rawRate.toString(),
+          // Idempotency (see this method's doc comment) — undefined when the
+          // caller omitted one, which Prisma/Postgres treats as NULL (always
+          // permitted, never conflicts with any other NULL row).
+          idempotencyKey:       dto.idempotencyKey,
+          requestFingerprint:   fingerprint,
         },
       });
 
@@ -333,6 +479,40 @@ export class WalkInSalesService {
         where:   { id: invoice.id },
         include: { client: { select: { id: true, name: true } }, payments: true },
       });
-    });
+      });
+    } catch (e) {
+      // Expected race (see this method's doc comment): two near-simultaneous
+      // requests carrying the SAME idempotencyKey can both pass the
+      // application-level check at the top of create() — only one
+      // tx.invoice.create() wins, the other hits
+      // invoices_idempotencyKey_unique_active (P2002). Return the winner's
+      // invoice instead of surfacing a raw constraint violation; if no
+      // matching LIVE invoice actually exists, this wasn't that race —
+      // rethrow (mirrors InvoicesService.createFromOrder()'s identical
+      // P2002-recovery for the orderId constraint). status excluded here for
+      // the same reason as the pre-transaction check above — the partial
+      // index only prevents two LIVE rows from sharing a key, so a cancelled
+      // "winner" is never a real conflict target to recover.
+      if (dto.idempotencyKey && e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const winner = await this.prisma.invoice.findFirst({
+          where: { idempotencyKey: dto.idempotencyKey, status: { not: 'cancelled' } },
+          include: { client: { select: { id: true, name: true } }, payments: true },
+        });
+        if (winner) {
+          // Same match/mismatch rule as the pre-transaction check above — the
+          // race that hit P2002 could equally be two DIFFERENT requests that
+          // happen to share a key, not just two copies of the same one.
+          if (winner.requestFingerprint !== fingerprint) {
+            throw new ConflictException({
+              message: 'This idempotency key was already used for a different sale request',
+              error: 'This idempotency key was already used for a different sale request',
+              code: 'IDEMPOTENCY_KEY_REUSED',
+            });
+          }
+          return winner;
+        }
+      }
+      throw e;
+    }
   }
 }

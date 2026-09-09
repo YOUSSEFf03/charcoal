@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateGeneralExpenseDto } from './dto/create-general-expense.dto';
+import { UpdateGeneralExpenseDto } from './dto/update-general-expense.dto';
 
 /**
  * "Option B" recurrence semantics — the single source of truth for how a
@@ -112,6 +113,30 @@ export class GeneralExpensesService {
         date: dto.date ? new Date(dto.date) : new Date(),
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
         addedById: user.id,
+      },
+    });
+  }
+
+  async update(id: string, dto: UpdateGeneralExpenseDto) {
+    await this.findOne(id);
+
+    if (dto.amount !== undefined && !new Decimal(dto.amount).gt(0)) {
+      throw new BadRequestException({
+        message: 'Expense amount must be greater than zero',
+        error: 'Expense amount must be greater than zero',
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
+
+    return this.prisma.generalExpense.update({
+      where: { id },
+      data: {
+        ...(dto.description !== undefined ? { description: dto.description } : {}),
+        ...(dto.amount !== undefined ? { amount: dto.amount } : {}),
+        ...(dto.isRecurring !== undefined ? { isRecurring: dto.isRecurring } : {}),
+        ...(dto.category !== undefined ? { category: dto.category } : {}),
+        ...(dto.date !== undefined ? { date: new Date(dto.date) } : {}),
+        ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
       },
     });
   }

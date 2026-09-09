@@ -53,7 +53,7 @@ export class BalanceQueryService {
 
     // For the detail table, also pull the original payment / exit records for richer display
     const nameFilter = receiver.name;
-    const [payments, exits, handovers] = await Promise.all([
+    const [allPayments, allExits, handovers] = await Promise.all([
       this.prisma.payment.findMany({
         where: { OR: [{ receiverId }, { receiverId: null, receiverName: nameFilter }] },
         orderBy: { createdAt: 'desc' },
@@ -69,6 +69,20 @@ export class BalanceQueryService {
         orderBy: { createdAt: 'desc' },
       }),
     ]);
+
+    // The detail list must show only what's still uncollected — cash this
+    // receiver is currently holding — not their entire all-time sales
+    // history. There's no per-transaction "collected" flag (a handover
+    // debits the account by a lump handedAmt, not by specific payment/exit
+    // ids), so the practical boundary is time-based: anything at or before
+    // the most recent handover was already reconciled at that point (either
+    // physically handed over, or its shortfall/overage was recorded as that
+    // handover's `difference`); anything strictly after is genuinely new and
+    // has never been reconciled. If there's never been a handover, every
+    // record is still uncollected.
+    const lastHandoverAt = handovers[0]?.createdAt ?? null;
+    const payments = lastHandoverAt ? allPayments.filter(p => p.createdAt > lastHandoverAt) : allPayments;
+    const exits = lastHandoverAt ? allExits.filter(e => e.createdAt > lastHandoverAt) : allExits;
 
     const totalCollected = entries
       .filter(e => new Decimal(e.amount.toString()).gt(0))

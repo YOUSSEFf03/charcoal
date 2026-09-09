@@ -22,6 +22,10 @@ export default function SortHeader<K extends string>({
       className={align === 'right' ? 'right' : undefined}
       style={{ width, cursor: 'pointer', userSelect: 'none' }}
       onClick={() => onSort(sortKey)}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSort(sortKey) } }}
+      role="button"
+      tabIndex={0}
+      aria-sort={active ? (sort!.order === 'asc' ? 'ascending' : 'descending') : 'none'}
     >
       {label}
       <i

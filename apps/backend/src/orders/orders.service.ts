@@ -51,6 +51,7 @@ export class OrdersService {
         include: {
           client: { select: { id: true, name: true } },
           bagType: { select: { id: true, name: true, nominalKg: true } },
+          location: { select: { id: true, name: true } },
         },
       }),
       this.prisma.clientOrder.count({ where }),
@@ -160,6 +161,8 @@ export class OrdersService {
           createdAt: true,
           driverId: true,
           driver: { select: { id: true, name: true } },
+          locationId: true,
+          location: { select: { id: true, name: true } },
         },
       }),
       this.prisma.clientOrder.count({ where }),
@@ -181,6 +184,7 @@ export class OrdersService {
         client: true,
         driver: { select: { id: true, name: true } },
         bagType: { select: { id: true, name: true, nominalKg: true } },
+        location: { select: { id: true, name: true } },
         shipments: { include: { bags: { include: { bagType: true } } } },
         orderBagLines: { include: { bagType: true } },
         invoices: true,
@@ -235,6 +239,26 @@ export class OrdersService {
       });
     }
 
+    // Multiple-locations audit, 2026-08-31 (creation requirement, 2026-09):
+    // once a client is enabled for multiple locations, every NEW normal order
+    // must be tied to one of that client's own active locations — never
+    // silently created with no branch. Single-location clients are unaffected
+    // (locationId stays optional, exactly as before). This requirement is
+    // creation-only by explicit product decision — see update()'s own
+    // comment for why editing an existing order never re-triggers it.
+    if (client.multiLocationEnabled && !dto.locationId) {
+      throw new BadRequestException({
+        error: 'Location is required for clients with multiple locations enabled',
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
+    // A selected location must actually belong to THIS client and be active —
+    // never silently attach another client's branch, or one the owner
+    // already deactivated.
+    if (dto.locationId) {
+      await this.validateLocation(dto.clientId, dto.locationId);
+    }
+
     // Compute avgOrderDays update
     const today = new Date();
     let newAvgOrderDays: number | null = null;
@@ -267,10 +291,12 @@ export class OrdersService {
           ...(dto.notes ? { notes: dto.notes } : {}),
           ...(dto.driverId ? { driverId: dto.driverId } : {}),
           ...(dto.supplierName ? { supplierName: dto.supplierName } : {}),
+          ...(dto.locationId ? { locationId: dto.locationId } : {}),
         },
         include: {
           client: { select: { id: true, name: true } },
           orderBagLines: true,
+          location: { select: { id: true, name: true } },
         },
       }),
       this.prisma.client.update({
@@ -338,6 +364,42 @@ export class OrdersService {
       }
     }
 
+    // Multiple-locations audit, 2026-08-31: locationId is editable in any
+    // status (informational provenance, like notes/driverId/supplierName —
+    // never financially significant) — but a non-null value must still
+    // belong to the order's EFFECTIVE client (the new one if clientId is
+    // also being changed, otherwise the order's existing one) and be active.
+    if (dto.locationId) {
+      const effectiveClientId = dto.clientId ?? order.clientId;
+      await this.validateLocation(effectiveClientId, dto.locationId);
+    }
+
+    // Update-time requirement (explicit product decision, 2026-09): unlike
+    // create(), enabling multi-location for a client NEVER retroactively
+    // requires a location on its existing orders — an order that has always
+    // had locationId: null (historical, or created before the client
+    // switched on multi-location) stays editable and stays null forever,
+    // unless the user explicitly assigns a real location themselves. This is
+    // the direct continuation of the earlier rule: "Existing orders keep
+    // locationId = NULL; no fabrication anywhere."
+    //
+    // The ONE thing blocked here: an order that already HAS a location
+    // cannot have it explicitly cleared back to null while its client is
+    // still multi-location-enabled — that would silently regress an order
+    // that once had real branch provenance. Changing it to a DIFFERENT valid
+    // active location (handled by validateLocation() above) remains allowed.
+    if (dto.locationId === null && order.locationId) {
+      const effectiveClient = dto.clientId !== undefined
+        ? await this.prisma.client.findUnique({ where: { id: dto.clientId } })
+        : order.client;
+      if (effectiveClient?.multiLocationEnabled) {
+        throw new BadRequestException({
+          error: 'Location cannot be cleared for a multi-location client\'s order — assign a different active location instead',
+          code: 'CONSTRAINT_VIOLATION',
+        });
+      }
+    }
+
     return this.prisma.clientOrder.update({
       where: { id },
       data: {
@@ -357,8 +419,30 @@ export class OrdersService {
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
         ...(dto.driverId !== undefined ? { driverId: dto.driverId } : {}),
         ...(dto.supplierName !== undefined ? { supplierName: dto.supplierName } : {}),
+        ...(dto.locationId !== undefined ? { locationId: dto.locationId } : {}),
       },
     });
+  }
+
+  /**
+   * Multiple-locations audit, 2026-08-31: a location must belong to the
+   * SAME client the order is for (never another client's branch) and be
+   * active (never a deactivated one, which would silently attach a "dead"
+   * branch to a brand-new order). Never validates anything about the
+   * client's balance/ledger — location is pure provenance, see
+   * ClientLocation's schema.prisma doc comment.
+   */
+  private async validateLocation(clientId: string, locationId: string) {
+    const location = await this.prisma.clientLocation.findUnique({ where: { id: locationId } });
+    if (!location || location.clientId !== clientId) {
+      throw new NotFoundException({ error: 'Location not found for this client', code: 'NOT_FOUND' });
+    }
+    if (!location.isActive) {
+      throw new BadRequestException({
+        error: `Location "${location.name}" is deactivated and cannot be assigned to a new order`,
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
   }
 
   /**

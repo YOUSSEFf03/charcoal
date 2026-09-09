@@ -161,6 +161,7 @@ describe('OrdersService', () => {
       findMany: fn(),
       count: fn(),
     },
+    clientLocation: { findUnique: fn() },
     shipment: { updateMany: fn() },
     $transaction: fn(),
   };
@@ -784,6 +785,93 @@ describe('OrdersService', () => {
       expect(mockPrisma.$transaction).not.toHaveBeenCalled();
     });
 
+    // -------------------------------------------------------------------------
+    // Multiple-locations audit, 2026-08-31 — CASE 4/5: Normal Order can select
+    // Location A / Location B. Required-location audit, 2026-09 — once a
+    // client is enabled for multiple locations, a NEW order MUST have one.
+    // -------------------------------------------------------------------------
+    describe('locationId (forensic audit, 2026-08-31 / required-location audit, 2026-09)', () => {
+      it('CASE 4 — multi-location client + valid active Location A → accepted', async () => {
+        mockPrisma.user.findUnique.mockResolvedValue(dbUser);
+        mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null, multiLocationEnabled: true });
+        mockPrisma.clientLocation.findUnique.mockResolvedValue({ id: 'loc-a', clientId: 'client-1', name: 'Hamra Branch', isActive: true });
+        mockPrisma.clientOrder.create.mockResolvedValue({ id: 'order-loc-a' });
+        mockPrisma.client.update.mockResolvedValue({ id: 'client-1' });
+
+        await service.create({ ...baseDto, locationId: 'loc-a' } as CreateOrderDto, userId);
+
+        expect(mockPrisma.clientOrder.create).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ locationId: 'loc-a' }) }),
+        );
+      });
+
+      it('CASE 5 — multi-location client + valid active Location B (a different location than CASE 4) → accepted', async () => {
+        mockPrisma.user.findUnique.mockResolvedValue(dbUser);
+        mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null, multiLocationEnabled: true });
+        mockPrisma.clientLocation.findUnique.mockResolvedValue({ id: 'loc-b', clientId: 'client-1', name: 'Jounieh Branch', isActive: true });
+        mockPrisma.clientOrder.create.mockResolvedValue({ id: 'order-loc-b' });
+        mockPrisma.client.update.mockResolvedValue({ id: 'client-1' });
+
+        await service.create({ ...baseDto, locationId: 'loc-b' } as CreateOrderDto, userId);
+
+        expect(mockPrisma.clientOrder.create).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ locationId: 'loc-b' }) }),
+        );
+      });
+
+      it('multi-location client + NO location → rejected with CONSTRAINT_VIOLATION, never reaches the transaction', async () => {
+        mockPrisma.user.findUnique.mockResolvedValue(dbUser);
+        mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null, multiLocationEnabled: true });
+
+        await expect(service.create(baseDto as CreateOrderDto, userId)).rejects.toMatchObject({
+          response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+        });
+        expect(mockPrisma.clientLocation.findUnique).not.toHaveBeenCalled();
+        expect(mockPrisma.clientOrder.create).not.toHaveBeenCalled();
+        expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      });
+
+      it('multi-location client + a NONEXISTENT location → rejected (NotFoundException)', async () => {
+        mockPrisma.user.findUnique.mockResolvedValue(dbUser);
+        mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null, multiLocationEnabled: true });
+        mockPrisma.clientLocation.findUnique.mockResolvedValue(null);
+
+        await expect(service.create({ ...baseDto, locationId: 'loc-ghost' } as CreateOrderDto, userId)).rejects.toBeInstanceOf(NotFoundException);
+        expect(mockPrisma.clientOrder.create).not.toHaveBeenCalled();
+      });
+
+      it('multi-location client + a location belonging to a DIFFERENT client → rejected — never silently attaches another client\'s branch', async () => {
+        mockPrisma.user.findUnique.mockResolvedValue(dbUser);
+        mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null, multiLocationEnabled: true });
+        mockPrisma.clientLocation.findUnique.mockResolvedValue({ id: 'loc-x', clientId: 'other-client', name: 'Foreign Branch', isActive: true });
+
+        await expect(service.create({ ...baseDto, locationId: 'loc-x' } as CreateOrderDto, userId)).rejects.toBeInstanceOf(NotFoundException);
+        expect(mockPrisma.clientOrder.create).not.toHaveBeenCalled();
+      });
+
+      it('multi-location client + a DEACTIVATED location → rejected', async () => {
+        mockPrisma.user.findUnique.mockResolvedValue(dbUser);
+        mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null, multiLocationEnabled: true });
+        mockPrisma.clientLocation.findUnique.mockResolvedValue({ id: 'loc-a', clientId: 'client-1', name: 'Hamra Branch', isActive: false });
+
+        await expect(service.create({ ...baseDto, locationId: 'loc-a' } as CreateOrderDto, userId)).rejects.toBeInstanceOf(BadRequestException);
+        expect(mockPrisma.clientOrder.create).not.toHaveBeenCalled();
+      });
+
+      it('single-location client (multiLocationEnabled: false/undefined) + NO locationId → accepted, locationId omitted from the write', async () => {
+        mockPrisma.user.findUnique.mockResolvedValue(dbUser);
+        mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null });
+        mockPrisma.clientOrder.create.mockResolvedValue({ id: 'order-no-loc' });
+        mockPrisma.client.update.mockResolvedValue({ id: 'client-1' });
+
+        await service.create(baseDto as CreateOrderDto, userId);
+
+        expect(mockPrisma.clientLocation.findUnique).not.toHaveBeenCalled();
+        const call = mockPrisma.clientOrder.create.mock.calls[0][0];
+        expect(call.data.locationId).toBeUndefined();
+      });
+    });
+
     it('first order: client has no lastOrderDate — avgOrderDays is not written, only lastOrderDate', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(dbUser);
       mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD', lastOrderDate: null, avgOrderDays: null });
@@ -868,13 +956,14 @@ describe('OrdersService', () => {
       );
     });
 
-    it('list query stays lightweight: only client (id/name) and bagType (id/name/nominalKg) are included — no shipments/invoices/driver/bagLines on the list endpoint', async () => {
+    it('list query stays lightweight: only client (id/name), bagType (id/name/nominalKg), and location (id/name) are included — no shipments/invoices/driver/bagLines on the list endpoint', async () => {
       await service.findAll(1, 20);
 
       const call = mockPrisma.clientOrder.findMany.mock.calls[0][0];
       expect(call.include).toEqual({
         client: { select: { id: true, name: true } },
         bagType: { select: { id: true, name: true, nominalKg: true } },
+        location: { select: { id: true, name: true } },
       });
     });
 
@@ -1080,6 +1169,8 @@ describe('OrdersService', () => {
         createdAt: true,
         driverId: true,
         driver: { select: { id: true, name: true } },
+        locationId: true,
+        location: { select: { id: true, name: true } },
       });
     });
 
@@ -1162,6 +1253,7 @@ describe('OrdersService', () => {
           client: true,
           driver: { select: { id: true, name: true } },
           bagType: { select: { id: true, name: true, nominalKg: true } },
+          location: { select: { id: true, name: true } },
           shipments: { include: { bags: { include: { bagType: true } } } },
           orderBagLines: { include: { bagType: true } },
           invoices: true,
@@ -1392,6 +1484,147 @@ describe('OrdersService', () => {
         response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
       });
       expect(mockPrisma.clientOrder.update).not.toHaveBeenCalled();
+    });
+
+    // -------------------------------------------------------------------------
+    // Multiple-locations audit, 2026-08-31 — locationId is editable in any
+    // order status (informational provenance, like notes/driverId/supplierName).
+    // Required-location audit, 2026-09, decision B — updating an OLD order
+    // never retroactively requires a location just because the client is
+    // currently multi-location; the ONE thing blocked is explicitly clearing
+    // a location an order already has, while that client is multi-location.
+    // -------------------------------------------------------------------------
+    describe('locationId (forensic audit, 2026-08-31 / required-location audit, 2026-09)', () => {
+      it('a non-draft order can still have its locationId changed (never a protected/locked field)', async () => {
+        mockPrisma.clientOrder.findUnique.mockResolvedValue({ ...orderWith('delivered'), clientId: 'client-1' });
+        mockPrisma.clientLocation.findUnique.mockResolvedValue({ id: 'loc-a', clientId: 'client-1', name: 'Hamra Branch', isActive: true });
+        mockPrisma.clientOrder.update.mockResolvedValue({ id: 'order-uuid-upd', locationId: 'loc-a' });
+
+        await service.update('order-uuid-upd', { locationId: 'loc-a' } as UpdateOrderDto);
+
+        expect(mockPrisma.clientOrder.update).toHaveBeenCalledWith({
+          where: { id: 'order-uuid-upd' },
+          data: { locationId: 'loc-a' },
+        });
+      });
+
+      it('explicitly clearing locationId (null) writes null, skipping location validation, when the order never had one', async () => {
+        mockPrisma.clientOrder.findUnique.mockResolvedValue({ ...orderWith('draft'), clientId: 'client-1' });
+        mockPrisma.clientOrder.update.mockResolvedValue({ id: 'order-uuid-upd', locationId: null });
+
+        await service.update('order-uuid-upd', { locationId: null } as unknown as UpdateOrderDto);
+
+        expect(mockPrisma.clientLocation.findUnique).not.toHaveBeenCalled();
+        expect(mockPrisma.clientOrder.update).toHaveBeenCalledWith({
+          where: { id: 'order-uuid-upd' },
+          data: { locationId: null },
+        });
+      });
+
+      it('rejects a location that does not belong to the order\'s client', async () => {
+        mockPrisma.clientOrder.findUnique.mockResolvedValue({ ...orderWith('draft'), clientId: 'client-1' });
+        mockPrisma.clientLocation.findUnique.mockResolvedValue({ id: 'loc-x', clientId: 'other-client', name: 'Foreign Branch', isActive: true });
+
+        await expect(
+          service.update('order-uuid-upd', { locationId: 'loc-x' } as UpdateOrderDto),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        expect(mockPrisma.clientOrder.update).not.toHaveBeenCalled();
+      });
+
+      it('rejects a DEACTIVATED location', async () => {
+        mockPrisma.clientOrder.findUnique.mockResolvedValue({ ...orderWith('draft'), clientId: 'client-1' });
+        mockPrisma.clientLocation.findUnique.mockResolvedValue({ id: 'loc-a', clientId: 'client-1', name: 'Hamra Branch', isActive: false });
+
+        await expect(
+          service.update('order-uuid-upd', { locationId: 'loc-a' } as UpdateOrderDto),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(mockPrisma.clientOrder.update).not.toHaveBeenCalled();
+      });
+
+      it('historical order (locationId: null) + client now multi-location → an UNRELATED update (notes) succeeds without any location', async () => {
+        mockPrisma.clientOrder.findUnique.mockResolvedValue({
+          ...orderWith('delivered'), clientId: 'client-1', locationId: null,
+          client: { id: 'client-1', multiLocationEnabled: true },
+        });
+        mockPrisma.clientOrder.update.mockResolvedValue({ id: 'order-uuid-upd', notes: 'urgent' });
+
+        await service.update('order-uuid-upd', { notes: 'urgent' } as UpdateOrderDto);
+
+        expect(mockPrisma.clientLocation.findUnique).not.toHaveBeenCalled();
+        expect(mockPrisma.clientOrder.update).toHaveBeenCalledWith({
+          where: { id: 'order-uuid-upd' },
+          data: { notes: 'urgent' },
+        });
+      });
+
+      it('historical order (locationId: null) + client now multi-location → stays null when the DTO never mentions locationId (no fabrication)', async () => {
+        mockPrisma.clientOrder.findUnique.mockResolvedValue({
+          ...orderWith('confirmed'), clientId: 'client-1', locationId: null,
+          client: { id: 'client-1', multiLocationEnabled: true },
+        });
+        mockPrisma.clientOrder.update.mockResolvedValue({ id: 'order-uuid-upd', driverId: 'driver-9' });
+
+        await service.update('order-uuid-upd', { driverId: 'driver-9' } as UpdateOrderDto);
+
+        const writtenData = mockPrisma.clientOrder.update.mock.calls[0][0].data;
+        expect(writtenData).not.toHaveProperty('locationId');
+      });
+
+      it('order already has a location + an UNRELATED update (notes) succeeds and leaves the location untouched', async () => {
+        mockPrisma.clientOrder.findUnique.mockResolvedValue({
+          ...orderWith('delivered'), clientId: 'client-1', locationId: 'loc-a',
+          client: { id: 'client-1', multiLocationEnabled: true },
+        });
+        mockPrisma.clientOrder.update.mockResolvedValue({ id: 'order-uuid-upd', notes: 'urgent' });
+
+        await service.update('order-uuid-upd', { notes: 'urgent' } as UpdateOrderDto);
+
+        const writtenData = mockPrisma.clientOrder.update.mock.calls[0][0].data;
+        expect(writtenData).not.toHaveProperty('locationId');
+      });
+
+      it('order already has a location + client is multi-location + explicit clear to null → REJECTED', async () => {
+        mockPrisma.clientOrder.findUnique.mockResolvedValue({
+          ...orderWith('draft'), clientId: 'client-1', locationId: 'loc-a',
+          client: { id: 'client-1', multiLocationEnabled: true },
+        });
+
+        await expect(
+          service.update('order-uuid-upd', { locationId: null } as unknown as UpdateOrderDto),
+        ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }) });
+        expect(mockPrisma.clientOrder.update).not.toHaveBeenCalled();
+      });
+
+      it('order already has a location + client is NOT (or no longer) multi-location + explicit clear to null → ALLOWED', async () => {
+        mockPrisma.clientOrder.findUnique.mockResolvedValue({
+          ...orderWith('draft'), clientId: 'client-1', locationId: 'loc-a',
+          client: { id: 'client-1', multiLocationEnabled: false },
+        });
+        mockPrisma.clientOrder.update.mockResolvedValue({ id: 'order-uuid-upd', locationId: null });
+
+        await service.update('order-uuid-upd', { locationId: null } as unknown as UpdateOrderDto);
+
+        expect(mockPrisma.clientOrder.update).toHaveBeenCalledWith({
+          where: { id: 'order-uuid-upd' },
+          data: { locationId: null },
+        });
+      });
+
+      it('order already has a location + change to a DIFFERENT valid active location belonging to the same client → ALLOWED', async () => {
+        mockPrisma.clientOrder.findUnique.mockResolvedValue({
+          ...orderWith('draft'), clientId: 'client-1', locationId: 'loc-a',
+          client: { id: 'client-1', multiLocationEnabled: true },
+        });
+        mockPrisma.clientLocation.findUnique.mockResolvedValue({ id: 'loc-b', clientId: 'client-1', name: 'Jounieh Branch', isActive: true });
+        mockPrisma.clientOrder.update.mockResolvedValue({ id: 'order-uuid-upd', locationId: 'loc-b' });
+
+        await service.update('order-uuid-upd', { locationId: 'loc-b' } as UpdateOrderDto);
+
+        expect(mockPrisma.clientOrder.update).toHaveBeenCalledWith({
+          where: { id: 'order-uuid-upd' },
+          data: { locationId: 'loc-b' },
+        });
+      });
     });
   });
 

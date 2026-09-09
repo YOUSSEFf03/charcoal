@@ -114,17 +114,19 @@ export default function FillClientPickupDetail() {
           {bags.length === 0 ? (
             <div className="empty">No bag breakdown recorded.</div>
           ) : (
-            <table className="data-table">
-              <thead><tr><th>Bag spec</th><th className="right">Qty</th></tr></thead>
-              <tbody>
-                {bags.map((b, i) => (
-                  <tr key={i}>
-                    <td>{b.size ?? '?'} kg {b.charcoal ? `· ${b.charcoal}` : ''}</td>
-                    <td className="right num" style={{ fontWeight: 600 }}>{b.qty}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead><tr><th>Bag spec</th><th className="right">Qty</th></tr></thead>
+                <tbody>
+                  {bags.map((b, i) => (
+                    <tr key={i}>
+                      <td>{b.size ?? '?'} kg {b.charcoal ? `· ${b.charcoal}` : ''}</td>
+                      <td className="right num" style={{ fontWeight: 600 }}>{b.qty}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
@@ -145,7 +147,7 @@ export default function FillClientPickupDetail() {
           <div className="modal" style={{ width: 420, maxWidth: '96vw' }}>
             <div className="compose-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0' }}>
               <div style={{ fontWeight: 700, fontSize: 15 }}><i className="ti ti-edit" style={{ marginRight: 8 }} />Edit pickup</div>
-              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} onClick={() => setEditing(false)}><i className="ti ti-x" /></button>
+              <button className="icon-btn" aria-label="Cancel edit" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} onClick={() => setEditing(false)}><i className="ti ti-x" /></button>
             </div>
             <div className="compose-section" style={{ borderBottom: 'none' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>

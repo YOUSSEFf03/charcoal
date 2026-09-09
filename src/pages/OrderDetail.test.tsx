@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom'
 import type { ReactNode } from 'react'
 
 // ---------------------------------------------------------------------------
@@ -18,8 +18,22 @@ import type { ReactNode } from 'react'
 // page's existing toast/error conventions, never a raw crash.
 // ---------------------------------------------------------------------------
 
+// The mock resolves `back` the same way the real Topbar does (navigate for a
+// route string) so the navigation-consolidation fix — OrderDetail's "Orders"
+// link now goes through Topbar's `back` prop instead of a hand-rolled
+// duplicate inside the page header — stays covered.
 vi.mock('../components/layout/Topbar', () => ({
-  default: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  default: ({ back, children }: { title?: string; back?: { label: string; to: string | (() => void) }; children?: ReactNode }) => {
+    const navigate = useNavigate()
+    return (
+      <div>
+        {back && (
+          <button onClick={() => (typeof back.to === 'function' ? back.to() : navigate(back.to))}>{back.label}</button>
+        )}
+        {children}
+      </div>
+    )
+  },
 }))
 
 const mockUseOrder = vi.fn()
@@ -75,6 +89,7 @@ function renderOrderDetail() {
   return render(
     <MemoryRouter initialEntries={['/orders/order-1']}>
       <Routes>
+        <Route path="/orders" element={<div>Orders list page</div>} />
         <Route path="/orders/:id" element={<OrderDetail />} />
       </Routes>
     </MemoryRouter>,
@@ -86,6 +101,15 @@ beforeEach(() => {
   markDeliveredIsPending = false
   mockUseOrder.mockReturnValue({ data: makeOrder(), isLoading: false, isError: false, refetch: vi.fn() })
   vi.stubGlobal('confirm', vi.fn(() => true))
+})
+
+describe('OrderDetail — back navigation', () => {
+  it('the "Orders" back link (now on Topbar, not a hand-rolled duplicate) returns to /orders', async () => {
+    const user = userEvent.setup()
+    renderOrderDetail()
+    await user.click(screen.getByText('Orders'))
+    expect(screen.getByText('Orders list page')).toBeInTheDocument()
+  })
 })
 
 describe('OrderDetail — "Mark as delivered" double-click protection', () => {

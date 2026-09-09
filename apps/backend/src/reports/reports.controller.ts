@@ -242,4 +242,21 @@ export class ReportsController {
   ) {
     return this.reportsService.getActivity(limit);
   }
+
+  /**
+   * Full Day Report (forensic audit, 2026-09) — read-only end-of-day business
+   * summary for one calendar day. Owner only — same tier as profit-loss/
+   * daily-revenue, since this report includes revenue, cash, expense, and
+   * employee-reconciliation detail comparable to (or exceeding) P&L.
+   * Never creates/updates/deletes anything — read-only by construction.
+   */
+  @ApiOperation({ summary: 'Full Day Report — read-only end-of-day business summary (owner only)' })
+  @ApiResponse({ status: 200, description: 'DailyReport for the given date' })
+  @ApiResponse({ status: 400, description: 'Invalid date' })
+  @ApiResponse({ status: 403, description: 'Forbidden — non-owner roles' })
+  @Roles('owner')
+  @Get('daily/:date')
+  getDailyReport(@Param('date') date: string) {
+    return this.reportsService.getDailyReport(date);
+  }
 }

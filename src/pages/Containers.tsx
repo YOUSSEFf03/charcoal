@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useContainers } from '../hooks/useContainers'
 import { useSuppliers } from '../hooks/useSuppliers'
-import type { Container, ContainerStatus } from '../types/api'
+import type { Container, ContainerStatus, ContainerTrackingSummary } from '../types/api'
+import { formatDate, formatDateTime, formatEtaCountdown, daysUntil } from '../lib/date'
 
 type CtrStatus = 'all' | 'port' | 'transit' | 'arrived'
 
@@ -19,12 +20,29 @@ const STRIPE_COLOR: Record<ContainerStatus, string> = {
   arrived: 'var(--accent)',
 }
 
-// Format an ISO arrival date to the short "28 May" display used on the cards.
-function fmtEta(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+/** Sum of paidBags × kgPerBag / 1000 across product lines — the same tonnage
+ * formula ContainerDetail.tsx uses. productLines is already returned by
+ * GET /containers (no extra request). */
+function totalWeightTons(ctr: Container): number {
+  const lines = ctr.productLines ?? []
+  return lines.reduce((s, l) => s + (l.paidBags * parseFloat(l.kgPerBag)) / 1000, 0)
+}
+
+/** Text color for the countdown value, by urgency — overdue reads as red,
+ * arriving today/very soon as amber, everything else as the default text
+ * color. Purely a visual cue; formatEtaCountdown() owns the wording. */
+function countdownColor(eta: string | null | undefined): string {
+  const days = daysUntil(eta)
+  if (days === null) return 'var(--text3)'
+  if (days < 0) return 'var(--red)'
+  if (days <= 3) return 'var(--accent2)'
+  return 'var(--text)'
+}
+
+function routeLine(tracking: ContainerTrackingSummary | null | undefined): string | null {
+  if (!tracking) return null
+  if (tracking.origin && tracking.destination) return `${tracking.origin} → ${tracking.destination}`
+  return tracking.origin ?? tracking.destination ?? null
 }
 
 export default function Containers() {
@@ -33,9 +51,16 @@ export default function Containers() {
   const [search, setSearch] = useState('')
 
   // The list endpoint filters server-side; we pass status + search params.
+  // limit: 100 (the API's max — see ParseLimitPipe) so this "control center"
+  // overview isn't silently truncated at the default page size of 20 before
+  // being split into the two sections below. finalized: false — this page
+  // represents ACTIVE operational work; finalized containers move to
+  // /containers/history instead (Container Finalization + History).
   const { data, isLoading, isError, refetch } = useContainers({
     status: statusFilter === 'all' ? undefined : statusFilter,
     search: search || undefined,
+    limit: 100,
+    finalized: false,
   })
   // Supplier lookup for the client-side name join (cards display name, not id).
   const suppliersQ = useSuppliers({ limit: 100 })
@@ -45,11 +70,18 @@ export default function Containers() {
   // Tab counts: total reflects the active query; per-status is best-effort from
   // the loaded page (the API paginates, so these are page-local counts).
   const counts = {
-    all: statusFilter === 'all' ? (data?.total ?? containers.length) : (data?.total ?? containers.length),
+    all: data?.total ?? containers.length,
     port: containers.filter(c => c.status === 'port').length,
     transit: containers.filter(c => c.status === 'transit').length,
     arrived: containers.filter(c => c.status === 'arrived').length,
   }
+
+  // The internal container status is the sole authority for which section a
+  // container belongs to — never inferred from Traqo's tracking status. An
+  // "arrived" container stays in ARRIVED even if its last cached tracking
+  // snapshot still reads "IN_TRANSIT" (stale/unrefreshed data).
+  const notArrived = containers.filter(c => c.status !== 'arrived')
+  const arrived = containers.filter(c => c.status === 'arrived')
 
   return (
     <>
@@ -109,49 +141,142 @@ export default function Containers() {
           </div>
         )}
 
-        {/* Container cards */}
         {!isLoading && !isError && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {containers.map(ctr => {
-              const badge = STATUS_BADGE[ctr.status]
-              const stripe = STRIPE_COLOR[ctr.status]
-              return (
-                <div
-                  key={ctr.id}
-                  className="ctr-card"
-                  onClick={() => navigate('/containers/' + encodeURIComponent(ctr.id))}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <div className="ctr-card-inner">
-                    <div className="ctr-status-stripe" style={{ background: stripe }} />
-                    <div className="ctr-body">
-                      <div className="ctr-head">
-                        <div>
-                          <div className="ctr-number">{ctr.number}</div>
-                          <div className="ctr-supplier">
-                            <i className="ti ti-building-store" style={{ fontSize: 12 }} /> {supplierNameById.get(ctr.supplierId) ?? ctr.supplierId}
+          <>
+            {/* ============================================================
+                NOT ARRIVED / IN TRANSIT — the operational section: what's
+                still coming, where it is, and how many days remain.
+               ============================================================ */}
+            <div className="section-title">
+              <i className="ti ti-ship" /> Not arrived / in transit
+              <span style={{ fontFamily: "'IBM Plex Mono',monospace", opacity: 0.7 }}>({notArrived.length})</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 26 }}>
+              {notArrived.map(ctr => {
+                const badge = STATUS_BADGE[ctr.status]
+                const stripe = STRIPE_COLOR[ctr.status]
+                const tracking = ctr.tracking
+                const route = routeLine(tracking)
+                return (
+                  <div
+                    key={ctr.id}
+                    className="ctr-card"
+                    onClick={() => navigate('/containers/' + encodeURIComponent(ctr.id))}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <div className="ctr-card-inner">
+                      <div className="ctr-status-stripe" style={{ background: stripe }} />
+                      <div className="ctr-body">
+                        <div className="ctr-head">
+                          <div>
+                            <div className="ctr-number">{ctr.number}</div>
+                            <div className="ctr-supplier">
+                              <i className="ti ti-building-store" style={{ fontSize: 12 }} /> {supplierNameById.get(ctr.supplierId) ?? ctr.supplierId}
+                            </div>
                           </div>
+                          <span className={`badge ${badge.cls}`}>{badge.label}</span>
                         </div>
-                        <span className={`badge ${badge.cls}`}>{badge.label}</span>
+
+                        <div className="ctr-meta">
+                          {(ctr.sealineName ?? ctr.sealine) && (
+                            <span><i className="ti ti-anchor" /> {ctr.sealineName ?? ctr.sealine}</span>
+                          )}
+                          {tracking?.status && (
+                            <span className="badge badge-gray" style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11 }}>{tracking.status}</span>
+                          )}
+                          {(tracking?.vessel || tracking?.voyage) && (
+                            <span><i className="ti ti-sailboat" /> {[tracking?.vessel, tracking?.voyage].filter(Boolean).join(' · ')}</span>
+                          )}
+                        </div>
+
+                        {(route || tracking?.currentLocation) && (
+                          <div className="ctr-meta">
+                            {route && <span><i className="ti ti-route" /> {route}</span>}
+                            {tracking?.currentLocation && <span><i className="ti ti-map-pin" /> Latest location: {tracking.currentLocation}</span>}
+                          </div>
+                        )}
+
+                        {!ctr.sealine && (
+                          <div className="ctr-meta" style={{ color: 'var(--text3)' }}>Carrier not set</div>
+                        )}
+                        {ctr.sealine && !tracking && (
+                          <div className="ctr-meta" style={{ color: 'var(--text3)' }}>Tracking not available — open container to refresh</div>
+                        )}
+
+                        {tracking?.lastFetchedAt && (
+                          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
+                            Tracking updated {formatDateTime(tracking.lastFetchedAt)}
+                          </div>
+                        )}
                       </div>
-                      <div className="ctr-meta">
-                        <span><i className="ti ti-clock" /> ETA {fmtEta(ctr.arrivalDate)}</span>
-                        {ctr.notes && <span><i className="ti ti-map-pin" /> {ctr.notes}</span>}
+                      <div className="ctr-right">
+                        <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                          {tracking?.eta ? `ETA ${formatDate(tracking.eta)}` : ' '}
+                        </div>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: countdownColor(tracking?.eta), textAlign: 'right' }}>
+                          {formatEtaCountdown(tracking?.eta)}
+                        </div>
                       </div>
-                    </div>
-                    <div className="ctr-right">
-                      <span className="badge badge-gray" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
-                        {ctr.status}
-                      </span>
                     </div>
                   </div>
-                </div>
-              )
-            })}
-            {containers.length === 0 && (
-              <div className="empty">No containers found.</div>
-            )}
-          </div>
+                )
+              })}
+              {notArrived.length === 0 && (
+                <div className="empty">No containers currently in transit match your search/filter.</div>
+              )}
+            </div>
+
+            {/* ============================================================
+                ARRIVED — completed, compact, no countdown/tracking clutter.
+               ============================================================ */}
+            <div className="section-title">
+              <i className="ti ti-anchor" /> Arrived
+              <span style={{ fontFamily: "'IBM Plex Mono',monospace", opacity: 0.7 }}>({arrived.length})</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {arrived.map(ctr => {
+                const route = routeLine(ctr.tracking)
+                return (
+                  <div
+                    key={ctr.id}
+                    className="ctr-card"
+                    onClick={() => navigate('/containers/' + encodeURIComponent(ctr.id))}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <div className="ctr-card-inner">
+                      <div className="ctr-status-stripe" style={{ background: STRIPE_COLOR.arrived }} />
+                      <div className="ctr-body">
+                        <div className="ctr-head">
+                          <div>
+                            <div className="ctr-number">{ctr.number}</div>
+                            <div className="ctr-supplier">
+                              <i className="ti ti-building-store" style={{ fontSize: 12 }} /> {supplierNameById.get(ctr.supplierId) ?? ctr.supplierId}
+                            </div>
+                          </div>
+                          <span className="badge badge-green">Arrived</span>
+                        </div>
+                        <div className="ctr-meta">
+                          <span><i className="ti ti-calendar-check" /> Arrived {formatDate(ctr.arrivalDate)}</span>
+                          <span><i className="ti ti-weight" /> {totalWeightTons(ctr).toFixed(2)} t</span>
+                          {(ctr.sealineName ?? ctr.sealine) && (
+                            <span><i className="ti ti-anchor" /> {ctr.sealineName ?? ctr.sealine}</span>
+                          )}
+                        </div>
+                        {route && (
+                          <div className="ctr-meta" style={{ color: 'var(--text3)' }}>
+                            <span><i className="ti ti-route" /> {route}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+              {arrived.length === 0 && (
+                <div className="empty">No arrived containers match your search/filter.</div>
+              )}
+            </div>
+          </>
         )}
 
       </div>

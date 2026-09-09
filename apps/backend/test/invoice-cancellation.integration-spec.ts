@@ -25,6 +25,8 @@ import { InvoicesService } from '../src/invoices/invoices.service';
 import { ShipmentsModule } from '../src/shipments/shipments.module';
 import { ShipmentsService } from '../src/shipments/shipments.service';
 import { SettingsModule } from '../src/settings/settings.module';
+import { WalkInSalesModule } from '../src/walk-in-sales/walk-in-sales.module';
+import { WalkInSalesService } from '../src/walk-in-sales/walk-in-sales.service';
 
 const TAG = `CANCEL_TEST_${Date.now()}`;
 const CLERK_ID = 'user_test_owner'; // matches the dev-auth-bypass seeded user (auth.guard.ts)
@@ -34,6 +36,8 @@ describe('Invoice cancellation guards — real Postgres integration', () => {
   let prisma: PrismaService;
   let invoices: InvoicesService;
   let shipments: ShipmentsService;
+
+  let walkInSales: WalkInSalesService;
 
   let clientId: string;
   let supplierId: string;
@@ -100,14 +104,50 @@ describe('Invoice cancellation guards — real Postgres integration', () => {
     return { orderId: order.id, bagTypeId };
   }
 
+  async function makePackedStock(quantity: number) {
+    const lot = await prisma.stockLot.create({
+      data: {
+        charcoalType: TAG, grade: 'A', supplierId,
+        kgReceived: '1000.000', kgRemaining: '1000.000', costPerKg: '1.0000',
+        source: 'container', dateReceived: new Date(),
+      },
+    });
+    createdLotIds.push(lot.id);
+    const session = await prisma.packingSession.create({
+      data: {
+        workerId: userId, mode: 'stock', kgConsumed: '0', kgOutputTotal: '0', varianceKg: '0', sessionEarnings: '0',
+        date: new Date(), completedAt: new Date(), sessionLots: { create: [{ lotId: lot.id, kgUsed: '0' }] },
+      },
+    });
+    createdPackingSessionIds.push(session.id);
+    const packedStock = await prisma.packedStock.create({
+      data: { lotId: lot.id, bagTypeId, quantity, reservedQuantity: 0, sessionId: session.id },
+    });
+    createdPackedStockIds.push(packedStock.id);
+    return packedStock.id;
+  }
+
+  async function makeRawLot(kgRemaining: string) {
+    const lot = await prisma.stockLot.create({
+      data: {
+        charcoalType: TAG, grade: 'A', supplierId,
+        kgReceived: kgRemaining, kgRemaining, costPerKg: '1.0000',
+        source: 'container', dateReceived: new Date(),
+      },
+    });
+    createdLotIds.push(lot.id);
+    return lot.id;
+  }
+
   beforeAll(async () => {
     moduleRef = await Test.createTestingModule({
-      imports: [PrismaModule, InvoicesModule, ShipmentsModule, SettingsModule],
+      imports: [PrismaModule, InvoicesModule, ShipmentsModule, SettingsModule, WalkInSalesModule],
     }).compile();
 
     prisma = moduleRef.get(PrismaService);
     invoices = moduleRef.get(InvoicesService);
     shipments = moduleRef.get(ShipmentsService);
+    walkInSales = moduleRef.get(WalkInSalesService);
 
     const user = await prisma.user.upsert({
       where: { clerkId: CLERK_ID },
@@ -267,5 +307,122 @@ describe('Invoice cancellation guards — real Postgres integration', () => {
 
     const result = await invoices.cancel(invoice.id);
     expect(result.status).toBe('cancelled');
+  });
+
+  // ===========================================================================
+  // Stock reversal fix (forensic audit, 2026-08-28): cancelling an unpaid
+  // walk-in sale must restore the stock its creation deducted. Before this
+  // fix, real Postgres proof showed cancellation left PackedStock.quantity/
+  // StockLot.kgRemaining permanently decremented (45→45, 90→90) with both
+  // StockExit rows still pointing at the now-cancelled invoice.
+  // ===========================================================================
+  describe('stock reversal on cancellation (confirmed bug fix)', () => {
+    it('cancelling an unpaid walk-in sale restores BOTH packed-stock quantity and raw-lot kgRemaining', async () => {
+      const packedStockId = await makePackedStock(50);
+      const lotId = await makeRawLot('100.000');
+
+      const before = await prisma.packedStock.findUnique({ where: { id: packedStockId } });
+      const lotBefore = await prisma.stockLot.findUnique({ where: { id: lotId } });
+      expect(before!.quantity).toBe(50);
+      expect(lotBefore!.kgRemaining.toString()).toBe('100');
+
+      const sale = await walkInSales.create(
+        {
+          clientId, date: '2026-08-28', method: 'cash' as const,
+          bags: [{ packedStockId, bagTypeId, bagTypeName: 'Test Bag', quantity: 5, pricePerBag: '2.00', currency: 'USD' as const }],
+          kgLines: [{ lotId, kgQuantity: '10.000', pricePerKg: '1.00', currency: 'USD' as const, description: 'raw' }],
+          // no receivedUsd/receivedLbp — zero-payment, the only kind cancel() allows
+        } as any,
+        CLERK_ID,
+      );
+      createdInvoiceIds.push(sale.id);
+      expect(sale.status).toBe('issued');
+
+      const afterCreate = await prisma.packedStock.findUnique({ where: { id: packedStockId } });
+      const lotAfterCreate = await prisma.stockLot.findUnique({ where: { id: lotId } });
+      expect(afterCreate!.quantity).toBe(45);
+      expect(lotAfterCreate!.kgRemaining.toString()).toBe('90');
+
+      const cancelled = await invoices.cancel(sale.id);
+      expect(cancelled.status).toBe('cancelled');
+
+      // THE FIX: stock is restored to its pre-sale level.
+      const afterCancel = await prisma.packedStock.findUnique({ where: { id: packedStockId } });
+      const lotAfterCancel = await prisma.stockLot.findUnique({ where: { id: lotId } });
+      expect(afterCancel!.quantity).toBe(50);
+      expect(lotAfterCancel!.kgRemaining.toString()).toBe('100');
+
+      // The StockExit rows themselves are left in place, untouched, as a
+      // historical record — same treatment as the Invoice row (cancelled, not deleted).
+      const exits = await prisma.stockExit.findMany({ where: { invoiceId: sale.id } });
+      expect(exits).toHaveLength(2);
+      expect(exits.find((e) => e.packedStockId === packedStockId)!.quantity).toBe(5);
+      expect(exits.find((e) => e.lotId === lotId)!.kgQuantity!.toString()).toBe('10');
+    });
+
+    it('multi-batch sale (2 packed-stock lots): cancelling restores BOTH lots independently', async () => {
+      const ps1 = await makePackedStock(30);
+      const ps2 = await makePackedStock(40);
+
+      const sale = await walkInSales.create(
+        {
+          clientId, date: '2026-08-28', method: 'cash' as const,
+          bags: [
+            { packedStockId: ps1, bagTypeId, bagTypeName: 'Test Bag', quantity: 3, pricePerBag: '2.00', currency: 'USD' as const },
+            { packedStockId: ps2, bagTypeId, bagTypeName: 'Test Bag', quantity: 4, pricePerBag: '2.00', currency: 'USD' as const },
+          ],
+        } as any,
+        CLERK_ID,
+      );
+      createdInvoiceIds.push(sale.id);
+
+      expect((await prisma.packedStock.findUnique({ where: { id: ps1 } }))!.quantity).toBe(27);
+      expect((await prisma.packedStock.findUnique({ where: { id: ps2 } }))!.quantity).toBe(36);
+
+      await invoices.cancel(sale.id);
+
+      expect((await prisma.packedStock.findUnique({ where: { id: ps1 } }))!.quantity).toBe(30);
+      expect((await prisma.packedStock.findUnique({ where: { id: ps2 } }))!.quantity).toBe(40);
+    });
+
+    it('cancelling a PAID walk-in sale is still rejected (INVALID_TRANSITION) — stock is NOT restored, since it never should be for a live sale', async () => {
+      const packedStockId = await makePackedStock(50);
+      const receiver = await prisma.user.create({
+        data: { clerkId: `local_${TAG}_receiver`, email: `${TAG}_receiver@local.internal`, name: 'Cancel Test Receiver', role: 'receiver' },
+      });
+      let saleId: string | undefined;
+
+      // try/finally — this fixture's receiver must be deleted even if an
+      // assertion below throws, or a failing test leaks a "Test Owner"-style
+      // duplicate user the same way the audited files did.
+      try {
+        const sale = await walkInSales.create(
+          {
+            clientId, date: '2026-08-28', method: 'cash' as const,
+            bags: [{ packedStockId, bagTypeId, bagTypeName: 'Test Bag', quantity: 5, pricePerBag: '2.00', currency: 'USD' as const }],
+            receivedUsd: '10.00', receiverId: receiver.id,
+          } as any,
+          CLERK_ID,
+        );
+        saleId = sale.id;
+        createdInvoiceIds.push(sale.id);
+        expect(sale.status).toBe('paid');
+
+        await expect(invoices.cancel(sale.id)).rejects.toMatchObject({
+          response: expect.objectContaining({ code: 'INVALID_TRANSITION' }),
+        });
+
+        // Rejected — stock must remain exactly as the live sale left it (45), not restored.
+        const ps = await prisma.packedStock.findUnique({ where: { id: packedStockId } });
+        expect(ps!.quantity).toBe(45);
+      } finally {
+        if (saleId) {
+          await prisma.paymentAllocation.deleteMany({ where: { invoiceId: saleId } });
+          await prisma.payment.deleteMany({ where: { invoiceId: saleId } });
+        }
+        await prisma.userAccount.deleteMany({ where: { userId: receiver.id } });
+        await prisma.user.deleteMany({ where: { id: receiver.id } });
+      }
+    });
   });
 });

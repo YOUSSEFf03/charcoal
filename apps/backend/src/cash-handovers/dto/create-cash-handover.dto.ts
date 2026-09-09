@@ -13,11 +13,21 @@ import { ApiProperty } from '@nestjs/swagger';
 
 /**
  * Itemized amount already deducted from collected cash before handover
- * (e.g. gas, parking) — persisted verbatim as a CashHandoverExpense row.
+ * (e.g. gas, parking) — persisted as a CashHandoverExpense row.
+ *
+ * Forensic audit (2026-08-31), "Expenses + Cash Handover expense selection
+ * redesign": a free-text `description` previously let the same real-world
+ * expense be logged under any spelling ("fuel"/"Fuel"/"benzin"/"gaz"),
+ * making it impossible to reliably group/report by category. This now
+ * requires an existing ExpenseCategory (selected from a dropdown, or
+ * created via POST /expense-categories' find-or-create) — CashHandoversService
+ * .create() resolves `categoryId` to the category's name and stores THAT as
+ * `CashHandoverExpense.description`, so every existing reader of that column
+ * keeps working unchanged.
  */
 export class CashHandoverExpenseDto {
-  @ApiProperty({ description: 'Expense description', example: 'Fuel' })
-  @IsString() @IsNotEmpty() description: string;
+  @ApiProperty({ description: 'UUID of an existing ExpenseCategory (see GET/POST /expense-categories)' })
+  @IsUUID('all') categoryId: string;
 
   @ApiProperty({ description: 'Expense amount (decimal string)', example: '10.00' })
   @IsNumberString() @IsNotEmpty() amount: string;

@@ -112,32 +112,34 @@ export default function FillClientPayments() {
             <div className="empty">No payments {filterActive ? 'in this period' : 'recorded yet'}.</div>
           )}
           {!paymentsQ.isLoading && !paymentsQ.isError && payments.length > 0 && (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Method</th>
-                  <th>Receiver</th>
-                  <th className="right">Amount</th>
-                  <th>Currency</th>
-                  <th>Reference</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payments.map(p => (
-                  <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/fill-clients/${id}/payments/${p.id}`)}>
-                    <td className="mono">{formatDateTime(p.date, { day: '2-digit' })}</td>
-                    <td><span className="badge badge-gray">{p.method}</span></td>
-                    {/* receiver (authoritative relation, same value cash attribution
-                        uses) over receiverName (denormalized, goes stale on rename). */}
-                    <td style={{ color: 'var(--text2)', fontSize: 12.5 }}>{p.receiver?.name ?? p.receiverName ?? '—'}</td>
-                    <td className="right num" style={{ fontWeight: 600, color: 'var(--accent)' }}>+{formatUsd(p.amount)}</td>
-                    <td className="mono" style={{ color: 'var(--text3)' }}>{p.currency}</td>
-                    <td style={{ color: 'var(--text2)', fontSize: 12.5 }}>{p.notes ?? p.displayId ?? '—'}</td>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Method</th>
+                    <th>Receiver</th>
+                    <th className="right">Amount</th>
+                    <th>Currency</th>
+                    <th>Reference</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {payments.map(p => (
+                    <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/fill-clients/${id}/payments/${p.id}`)}>
+                      <td className="mono">{formatDateTime(p.date, { day: '2-digit' })}</td>
+                      <td><span className="badge badge-gray">{p.method}</span></td>
+                      {/* receiver (authoritative relation, same value cash attribution
+                          uses) over receiverName (denormalized, goes stale on rename). */}
+                      <td style={{ color: 'var(--text2)', fontSize: 12.5 }}>{p.receiver?.name ?? p.receiverName ?? '—'}</td>
+                      <td className="right num" style={{ fontWeight: 600, color: 'var(--accent)' }}>+{formatUsd(p.amount)}</td>
+                      <td className="mono" style={{ color: 'var(--text3)' }}>{p.currency}</td>
+                      <td style={{ color: 'var(--text2)', fontSize: 12.5 }}>{p.notes ?? p.displayId ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
           {!paymentsQ.isLoading && payments.length > 0 && totalPages > 1 && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>

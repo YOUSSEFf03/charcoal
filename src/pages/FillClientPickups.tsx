@@ -126,34 +126,36 @@ export default function FillClientPickups() {
             <div className="empty">No pickups {filterActive ? 'in this period' : 'recorded yet'}.</div>
           )}
           {!pickupsQ.isLoading && !pickupsQ.isError && pickups.length > 0 && (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Driver / recipient</th>
-                  <th>Bags</th>
-                  <th className="right">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pickups.map((pk: any) => {
-                  const { count, detail } = parseBags(pk.reason)
-                  return (
-                    <tr key={pk.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/fill-clients/${id}/pickups/${pk.id}`)}>
-                      <td className="mono">{formatDateTime(pk.date, { day: '2-digit' })}</td>
-                      <td style={{ color: 'var(--text2)' }}>{pk.recipient ?? '—'}</td>
-                      <td>
-                        <span style={{ fontWeight: 600 }}>{count > 0 ? count : '—'}</span>
-                        {detail && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>{detail}</span>}
-                      </td>
-                      <td className="right num" style={{ fontWeight: 600, color: pk.amount ? 'var(--accent)' : 'var(--text3)' }}>
-                        {pk.amount ? formatUsd(pk.amount) : '—'}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Driver / recipient</th>
+                    <th>Bags</th>
+                    <th className="right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pickups.map((pk: any) => {
+                    const { count, detail } = parseBags(pk.reason)
+                    return (
+                      <tr key={pk.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/fill-clients/${id}/pickups/${pk.id}`)}>
+                        <td className="mono">{formatDateTime(pk.date, { day: '2-digit' })}</td>
+                        <td style={{ color: 'var(--text2)' }}>{pk.recipient ?? '—'}</td>
+                        <td>
+                          <span style={{ fontWeight: 600 }}>{count > 0 ? count : '—'}</span>
+                          {detail && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>{detail}</span>}
+                        </td>
+                        <td className="right num" style={{ fontWeight: 600, color: pk.amount ? 'var(--accent)' : 'var(--text3)' }}>
+                          {pk.amount ? formatUsd(pk.amount) : '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
           {!pickupsQ.isLoading && pickups.length > 0 && totalPages > 1 && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>

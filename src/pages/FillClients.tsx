@@ -244,7 +244,7 @@ export default function FillClients() {
                 <div className="compose-title">New fill client</div>
                 <div className="compose-sub">company that supplies its own bags for filling</div>
               </div>
-              <button className="compose-close" onClick={() => setShowNew(false)}>✕</button>
+              <button className="compose-close" aria-label="Close" onClick={() => setShowNew(false)}>✕</button>
             </div>
 
             <div style={{ overflowY: 'auto', flex: 1 }}>

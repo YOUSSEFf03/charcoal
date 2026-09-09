@@ -119,6 +119,24 @@ describe('StockLotsService', () => {
       // Original DB record should not have been mutated
       expect(original).toHaveProperty('costPerKg');
     });
+
+    // =========================================================================
+    // Real leak found during the Warehouse forensic audit: the nested
+    // `supplier` relation was `include: { supplier: true }` — the FULL
+    // Supplier record (bankDetails/contactPersons/paymentTerms included) was
+    // returned to every role that can reach GET /stock-lots, including
+    // sales_rep/worker (GET /suppliers itself is owner/accountant-only —
+    // this bypassed that boundary entirely). Only id/name are ever needed
+    // (StockLot.supplier's own declared type, and the only fields Warehouse.tsx
+    // reads) — the query is now scoped at the Prisma level, for every role.
+    // =========================================================================
+
+    it('the supplier relation is queried with a scoped select — only id/name — never the full record', async () => {
+      mockPrisma.stockLot.findUnique.mockResolvedValue(lotWithCost);
+      await service.findOne('lot-uuid-1', 'owner');
+      const args = mockPrisma.stockLot.findUnique.mock.calls[0][0];
+      expect(args.include).toEqual({ supplier: { select: { id: true, name: true } } });
+    });
   });
 
   // =========================================================================
@@ -152,6 +170,13 @@ describe('StockLotsService', () => {
       for (const lot of result.data) {
         expect(lot).toHaveProperty('costPerKg');
       }
+    });
+
+    it('the supplier relation is queried with a scoped select — only id/name — regardless of role (real leak found live: worker/sales_rep received the supplier\'s bank IBAN/SWIFT/account number verbatim)', async () => {
+      mockPrisma.$transaction.mockResolvedValue([[], 0]);
+      await service.findAll(1, 20, undefined, undefined, undefined, undefined, undefined, 'worker');
+      const findManyArgs = mockPrisma.stockLot.findMany.mock.calls[0][0];
+      expect(findManyArgs.include).toEqual({ supplier: { select: { id: true, name: true } } });
     });
   });
 
@@ -258,6 +283,13 @@ describe('StockLotsService', () => {
       mockPrisma.stockLot.findMany.mockResolvedValue([]);
       const result = await service.findAvailable('owner');
       expect(result).toEqual([]);
+    });
+
+    it('the supplier relation is queried with a scoped select — only id/name — same fix as findAll()/findOne()', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue([]);
+      await service.findAvailable('worker');
+      const args = mockPrisma.stockLot.findMany.mock.calls[0][0];
+      expect(args.include).toEqual({ supplier: { select: { id: true, name: true } } });
     });
   });
 });

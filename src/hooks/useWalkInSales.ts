@@ -39,6 +39,18 @@ export interface CreateWalkInSaleDto {
   receiverName?: string
   recipient?: string
   notes?: string
+  /**
+   * Client-generated key identifying one logical sale-submission attempt —
+   * see WalkInSalesService.create()'s doc comment (backend) for the full
+   * idempotency mechanism this enables. Generated once per sale-entry session
+   * in WarehouseSales.tsx (crypto.randomUUID()), unchanged across retries of
+   * that same attempt; a fresh key is only generated after a submission
+   * actually completes (success or terminal failure). This is what lets the
+   * backend collapse a double-click / network retry into the single original
+   * result instead of creating a duplicate sale — the frontend's disabled-
+   * while-pending button is UX-layer protection only, not this guarantee.
+   */
+  idempotencyKey: string
 }
 
 /**

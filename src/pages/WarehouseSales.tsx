@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import Topbar from '../components/layout/Topbar'
 import { useBagTypes } from '../hooks/useBagTypes'
-import { useAvailableStockLots, usePackedStockSummary, useStockExits, useCreateStockExit, useUpdateStockExit, useWalkInSummary, useWarehouseCashSummary, useOnAccountCount, useFifoDraw } from '../hooks/useWarehouse'
+import { useAvailableStockLots, usePackedStockSummary, useGroupedStockExits, useCreateStockExit, useUpdateStockExit, useWalkInSummary, useWarehouseCashSummary, useOnAccountCount, useFifoDraw } from '../hooks/useWarehouse'
 import { useClients } from '../hooks/useClients'
 import { useCashReceivers } from '../hooks/useUsers'
 import { useCreateWalkInSale } from '../hooks/useWalkInSales'
@@ -30,6 +30,25 @@ function clientBadgeCls(type: string) {
 
 function mkInitials(name: string) {
   return name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase()
+}
+
+// Money in its OWN currency (never converted) — same $/LL convention Invoices.tsx
+// uses for payment rows. `amount` is a decimal string from the API, or null/undefined.
+function fmtCcy(amount: string | number | null | undefined, currency?: string | null) {
+  if (amount == null) return '—'
+  const n = typeof amount === 'number' ? amount : parseFloat(amount)
+  if (!Number.isFinite(n)) return '—'
+  return currency === 'LBP' ? `LL ${n.toLocaleString()}` : `$${n.toFixed(2)}`
+}
+
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  cash: 'Cash', whish: 'Whish', omt: 'OMT', bank_transfer: 'Bank transfer', cheque: 'Cheque',
+}
+// Anonymous (non-invoiced) walk-in sales have no `method` column on StockExit
+// at all — see findAllGrouped()'s doc comment (backend) — so this is reported
+// honestly as "Not recorded" rather than guessed from the Entry form's dropdown.
+function methodLabel(method: string | null | undefined) {
+  return method ? (PAYMENT_METHOD_LABELS[method] ?? method) : 'Not recorded'
 }
 
 export default function WarehouseSales() {
@@ -63,7 +82,7 @@ export default function WarehouseSales() {
   // out-of-range page instead of their new results.
   useEffect(() => { setSalesLogPage(1) }, [logDateFrom, logDateTo])
 
-  const exitsQ = useStockExits({
+  const exitsQ = useGroupedStockExits({
     exitType: 'walk_in',
     dateFrom: logDateFrom || undefined,
     dateTo: logDateTo || undefined,
@@ -82,7 +101,7 @@ export default function WarehouseSales() {
   // ("Sales today" etc.) use todayExitsQ.data?.total (already unbounded,
   // straight from the backend's count()), never todayExits.length (capped
   // at 100 rows — would silently undercount on a busy day).
-  const todayExitsQ = useStockExits({ exitType: 'walk_in', dateFrom: today, dateTo: today, limit: 100 })
+  const todayExitsQ = useGroupedStockExits({ exitType: 'walk_in', dateFrom: today, dateTo: today, limit: 100 })
   // Cash actually collected today — anonymous StockExit amounts + payments on
   // warehouse-sale invoices, computed server-side. See
   // StockExitsService.getWarehouseCashSummary() for the accounting rule.
@@ -155,8 +174,22 @@ export default function WarehouseSales() {
   const [rcvUsd, setRcvUsd] = useState('')
   const [rcvLbp, setRcvLbp] = useState('')
   const [payMethod, setPayMethod] = useState('Cash')
-  const [receiver, setReceiver] = useState('')
+  const [receiverId, setReceiverId] = useState('')
   const [notes, setNotes] = useState('')
+
+  // Identifies ONE logical sale-submission attempt — sent as
+  // CreateWalkInSaleDto.idempotencyKey (registered-client sales, POST
+  // /walk-in-sales) or CreateStockExitDto.idempotencyKey (anonymous sales,
+  // POST /stock-exits — the endpoint anonymous walk-ins actually use) so the
+  // backend can collapse a double-click/network-retry into the original
+  // result instead of creating a duplicate sale (see WalkInSalesService/
+  // StockExitsService.create()'s doc comments for the real guarantee — the
+  // submitInFlightRef guard and the disabled button below are UX protection
+  // only, not this). Generated once per sale-entry session; regenerated only
+  // after a submission actually completes (every success path below —
+  // registered-client and anonymous alike — calls this), never on every
+  // keystroke or re-render, so retries of the SAME attempt keep the SAME key.
+  const [saleIdempotencyKey, setSaleIdempotencyKey] = useState(() => crypto.randomUUID())
 
   const updateExit = useUpdateStockExit()
   const [selectedExit, setSelectedExit] = useState<any>(null)
@@ -222,6 +255,31 @@ export default function WarehouseSales() {
     return null
   }
 
+  // Display-only USD amount for a GROUPED sale-history row (see
+  // useGroupedStockExits — one row per invoice, not per StockExit).
+  // Standalone (non-invoiced) rows delegate straight to exitDisplayAmountUsd()
+  // via the attached rawExit, so that logic (and its edit-amount flow) stays
+  // exactly as it was. An invoiced row sums every line's lineTotal — already
+  // the exact figure InvoiceCalculatorService.computeLines() stored — instead
+  // of re-deriving qty × price per line.
+  function groupAmountUsd(row: any): number | null {
+    if (row.rawExit) return exitDisplayAmountUsd(row.rawExit)
+    const total = (row.lines ?? []).reduce((sum: number, l: any) => sum + (parseFloat(l.lineTotal ?? '0') || 0), 0)
+    return row.currency === 'LBP' ? (rawRate > 0 ? total / rawRate : 0) : total
+  }
+
+  // Short one-line description of a grouped sale-history row for compact
+  // (non-tabular) displays — the Entry tab's "Today's sales" mini-list.
+  function groupDescription(row: any): string {
+    const lines: any[] = row.lines ?? []
+    if (lines.length === 0) return '—'
+    if (lines.length > 1) return `${lines.length} items`
+    const l = lines[0]
+    return l.saleUnit === 'KG'
+      ? `${(parseFloat(l.kgQuantity ?? '0') || 0).toFixed(1)} kg raw`
+      : `${l.qty ?? 0} × ${l.bagTypeName ?? '—'}`
+  }
+
   // Totals
   function lineTotalUSD(ln: PackedLine) {
     const sub = roundDp((parseFloat(ln.qty) || 0) * (parseFloat(ln.price) || 0), 2)
@@ -257,6 +315,14 @@ export default function WarehouseSales() {
   const lbpNum = parseFloat(rcvLbp) || 0
   const lbpEq = rawRate > 0 ? roundDp(lbpNum / rawRate, 2) : 0
   const totalRecv = roundDp(usdNum + lbpEq, 2)
+
+  // Cash/Whish/OMT are personal-custody methods — same rule
+  // PaymentsService.RECEIVER_REQUIRED_METHODS enforces server-side (and
+  // Invoices.tsx's Log Payment modal already mirrors client-side). Only
+  // matters once a registered-client sale will actually create a Payment
+  // (totalRecv > 0) — an "On account" or zero-received sale never reaches
+  // WalkInSalesService's receiver check at all.
+  const receiverRequired = totalRecv > 0 && (payMethod === 'Cash' || payMethod === 'Whish' || payMethod === 'OMT')
 
   let recvBarCls = 'recv-bar none'
   let recvLabel = 'Enter amount received above'
@@ -295,9 +361,49 @@ export default function WarehouseSales() {
     'Cash': 'cash', 'Whish': 'whish', 'OMT': 'omt', 'Bank transfer': 'bank_transfer',
   }
 
+  // ── UX-layer guard ONLY — read this before assuming it's the real fix ──────
+  // A repeat-click/double-tap on "Record this sale" (or a slow network making
+  // a user tap again before anything visibly happens) must not even ATTEMPT a
+  // second HTTP request in the common case. This ref is a synchronous
+  // re-entrancy guard checked BEFORE the first `await` in doSubmitSale, so it
+  // closes the whole in-tab window — including while an earlier FIFO-draw
+  // lookup is still in flight, before createWalkInSale.isPending would even
+  // turn true. The button's `disabled={createWalkInSale.isPending || ...}`
+  // below is the visible feedback for the same guard.
+  //
+  // What this CANNOT do: stop a second tab, a retrying proxy, a direct API
+  // call, or any request this ref never sees. THE ACTUAL GUARANTEE against a
+  // duplicate sale is server-side — WalkInSalesService.create()'s idempotency
+  // check + the invoices_idempotencyKey_key DB constraint (see that method's
+  // doc comment). This ref exists purely so a normal double-click doesn't even
+  // round-trip to the server; without it the request would still be safely
+  // deduplicated there, just after a wasted network call.
+  const submitInFlightRef = useRef(false)
+
   async function submitSale() {
+    if (submitInFlightRef.current) return
+    submitInFlightRef.current = true
+    try {
+      await doSubmitSale()
+    } finally {
+      submitInFlightRef.current = false
+    }
+  }
+
+  async function doSubmitSale() {
     const buyerName = selectedBuyer ? selectedBuyer.name : (buyerInput.trim() || 'Walk-in')
     const isRegisteredClient = !!selectedBuyerId && selectedBuyerId !== 'walk-in'
+
+    // Mirrors PaymentsService's server-side RECEIVER_REQUIRED_METHODS check
+    // (WalkInSalesService.create() now enforces the same rule) — validated
+    // here too so the user gets an immediate, specific toast instead of a
+    // round-trip 400. A registered-client sale is the only path that creates
+    // a real Payment row here; anonymous walk-ins record the amount directly
+    // on the StockExit and never reach this rule.
+    if (isRegisteredClient && receiverRequired && !receiverId) {
+      showToast('Select who received the payment — required for Cash, Whish, and OMT')
+      return
+    }
 
     // BUG-3/BUG-4: a sale to a REGISTERED client (packed bags) goes through one atomic
     // backend endpoint that writes stock exit + issued invoice + payment together, in the
@@ -349,10 +455,6 @@ export default function WarehouseSales() {
       }
 
       const mappedMethod = PAY_METHOD_MAP[payMethod]
-      // receiverId must be a User ID (payments_receiverId_fkey → users table).
-      // Workers come from the workers table — their IDs are invalid here.
-      // Only receivers (role='receiver') are real users and safe to pass.
-      const receiverId = allReceivers.find(r => r.name === receiver)?.id
 
       try {
         await createWalkInSale.mutateAsync({
@@ -362,9 +464,10 @@ export default function WarehouseSales() {
           ...(usdNum > 0 ? { receivedUsd: usdNum.toFixed(2) } : {}),
           ...(lbpNum > 0 ? { receivedLbp: lbpNum.toFixed(2) } : {}),
           method: mappedMethod ?? 'cash',
-          ...(receiverId ? { receiverId } : receiver ? { receiverName: receiver } : {}),
+          ...(receiverId ? { receiverId } : {}),
           recipient: buyerName,
           notes: notes || undefined,
+          idempotencyKey: saleIdempotencyKey,
         })
       } catch (err: any) {
         showToast(err?.error ?? err?.response?.data?.error ?? 'Failed to record sale')
@@ -377,6 +480,11 @@ export default function WarehouseSales() {
       setKgWeight(''); setKgPrice('')
       setNotes('')
       setPackedLines([{ id: Date.now(), bagTypeId: bagTypes[0]?.id ?? '', qty: '', price: '', curr: 'USD' }])
+      // A new idempotency key for the NEXT sale — this attempt already
+      // succeeded, so its key must never be reused (that would make the next
+      // genuinely different sale look like a retry of this one and get
+      // silently collapsed into it).
+      setSaleIdempotencyKey(crypto.randomUUID())
       return
     }
 
@@ -392,10 +500,6 @@ export default function WarehouseSales() {
           return
         }
       }
-
-      // collectedById must be a User ID (stock_exits_collectedById_fkey → users table).
-      // Workers come from the workers table — their IDs are invalid here.
-      const collectedById = allReceivers.find(r => r.name === receiver)?.id
 
       // Anonymous packed-bag sale — no invoice, no client; amount recorded
       // directly on each exit (mirrors the anonymous KG-sale branch below).
@@ -429,7 +533,14 @@ export default function WarehouseSales() {
               recipient: buyerName,
               reason: notes || undefined,
               ...(lineAmt > 0 ? { amount: lineAmt, currency: ln.curr } : {}),
-              ...(collectedById ? { collectedById } : receiver ? { collectedBy: receiver } : {}),
+              ...(receiverId ? { collectedById: receiverId } : {}),
+              // Same one-per-submission key used for the registered-client
+              // branches below — each FIFO draw still fingerprints uniquely
+              // (distinct packedStockId/quantity/amount), so sharing this key
+              // across every draw in ONE submission is safe: a genuine retry
+              // of the whole submission reproduces the same (key, fingerprint)
+              // pairs and every call short-circuits to its original row.
+              idempotencyKey: saleIdempotencyKey,
             })
             remaining -= d.quantity
           } catch (err: any) {
@@ -457,7 +568,6 @@ export default function WarehouseSales() {
         // Uses the same endpoint as bag sales so the client gets a proper invoice.
         const description = `${lot.charcoalType} Grade ${lot.grade}`
         const mappedMethod = PAY_METHOD_MAP[payMethod]
-        const receiverId = allReceivers.find(r => r.name === receiver)?.id
         try {
           await createWalkInSale.mutateAsync({
             clientId: selectedBuyerId!,
@@ -472,9 +582,10 @@ export default function WarehouseSales() {
             ...(usdNum > 0 ? { receivedUsd: usdNum.toFixed(2) } : {}),
             ...(lbpNum > 0 ? { receivedLbp: lbpNum.toFixed(2) } : {}),
             method:    mappedMethod ?? 'cash',
-            ...(receiverId ? { receiverId } : receiver ? { receiverName: receiver } : {}),
+            ...(receiverId ? { receiverId } : {}),
             recipient: buyerName,
             notes:     notes || undefined,
+            idempotencyKey: saleIdempotencyKey,
           })
         } catch (err: any) {
           showToast(err?.error ?? err?.response?.data?.error ?? 'Failed to record sale')
@@ -486,15 +597,13 @@ export default function WarehouseSales() {
         setKgWeight(''); setKgPrice('')
         setNotes('')
         setPackedLines([{ id: Date.now(), bagTypeId: bagTypes[0]?.id ?? '', qty: '', price: '', curr: 'USD' }])
+        setSaleIdempotencyKey(crypto.randomUUID())
         return
       }
 
       // Anonymous KG sale — no invoice; amount recorded directly on the exit.
       try {
         const kgAmt = roundDp(kgNum * (parseFloat(kgPrice) || 0) * (kgCurr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1), 2)
-        // collectedById must be a User ID (stock_exits_collectedById_fkey → users table).
-        // Workers come from the workers table — their IDs are invalid here.
-        const collectedById = allReceivers.find(r => r.name === receiver)?.id
         await createExit.mutateAsync({
           lotId:     lot.id,
           kgQuantity: kgNum,
@@ -503,7 +612,8 @@ export default function WarehouseSales() {
           recipient: buyerName,
           reason:    notes || undefined,
           ...(kgAmt > 0 ? { amount: kgAmt, currency: kgCurr } : {}),
-          ...(collectedById ? { collectedById } : receiver ? { collectedBy: receiver } : {}),
+          ...(receiverId ? { collectedById: receiverId } : {}),
+          idempotencyKey: saleIdempotencyKey,
         })
       } catch (err: any) {
         showToast(err?.error ?? 'Failed to record sale')
@@ -519,6 +629,14 @@ export default function WarehouseSales() {
     // the packed-bag branch's amount/currency were incorrectly gated behind a registered
     // buyer, which that branch can never have — fixed above); no standalone payment is
     // created for either.
+    //
+    // Both anonymous branches above fall through to here only on SUCCESS (their
+    // catch blocks `return` early on failure) — this is where the anonymous-sale
+    // idempotency key is regenerated for the NEXT sale, mirroring the two
+    // registered-client branches (which regenerate their own key right before
+    // their early `return`). This attempt already succeeded, so its key must
+    // never be reused for a genuinely different next sale.
+    setSaleIdempotencyKey(crypto.randomUUID())
 
     showToast(`Sale recorded · $${totalUSD.toFixed(2)} from ${buyerName}`)
     setBuyerInput(''); setSelectedBuyerId(null)
@@ -595,7 +713,7 @@ export default function WarehouseSales() {
             </div>
           </div>
           <div className="kpi">
-            <div className="kpi-label">Total exits recorded</div>
+            <div className="kpi-label">Total sales recorded</div>
             <div className="kpi-value">{exitsQ.isLoading ? '—' : (exitsQ.data?.total ?? 0).toLocaleString()}</div>
             <div className="kpi-sub">walk-in sales</div>
           </div>
@@ -767,6 +885,7 @@ export default function WarehouseSales() {
                           </div>
                           <button
                             className="del-btn"
+                            aria-label="Remove line"
                             onClick={() => removePackedLine(ln.id)}
                             disabled={packedLines.length === 1}
                           >
@@ -916,11 +1035,14 @@ export default function WarehouseSales() {
                       </select>
                     </div>
                     <div>
-                      <label className="form-label">Received by</label>
-                      <select className="form-input" value={receiver} onChange={e => setReceiver(e.target.value)}>
+                      <label className="form-label">
+                        Received by {receiverRequired && <span style={{ color: 'var(--red)' }}>*</span>}
+                        {!receiverRequired && <span style={{ color: 'var(--text3)', fontWeight: 400 }}> (optional for bank transfer / on account)</span>}
+                      </label>
+                      <select className="form-input" value={receiverId} onChange={e => setReceiverId(e.target.value)}>
                         <option value="">— select receiver —</option>
                         {allReceivers.map(r => (
-                          <option key={r.id} value={r.name}>{r.name}{r.role ? ` (${r.role})` : ''}</option>
+                          <option key={r.id} value={r.id}>{r.name}{r.role ? ` (${r.role})` : ''}</option>
                         ))}
                       </select>
                     </div>
@@ -937,8 +1059,12 @@ export default function WarehouseSales() {
                     />
                   </div>
 
-                  <button className="submit-btn" onClick={submitSale}>
-                    <i className="ti ti-check" /> Record this sale
+                  <button
+                    className="submit-btn"
+                    onClick={submitSale}
+                    disabled={createWalkInSale.isPending || createExit.isPending || fifoDraw.isPending}
+                  >
+                    <i className="ti ti-check" /> {createWalkInSale.isPending || createExit.isPending || fifoDraw.isPending ? 'Recording…' : 'Record this sale'}
                   </button>
 
                 </div>
@@ -996,25 +1122,22 @@ export default function WarehouseSales() {
                 {!todayExitsQ.isLoading && todayExits.length === 0 && (
                   <div className="empty" style={{ fontSize: 12 }}>No sales recorded today.</div>
                 )}
-                {todayExits.map((exit: any) => {
-                  const isRaw = !!exit.lotId
-                  const bagName = exit.bagType?.name ?? (isRaw ? 'By kg' : '—')
-                  const desc = isRaw
-                    ? `${parseFloat(exit.kgQuantity ?? 0).toFixed(1)} kg raw`
-                    : `${exit.quantity} × ${bagName}`
-                  const displayAmt = exitDisplayAmountUsd(exit)
+                {todayExits.map((row: any) => {
+                  const desc = groupDescription(row)
+                  const displayAmt = groupAmountUsd(row)
+                  const collectedBy = row.rawExit?.collectedBy
                   return (
                     <div
-                      key={exit.id}
+                      key={row.id}
                       style={{
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                         padding: '9px 18px', borderBottom: '1px solid var(--border)', fontSize: 12,
                         cursor: 'pointer',
                       }}
-                      onClick={() => setSelectedExit(exit)}
+                      onClick={() => setSelectedExit(row)}
                     >
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 500 }}>{exit.recipient ?? 'Walk-in'}</div>
+                        <div style={{ fontWeight: 500 }}>{row.recipient ?? 'Walk-in'}</div>
                         <div style={{ color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>
                           {desc}
                         </div>
@@ -1024,8 +1147,8 @@ export default function WarehouseSales() {
                           {displayAmt != null ? `$${displayAmt.toFixed(2)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
                         </div>
                         <div style={{ fontSize: 11, color: 'var(--text3)' }}>
-                          {exit.collectedBy ?? ''}{exit.collectedBy && ' · '}
-                          {new Date(exit.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                          {collectedBy ?? ''}{collectedBy && ' · '}
+                          {new Date(row.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                         </div>
                       </div>
                     </div>
@@ -1073,7 +1196,7 @@ export default function WarehouseSales() {
                   </button>
                 )}
                 <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", marginLeft: 4 }}>
-                  {exitsQ.data?.total ?? 0} exits
+                  {exitsQ.data?.total ?? 0} sales
                 </span>
               </div>
             </div>
@@ -1081,67 +1204,90 @@ export default function WarehouseSales() {
             {!exitsQ.isLoading && (exitsQ.data?.data ?? []).length === 0 && (
               <div className="empty">No walk-in sales recorded yet. Use the "Enter sale" tab to record a sale.</div>
             )}
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Bag type</th>
-                  <th>Charcoal (lot)</th>
-                  <th style={{ textAlign: 'right' }}>Qty bags</th>
-                  <th style={{ textAlign: 'right' }}>Nominal kg</th>
-                  <th>Recipient</th>
-                  <th>Logged by</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {(exitsQ.data?.data ?? []).map((exit: any) => {
-                  const isRaw = !!exit.lotId
-                  const nomKg = isRaw
-                    ? parseFloat(exit.kgQuantity ?? '0')
-                    : exit.bagType ? parseFloat(exit.bagType.nominalKg) * exit.quantity : 0
-                  const charcoalLot = isRaw ? exit.lot : exit.packedStock?.lot
-                  return (
-                    <tr key={exit.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedExit(exit)}>
-                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text2)' }}>
-                        {new Date(exit.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
-                      </td>
-                      <td>
-                        {isRaw ? (
-                          <span className="badge badge-amber">By kg</span>
-                        ) : (
-                          <>
-                            <div style={{ fontWeight: 500 }}>{exit.bagType?.name ?? '—'}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>
-                              {exit.bagType ? `${parseFloat(exit.bagType.nominalKg).toFixed(1)} kg / bag` : ''}
-                            </div>
-                          </>
-                        )}
-                      </td>
-                      <td>
-                        {charcoalLot ? (
-                          <>
-                            <div style={{ fontWeight: 500 }}>{charcoalLot.charcoalType}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>
-                              Grade {charcoalLot.grade}
-                            </div>
-                          </>
-                        ) : <span style={{ color: 'var(--text3)' }}>—</span>}
-                      </td>
-                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, textAlign: 'right' }}>
-                        {isRaw ? '—' : exit.quantity}
-                      </td>
-                      <td style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', color: 'var(--text2)' }}>
-                        {nomKg > 0 ? `${nomKg.toFixed(1)} kg` : '—'}
-                      </td>
-                      <td style={{ color: 'var(--text2)' }}>{exit.recipient ?? '—'}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text3)' }}>{exit.loggedBy?.name ?? '—'}</td>
-                      <td><i className="ti ti-chevron-right" style={{ color: 'var(--text3)' }} /></td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Bag type</th>
+                    <th>Charcoal (lot)</th>
+                    <th style={{ textAlign: 'right' }}>Qty bags</th>
+                    <th style={{ textAlign: 'right' }}>Nominal kg</th>
+                    <th>Recipient</th>
+                    <th>Payment</th>
+                    <th>Logged by</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(exitsQ.data?.data ?? []).map((row: any) => {
+                    const lines: any[] = row.lines ?? []
+                    const multi = lines.length > 1
+                    // Bag-type / charcoal-lot cells only make sense as a single
+                    // value when every line in this sale agrees — otherwise show
+                    // a "N items" summary badge rather than a misleading first line.
+                    const uniformBagType = !multi ? lines[0] : (lines.every(l => l.bagTypeId === lines[0]?.bagTypeId) ? lines[0] : null)
+                    const uniformCharcoal = !multi ? lines[0] : (lines.every(l => l.charcoalType === lines[0]?.charcoalType && l.grade === lines[0]?.grade) ? lines[0] : null)
+                    const isRaw = !multi && lines[0]?.saleUnit === 'KG'
+                    return (
+                      <tr key={row.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedExit(row)}>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: 'var(--text2)' }}>
+                          {new Date(row.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </td>
+                        <td>
+                          {multi ? (
+                            <span className="badge badge-gray">{lines.length} items</span>
+                          ) : isRaw ? (
+                            <span className="badge badge-amber">By kg</span>
+                          ) : (
+                            <>
+                              <div style={{ fontWeight: 500 }}>{uniformBagType?.bagTypeName ?? '—'}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>
+                                {uniformBagType?.nominalKgPerBag ? `${parseFloat(uniformBagType.nominalKgPerBag).toFixed(1)} kg / bag` : ''}
+                              </div>
+                            </>
+                          )}
+                        </td>
+                        <td>
+                          {uniformCharcoal?.charcoalType ? (
+                            <>
+                              <div style={{ fontWeight: 500 }}>{uniformCharcoal.charcoalType}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>
+                                Grade {uniformCharcoal.grade}
+                              </div>
+                            </>
+                          ) : multi ? <span style={{ color: 'var(--text3)' }}>Mixed</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        </td>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, textAlign: 'right' }}>
+                          {row.totalQtyBags > 0 ? row.totalQtyBags : '—'}
+                        </td>
+                        <td style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', color: 'var(--text2)' }}>
+                          {parseFloat(row.totalKg) > 0 ? `${parseFloat(row.totalKg).toFixed(1)} kg` : '—'}
+                        </td>
+                        <td style={{ color: 'var(--text2)' }}>{row.recipient ?? '—'}</td>
+                        <td>
+                          {row.paidAmount != null ? (
+                            <>
+                              <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>
+                                {fmtCcy(row.paidAmount, row.currency)}
+                              </div>
+                              <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                                {row.payments?.[0]?.receiverName ?? '—'}
+                                {row.remaining != null && parseFloat(row.remaining) > 0
+                                  ? ` · ${fmtCcy(row.remaining, row.currency)} due`
+                                  : ''}
+                              </div>
+                            </>
+                          ) : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        </td>
+                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{row.loggedBy?.name ?? '—'}</td>
+                        <td><i className="ti ti-chevron-right" style={{ color: 'var(--text3)' }} /></td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
             {!exitsQ.isLoading && (exitsQ.data?.data ?? []).length > 0 && exitsTotalPages > 1 && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '14px 0 4px' }}>
                 <button className="btn" disabled={salesLogPage <= 1} onClick={() => setSalesLogPage(p => Math.max(1, p - 1))}>
@@ -1160,18 +1306,33 @@ export default function WarehouseSales() {
 
       </div>
 
-      {/* Exit detail panel */}
-      {selectedExit && (
+      {/* Sale detail panel — selectedExit is a GROUPED row (useGroupedStockExits):
+          one invoiced sale, however many lines its FIFO draw actually produced,
+          or one standalone (non-invoiced) exit via .rawExit. */}
+      {selectedExit && (() => {
+        const lines: any[] = selectedExit.lines ?? []
+        const multi = lines.length > 1
+        // Normalize cost/worker-rate/nominalKg onto every line so the section
+        // below renders identically whether the figures came from the
+        // batched bagType lookup (invoice-grouped rows) or straight off the
+        // raw exit's own bagType relation (standalone rows).
+        const displayLines = selectedExit.invoiceId
+          ? lines
+          : lines.map((l: any) => ({
+              ...l,
+              nominalKgPerBag: selectedExit.rawExit?.bagType?.nominalKg ?? null,
+              costPerBag: selectedExit.rawExit?.bagType?.costPerBag ?? null,
+              workerRatePerBag: selectedExit.rawExit?.bagType?.workerRate ?? null,
+            }))
+        return (
         <div className="lot-panel open">
           <div className="panel-head">
             <div>
               <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', marginBottom: 4 }}>
-                WALK-IN SALE · {new Date(selectedExit.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                WALK-IN SALE{selectedExit.invoiceDisplayId ? ` · ${selectedExit.invoiceDisplayId}` : ''} · {new Date(selectedExit.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
               </div>
               <div style={{ fontSize: 16, fontWeight: 600 }}>
-                {selectedExit.lotId
-                  ? `${parseFloat(selectedExit.kgQuantity ?? '0').toFixed(1)} kg raw lot`
-                  : `${selectedExit.quantity} × ${selectedExit.bagType?.name ?? '—'}`}
+                {multi ? `${lines.length} items` : groupDescription(selectedExit)}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>
                 {selectedExit.recipient ?? 'Walk-in'}
@@ -1181,74 +1342,201 @@ export default function WarehouseSales() {
           </div>
           <div className="panel-body">
 
+            {displayLines.map((line: any, i: number) => {
+              const isRaw = line.saleUnit === 'KG'
+              return (
+                <div key={i}>
+                  <div className="panel-section">
+                    <div className="panel-section-label">{multi ? `Line ${i + 1} — ` : ''}{isRaw ? 'Raw lot details' : 'Bag details'}</div>
+                    {isRaw ? (
+                      <>
+                        <div className="panel-row">
+                          <span className="panel-row-label">Quantity sold</span>
+                          <span className="panel-row-value" style={{ color: 'var(--accent)', fontSize: 14 }}>
+                            {(parseFloat(line.kgQuantity ?? '0') || 0).toFixed(1)} kg
+                          </span>
+                        </div>
+                        {line.pricePerKg && (
+                          <div className="panel-row">
+                            <span className="panel-row-label">Unit price (/ kg)</span>
+                            <span className="panel-row-value">{fmtCcy(line.pricePerKg, selectedExit.currency)}</span>
+                          </div>
+                        )}
+                        {line.lineTotal != null && (
+                          <div className="panel-row">
+                            <span className="panel-row-label">Line total</span>
+                            <span className="panel-row-value" style={{ fontWeight: 600 }}>{fmtCcy(line.lineTotal, selectedExit.currency)}</span>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <div className="panel-row">
+                          <span className="panel-row-label">Bag type</span>
+                          <span className="panel-row-value">{line.bagTypeName ?? '—'}</span>
+                        </div>
+                        <div className="panel-row">
+                          <span className="panel-row-label">Nominal kg / bag</span>
+                          <span className="panel-row-value">{line.nominalKgPerBag ? `${parseFloat(line.nominalKgPerBag).toFixed(2)} kg` : '—'}</span>
+                        </div>
+                        <div className="panel-row">
+                          <span className="panel-row-label">Quantity sold</span>
+                          <span className="panel-row-value" style={{ color: 'var(--accent)', fontSize: 14 }}>{line.qty ?? 0} bags</span>
+                        </div>
+                        <div className="panel-row">
+                          <span className="panel-row-label">Total nominal kg</span>
+                          <span className="panel-row-value">
+                            {line.nominalKgPerBag ? `${(parseFloat(line.nominalKgPerBag) * (line.qty ?? 0)).toFixed(2)} kg` : '—'}
+                          </span>
+                        </div>
+                        {line.pricePerBag != null && (
+                          <div className="panel-row">
+                            <span className="panel-row-label">Unit price (/ bag)</span>
+                            <span className="panel-row-value">{fmtCcy(line.pricePerBag, selectedExit.currency)}</span>
+                          </div>
+                        )}
+                        {line.lineTotal != null && (
+                          <div className="panel-row">
+                            <span className="panel-row-label">Line total</span>
+                            <span className="panel-row-value" style={{ fontWeight: 600 }}>{fmtCcy(line.lineTotal, selectedExit.currency)}</span>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="panel-section">
+                    <div className="panel-section-label">Charcoal source</div>
+                    {line.charcoalType ? (
+                      <>
+                        <div className="panel-row">
+                          <span className="panel-row-label">Type</span>
+                          <span className="panel-row-value">{line.charcoalType}</span>
+                        </div>
+                        <div className="panel-row">
+                          <span className="panel-row-label">Grade</span>
+                          <span className="panel-row-value">Grade {line.grade}</span>
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>Lot info not available</div>
+                    )}
+                  </div>
+
+                  {!isRaw && (line.costPerBag || line.workerRatePerBag) && (
+                    <div className="panel-section">
+                      <div className="panel-section-label">Bag cost & worker rate</div>
+                      <div className="panel-row">
+                        <span className="panel-row-label">Cost / bag</span>
+                        <span className="panel-row-value">
+                          {line.costPerBag ? `$${parseFloat(line.costPerBag).toFixed(3)}` : '—'}
+                        </span>
+                      </div>
+                      <div className="panel-row">
+                        <span className="panel-row-label">Worker rate / bag</span>
+                        <span className="panel-row-value">
+                          {line.workerRatePerBag ? `$${parseFloat(line.workerRatePerBag).toFixed(3)}` : '—'}
+                        </span>
+                      </div>
+                      <div className="panel-row">
+                        <span className="panel-row-label">Total worker cost</span>
+                        <span className="panel-row-value">
+                          {line.workerRatePerBag
+                            ? `$${(parseFloat(line.workerRatePerBag) * (line.qty ?? 0)).toFixed(2)}`
+                            : '—'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+            {/* SALE — the authoritative total: Invoice.total for a registered-
+                client sale, StockExit.amount for an anonymous one. Never
+                recomputed from qty × price here — see stock-exits.service.ts's
+                findAllGrouped() doc comment. */}
             <div className="panel-section">
-              <div className="panel-section-label">Bag details</div>
+              <div className="panel-section-label">Sale</div>
               <div className="panel-row">
-                <span className="panel-row-label">Bag type</span>
-                <span className="panel-row-value">{selectedExit.bagType?.name ?? '—'}</span>
-              </div>
-              <div className="panel-row">
-                <span className="panel-row-label">Nominal kg / bag</span>
-                <span className="panel-row-value">{selectedExit.bagType ? `${parseFloat(selectedExit.bagType.nominalKg).toFixed(2)} kg` : '—'}</span>
-              </div>
-              <div className="panel-row">
-                <span className="panel-row-label">Quantity sold</span>
-                <span className="panel-row-value" style={{ color: 'var(--accent)', fontSize: 14 }}>{selectedExit.quantity} bags</span>
-              </div>
-              <div className="panel-row">
-                <span className="panel-row-label">Total nominal kg</span>
-                <span className="panel-row-value">
-                  {selectedExit.bagType
-                    ? `${(parseFloat(selectedExit.bagType.nominalKg) * selectedExit.quantity).toFixed(2)} kg`
-                    : '—'}
+                <span className="panel-row-label">Total sale</span>
+                <span className="panel-row-value" style={{ fontWeight: 600, fontSize: 14 }}>
+                  {selectedExit.saleTotal != null ? fmtCcy(selectedExit.saleTotal, selectedExit.currency) : 'Not set'}
                 </span>
               </div>
             </div>
 
+            {/* PAYMENT — every payment actually applied to this sale (a
+                registered-client sale can accumulate more than one payment
+                over time; an anonymous sale has at most one, recorded
+                directly on the exit). */}
             <div className="panel-section">
-              <div className="panel-section-label">Charcoal source (lot)</div>
-              {selectedExit.packedStock?.lot ? (
-                <>
-                  <div className="panel-row">
-                    <span className="panel-row-label">Type</span>
-                    <span className="panel-row-value">{selectedExit.packedStock.lot.charcoalType}</span>
-                  </div>
-                  <div className="panel-row">
-                    <span className="panel-row-label">Grade</span>
-                    <span className="panel-row-value">Grade {selectedExit.packedStock.lot.grade}</span>
-                  </div>
-                  <div className="panel-row">
-                    <span className="panel-row-label">Lot ID</span>
-                    <span className="panel-row-value" style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }} title={selectedExit.packedStock.lot.id}>
-                      {selectedExit.packedStock.lot.displayId ?? selectedExit.packedStock.lot.id}
-                    </span>
-                  </div>
-                </>
+              <div className="panel-section-label">Payment</div>
+              {(selectedExit.payments ?? []).length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text3)' }}>No payment recorded — on account</div>
               ) : (
-                <div style={{ fontSize: 12, color: 'var(--text3)' }}>Lot info not available</div>
+                (selectedExit.payments as any[]).map((p: any, i: number) => (
+                  <div key={p.paymentId ?? i}>
+                    {selectedExit.payments.length > 1 && (
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: i > 0 ? 10 : 0 }}>
+                        Payment {i + 1}{p.displayId ? ` · ${p.displayId}` : ''}
+                      </div>
+                    )}
+                    <div className="panel-row">
+                      <span className="panel-row-label">Paid</span>
+                      <span className="panel-row-value">{fmtCcy(p.appliedAmount, p.currency)}</span>
+                    </div>
+                    <div className="panel-row">
+                      <span className="panel-row-label">Method</span>
+                      <span className="panel-row-value">{methodLabel(p.method)}</span>
+                    </div>
+                  </div>
+                ))
               )}
             </div>
 
+            {/* RECEIVER — who actually received the money and how much was
+                credited to their cash-ledger account. `creditedAmount` comes
+                straight from the ledger's own AccountEntry, never recomputed
+                here — see findAllGrouped()'s doc comment (backend). */}
             <div className="panel-section">
-              <div className="panel-section-label">Bag cost & worker rate</div>
+              <div className="panel-section-label">Receiver</div>
+              {(selectedExit.payments ?? []).filter((p: any) => p.receiverId || p.receiverName).length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text3)' }}>No receiver recorded</div>
+              ) : (
+                (selectedExit.payments as any[])
+                  .filter((p: any) => p.receiverId || p.receiverName)
+                  .map((p: any, i: number) => (
+                    <div key={p.paymentId ?? i}>
+                      <div className="panel-row">
+                        <span className="panel-row-label">Received by</span>
+                        <span className="panel-row-value">{p.receiverName ?? '—'}</span>
+                      </div>
+                      <div className="panel-row">
+                        <span className="panel-row-label">Credited to receiver account</span>
+                        <span className="panel-row-value" style={{ color: 'var(--accent)' }}>
+                          {p.creditedAmount != null ? `+${fmtCcy(p.creditedAmount, p.currency)}` : '—'}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+              )}
+            </div>
+
+            {/* BALANCE — Invoice.paidAmount/status for a registered-client
+                sale (recomputed by PaymentAllocationService, never a
+                client-side sum); an anonymous sale is binary (recorded =
+                fully paid, unset = on account). */}
+            <div className="panel-section">
+              <div className="panel-section-label">Balance</div>
               <div className="panel-row">
-                <span className="panel-row-label">Cost / bag</span>
-                <span className="panel-row-value">
-                  {selectedExit.bagType?.costPerBag ? `$${parseFloat(selectedExit.bagType.costPerBag).toFixed(3)}` : '—'}
-                </span>
-              </div>
-              <div className="panel-row">
-                <span className="panel-row-label">Worker rate / bag</span>
-                <span className="panel-row-value">
-                  {selectedExit.bagType?.workerRate ? `$${parseFloat(selectedExit.bagType.workerRate).toFixed(3)}` : '—'}
-                </span>
-              </div>
-              <div className="panel-row">
-                <span className="panel-row-label">Total worker cost</span>
-                <span className="panel-row-value">
-                  {selectedExit.bagType?.workerRate
-                    ? `$${(parseFloat(selectedExit.bagType.workerRate) * selectedExit.quantity).toFixed(2)}`
-                    : '—'}
+                <span className="panel-row-label">Status</span>
+                <span className="panel-row-value" style={{ fontWeight: 600 }}>
+                  {selectedExit.remaining == null
+                    ? '—'
+                    : parseFloat(selectedExit.remaining) <= 0
+                      ? 'Paid in full'
+                      : `Remaining: ${fmtCcy(selectedExit.remaining, selectedExit.currency)}`}
                 </span>
               </div>
             </div>
@@ -1263,10 +1551,10 @@ export default function WarehouseSales() {
                 <span className="panel-row-label">Logged by</span>
                 <span className="panel-row-value">{selectedExit.loggedBy?.name ?? '—'}</span>
               </div>
-              {selectedExit.reason && (
+              {selectedExit.rawExit?.reason && (
                 <div className="panel-row">
                   <span className="panel-row-label">Notes</span>
-                  <span className="panel-row-value" style={{ fontSize: 12 }}>{selectedExit.reason}</span>
+                  <span className="panel-row-value" style={{ fontSize: 12 }}>{selectedExit.rawExit.reason}</span>
                 </div>
               )}
               <div className="panel-row">
@@ -1278,42 +1566,35 @@ export default function WarehouseSales() {
             </div>
 
           </div>
-          {/* Edit sale amount — invoiced sales price from the invoice line, read-only here */}
-          <div className="panel-footer" style={{ flexDirection: 'column', gap: 8 }}>
-            {selectedExit.invoiceId ? (
-              <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>
-                {(() => {
-                  const amt = exitDisplayAmountUsd(selectedExit)
-                  return amt != null
-                    ? `Invoiced ${selectedExit.invoice?.displayId ?? ''} — $${amt.toFixed(2)}`
-                    : `Invoiced ${selectedExit.invoice?.displayId ?? ''} — see invoice for price`
-                })()}
+          {/* Edit sale amount — anonymous (non-invoiced) sales only. An
+              invoiced sale's price/paid/balance is fully covered by the
+              Sale/Payment/Balance sections above (sourced from the invoice
+              and its payments) — nothing left to show or edit here. */}
+          {!selectedExit.invoiceId && (
+            <div className="panel-footer" style={{ flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: selectedExit.rawExit?.amount ? 'var(--text3)' : 'var(--accent2)', textTransform: 'uppercase', letterSpacing: 1 }}>
+                {selectedExit.rawExit?.amount ? `Sale amount: $${parseFloat(selectedExit.rawExit.amount).toFixed(2)} — update` : '⚠ Sale amount not set — enter to track revenue'}
               </div>
-            ) : (
-              <>
-                <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: selectedExit.amount ? 'var(--text3)' : 'var(--accent2)', textTransform: 'uppercase', letterSpacing: 1 }}>
-                  {selectedExit.amount ? `Sale amount: $${parseFloat(selectedExit.amount).toFixed(2)} — update` : '⚠ Sale amount not set — enter to track revenue'}
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input
-                    className="form-input"
-                    type="number" min="0" step="0.01"
-                    placeholder={selectedExit.amount ? parseFloat(selectedExit.amount).toFixed(2) : 'Enter total sale price $'}
-                    value={editAmount}
-                    onChange={e => setEditAmount(e.target.value)}
-                    style={{ fontFamily: "'IBM Plex Mono',monospace", flex: 1 }}
-                    onKeyDown={e => { if (e.key === 'Enter' && editAmount) { updateExit.mutate({ id: selectedExit.id, amount: parseFloat(editAmount) }, { onSuccess: (u) => { setSelectedExit(u); setEditAmount(''); showToast('Amount updated') } }) } }}
-                  />
-                  <button className="btn primary" disabled={updateExit.isPending || !editAmount}
-                    onClick={() => { if (!editAmount) return; updateExit.mutate({ id: selectedExit.id, amount: parseFloat(editAmount) }, { onSuccess: (u) => { setSelectedExit(u); setEditAmount(''); showToast('Amount updated — balance & P&L recalculated') } }) }}>
-                    <i className="ti ti-check" style={{ fontSize: 13 }} /> {updateExit.isPending ? '…' : 'Save'}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  className="form-input"
+                  type="number" min="0" step="0.01"
+                  placeholder={selectedExit.rawExit?.amount ? parseFloat(selectedExit.rawExit.amount).toFixed(2) : 'Enter total sale price $'}
+                  value={editAmount}
+                  onChange={e => setEditAmount(e.target.value)}
+                  style={{ fontFamily: "'IBM Plex Mono',monospace", flex: 1 }}
+                  onKeyDown={e => { if (e.key === 'Enter' && editAmount) { updateExit.mutate({ id: selectedExit.rawExit.id, amount: parseFloat(editAmount) }, { onSuccess: (u) => { setSelectedExit((g: any) => g ? { ...g, rawExit: u } : g); setEditAmount(''); showToast('Amount updated') } }) } }}
+                />
+                <button className="btn primary" disabled={updateExit.isPending || !editAmount}
+                  onClick={() => { if (!editAmount) return; updateExit.mutate({ id: selectedExit.rawExit.id, amount: parseFloat(editAmount) }, { onSuccess: (u) => { setSelectedExit((g: any) => g ? { ...g, rawExit: u } : g); setEditAmount(''); showToast('Amount updated — balance & P&L recalculated') } }) }}>
+                  <i className="ti ti-check" style={{ fontSize: 13 }} /> {updateExit.isPending ? '…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+        )
+      })()}
       {selectedExit && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.15)', zIndex: 19 }}
           onClick={() => setSelectedExit(null)} />

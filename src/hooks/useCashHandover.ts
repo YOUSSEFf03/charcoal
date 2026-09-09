@@ -1,6 +1,10 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { Payment, PaginatedResponse, CashHandover, CashHandoverExpense } from '../types/api'
+import type {
+  Payment, PaginatedResponse, CashHandover,
+  ExpenseEmployeeSummary, ExpenseEmployeeDetail, ExpenseCategoryDetail,
+  BusinessExpense,
+} from '../types/api'
 
 /**
  * Payments recorded on a single day (cash-handover reconciliation).
@@ -97,8 +101,11 @@ export function useCreateCashHandover() {
       handedAmt: string
       notes?: string | null
       /** Itemized amounts already deducted from collected cash before handover
-       *  (e.g. gas, parking) — the SAME values used to compute expectedAmt. */
-      expenses?: { description: string; amount: string }[]
+       *  (e.g. gas, parking) — the SAME values used to compute expectedAmt.
+       *  `categoryId` selects an existing ExpenseCategory (see
+       *  useExpenseCategories()/useCreateExpenseCategory()) — free-text
+       *  description is no longer accepted here (forensic audit, 2026-08-31). */
+      expenses?: { categoryId: string; amount: string }[]
     }) => {
       const res = await api.post('/cash-handovers', body)
       return res.data
@@ -107,37 +114,89 @@ export function useCreateCashHandover() {
       qc.invalidateQueries({ queryKey: ['cash-handovers'] })
       qc.invalidateQueries({ queryKey: ['cash-handovers', 'balances'] })
       qc.invalidateQueries({ queryKey: ['cash-handovers', 'balance', vars.receiverId] })
+      qc.invalidateQueries({ queryKey: ['cash-handovers', 'expenses'] })
     },
   })
 }
 
-/** A cash-handover expense annotated with its parent handover's date and receiver,
- *  for display in the Expenses aggregation. */
-export interface AggregatedCashHandoverExpense extends CashHandoverExpense {
-  handoverDate: string
-  receiverName: string
+/** Date-range params shared by the Expenses page aggregation views. */
+export interface ExpensesAggregationQuery {
+  dateFrom?: string
+  dateTo?: string
 }
 
 /**
- * Aggregate itemized cash-handover expenses across all handovers in a date range.
- * CashHandoverExpense has no date of its own — it's derived from the parent
- * CashHandover.date (see schema comment).
- * @param params - optional dateFrom / dateTo (inclusive) on the parent handover's date
- * @returns React Query result of AggregatedCashHandoverExpense[]
- * GET /cash-handovers?dateFrom=&dateTo= (expenses already included server-side)
+ * Every cash-handover-sourced BUSINESS expense in range, flat (Business
+ * Expenses page PRIMARY view — business-model audit, 2026-09-04: "a Cash
+ * Handover is NOT an employee expense," the expense belongs to the business
+ * and the employee is only the cash holder). Aggregated server-side from the
+ * SAME CashHandoverExpense rows useExpensesSummary()/useEmployeeExpenses()
+ * below read — never a second/duplicate record, never a client-side fan-out
+ * over a paginated/capped fetch (same anti-pattern useExpensesSummary()'s own
+ * doc comment describes).
+ * GET /cash-handovers/expenses
  */
-export function useAllCashHandoverExpenses(params?: { dateFrom?: string; dateTo?: string }) {
+export function useBusinessExpenses(params?: ExpensesAggregationQuery) {
   return useQuery({
-    queryKey: ['cash-handovers', 'expenses', params ?? {}],
+    queryKey: ['cash-handovers', 'expenses', 'business', params ?? {}],
     queryFn: async () => {
-      const res = await api.get<{ data: CashHandover[]; total: number }>('/cash-handovers', {
-        params: { limit: 200, ...params },
-      })
-      const handovers = res.data.data
-      const all: AggregatedCashHandoverExpense[] = handovers.flatMap((h) =>
-        (h.expenses ?? []).map((e) => ({ ...e, handoverDate: h.date, receiverName: h.receiverName })),
-      )
-      return all
+      const res = await api.get<BusinessExpense[]>('/cash-handovers/expenses', { params })
+      return res.data
     },
   })
 }
+
+/**
+ * Cash-holder expense totals (a secondary "by cash holder" breakdown of the
+ * same business expenses above) — aggregated server-side from
+ * CashHandoverExpense, never a client-side reduce over a paginated/capped
+ * fetch (forensic audit, 2026-08-31 — this replaces a prior hook here that
+ * fetched GET /cash-handovers?limit=200 and flattened every handover's
+ * nested expenses in the browser, silently undercounting for any business
+ * with more than 200 handovers).
+ * GET /cash-handovers/expenses/summary
+ */
+export function useExpensesSummary(params?: ExpensesAggregationQuery) {
+  return useQuery({
+    queryKey: ['cash-handovers', 'expenses', 'summary', params ?? {}],
+    queryFn: async () => {
+      const res = await api.get<ExpenseEmployeeSummary[]>('/cash-handovers/expenses/summary', { params })
+      return res.data
+    },
+  })
+}
+
+/**
+ * One employee's expense total + category breakdown.
+ * GET /cash-handovers/expenses/employee/:employeeId
+ */
+export function useEmployeeExpenses(employeeId: string, params?: ExpensesAggregationQuery) {
+  return useQuery({
+    queryKey: ['cash-handovers', 'expenses', 'employee', employeeId, params ?? {}],
+    queryFn: async () => {
+      const res = await api.get<ExpenseEmployeeDetail>(`/cash-handovers/expenses/employee/${employeeId}`, { params })
+      return res.data
+    },
+    enabled: Boolean(employeeId),
+  })
+}
+
+/**
+ * Every individual expense occurrence for one employee in one category (the
+ * drill-down from useEmployeeExpenses()'s category row).
+ * GET /cash-handovers/expenses/employee/:employeeId/category/:categoryId
+ */
+export function useEmployeeCategoryExpenses(employeeId: string, categoryId: string, params?: ExpensesAggregationQuery) {
+  return useQuery({
+    queryKey: ['cash-handovers', 'expenses', 'employee', employeeId, 'category', categoryId, params ?? {}],
+    queryFn: async () => {
+      const res = await api.get<ExpenseCategoryDetail>(
+        `/cash-handovers/expenses/employee/${employeeId}/category/${categoryId}`,
+        { params },
+      )
+      return res.data
+    },
+    enabled: Boolean(employeeId) && Boolean(categoryId),
+  })
+}
+

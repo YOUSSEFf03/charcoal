@@ -13,6 +13,8 @@ import type {
   CreateContainerProductLineDto,
   UpdateContainerProductLineDto,
   ContainerProductLine,
+  ContainerTracking,
+  CarrierOption,
   PaginatedResponse,
 } from '../types/api'
 
@@ -23,6 +25,14 @@ export interface ContainersQuery {
   search?: string
   page?: number
   limit?: number
+  // Opt-in only (see ContainersService.findAll()'s doc comment on the
+  // backend): omitted = unfiltered. `false` excludes finalized containers
+  // (the main Containers page). `true` returns ONLY finalized containers
+  // (the History page), sorted finalizedAt desc, and enables the two
+  // date-range params below.
+  finalized?: boolean
+  finalizedFrom?: string // "YYYY-MM-DD"
+  finalizedTo?: string // "YYYY-MM-DD"
 }
 
 const containersKey = (params?: ContainersQuery) =>
@@ -74,6 +84,27 @@ export function useDeleteContainer() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['containers'] })
+    },
+  })
+}
+
+/**
+ * Finalize an arrived container — locks its financial/identity record
+ * permanently (owner only; backend-enforced). Does not touch stock lots,
+ * product lines, or cost — see backend ContainersService.finalize() doc.
+ * @returns mutation accepting the container id
+ * POST /containers/:id/finalize
+ */
+export function useFinalizeContainer() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await api.post<Container>(`/containers/${id}/finalize`)
+      return res.data
+    },
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ['containers'] })
+      qc.invalidateQueries({ queryKey: ['containers', id] })
     },
   })
 }
@@ -292,5 +323,63 @@ export function useDeleteProductLine() {
     onSuccess: (_data, { containerId }) => {
       qc.invalidateQueries({ queryKey: ['containers', containerId] })
     },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Shipment tracking (Traqo Ocean) — informational only, independent of
+// container status/cost. GET never calls the provider; only the refresh
+// mutation does, and the backend throttles that server-side.
+// ---------------------------------------------------------------------------
+
+/**
+ * Last stored tracking snapshot for a container (null until first refresh).
+ * Never triggers a live provider call — purely reads what's in our DB.
+ * GET /containers/:id/tracking
+ */
+export function useContainerTracking(containerId: string) {
+  return useQuery({
+    queryKey: ['containers', containerId, 'tracking'],
+    queryFn: async () => {
+      const res = await api.get<ContainerTracking | null>(`/containers/${containerId}/tracking`)
+      return res.data
+    },
+    enabled: Boolean(containerId),
+  })
+}
+
+/**
+ * Manual "Refresh tracking" — the only action that calls the live provider.
+ * Backend enforces a minimum interval between refreshes regardless of what
+ * the frontend does; a 429 here means "too soon", not a client bug.
+ * POST /containers/:id/tracking/refresh
+ */
+export function useRefreshTracking() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (containerId: string) => {
+      const res = await api.post<ContainerTracking>(`/containers/${containerId}/tracking/refresh`)
+      return res.data
+    },
+    onSuccess: (_data, containerId) => {
+      qc.invalidateQueries({ queryKey: ['containers', containerId, 'tracking'] })
+    },
+  })
+}
+
+/**
+ * Search supported ocean carriers, for the carrier picker in the edit-container modal.
+ * GET /containers/tracking/carriers?search=
+ */
+export function useCarriers(search: string, enabled = true) {
+  return useQuery({
+    queryKey: ['containers', 'tracking', 'carriers', search],
+    queryFn: async () => {
+      const res = await api.get<CarrierOption[]>('/containers/tracking/carriers', {
+        params: search ? { search } : undefined,
+      })
+      return res.data
+    },
+    enabled,
   })
 }

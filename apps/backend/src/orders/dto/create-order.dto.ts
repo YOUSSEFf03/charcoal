@@ -60,4 +60,12 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   supplierName?: string;
+
+  @ApiProperty({
+    description: 'Client location/branch UUID this order/delivery is for (optional — must belong to the client and be active). Warehouse/walk-in sales never use this field.',
+    required: false,
+  })
+  @IsOptional()
+  @IsUUID('all')
+  locationId?: string;
 }

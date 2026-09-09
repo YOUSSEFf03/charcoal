@@ -32,11 +32,23 @@ export class ClientBalanceService {
    *
    * @param clientId - Client UUID
    * @param tx - Optional Prisma transaction client
+   * @param asOf - Full Day Report audit (2026-09): optional point-in-time
+   *   upper bound, so the SAME formula above can compute a client's balance
+   *   "as of end of day X" (opening/closing receivable roll-forward) instead
+   *   of only "right now" — never a second, divergent balance calculation.
+   *   `lte` bounds the @db.Date-typed `payment.date` / `stockExit.date`
+   *   columns (no time-of-day to truncate); `businessLt` bounds the genuine
+   *   DateTime `invoice.issuedAt` column using the same Asia/Beirut
+   *   zoned-midnight boundary ReportsService's buildDateFilter() already
+   *   produces for its `to` bound — pass that function's output directly.
+   *   Omitted (the default) computes the live, current balance exactly as
+   *   before this parameter existed.
    * @returns Decimal where positive = client owes money, negative = credit
    */
   async computeBalance(
     clientId: string,
     tx?: Prisma.TransactionClient,
+    asOf?: { lte: Date; businessLt: Date },
   ): Promise<Decimal> {
     const db = tx ?? this.prisma;
 
@@ -45,6 +57,7 @@ export class ClientBalanceService {
         where: {
           clientId,
           status: { notIn: ['draft', 'cancelled'] },
+          ...(asOf ? { issuedAt: { lt: asOf.businessLt } } : {}),
         },
         select: { total: true },
       }),
@@ -53,11 +66,12 @@ export class ClientBalanceService {
           clientId,
           exitType: 'client_bags_fill',
           amount: { not: null },
+          ...(asOf ? { date: { lte: asOf.lte } } : {}),
         },
         select: { amount: true },
       }),
       (db as any).payment.findMany({
-        where: { clientId },
+        where: { clientId, ...(asOf ? { date: { lte: asOf.lte } } : {}) },
         select: { amount: true },
       }),
     ]);
