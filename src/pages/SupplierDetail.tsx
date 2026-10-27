@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useSupplier, useSupplierPayments, useCreateSupplierPayment } from '../hooks/useSuppliers'
+import { useSupplier, useSupplierPayments, useCreateSupplierPayment, useUpdateSupplier } from '../hooks/useSuppliers'
 import { useContainers } from '../hooks/useContainers'
 import { useSupplierLedger } from '../hooks/useReports'
 import { exportExcel, type ExcelColumn } from '../lib/excelExport'
@@ -49,6 +49,7 @@ export default function SupplierDetail() {
   const containersQ  = useContainers({ supplierId, limit: 20 })
   const paymentsQ    = useSupplierPayments(supplierId)
   const createPaymentM = useCreateSupplierPayment(supplierId)
+  const updateSupplierM = useUpdateSupplier()
   const containers   = containersQ.data?.data ?? []
   const payments     = paymentsQ.data?.data ?? []
 
@@ -88,6 +89,47 @@ export default function SupplierDetail() {
   const [toast, setToast] = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
   const { openExportModal, exportColumnsModal } = useExportColumnsModal()
+
+  // Edit-supplier modal — seeded from the loaded supplier when opened (see openEditModal below).
+  const [editOpen, setEditOpen] = useState(false)
+  const [editName, setEditName] = useState('')
+  const [editCountry, setEditCountry] = useState('')
+  const [editLeadTimeDays, setEditLeadTimeDays] = useState('')
+  const [editPaymentTerms, setEditPaymentTerms] = useState('Net 30')
+  const [editNotes, setEditNotes] = useState('')
+
+  function openEditModal() {
+    if (!supplier) return
+    setEditName(supplier.name)
+    setEditCountry(supplier.country)
+    setEditLeadTimeDays(supplier.leadTimeDays != null ? String(supplier.leadTimeDays) : '')
+    setEditPaymentTerms(supplier.paymentTerms ?? 'Net 30')
+    setEditNotes(supplier.notes ?? '')
+    setEditOpen(true)
+  }
+
+  function saveSupplierEdit() {
+    if (!supplier || !editName.trim()) return
+    updateSupplierM.mutate(
+      {
+        id: supplier.id,
+        body: {
+          name: editName.trim(),
+          country: editCountry.trim(),
+          leadTimeDays: editLeadTimeDays.trim() ? parseInt(editLeadTimeDays, 10) : null,
+          paymentTerms: editPaymentTerms,
+          notes: editNotes.trim() || null,
+        },
+      },
+      {
+        onSuccess: () => {
+          setEditOpen(false)
+          showToast(`${editName.trim()} updated`)
+        },
+        onError: (err: any) => showToast(err?.error ?? 'Failed to update supplier'),
+      },
+    )
+  }
 
   // ── Export-PDF split-button menu (Download / Share / Share via WhatsApp) —
   // mirrors ClientDetail.tsx's Statement of Account export exactly. ──────────
@@ -367,7 +409,7 @@ export default function SupplierDetail() {
       >
         {view === 'detail' ? (
           <>
-            <button className="btn"><i className="ti ti-edit" style={{ fontSize: 15 }} /> Edit</button>
+            <button className="btn" onClick={openEditModal}><i className="ti ti-edit" style={{ fontSize: 15 }} /> Edit</button>
             <button className="btn" onClick={() => setView('statement')}>
               <i className="ti ti-table" style={{ fontSize: 15 }} /> Statement of account
             </button>
@@ -860,6 +902,53 @@ export default function SupplierDetail() {
         )}
 
       </div>
+
+      {/* Edit supplier modal */}
+      {editOpen && (
+        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setEditOpen(false)}>
+          <div className="modal" style={{ width: 460 }}>
+            <div className="modal-head">
+              <div>
+                <div className="modal-title">Edit supplier</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{supplier?.name}</div>
+              </div>
+              <button className="close-btn" aria-label="Close" onClick={() => setEditOpen(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">Supplier name</label>
+                <input className="form-input" type="text" value={editName} onChange={e => setEditName(e.target.value)} />
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Country</label>
+                  <input className="form-input" type="text" value={editCountry} onChange={e => setEditCountry(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Lead time (days)</label>
+                  <input className="form-input" type="number" value={editLeadTimeDays} onChange={e => setEditLeadTimeDays(e.target.value)} />
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Payment terms</label>
+                <select className="form-input" value={editPaymentTerms} onChange={e => setEditPaymentTerms(e.target.value)}>
+                  <option>Net 30</option><option>Net 45</option><option>Net 60</option><option>Prepaid</option>
+                </select>
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Notes</label>
+                <textarea className="form-input" rows={3} value={editNotes} onChange={e => setEditNotes(e.target.value)} dir="auto" style={{ resize: 'vertical' }} />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setEditOpen(false)}>Cancel</button>
+              <button className="btn primary" disabled={updateSupplierM.isPending || !editName.trim()} onClick={saveSupplierEdit}>
+                <i className="ti ti-check" style={{ fontSize: 14 }} /> {updateSupplierM.isPending ? 'Saving…' : 'Save changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Pay modal */}
       {payOpen && (

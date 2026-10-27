@@ -10,6 +10,11 @@ export interface LotFlowSession {
   lotKgUsed: string; // Decimal — PackingSessionLot.kgUsed, this lot's real input to the session
   sessionKgConsumed: string; // Decimal — PackingSession.kgConsumed (session total, for reference only)
   sessionKgOutputTotal: string; // Decimal — PackingSession.kgOutputTotal (session total, for reference only)
+  /** PackingSession.bagsOutput's raw (bagTypeId, qty) lines — a session can legitimately
+   *  produce more than one bag type. Session-level, like bagCount, NOT apportioned by
+   *  this lot's input share (bagsOutput has no per-lot breakdown), so this is the same
+   *  full list for every lot that contributed to this session. */
+  bagTypes: { bagTypeId: string; qty: number }[];
   sharePct: string; // this lot's kgUsed / session kgConsumed * 100
   /** HISTORICAL output — session.kgOutputTotal apportioned by this lot's input share. Fixed,
    *  immutable at packing time. NEVER derived from live PackedStock.quantity, which shrinks
@@ -222,13 +227,15 @@ export class WarehouseService {
         currentPackedStock = currentPackedStock.plus(currentBatchStock);
         waste = waste.plus(allocatedWaste);
 
-        const bagsOutput = (session.bagsOutput as unknown as Array<{ qty: number }>) ?? [];
+        const bagsOutput = (session.bagsOutput as unknown as Array<{ bagTypeId: string; qty: number }>) ?? [];
         const bagCount = bagsOutput.reduce((s, b) => s + (b.qty ?? 0), 0);
+        const bagTypes = bagsOutput.map((b) => ({ bagTypeId: b.bagTypeId, qty: b.qty ?? 0 }));
 
         sessions.push({
           sessionId: session.id,
           date: session.date.toISOString(),
           bagCount,
+          bagTypes,
           lotKgUsed: kgUsed.toFixed(3),
           sessionKgConsumed: sessionKgConsumed.toFixed(3),
           sessionKgOutputTotal: sessionKgOutputTotal.toFixed(3),

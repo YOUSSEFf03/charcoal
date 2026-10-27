@@ -58,6 +58,17 @@ describe('PackingSessionsService', () => {
       stockExit: { count: fn(), ...overrides.stockExit },
       stockAdjustment: { count: fn(), ...overrides.stockAdjustment },
       shipmentReservation: { count: fn(), ...overrides.shipmentReservation },
+      // Waste-pool sync (syncPackingVarianceWasteEntry, called unconditionally by both
+      // create and update) — default: no pre-existing entry for this session, and a
+      // zero-balance pool. Most tests never exercise a non-zero variance delta, so these
+      // defaults are never read past the no-op early-return; tests that DO produce a
+      // non-zero variance still resolve safely against a real (zero) balance.
+      wasteEntry: { findUnique: fn().mockResolvedValue(null), create: fn(), update: fn(), delete: fn(), ...overrides.wasteEntry },
+      wasteStock: {
+        findUniqueOrThrow: fn().mockResolvedValue({ id: 'singleton', kgOnHand: { toString: () => '0.000' } }),
+        update: fn(),
+        ...overrides.wasteStock,
+      },
     };
   }
 
@@ -585,6 +596,7 @@ describe('PackingSessionsService', () => {
     function existingSession(overrides: Record<string, unknown> = {}) {
       return {
         id: sessionId,
+        date: new Date('2024-01-15'),
         bagsOutput: [{ bagTypeId: bagType10kg, qty: 10, ratePerBag: '0.1000' }],
         sessionEarnings: { toString: () => '1.00' },
         varianceNote: null,
@@ -600,6 +612,11 @@ describe('PackingSessionsService', () => {
     // on the existing session, simulating "the rate changed after the session was created".
     function setupTx(existing: ReturnType<typeof existingSession>) {
       const tx = makeTx();
+      // Default caller for update() 's unconditional user-resolution (needed for both
+      // the ownership check and as the createdById on a freshly-created WasteEntry).
+      // The two ownership-guard tests below override this themselves after calling
+      // setupTx(), same as they already did before this default existed.
+      tx.user.findUnique.mockResolvedValue({ id: 'db-caller-default', clerkId: userId });
       tx.packingSession.findUnique.mockResolvedValue(existing);
       tx.stockExit.count.mockResolvedValue(0);
       tx.stockAdjustment.count.mockResolvedValue(0);

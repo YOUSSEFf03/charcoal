@@ -11,6 +11,7 @@ import { UpdatePackingSessionDto } from './dto/update-packing-session.dto';
 import { ClerkUser } from '../auth/clerk.strategy';
 import { Prisma } from '@prisma/client';
 import { consumeLots } from '../common/inventory/consume-lots';
+import { syncPackingVarianceWasteEntry } from '../common/inventory/waste-pool';
 
 const SESSION_INCLUDE = {
   sessionLots: { include: { lot: true } },
@@ -152,6 +153,8 @@ export class PackingSessionsService {
    *  11. Create PackingSession record (workerEntityId always set — guaranteed by step 1b)
    *  12. Create PackingSessionLot records (the junction rows)
    *  13. Create PackedStock records (one per bag line)
+   *  13b. Feed max(varianceKg, 0) into the waste pool (WasteStock/WasteEntry) — see
+   *      syncPackingVarianceWasteEntry()
    *  14. Update Worker entity earnings if workerEntityId provided
    *  15. Return created session with session lots
    */
@@ -276,6 +279,16 @@ export class PackingSessionsService {
         data: splitRows.map(row => ({ lotId: row.lotId, bagTypeId: row.bagTypeId, quantity: row.qty, sessionId: created.id })),
       });
 
+      // Step 13b: Feed this session's waste into the pool — max(varianceKg, 0), same
+      // clamp as the material-flow report's waste figure (warehouse.service.ts). A
+      // brand-new session has no prior WasteEntry, so this only ever adds.
+      await syncPackingVarianceWasteEntry(tx, {
+        sessionId: created.id,
+        varianceKg,
+        date: created.date,
+        createdById: user.id,
+      });
+
       // Step 14: (removed) Worker.totalEarned / totalBagsPacked are deprecated cache columns.
       // Totals are computed on read from PackingSession.sessionEarnings — see workers.service.ts.
 
@@ -309,6 +322,13 @@ export class PackingSessionsService {
    * endpoint is @Roles('owner', 'worker'); without this check any authenticated worker
    * could edit another worker's session — reversing/reapplying its lot deductions,
    * packed stock, and earnings.
+   *
+   * Waste pool: this session's own WasteEntry is synced to the NEW max(varianceKg, 0)
+   * by delta (see syncPackingVarianceWasteEntry()). If the delta would drive the pool's
+   * shared balance negative — because some of what this session contributed has
+   * already been sold/disposed/adjusted elsewhere — the whole update is rejected
+   * (400 WASTE_POOL_INSUFFICIENT), same transactional all-or-nothing guarantee as the
+   * conservation check below.
    */
   async updatePackingSession(id: string, dto: UpdatePackingSessionDto, currentUser: ClerkUser) {
     return this.prisma.$transaction(async (tx) => {
@@ -319,11 +339,14 @@ export class PackingSessionsService {
       });
       if (!existing) throw new NotFoundException({ error: 'Packing session not found', code: 'NOT_FOUND' });
 
-      if (currentUser.role === 'worker') {
-        const caller = await tx.user.findUnique({ where: { clerkId: currentUser.userId } });
-        if (!caller || existing.workerId !== caller.id) {
-          throw new ForbiddenException({ error: 'Access denied to this packing session', code: 'FORBIDDEN' });
-        }
+      // Resolved unconditionally (not just for role==='worker') — needed as the
+      // createdById on a freshly-created WasteEntry below for a legacy session that
+      // predates the waste-pool feature and has none yet.
+      const caller = await tx.user.findUnique({ where: { clerkId: currentUser.userId } });
+      if (!caller) throw new ForbiddenException({ error: 'User not synced', code: 'NO_USER' });
+
+      if (currentUser.role === 'worker' && existing.workerId !== caller.id) {
+        throw new ForbiddenException({ error: 'Access denied to this packing session', code: 'FORBIDDEN' });
       }
 
       // Block if packed stock has downstream records. ShipmentReservation.packedStockId
@@ -479,6 +502,18 @@ export class PackingSessionsService {
       });
 
       // Worker.totalEarned / totalBagsPacked not updated here — computed on read.
+
+      // Sync this session's waste contribution — max(varianceKg, 0) — to the pool.
+      // Date is NEVER taken from dto.date (update() has never applied it — see
+      // createPackingSession's `date: dto.date ? ... : new Date()` vs. this method,
+      // which has no equivalent write), so existing.date is this session's real,
+      // unchanged date.
+      await syncPackingVarianceWasteEntry(tx, {
+        sessionId: id,
+        varianceKg,
+        date: existing.date,
+        createdById: caller.id,
+      });
     });
 
     // Return session outside transaction — read-only, no contention

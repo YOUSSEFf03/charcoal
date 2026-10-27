@@ -8,6 +8,9 @@ import type {
   PaginatedResponse,
   LotMaterialFlow,
   ContainerMaterialFlow,
+  WasteSummary,
+  WasteLedgerPage,
+  WasteEntryType,
 } from '../types/api'
 
 /** Query params accepted by GET /stock-lots. */
@@ -78,6 +81,44 @@ export function useContainerMaterialFlow(containerId: string) {
       return res.data
     },
     enabled: Boolean(containerId),
+  })
+}
+
+/**
+ * Waste-pool balance + this-month activity (kg on hand, collected/sold/disposed this
+ * month). One combined pool — see WasteSummary's doc comment.
+ * GET /waste/summary
+ */
+export function useWasteSummary() {
+  return useQuery({
+    queryKey: ['waste', 'summary'],
+    queryFn: async () => {
+      const res = await api.get<WasteSummary>('/waste/summary')
+      return res.data
+    },
+  })
+}
+
+/** Query params accepted by GET /waste/ledger. */
+export interface WasteLedgerQuery {
+  page?: number
+  limit?: number
+  type?: WasteEntryType
+  dateFrom?: string
+  dateTo?: string
+}
+
+/**
+ * Paginated waste-pool ledger (append-only — every row that moved WasteStock.kgOnHand).
+ * GET /waste/ledger
+ */
+export function useWasteLedger(params?: WasteLedgerQuery) {
+  return useQuery({
+    queryKey: ['waste', 'ledger', params ?? {}],
+    queryFn: async () => {
+      const res = await api.get<WasteLedgerPage>('/waste/ledger', { params })
+      return res.data
+    },
   })
 }
 
@@ -445,6 +486,7 @@ export function useUpdateStockAdjustment() {
       // Partial key invalidates every cached lot/container flow.
       qc.invalidateQueries({ queryKey: ['warehouse', 'lot-material-flow'] })
       qc.invalidateQueries({ queryKey: ['warehouse', 'container-material-flow'] })
+      qc.invalidateQueries({ queryKey: ['waste'] })
     },
   })
 }
@@ -462,6 +504,7 @@ export function useDeleteStockAdjustment() {
       qc.invalidateQueries({ queryKey: ['warehouse', 'summary'] })
       qc.invalidateQueries({ queryKey: ['warehouse', 'lot-material-flow'] })
       qc.invalidateQueries({ queryKey: ['warehouse', 'container-material-flow'] })
+      qc.invalidateQueries({ queryKey: ['waste'] })
     },
   })
 }
@@ -473,7 +516,7 @@ export function useCreateStockAdjustment() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (body: {
-      adjustmentType: 'lot' | 'packed_stock'
+      adjustmentType: 'lot' | 'packed_stock' | 'waste'
       lotId?: string
       packedStockId?: string
       qtyBefore: string
@@ -490,6 +533,9 @@ export function useCreateStockAdjustment() {
       qc.invalidateQueries({ queryKey: ['warehouse', 'summary'] })
       qc.invalidateQueries({ queryKey: ['warehouse', 'lot-material-flow'] })
       qc.invalidateQueries({ queryKey: ['warehouse', 'container-material-flow'] })
+      // Covers the 'waste' adjustmentType case too — harmless over-invalidation for
+      // the other two types, same as the warehouse invalidations above.
+      qc.invalidateQueries({ queryKey: ['waste'] })
     },
   })
 }
@@ -509,6 +555,7 @@ export function useApproveStockAdjustment() {
       qc.invalidateQueries({ queryKey: ['warehouse', 'summary'] })
       qc.invalidateQueries({ queryKey: ['warehouse', 'lot-material-flow'] })
       qc.invalidateQueries({ queryKey: ['warehouse', 'container-material-flow'] })
+      qc.invalidateQueries({ queryKey: ['waste'] })
     },
   })
 }

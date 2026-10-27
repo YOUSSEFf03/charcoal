@@ -51,6 +51,15 @@ describe('StockAdjustmentsService', () => {
       stockLot: { findUnique: fn(), update: fn(), ...txOverrides.stockLot },
       packedStock: { findUnique: fn(), update: fn(), ...txOverrides.packedStock },
       stockAdjustment: { create: fn(), ...txOverrides.stockAdjustment },
+      // Waste-pool branch (resolveAndApply's 'waste' case + the create()/approve()
+      // ledger write) — default: zero balance, FOR UPDATE lock resolves to a no-op.
+      $queryRaw: fn().mockResolvedValue([]),
+      wasteStock: {
+        findUniqueOrThrow: fn().mockResolvedValue({ id: 'singleton', kgOnHand: { toString: () => '0.000' } }),
+        update: fn().mockResolvedValue({ kgOnHand: { toString: () => '0.000' } }),
+        ...txOverrides.wasteStock,
+      },
+      wasteEntry: { create: fn(), update: fn(), ...txOverrides.wasteEntry },
     };
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
     return tx;
@@ -589,6 +598,267 @@ describe('StockAdjustmentsService', () => {
 
       expect(result.status).toBe('rejected');
       expect(mockPrisma.stockLot.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // =====================================================================
+  // adjustmentType='waste' — physical-count correction against the combined
+  // waste pool (WasteStock singleton + WasteEntry ledger). Mirrors the
+  // lot/packed_stock coverage above: owner self-approve vs. pending counter
+  // submission (BUG-H), atomic delta not absolute set (BUG-G), and the
+  // negative-pool guard. See waste-pool.ts and schema.prisma's WasteEntry/
+  // WasteStock doc comments for the full design.
+  // =====================================================================
+  describe('waste adjustments', () => {
+    it('owner self-approve: applies the delta to WasteStock and writes a linked WasteEntry', async () => {
+      const clerkId = 'clerk-owner-1';
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-owner', clerkId, role: 'owner' });
+      const tx = setupTransaction();
+      tx.wasteStock.findUniqueOrThrow.mockResolvedValue({ id: 'singleton', kgOnHand: { toString: () => '50.000' } });
+      tx.stockAdjustment.create.mockResolvedValue({ id: 'adj-waste-1', date: new Date('2024-01-15') });
+
+      await service.create(
+        { adjustmentType: 'waste' as any, qtyBefore: '999', qtyAfter: '62.500', reason: 'Physical recount', date: '2024-01-15' },
+        clerkId,
+      );
+
+      // Atomic delta (62.5 − live 50 = +12.5), never an absolute set.
+      expect(tx.wasteStock.update).toHaveBeenCalledWith({
+        where: { id: 'singleton' },
+        data: { kgOnHand: { increment: '12.500' } },
+      });
+      const createData = tx.stockAdjustment.create.mock.calls[0][0].data;
+      expect(createData.qtyBefore).toBe('50.000'); // live value, not the forged client '999'
+      expect(createData.difference).toBe('12.500');
+      expect(createData.lotId).toBeUndefined();
+      expect(createData.packedStockId).toBeUndefined();
+
+      expect(tx.wasteEntry.create).toHaveBeenCalledWith({
+        data: {
+          type: 'adjustment',
+          kg: '12.500',
+          adjustmentId: 'adj-waste-1',
+          date: new Date('2024-01-15'),
+          createdById: 'db-owner',
+        },
+      });
+    });
+
+    it('non-owner counter: submits a PENDING waste adjustment — no pool mutation, no ledger entry yet', async () => {
+      const clerkId = 'clerk-worker';
+
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'worker-db', clerkId, role: 'worker' });
+      const tx = setupTransaction();
+      tx.stockAdjustment.create.mockImplementation((a: any) => Promise.resolve({ id: 'adj-waste-pending', ...a.data }));
+
+      await service.create(
+        { adjustmentType: 'waste' as any, qtyBefore: '0', qtyAfter: '15.000', reason: 'count', date: '2024-01-15' },
+        clerkId,
+      );
+
+      expect(tx.wasteStock.update).not.toHaveBeenCalled();
+      expect(tx.wasteEntry.create).not.toHaveBeenCalled();
+      const data = tx.stockAdjustment.create.mock.calls[0][0].data;
+      expect(data.status).toBe('pending');
+    });
+
+    it('create() rejects a negative qtyAfter for waste adjustments', async () => {
+      const clerkId = 'clerk-owner-1';
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'db-owner', clerkId, role: 'owner' });
+      const tx = setupTransaction();
+
+      await expect(
+        service.create(
+          { adjustmentType: 'waste' as any, qtyBefore: '0', qtyAfter: '-5.000', reason: 'x', date: '2024-01-15' },
+          clerkId,
+        ),
+      ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }) });
+      expect(tx.wasteStock.update).not.toHaveBeenCalled();
+    });
+
+    it('approve(): applies the delta to WasteStock and writes the ledger entry at approval time (the deferred, non-owner path)', async () => {
+      const clerkId = 'clerk-owner';
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: 'adj-waste-2', adjustmentType: 'waste', lotId: null, packedStockId: null,
+            status: 'pending', countedById: 'worker-db',
+            qtyAfter: { toString: () => '20.000' },
+            date: new Date('2024-02-01'),
+          }),
+          update: fn().mockImplementation((a: any) => Promise.resolve({ id: 'adj-waste-2', ...a.data })),
+        },
+        stockLot: { update: fn() },
+        packedStock: { update: fn() },
+        $queryRaw: fn().mockResolvedValue([]),
+        wasteStock: {
+          findUniqueOrThrow: fn().mockResolvedValue({ id: 'singleton', kgOnHand: { toString: () => '5.000' } }),
+          update: fn().mockResolvedValue({}),
+        },
+        wasteEntry: { create: fn().mockResolvedValue({}) },
+      };
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'owner-db', clerkId, role: 'owner' });
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.approve('adj-waste-2', clerkId);
+
+      expect(tx.wasteStock.update).toHaveBeenCalledWith({
+        where: { id: 'singleton' },
+        data: { kgOnHand: { increment: '15.000' } }, // 20 − live 5
+      });
+      expect(tx.wasteEntry.create).toHaveBeenCalledWith({
+        data: {
+          type: 'adjustment',
+          kg: '15.000',
+          adjustmentId: 'adj-waste-2',
+          date: new Date('2024-02-01'),
+          createdById: 'owner-db',
+        },
+      });
+    });
+
+    it('update(): editing an approved waste adjustment applies the delta and keeps the linked WasteEntry.kg in lockstep', async () => {
+      const adjId = 'adj-waste-3';
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: adjId, adjustmentType: 'waste', lotId: null, packedStockId: null,
+            status: 'approved',
+            qtyBefore: { toString: () => '40.000' },
+            qtyAfter: { toString: () => '50.000' },
+            difference: { toString: () => '10.000' },
+          }),
+          update: fn().mockResolvedValue({ id: adjId }),
+        },
+        stockLot: { update: fn() },
+        packedStock: { update: fn() },
+        wasteStock: { update: fn().mockResolvedValue({ kgOnHand: { toString: () => '60.000' } }) },
+        wasteEntry: { update: fn().mockResolvedValue({}) },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      // qtyAfter 50 → 55: editDelta = +5, newDiff (vs immutable qtyBefore 40) = 15.
+      await service.update(adjId, { qtyAfter: '55.000' });
+
+      expect(tx.wasteStock.update).toHaveBeenCalledWith({
+        where: { id: 'singleton' },
+        data: { kgOnHand: { increment: '5.000' } },
+      });
+      expect(tx.wasteEntry.update).toHaveBeenCalledWith({
+        where: { adjustmentId: adjId },
+        data: { kg: '15.000' },
+      });
+      expect(tx.stockAdjustment.update.mock.calls[0][0].data.difference).toBe('15.000');
+    });
+
+    it('update() rejects an edit that would drive the waste pool negative, and writes nothing', async () => {
+      const adjId = 'adj-waste-neg';
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: adjId, adjustmentType: 'waste', lotId: null, packedStockId: null,
+            status: 'approved',
+            qtyBefore: { toString: () => '40.000' },
+            qtyAfter: { toString: () => '50.000' },
+            difference: { toString: () => '10.000' },
+          }),
+          update: fn(),
+        },
+        stockLot: { update: fn() },
+        packedStock: { update: fn() },
+        // Reducing qtyAfter to 5 means editDelta = 5 − 50 = −45; only 5kg remains live.
+        wasteStock: { update: fn().mockResolvedValue({ kgOnHand: { toString: () => '-40.000' } }) },
+        wasteEntry: { update: fn() },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.update(adjId, { qtyAfter: '5.000' })).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      expect(tx.stockAdjustment.update).not.toHaveBeenCalled();
+      expect(tx.wasteEntry.update).not.toHaveBeenCalled();
+    });
+
+    it('remove(): reverses the INVERSE delta on WasteStock and deletes the linked WasteEntry', async () => {
+      const adjId = 'adj-waste-4';
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: adjId, adjustmentType: 'waste', lotId: null, packedStockId: null,
+            status: 'approved',
+            qtyBefore: { toString: () => '40.000' },
+            difference: { toString: () => '10.000' }, // reversal = −10
+          }),
+          delete: fn().mockResolvedValue({}),
+        },
+        stockLot: { update: fn() },
+        packedStock: { update: fn() },
+        wasteStock: { update: fn().mockResolvedValue({ kgOnHand: { toString: () => '30.000' } }) },
+        wasteEntry: { deleteMany: fn().mockResolvedValue({ count: 1 }) },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.remove(adjId);
+
+      expect(tx.wasteStock.update).toHaveBeenCalledWith({
+        where: { id: 'singleton' },
+        data: { kgOnHand: { increment: '-10.000' } },
+      });
+      expect(tx.wasteEntry.deleteMany).toHaveBeenCalledWith({ where: { adjustmentId: adjId } });
+      expect(tx.stockAdjustment.delete).toHaveBeenCalledWith({ where: { id: adjId } });
+    });
+
+    it('remove() rejects a reversal that would drive the waste pool negative, and deletes nothing', async () => {
+      const adjId = 'adj-waste-neg-2';
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: adjId, adjustmentType: 'waste', lotId: null, packedStockId: null,
+            status: 'approved',
+            qtyBefore: { toString: () => '40.000' },
+            difference: { toString: () => '10.000' },
+          }),
+          delete: fn(),
+        },
+        stockLot: { update: fn() },
+        packedStock: { update: fn() },
+        wasteStock: { update: fn().mockResolvedValue({ kgOnHand: { toString: () => '-3.000' } }) },
+        wasteEntry: { deleteMany: fn() },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await expect(service.remove(adjId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      expect(tx.wasteEntry.deleteMany).not.toHaveBeenCalled();
+      expect(tx.stockAdjustment.delete).not.toHaveBeenCalled();
+    });
+
+    it('remove() on a PENDING waste adjustment never touches WasteStock (it never mutated it)', async () => {
+      const adjId = 'adj-waste-pending-del';
+      const tx = {
+        stockAdjustment: {
+          findUnique: fn().mockResolvedValue({
+            id: adjId, adjustmentType: 'waste', lotId: null, packedStockId: null,
+            status: 'pending',
+            qtyBefore: { toString: () => '40.000' },
+            difference: { toString: () => '10.000' },
+          }),
+          delete: fn().mockResolvedValue({}),
+        },
+        stockLot: { update: fn() },
+        packedStock: { update: fn() },
+        wasteStock: { update: fn() },
+        // Still called (harmless no-op) — a pending adjustment never got a WasteEntry.
+        wasteEntry: { deleteMany: fn().mockResolvedValue({ count: 0 }) },
+      };
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+      await service.remove(adjId);
+
+      expect(tx.wasteStock.update).not.toHaveBeenCalled();
+      expect(tx.stockAdjustment.delete).toHaveBeenCalledWith({ where: { id: adjId } });
     });
   });
 });

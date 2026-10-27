@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useApproveStockAdjustment, useRejectStockAdjustment, useStockExits, useLotMaterialFlow, useAvailableStockLots, usePackedStock } from '../hooks/useWarehouse'
+import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useApproveStockAdjustment, useRejectStockAdjustment, useStockExits, useLotMaterialFlow, useAvailableStockLots, usePackedStock, useWasteSummary, useWasteLedger } from '../hooks/useWarehouse'
 import type { StockLot } from '../types/api'
 import { usePackingSessions } from '../hooks/usePacking'
 import { useBagTypes } from '../hooks/useBagTypes'
@@ -8,7 +8,7 @@ import { formatDate, toDateOnlyString } from '../lib/date'
 
 const PACKED_STOCK_PAGE_SIZE = 20
 
-type WTab = 'raw' | 'packed' | 'adj'
+type WTab = 'raw' | 'packed' | 'waste' | 'adj' | 'history'
 
 interface LotVM {
   id: string
@@ -31,13 +31,17 @@ export default function Warehouse() {
   const [tab, setTab] = useState<WTab>('raw')
   const [lotPanelOpen, setLotPanelOpen] = useState(false)
   const [selectedLot, setSelectedLot] = useState<LotVM | null>(null)
-  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'depleted'>('all')
   const [filterSearch, setFilterSearch] = useState('')
+  const [historySearch, setHistorySearch] = useState('')
   const [adjModalOpen, setAdjModalOpen] = useState(false)
   const [adjLotId, setAdjLotId] = useState('')
   const [adjQtyAfter, setAdjQtyAfter] = useState('')
   const [adjReason, setAdjReason] = useState('')
   const [adjError, setAdjError] = useState('')
+  const [wasteAdjModalOpen, setWasteAdjModalOpen] = useState(false)
+  const [wasteAdjQtyAfter, setWasteAdjQtyAfter] = useState('')
+  const [wasteAdjReason, setWasteAdjReason] = useState('')
+  const [wasteAdjError, setWasteAdjError] = useState('')
   const [toast, setToast] = useState('')
   const [selectedBagTypeId, setSelectedBagTypeId] = useState<string | null>(null)
   const [packedStockPage, setPackedStockPage] = useState(1)
@@ -52,6 +56,8 @@ export default function Warehouse() {
   const sessionsQ = usePackingSessions({ limit: 100 })
   const summaryQ = useWarehouseSummary()
   const adjQ = useStockAdjustments({ limit: 100 })
+  const wasteSummaryQ = useWasteSummary()
+  const wasteLedgerQ = useWasteLedger({ limit: 50 })
   const lotExitsQ = useStockExits(selectedLot ? { lotId: selectedLot.id, limit: 200 } : undefined)
   const lotFlowQ = useLotMaterialFlow(selectedLot?.id ?? '')
   const createAdj = useCreateStockAdjustment()
@@ -64,6 +70,14 @@ export default function Warehouse() {
   const [editAdjReason, setEditAdjReason] = useState('')
   const [editAdjError, setEditAdjError] = useState('')
   const bagTypesQ = useBagTypes()
+  const bagTypeNameById = new Map((bagTypesQ.data ?? []).map(b => [b.id, b.name]))
+  // A packing session's bagsOutput can legitimately contain more than one bag
+  // type — join every line's name × qty rather than showing only the first
+  // one (which would silently hide the rest for a mixed-output session).
+  function bagTypesLabel(bagTypes: { bagTypeId: string; qty: number }[]) {
+    if (bagTypes.length === 0) return '—'
+    return bagTypes.map(b => `${bagTypeNameById.get(b.bagTypeId) ?? 'Unknown'} ×${b.qty}`).join(', ')
+  }
   // Per-bag-type source lots for the detail panel — a single bag type's live
   // batch count is small and bounded (same "safe unbounded per-entity" scale
   // profile as getFifoDraw()), so this stays a single unpaginated page.
@@ -153,10 +167,26 @@ export default function Warehouse() {
   const activeLots = summaryQ.data?.lotCount ?? lots.filter(l => l.status === 'active').length
   const totalPackedBags = (summaryQ.data?.packedSummary ?? packedSummary).reduce((s, p) => s + p.totalBags, 0)
 
+  // Raw lots tab shows only lots that still have stock — once a lot's
+  // remaining kg hits 0 it's depleted and moves to the Warehouse history tab
+  // below instead of lingering here.
   const filteredLots = lots.filter(l => {
-    if (filterStatus !== 'all' && l.status !== filterStatus) return false
+    if (l.status !== 'active') return false
     if (filterSearch) {
       const q = filterSearch.toLowerCase()
+      return (
+        l.charcoalType.toLowerCase().includes(q) ||
+        l.supplier.toLowerCase().includes(q) ||
+        l.id.toLowerCase().includes(q)
+      )
+    }
+    return true
+  })
+
+  const historyLots = lots.filter(l => {
+    if (l.status !== 'depleted') return false
+    if (historySearch) {
+      const q = historySearch.toLowerCase()
       return (
         l.charcoalType.toLowerCase().includes(q) ||
         l.supplier.toLowerCase().includes(q) ||
@@ -225,7 +255,9 @@ export default function Warehouse() {
   const tabCounts = {
     raw: lots.filter(l => l.status === 'active').length,
     packed: packedCards.length,
+    waste: wasteLedgerQ.data?.total ?? 0,
     adj: adjQ.data?.total ?? 0,
+    history: lots.filter(l => l.status === 'depleted').length,
   }
 
   return (
@@ -245,9 +277,17 @@ export default function Warehouse() {
           <i className="ti ti-box" style={{ fontSize: 15 }} /> Packed goods
           <span className="tab-count">{tabCounts.packed}</span>
         </button>
+        <button className={`tab${tab === 'waste' ? ' active' : ''}`} onClick={() => setTab('waste')}>
+          <i className="ti ti-recycle" style={{ fontSize: 15 }} /> Waste
+          <span className="tab-count">{tabCounts.waste}</span>
+        </button>
         <button className={`tab${tab === 'adj' ? ' active' : ''}`} onClick={() => setTab('adj')}>
           <i className="ti ti-adjustments" style={{ fontSize: 15 }} /> Adjustments
           <span className="tab-count">{tabCounts.adj}</span>
+        </button>
+        <button className={`tab${tab === 'history' ? ' active' : ''}`} onClick={() => setTab('history')}>
+          <i className="ti ti-history" style={{ fontSize: 15 }} /> Warehouse history
+          <span className="tab-count">{tabCounts.history}</span>
         </button>
       </div>
 
@@ -303,15 +343,6 @@ export default function Warehouse() {
                   onChange={e => setFilterSearch(e.target.value)}
                 />
               </div>
-              <select
-                className="filter-select"
-                value={filterStatus}
-                onChange={e => setFilterStatus(e.target.value as typeof filterStatus)}
-              >
-                <option value="all">All status</option>
-                <option value="active">Active</option>
-                <option value="depleted">Depleted</option>
-              </select>
               <div className="filter-sep" />
               <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
                 {filteredLots.length} lot{filteredLots.length !== 1 ? 's' : ''}
@@ -323,6 +354,9 @@ export default function Warehouse() {
                 <div className="card-title">
                   <i className="ti ti-stack-2" /> Raw stock lots
                 </div>
+                <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+                  Depleted lots move to <a href="#" onClick={e => { e.preventDefault(); setTab('history') }} style={{ color: 'inherit', textDecoration: 'underline' }}>Warehouse history</a>
+                </span>
                 <button className="card-action">Export</button>
               </div>
               <div className="table-scroll">
@@ -545,6 +579,116 @@ export default function Warehouse() {
         )}
 
         {/* Adjustments tab */}
+        {/* Waste pool tab — one combined pool across all charcoal types, auto-fed from
+            packing-session variance (see WasteStock/WasteEntry doc comments). Selling
+            from the pool is not wired up yet (coming in a later phase) — this tab is
+            view + physical-count correction only. */}
+        {tab === 'waste' && (() => {
+          const w = wasteSummaryQ.data
+          const kgOnHand = w ? parseFloat(w.kgOnHand) : null
+          const collected = w ? parseFloat(w.collectedThisMonthKg) : null
+          const sold = w ? parseFloat(w.soldThisMonthKg) : null
+          const disposed = w ? parseFloat(w.disposedThisMonthKg) : null
+          const daysSinceAdj = w?.lastAdjustmentDate
+            ? Math.floor((Date.now() - new Date(w.lastAdjustmentDate).getTime()) / 86400000)
+            : null
+          const fmtKg = (n: number | null) => n == null ? '—' : `${n.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg`
+          const ledgerRows = wasteLedgerQ.data?.data ?? []
+
+          return (
+            <div>
+              <div className="card" style={{ marginBottom: 14 }}>
+                <div className="card-head">
+                  <div className="card-title"><i className="ti ti-recycle" /> Waste pool</div>
+                  <button
+                    className="btn primary"
+                    style={{ fontSize: 12 }}
+                    onClick={() => {
+                      setWasteAdjQtyAfter('')
+                      setWasteAdjReason('')
+                      setWasteAdjError('')
+                      setWasteAdjModalOpen(true)
+                    }}
+                  >
+                    <i className="ti ti-scale" style={{ fontSize: 13 }} /> Correct balance
+                  </button>
+                </div>
+                <div style={{ padding: '18px 20px' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text2)', fontWeight: 500, marginBottom: 4 }}>KG ON HAND</div>
+                  <div style={{ fontSize: 30, fontWeight: 600, letterSpacing: '-0.8px', color: 'var(--accent)' }}>
+                    {wasteSummaryQ.isLoading ? '…' : fmtKg(kgOnHand)}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 6 }}>
+                    Combined offcuts/sweepings from every packing session — not split by charcoal type.{' '}
+                    {daysSinceAdj != null
+                      ? `Last physically counted ${daysSinceAdj === 0 ? 'today' : `${daysSinceAdj} day${daysSinceAdj === 1 ? '' : 's'} ago`}.`
+                      : 'Never physically counted — weigh the pile and correct the balance below.'}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
+                {[
+                  { label: 'Collected this month', value: fmtKg(collected) },
+                  { label: 'Sold this month', value: fmtKg(sold) },
+                  { label: 'Disposed this month', value: fmtKg(disposed) },
+                ].map(k => (
+                  <div key={k.label} className="kpi-tile">
+                    <div className="kpi-tile-label">{k.label}</div>
+                    <div className="kpi-tile-value">{wasteSummaryQ.isLoading ? '…' : k.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="card">
+                <div className="card-head">
+                  <div className="card-title"><i className="ti ti-list" /> Ledger</div>
+                </div>
+                {wasteLedgerQ.isLoading && <div className="empty">Loading…</div>}
+                {wasteLedgerQ.isError && (
+                  <div className="empty">
+                    Failed to load the waste ledger.
+                    <div><button className="btn" style={{ marginTop: 10 }} onClick={() => wasteLedgerQ.refetch()}>Retry</button></div>
+                  </div>
+                )}
+                {!wasteLedgerQ.isLoading && !wasteLedgerQ.isError && ledgerRows.length === 0 && (
+                  <div className="empty">No waste activity yet.</div>
+                )}
+                {ledgerRows.map(e => {
+                  const kg = parseFloat(e.kg)
+                  const isOut = kg < 0
+                  const typeLabel =
+                    e.type === 'packing_variance' ? 'Collected from packing'
+                    : e.type === 'sale' ? 'Sold'
+                    : e.type === 'disposal' ? 'Disposed'
+                    : 'Physical-count correction'
+                  const sourceLabel = e.session
+                    ? `Session ${new Date(e.session.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}${e.session.workerEntity ? ` · ${e.session.workerEntity.name}` : ''}`
+                    : e.adjustment?.reason ?? null
+                  return (
+                    <div key={e.id} className="adj-row">
+                      <div className="adj-icon" style={{ background: isOut ? 'var(--red-bg)' : 'var(--accent-bg)' }}>
+                        <i className={`ti ti-${isOut ? 'minus' : 'plus'}`} style={{ color: isOut ? 'var(--red)' : 'var(--accent)' }} />
+                      </div>
+                      <div className="adj-body">
+                        <strong>{typeLabel}</strong>
+                        <div className="adj-meta">
+                          {new Date(e.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          {sourceLabel && ` · ${sourceLabel}`}
+                          {' · by '}{e.createdBy?.name ?? 'unknown'}
+                        </div>
+                      </div>
+                      <div className="adj-diff" style={{ color: isOut ? 'var(--red)' : 'var(--accent)' }}>
+                        {kg > 0 ? '+' : ''}{kg.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })()}
+
         {tab === 'adj' && (
           <div className="card">
             <div className="card-head">
@@ -581,6 +725,8 @@ export default function Warehouse() {
                     <strong style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {a.adjustmentType === 'lot'
                         ? `${a.lot?.charcoalType ?? 'Lot'} · Grade ${a.lot?.grade ?? '—'}`
+                        : a.adjustmentType === 'waste'
+                        ? 'Waste pool'
                         : `Packed stock`}
                       {a.status === 'pending' && (
                         <span className="badge badge-amber" style={{ fontSize: 10, padding: '1px 6px' }}>
@@ -665,6 +811,110 @@ export default function Warehouse() {
                 </div>
               )
             })}
+          </div>
+        )}
+
+        {/* Warehouse history tab — lots that were fully consumed (remaining kg = 0).
+            Read-only record of old stock; the Raw lots tab above only ever shows
+            lots that still have stock on hand. */}
+        {tab === 'history' && (
+          <div>
+            <div className="filters">
+              <div className="filter-input">
+                <i className="ti ti-search" />
+                <input
+                  type="text"
+                  placeholder="Search by type, supplier, lot ID…"
+                  value={historySearch}
+                  onChange={e => setHistorySearch(e.target.value)}
+                />
+              </div>
+              <div className="filter-sep" />
+              <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                {historyLots.length} depleted lot{historyLots.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+
+            <div className="card">
+              <div className="card-head">
+                <div className="card-title">
+                  <i className="ti ti-history" /> Warehouse history — depleted lots
+                </div>
+                <button className="card-action">Export</button>
+              </div>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Lot</th>
+                      <th>Type / grade</th>
+                      <th>Supplier</th>
+                      <th>Received</th>
+                      <th>Total consumed</th>
+                      <th>Cost / kg</th>
+                      <th>Original value</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stockLotsQ.isLoading && [0, 1, 2].map(i => (
+                      <tr key={i}>
+                        <td colSpan={8}>
+                          <div className="skeleton" style={{ width: '100%', height: 16 }} />
+                        </td>
+                      </tr>
+                    ))}
+                    {stockLotsQ.isError && (
+                      <tr>
+                        <td colSpan={8} className="empty">
+                          Failed to load stock lots.
+                          <div><button className="btn" style={{ marginTop: 10 }} onClick={() => stockLotsQ.refetch()}>Retry</button></div>
+                        </td>
+                      </tr>
+                    )}
+                    {!stockLotsQ.isLoading && !stockLotsQ.isError && historyLots.map(lot => (
+                      <tr key={lot.id} style={{ cursor: 'pointer' }} onClick={() => openLot(lot)}>
+                        <td>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text3)' }} title={lot.id}>
+                            {lot.displayId ?? lot.id.slice(0, 8).toUpperCase()}
+                          </span>
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {lot.charcoalType}
+                            {adjustedLotIds.has(lot.id) && (
+                              <span
+                                className="badge badge-amber"
+                                style={{ fontSize: 10, padding: '1px 6px' }}
+                                title="This lot has at least one approved stock adjustment"
+                              >
+                                <i className="ti ti-adjustments" style={{ fontSize: 10 }} /> Adjusted
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>Grade {lot.grade}</div>
+                        </td>
+                        <td style={{ color: 'var(--text2)' }}>{lot.supplier}</td>
+                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text2)' }}>
+                          {lot.rawKg.toLocaleString()} kg
+                        </td>
+                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>
+                          {lot.rawKg.toLocaleString()} kg
+                        </td>
+                        <td style={{ fontFamily: "'IBM Plex Mono', monospace" }}>${lot.costPerKg.toFixed(3)}</td>
+                        <td style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500 }}>
+                          ${Math.round(lot.rawKg * lot.costPerKg).toLocaleString()}
+                        </td>
+                        <td><i className="ti ti-chevron-right" style={{ color: 'var(--text3)' }} /></td>
+                      </tr>
+                    ))}
+                    {!stockLotsQ.isLoading && !stockLotsQ.isError && historyLots.length === 0 && (
+                      <tr><td colSpan={8} className="empty">No depleted lots yet.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -856,6 +1106,7 @@ export default function Warehouse() {
                       <thead>
                         <tr>
                           <th>Date</th>
+                          <th>Bag type</th>
                           <th className="right">Bags</th>
                           <th className="right">This lot's input</th>
                           <th className="right">Share of session</th>
@@ -868,6 +1119,7 @@ export default function Warehouse() {
                         {lotFlowQ.data!.sessions.map(s => (
                           <tr key={s.sessionId}>
                             <td style={{ color: 'var(--text2)' }}>{fmtDate(s.date)}</td>
+                            <td style={{ color: 'var(--text2)', fontSize: 12.5 }}>{bagTypesLabel(s.bagTypes)}</td>
                             <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{s.bagCount}</td>
                             <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 500 }}>{parseFloat(s.lotKgUsed).toFixed(1)} kg</td>
                             <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)' }}>{s.sharePct}%</td>
@@ -885,7 +1137,7 @@ export default function Warehouse() {
                       </tbody>
                       <tfoot>
                         <tr style={{ background: 'var(--surface2)' }}>
-                          <td colSpan={2} style={{ padding: '10px 18px', fontWeight: 600, fontSize: 13 }}>Total (this lot only)</td>
+                          <td colSpan={3} style={{ padding: '10px 18px', fontWeight: 600, fontSize: 13 }}>Total (this lot only)</td>
                           <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700 }}>
                             {lotFlowQ.data!.sessions.reduce((s, r) => s + parseFloat(r.lotKgUsed), 0).toFixed(1)} kg
                           </td>
@@ -1283,6 +1535,96 @@ export default function Warehouse() {
         )
       })()}
 
+      {/* Correct waste-pool balance modal — posts a StockAdjustment(adjustmentType='waste'),
+          same owner-self-approve / counter-submits-pending flow as the lot/packed_stock
+          modal above (BUG-H), via the same useCreateStockAdjustment() mutation. */}
+      {wasteAdjModalOpen && (() => {
+        const kgOnHand = wasteSummaryQ.data ? parseFloat(wasteSummaryQ.data.kgOnHand) : 0
+        const qtyAfterNum = parseFloat(wasteAdjQtyAfter)
+        const diff = !isNaN(qtyAfterNum) ? qtyAfterNum - kgOnHand : null
+        return (
+          <div className="modal-overlay open" onClick={() => setWasteAdjModalOpen(false)}>
+            <div className="modal" style={{ width: 460 }} onClick={e => e.stopPropagation()}>
+              <div className="modal-head">
+                <span className="modal-title">Correct waste pool balance</span>
+                <button className="panel-close" aria-label="Close" onClick={() => setWasteAdjModalOpen(false)}><i className="ti ti-x" /></button>
+              </div>
+              <div className="modal-body">
+                <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '10px 14px', fontSize: 12, fontFamily: "'IBM Plex Mono',monospace", marginBottom: 14 }}>
+                  Current system qty: <strong>{kgOnHand.toLocaleString()} kg</strong>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Actual weighed quantity (kg)</label>
+                  <input
+                    className="form-input"
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    placeholder="Enter the real counted quantity…"
+                    value={wasteAdjQtyAfter}
+                    onChange={e => setWasteAdjQtyAfter(e.target.value)}
+                    style={{ fontFamily: "'IBM Plex Mono',monospace" }}
+                  />
+                  {diff !== null && (
+                    <div style={{ marginTop: 6, fontSize: 12, fontFamily: "'IBM Plex Mono',monospace", color: diff < 0 ? 'var(--red)' : diff > 0 ? 'var(--accent)' : 'var(--text3)' }}>
+                      Difference: {diff > 0 ? '+' : ''}{diff.toFixed(1)} kg {diff < 0 ? '(loss)' : diff > 0 ? '(gain)' : '(no change)'}
+                    </div>
+                  )}
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Reason (required)</label>
+                  <input
+                    className="form-input"
+                    type="text"
+                    placeholder="e.g. physical count, scale calibration…"
+                    value={wasteAdjReason}
+                    onChange={e => setWasteAdjReason(e.target.value)}
+                  />
+                </div>
+                {wasteAdjError && (
+                  <div style={{ marginTop: 10, fontSize: 12, color: 'var(--red)' }}>{wasteAdjError}</div>
+                )}
+              </div>
+              <div className="modal-footer">
+                <button className="btn" onClick={() => setWasteAdjModalOpen(false)}>Cancel</button>
+                <button
+                  className="btn primary"
+                  disabled={createAdj.isPending}
+                  onClick={() => {
+                    if (!wasteAdjQtyAfter || isNaN(parseFloat(wasteAdjQtyAfter))) { setWasteAdjError('Enter actual quantity'); return }
+                    if (!wasteAdjReason.trim()) { setWasteAdjError('Reason is required'); return }
+                    setWasteAdjError('')
+                    createAdj.mutate(
+                      {
+                        adjustmentType: 'waste',
+                        qtyBefore: kgOnHand.toFixed(3),
+                        qtyAfter: parseFloat(wasteAdjQtyAfter).toFixed(3),
+                        reason: wasteAdjReason.trim(),
+                        date: toDateOnlyString(new Date()),
+                      },
+                      {
+                        onSuccess: (res: any) => {
+                          setWasteAdjModalOpen(false)
+                          showToast(
+                            res?.status === 'pending'
+                              ? 'Correction submitted — awaiting owner approval, pool not yet changed'
+                              : 'Waste pool balance corrected',
+                          )
+                        },
+                        onError: (err: any) => setWasteAdjError(err?.error ?? 'Failed to save'),
+                      }
+                    )
+                  }}
+                >
+                  <i className="ti ti-check" style={{ fontSize: 13 }} />
+                  {createAdj.isPending ? 'Saving…' : 'Save correction'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Edit adjustment modal */}
       {editAdj && (
         <div className="modal-overlay open" onClick={() => setEditAdj(null)}>
@@ -1293,7 +1635,13 @@ export default function Warehouse() {
             </div>
             <div className="modal-body">
               <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '10px 14px', fontSize: 12, fontFamily: "'IBM Plex Mono',monospace", marginBottom: 14 }}>
-                <strong>{editAdj.lot?.charcoalType ?? 'Lot'} · Grade {editAdj.lot?.grade ?? '—'}</strong>
+                <strong>
+                  {editAdj.adjustmentType === 'lot'
+                    ? `${editAdj.lot?.charcoalType ?? 'Lot'} · Grade ${editAdj.lot?.grade ?? '—'}`
+                    : editAdj.adjustmentType === 'waste'
+                    ? 'Waste pool'
+                    : 'Packed stock'}
+                </strong>
                 <div style={{ color: 'var(--text3)', marginTop: 2 }}>
                   Original: {parseFloat(editAdj.qtyBefore).toLocaleString()} kg → {parseFloat(editAdj.qtyAfter).toLocaleString()} kg
                 </div>

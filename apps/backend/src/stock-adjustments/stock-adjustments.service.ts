@@ -3,11 +3,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { AdjustmentType, Prisma } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto';
 import { UpdateStockAdjustmentDto } from './dto/update-stock-adjustment.dto';
+import { WASTE_STOCK_ID } from '../common/inventory/waste-pool';
 
 @Injectable()
 export class StockAdjustmentsService {
@@ -98,19 +99,46 @@ export class StockAdjustmentsService {
    * BUG-G (P4): stock mutates by an atomic { increment } delta, never an absolute set.
    * BUG-E (P2): a packed_stock adjustment may not drive quantity below reservedQuantity.
    *
+   * adjustmentType='waste': refId is ignored (the waste pool is the single WasteStock
+   * singleton row, WASTE_STOCK_ID) — a physical-count correction against the combined
+   * waste pool. Locks that row with `SELECT ... FOR UPDATE` before reading (unlike the
+   * lot/packed_stock branches below) because it is the SAME row every concurrent waste
+   * sale and every packing session's own variance write also contends for — see
+   * syncPackingVarianceWasteEntry() in waste-pool.ts, which uses the identical lock.
+   *
    * @param mutate - when false, validate + resolve qtyBefore but do NOT touch stock
    *                 (used to record a PENDING adjustment — BUG-H).
    */
   private async resolveAndApply(
     tx: Prisma.TransactionClient,
-    adjustmentType: 'lot' | 'packed_stock',
+    adjustmentType: AdjustmentType,
     refId: string,
     qtyAfter: string,
     mutate: boolean,
   ): Promise<Decimal> {
     let liveQtyBefore: Decimal;
 
-    if (adjustmentType === 'lot') {
+    if (adjustmentType === 'waste') {
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM "waste_stock" WHERE id = ${WASTE_STOCK_ID} FOR UPDATE`);
+      const stock = await tx.wasteStock.findUniqueOrThrow({ where: { id: WASTE_STOCK_ID } });
+
+      if (new Decimal(qtyAfter).lt(0)) {
+        throw new BadRequestException({
+          message: 'qtyAfter must be >= 0 for waste adjustments',
+          error: 'qtyAfter must be >= 0 for waste adjustments',
+          code: 'CONSTRAINT_VIOLATION',
+        });
+      }
+
+      liveQtyBefore = new Decimal(stock.kgOnHand.toString());
+      if (mutate) {
+        const difference = new Decimal(qtyAfter).minus(liveQtyBefore);
+        await tx.wasteStock.update({
+          where: { id: WASTE_STOCK_ID },
+          data: { kgOnHand: { increment: difference.toFixed(3) } },
+        });
+      }
+    } else if (adjustmentType === 'lot') {
       const lot = await tx.stockLot.findUnique({ where: { id: refId } });
       if (!lot) throw new NotFoundException({ error: 'Stock lot not found', code: 'NOT_FOUND' });
 
@@ -190,7 +218,10 @@ export class StockAdjustmentsService {
     }
 
     const isOwner = user.role === 'owner';
-    const refId = (dto.adjustmentType === 'lot' ? dto.lotId : dto.packedStockId)!;
+    const refId =
+      dto.adjustmentType === 'lot' ? dto.lotId! :
+      dto.adjustmentType === 'packed_stock' ? dto.packedStockId! :
+      WASTE_STOCK_ID;
 
     return this.prisma.$transaction(async (tx) => {
       // Validate + resolve live qtyBefore; only mutate stock when the owner self-approves.
@@ -204,7 +235,7 @@ export class StockAdjustmentsService {
 
       const difference = new Decimal(dto.qtyAfter).minus(liveQtyBefore);
 
-      return tx.stockAdjustment.create({
+      const created = await tx.stockAdjustment.create({
         data: {
           adjustmentType: dto.adjustmentType,
           ...(dto.lotId ? { lotId: dto.lotId } : {}),
@@ -220,6 +251,25 @@ export class StockAdjustmentsService {
         },
         include: { lot: true, packedStock: true, countedBy: true, approvedBy: true },
       });
+
+      // Waste pool: record this APPLIED correction in the ledger too — only once stock
+      // actually moved (the isOwner self-approve path; a pending counter submission has
+      // not touched WasteStock.kgOnHand yet, same as the lot/packed_stock branches above
+      // via resolveAndApply's `mutate` flag). See approve() for the matching write on
+      // the deferred (non-owner) path.
+      if (dto.adjustmentType === 'waste' && isOwner) {
+        await tx.wasteEntry.create({
+          data: {
+            type: 'adjustment',
+            kg: difference.toFixed(3),
+            adjustmentId: created.id,
+            date: created.date,
+            createdById: user.id,
+          },
+        });
+      }
+
+      return created;
     });
   }
 
@@ -249,7 +299,10 @@ export class StockAdjustmentsService {
         });
       }
 
-      const refId = (adj.adjustmentType === 'lot' ? adj.lotId : adj.packedStockId)!;
+      const refId =
+        adj.adjustmentType === 'lot' ? adj.lotId! :
+        adj.adjustmentType === 'packed_stock' ? adj.packedStockId! :
+        WASTE_STOCK_ID;
       // Re-resolve live qtyBefore at APPROVAL time and apply the atomic delta now.
       const liveQtyBefore = await this.resolveAndApply(
         tx,
@@ -260,7 +313,7 @@ export class StockAdjustmentsService {
       );
       const difference = new Decimal(adj.qtyAfter.toString()).minus(liveQtyBefore);
 
-      return tx.stockAdjustment.update({
+      const updated = await tx.stockAdjustment.update({
         where: { id },
         data: {
           status: 'approved',
@@ -270,6 +323,23 @@ export class StockAdjustmentsService {
         },
         include: { lot: true, packedStock: true, countedBy: true, approvedBy: true },
       });
+
+      // Waste pool: this PENDING adjustment never touched WasteStock (create() only
+      // mutates on the owner self-approve path) — write its ledger entry now, at the
+      // point stock actually moves. Mirrors create()'s own write for the owner path.
+      if (adj.adjustmentType === 'waste') {
+        await tx.wasteEntry.create({
+          data: {
+            type: 'adjustment',
+            kg: difference.toFixed(3),
+            adjustmentId: id,
+            date: adj.date,
+            createdById: user.id,
+          },
+        });
+      }
+
+      return updated;
     });
   }
 
@@ -314,6 +384,10 @@ export class StockAdjustmentsService {
         // An absolute `set = newQtyAfter` would clobber any sale/exit since the original
         // adjustment. qtyBefore is immutable — the original difference simply grows/shrinks.
         const editDelta = newQtyAfter.minus(new Decimal(adj.qtyAfter.toString()));
+        // Computed here (not after the approved-only block below) because the waste
+        // branch inside that block needs it too, to keep the linked WasteEntry.kg in
+        // lockstep with the adjustment's own `difference` — same value, written once.
+        const newDiff = newQtyAfter.minus(new Decimal(adj.qtyBefore.toString()));
 
         // BUG-H: only an APPROVED adjustment has already moved stock; editing it adjusts
         // stock by the delta. A PENDING adjustment never touched stock, so editing its
@@ -349,10 +423,28 @@ export class StockAdjustmentsService {
                 code: 'CONSTRAINT_VIOLATION',
               });
             }
+          } else if (adj.adjustmentType === 'waste') {
+            const updatedStock = await tx.wasteStock.update({
+              where: { id: WASTE_STOCK_ID },
+              data: { kgOnHand: { increment: editDelta.toFixed(3) } },
+            });
+            if (new Decimal(updatedStock.kgOnHand.toString()).lt(0)) {
+              throw new BadRequestException({
+                error: `Editing this adjustment would drive the waste pool negative (${updatedStock.kgOnHand}) — other waste activity (a sale, disposal, or another adjustment) has happened since the original adjustment`,
+                code: 'CONSTRAINT_VIOLATION',
+              });
+            }
+            // Keep the linked WasteEntry's kg in lockstep with the adjustment's own
+            // `difference` — same 1:1 invariant syncPackingVarianceWasteEntry()
+            // maintains for packing sessions' own entries. Guaranteed to exist: only
+            // an APPROVED waste adjustment (this branch) ever got one, in create()/approve().
+            await tx.wasteEntry.update({
+              where: { adjustmentId: id },
+              data: { kg: newDiff.toFixed(3) },
+            });
           }
         }
 
-        const newDiff = newQtyAfter.minus(new Decimal(adj.qtyBefore.toString()));
         return tx.stockAdjustment.update({
           where: { id },
           data: {
@@ -414,7 +506,27 @@ export class StockAdjustmentsService {
               code: 'CONSTRAINT_VIOLATION',
             });
           }
+        } else if (adj.adjustmentType === 'waste') {
+          const updatedStock = await tx.wasteStock.update({
+            where: { id: WASTE_STOCK_ID },
+            data: { kgOnHand: { increment: inverseDelta.toFixed(3) } },
+          });
+          if (new Decimal(updatedStock.kgOnHand.toString()).lt(0)) {
+            throw new BadRequestException({
+              error: `Deleting this adjustment would drive the waste pool negative (${updatedStock.kgOnHand}) — other waste activity has happened since it was approved`,
+              code: 'CONSTRAINT_VIOLATION',
+            });
+          }
         }
+      }
+
+      // Waste pool: the linked WasteEntry is NOT cascade-deleted at the DB level (its FK
+      // is ON DELETE SET NULL, like every other optional relation in this schema) — it is
+      // removed explicitly here so Σ(WasteEntry.kg) keeps reconciling to
+      // WasteStock.kgOnHand, which was just reversed above. Safe no-op for a PENDING
+      // waste adjustment (never had an entry) or any non-waste adjustmentType.
+      if (adj.adjustmentType === 'waste') {
+        await tx.wasteEntry.deleteMany({ where: { adjustmentId: id } });
       }
 
       await tx.stockAdjustment.delete({ where: { id } });

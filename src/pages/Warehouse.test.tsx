@@ -95,6 +95,8 @@ vi.mock('../hooks/useWarehouse', () => ({
   useLotMaterialFlow: () => ({ data: undefined }),
   useAvailableStockLots: () => ({ data: [] }),
   usePackedStock: (...args: unknown[]) => mockUsePackedStock(...args),
+  useWasteSummary: () => ({ data: undefined, isLoading: false }),
+  useWasteLedger: () => ({ data: { data: [], total: 0, page: 1, limit: 50 }, isLoading: false, isError: false, refetch: vi.fn() }),
 }))
 
 vi.mock('../hooks/usePacking', () => ({

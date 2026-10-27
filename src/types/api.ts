@@ -52,6 +52,10 @@ export interface LotFlowSession {
   lotKgUsed: string // Decimal — this lot's real input to the session
   sessionKgConsumed: string // Decimal — session total, reference only
   sessionKgOutputTotal: string // Decimal — session total, reference only
+  /** PackingSession.bagsOutput's raw (bagTypeId, qty) lines — a session can legitimately
+   *  produce more than one bag type. Session-level, like bagCount — NOT apportioned by
+   *  this lot's input share, so it's the same full list for every lot in this session. */
+  bagTypes: { bagTypeId: string; qty: number }[]
   sharePct: string // this lot's kgUsed / session kgConsumed * 100
   /** HISTORICAL output — session.kgOutputTotal apportioned by this lot's input share.
    *  Fixed at packing time. NEVER derived from live PackedStock.quantity, which shrinks
@@ -306,4 +310,48 @@ export interface UpdateContainerProductLineDto {
 export interface UpdateContainerExpenseDto {
   description?: string
   amount?: string
+}
+
+/**
+ * GET /waste/summary — waste-pool balance + this-month activity. The pool is one
+ * combined balance (not split by charcoal type) fed automatically by packing-session
+ * variance and corrected only by a waste adjustment (physical count) — see
+ * WasteEntry/WasteStock's doc comments in schema.prisma for the full ledger design.
+ * No $ figure yet — selling from the pool isn't wired up (coming in a later phase);
+ * an always-zero USD field would misrepresent functionality that doesn't exist yet.
+ */
+export interface WasteSummary {
+  kgOnHand: string // Decimal — WasteStock.kgOnHand
+  collectedThisMonthKg: string // Decimal — Σ packing_variance entries this month
+  soldThisMonthKg: string // Decimal — always '0.000' until selling from the pool exists
+  disposedThisMonthKg: string // Decimal
+  lastAdjustmentDate: string | null // ISO date of the most recent physical-count correction
+}
+
+export type WasteEntryType = 'packing_variance' | 'sale' | 'adjustment' | 'disposal'
+
+/** One row of the waste-pool ledger. GET /waste/ledger */
+export interface WasteEntry {
+  id: string
+  type: WasteEntryType
+  kg: string // Decimal — SIGNED: positive = intake, negative = outflow
+  sessionId: string | null
+  session: { id: string; date: string; workerEntity: { id: string; name: string } | null } | null
+  stockExitId: string | null
+  invoiceId: string | null
+  adjustmentId: string | null
+  adjustment: { id: string; reason: string; status: string } | null
+  note: string | null
+  date: string
+  createdById: string
+  createdBy: { id: string; name: string }
+  createdAt: string
+}
+
+/** GET /waste/ledger — paginated. */
+export interface WasteLedgerPage {
+  data: WasteEntry[]
+  total: number
+  page: number
+  limit: number
 }

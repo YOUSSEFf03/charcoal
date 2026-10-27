@@ -119,6 +119,17 @@ enum PaymentMethod {
 enum AdjustmentType {
   lot
   packed_stock
+  waste
+}
+
+/// Waste-pool ledger entry types. packing_variance is the only automatic one
+/// (written by packing-sessions.service.ts inside the session's own
+/// transaction); sale/adjustment/disposal are written by their own services.
+enum WasteEntryType {
+  packing_variance
+  sale
+  adjustment
+  disposal
 }
 
 enum AdjustmentStatus {
@@ -193,6 +204,7 @@ model User {
   account                  UserAccount?
   cashHolder               CashHolder?
   workerEntity              Worker?           @relation("WorkerUser")
+  wasteEntriesCreated      WasteEntry[]       @relation("WasteEntryCreatedBy")
 
   @@map("users")
 }
@@ -753,6 +765,10 @@ model PackingSession {
   notes           String?
   sessionLots     PackingSessionLot[]
   packedStocks    PackedStock[]
+  /// At most one — this session's own packing_variance WasteEntry (see WasteEntry's
+  /// doc comment). Cascade-deletes with the session (no delete endpoint exists today,
+  /// but this keeps the invariant safe if one is ever added).
+  wasteEntry      WasteEntry?
 
   @@index([workerId])
   @@index([date])
@@ -792,12 +808,79 @@ model StockAdjustment {
   approvedBy     User?            @relation("AdjustmentApprovedBy", fields: [approvedById], references: [id])
   date           DateTime         @db.Date
   createdAt      DateTime         @default(now())
+  /// At most one — set when adjustmentType='waste' (a waste-pool physical-count
+  /// correction). See WasteEntry's doc comment.
+  wasteEntry     WasteEntry?
 
   @@index([packedStockId])
   @@index([lotId])
   @@index([date])
   @@index([status])
   @@map("stock_adjustments")
+}
+
+/// Singleton on-hand balance for the combined waste pool (packing offcuts/sweepings
+/// collected across ALL lots and charcoal types into one pile — never split by lot,
+/// unlike StockLot.kgRemaining). Mirrors StockLot's own invariant: mutated ONLY via
+/// atomic { increment }/{ decrement } alongside a WasteEntry row in the same
+/// transaction, and locked FOR UPDATE by any path that reads-then-writes it (same
+/// pattern as consume-lots.ts's `SELECT ... FOR UPDATE` on stock_lots). Always exactly
+/// one row, id = 'singleton'. Σ(WasteEntry.kg) must always equal this row's kgOnHand.
+model WasteStock {
+  id        String   @id @default("singleton")
+  kgOnHand  Decimal  @db.Decimal(10, 3) @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@map("waste_stock")
+}
+
+/// Append-only ledger for the waste pool. Every row that changes WasteStock.kgOnHand
+/// has exactly one corresponding entry here with the same signed kg delta — so
+/// Σ(WasteEntry.kg) always reconciles to WasteStock.kgOnHand, the same reconciliation
+/// discipline StockLot.kgRemaining already has via StockAdjustment/StockExit.
+///
+///   packing_variance: +kg, auto-written by packing-sessions.service.ts inside the
+///     SAME transaction as the session that produced it — sessionId is @unique so a
+///     session's variance can only ever have one entry (upserted on session edit,
+///     never duplicated).
+///   sale:             −kg, written by walk-in-sales.service.ts / stock-exits.service.ts.
+///   adjustment:        ±kg, a physical-count correction (StockAdjustment.adjustmentType
+///     = 'waste') — the ONLY path that reconciles this auto-fed pool against what's
+///     actually on the floor; see WasteStock's own doc comment for why this matters.
+///   disposal:         −kg, waste thrown away rather than sold.
+model WasteEntry {
+  id            String          @id @default(uuid())
+  type          WasteEntryType
+  /// SIGNED kg delta: positive for intake (packing_variance, a positive adjustment),
+  /// negative for outflow (sale, disposal, a negative adjustment). Never a magnitude.
+  kg            Decimal         @db.Decimal(10, 3)
+  /// Set only for type='packing_variance' — the ONE packing session this entry's kg
+  /// came from. @unique enforces at most one entry per session (see doc comment above).
+  sessionId     String?         @unique
+  session       PackingSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  /// Set only for type='sale' via the anonymous cash-sale path (POST /stock-exits).
+  /// @unique — one waste cash-sale exit produces exactly one ledger entry.
+  stockExitId   String?         @unique
+  stockExit     StockExit?      @relation(fields: [stockExitId], references: [id])
+  /// Set only for type='sale' via the registered-client path (POST /walk-in-sales).
+  /// @unique — a sale's wasteLines (however many) collapse into ONE entry for the
+  /// combined pool's total kg, same "one pool, one number" reasoning as WasteStock.
+  invoiceId     String?         @unique
+  invoice       Invoice?        @relation(fields: [invoiceId], references: [id])
+  /// Set only for type='adjustment' — the StockAdjustment row this correction came from.
+  adjustmentId  String?         @unique
+  adjustment    StockAdjustment? @relation(fields: [adjustmentId], references: [id])
+  note          String?
+  date          DateTime        @db.Date
+  createdById   String
+  createdBy     User            @relation("WasteEntryCreatedBy", fields: [createdById], references: [id])
+  createdAt     DateTime        @default(now())
+
+  @@index([date])
+  @@index([type])
+  @@index([stockExitId])
+  @@index([invoiceId])
+  @@map("waste_entries")
 }
 
 model Client {
@@ -1047,6 +1130,9 @@ model StockExit {
   /// DIFFERENT fingerprint is rejected (409 IDEMPOTENCY_KEY_REUSED), never
   /// silently treated as a retry.
   requestFingerprint String?
+  /// At most one — set when this exit is itself a waste-pool cash sale (Phase 3,
+  /// not yet wired). See WasteEntry's doc comment.
+  wasteEntry         WasteEntry?
 
   @@index([date])
   @@index([exitType])
@@ -1124,6 +1210,9 @@ model Invoice {
   /// Authoritative record of how much of which payments applied to this invoice.
   /// paidAmount/status are a cache recomputed FROM this — see PaymentAllocation.
   allocations          PaymentAllocation[]
+  /// At most one — set when this invoice's wasteLines sold from the waste pool
+  /// (Phase 3, not yet wired). See WasteEntry's doc comment.
+  wasteEntry           WasteEntry?
 
   @@index([clientId])
   @@index([status])

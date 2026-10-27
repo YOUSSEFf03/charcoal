@@ -22,6 +22,7 @@ import { ContainersModule } from './containers/containers.module';
 import { StockLotsModule } from './stock-lots/stock-lots.module';
 import { StockAdjustmentsModule } from './stock-adjustments/stock-adjustments.module';
 import { WarehouseModule } from './warehouse/warehouse.module';
+import { WasteModule } from './waste/waste.module';
 import { PackingSessionsModule } from './packing-sessions/packing-sessions.module';
 import { PackedStockModule } from './packed-stock/packed-stock.module';
 import { ClientsModule } from './clients/clients.module';
@@ -67,6 +68,7 @@ import { MobileModule } from './mobile/mobile.module';
     StockLotsModule,
     StockAdjustmentsModule,
     WarehouseModule,
+    WasteModule,
     PackingSessionsModule,
     PackedStockModule,
     ClientsModule,
