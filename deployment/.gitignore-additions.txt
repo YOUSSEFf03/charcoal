@@ -1,0 +1,5 @@
+Add these lines to the repository root .gitignore if not already present:
+.env.production
+.deployment-state
+deployment/.deploy-config
+deployment/backups/
