@@ -1,0 +1,38 @@
+﻿#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="/opt/farah-charcoal"
+APP="$ROOT/app"
+ENV_FILE="$ROOT/.env.production"
+COMPOSE_FILE="$APP/deployment/compose.production.yml"
+
+if [[ "$EUID" -ne 0 ]]; then
+  echo "Run with sudo: sudo $0"
+  exit 1
+fi
+
+for path in "$APP" "$ENV_FILE" "$COMPOSE_FILE"; do
+  if [[ ! -e "$path" ]]; then
+    echo "Required path is missing: $path"
+    exit 1
+  fi
+done
+
+if [[ ! -s "$ENV_FILE" ]]; then
+  echo "Production environment file is empty."
+  exit 1
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is not installed."
+  exit 1
+fi
+
+if ! docker compose version >/dev/null 2>&1; then
+  echo "Docker Compose plugin is not available."
+  exit 1
+fi
+
+echo "Preflight checks passed."
+echo "No deployment or database changes have been made."
+echo "Review Compose configuration and test migrations before enabling deployment."

@@ -17,6 +17,7 @@ services:
     networks: [dbnet]
 
   backend:
+    image: farah-charcoal-backend:${DEPLOY_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: deployment/Dockerfile.backend
@@ -41,6 +42,7 @@ services:
       start_period: 60s
 
   frontend:
+    image: farah-charcoal-frontend:${DEPLOY_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: deployment/Dockerfile.frontend

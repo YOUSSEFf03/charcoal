@@ -35,3 +35,7 @@ npm-debug.log*
 
 # TypeScript
 *.tsbuildinfo
+.env.production
+deployment/.deploy-config
+deployment/backups/
+deployment-backup-*/

@@ -1,24 +1,49 @@
-# Build from repository root: docker build -f deployment/Dockerfile.backend .
+
+# Build from repository root:
+# docker build -f deployment/Dockerfile.backend .
 FROM node:20-bookworm-slim AS build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
+
 COPY package.json package-lock.json ./
 COPY apps/backend/package.json apps/backend/package.json
 COPY apps/mobile/package.json apps/mobile/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/database/package.json packages/database/package.json
 COPY packages/shared/package.json packages/shared/package.json
-RUN npm ci
+
+RUN npm ci \
+    --workspace=@charcoal/backend \
+    --workspace=@charcoal/database \
+    --workspace=@charcoal/shared \
+    --fetch-retries=5 \
+    --fetch-timeout=300000
+
 COPY . .
+
 RUN npm run prisma:generate --workspace=@charcoal/backend
 RUN npm run build --workspace=@charcoal/backend
 
-# Keep Prisma CLI available for migrate deploy. Runtime image is larger but
-# predictable; optimize dependency pruning only after validating workspace needs.
+# Runtime stage: retain Prisma CLI for database migrations.
 FROM node:20-bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
+
 WORKDIR /app
+
 COPY --from=build /app /app
 COPY deployment/backend-entrypoint.sh /usr/local/bin/backend-entrypoint
+
 RUN chmod 755 /usr/local/bin/backend-entrypoint
+
 EXPOSE 3001
+
 ENTRYPOINT ["/usr/local/bin/backend-entrypoint"]

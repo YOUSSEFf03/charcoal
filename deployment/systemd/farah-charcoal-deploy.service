@@ -6,4 +6,4 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/farah-charcoal/app/deployment/scripts/deploy-poll.sh
+ExecStart=/usr/bin/bash /opt/farah-charcoal/app/deployment/scripts/deploy-poll.sh

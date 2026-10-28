@@ -1,12 +1,28 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, 'feature/**']
   pull_request:
     branches: [main]
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: charcoal_ci
+          POSTGRES_USER: charcoal
+          POSTGRES_PASSWORD: ci_placeholder_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U charcoal -d charcoal_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://charcoal:ci_placeholder_only@localhost:5432/charcoal_ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,6 +31,20 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run prisma:generate --workspace=@charcoal/backend
+      - run: npx --no-install prisma migrate deploy --schema apps/backend/prisma/schema.prisma
       - run: npm test
+      - run: npm test --workspace=@charcoal/backend -- --runInBand
       - run: npm run build --workspace=@charcoal/backend
       - run: npm run build
+      - name: Validate deployment scripts and Compose configuration
+        env:
+          POSTGRES_DB: farah_charcoal_ci
+          POSTGRES_USER: farah_ci
+          POSTGRES_PASSWORD: ci-placeholder-only
+          DATABASE_URL: postgresql://farah_ci:ci-placeholder-only@db:5432/farah_charcoal_ci
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci_placeholder
+          PROD_ENV_FILE: /dev/null
+        run: |
+          bash -n deployment/backend-entrypoint.sh deployment/scripts/*.sh
+          bash deployment/tests/deployment-scripts.test.sh
+          docker compose -f deployment/compose.production.yml config --quiet
