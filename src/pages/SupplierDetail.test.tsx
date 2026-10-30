@@ -46,6 +46,7 @@ vi.mock('../hooks/useSuppliers', () => ({
   }),
   useSupplierPayments: () => ({ data: { data: [], total: 0 } }),
   useCreateSupplierPayment: () => ({ mutate: vi.fn(), isPending: false }),
+  useUpdateSupplier: () => ({ mutate: vi.fn(), isPending: false }),
 }))
 
 vi.mock('../hooks/useContainers', () => ({

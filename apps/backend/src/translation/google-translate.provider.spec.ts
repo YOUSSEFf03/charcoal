@@ -21,7 +21,6 @@ jest.mock('@google-cloud/translate', () => ({
   })),
 }));
 
-// eslint-disable-next-line import/first
 import { GoogleTranslateProvider } from './google-translate.provider';
 
 function configServiceStub(projectId: string = 'test-project'): ConfigService {

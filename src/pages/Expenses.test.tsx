@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
@@ -483,6 +483,17 @@ describe('Expenses — Recurring tab', () => {
 // cash settlement, never a second P&L expense. Test matrix maps to CASE 1-9.
 // ---------------------------------------------------------------------------
 describe('Expenses — Employee wage expense (COGS vs. Expenses classification)', () => {
+  // The fixtures below are dated September 2026 and the page filters to the
+  // current month — pin "today" so this block doesn't break once Sept ends.
+  // Only Date is faked so Testing Library's real timers keep working.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-20T12:00:00'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('CASE 2/6 — daily wage appears in Business Expenses as "Employee wage · <name>", categorized correctly', () => {
     mockUseAllWorkerWageExpenses.mockReturnValue({ data: [makeWorkerWageExpense()] })
     render(<Expenses />)
