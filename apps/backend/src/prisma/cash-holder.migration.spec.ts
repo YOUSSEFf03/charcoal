@@ -12,10 +12,14 @@ import { PrismaClient } from '@prisma/client';
 describe('CashHolder migration (PR 10 smoke test)', () => {
   const prisma = new PrismaClient();
   const createdIds: string[] = [];
+  const createdUserIds: string[] = [];
 
   afterAll(async () => {
     if (createdIds.length > 0) {
       await prisma.cashHolder.deleteMany({ where: { id: { in: createdIds } } });
+    }
+    if (createdUserIds.length > 0) {
+      await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
     }
     await prisma.$disconnect();
   });
@@ -55,8 +59,18 @@ describe('CashHolder migration (PR 10 smoke test)', () => {
   });
 
   it('supports an optional 1:1 link to a real User for type=person', async () => {
-    const user = await prisma.user.findFirst();
-    expect(user).not.toBeNull();
+    // Create a throwaway user rather than borrowing an existing one: CI runs
+    // against an empty, freshly-migrated database with no users in it.
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const user = await prisma.user.create({
+      data: {
+        clerkId: `pr10-smoke-${suffix}`,
+        email: `pr10-smoke-${suffix}@test.local`,
+        name: 'PR10 smoke test user',
+        role: 'worker',
+      },
+    });
+    createdUserIds.push(user.id);
 
     const holder = await prisma.cashHolder.create({
       data: { type: 'person', label: 'PR10 smoke test — person', userId: user!.id },
