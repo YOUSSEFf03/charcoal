@@ -41,8 +41,8 @@ describe('ReportsService', () => {
     supplier:             { findUnique: fn() },
     supplierPayment:      { findMany: fn() },
     supplierOpeningBalance: { findUnique: fn() },
-    clientOpeningBalance:   { findUnique: fn() },
-    client:               { findUnique: fn(), findMany: fn() },
+    clientOpeningBalance:   { findUnique: fn(), findFirst: fn() },
+    client:              { findUnique: fn(), findMany: fn() },
     payment:              { findMany: fn(), aggregate: fn(), groupBy: fn() },
     worker:               { findUnique: fn() },
     workerPayment:        { findMany: fn(), aggregate: fn() },
@@ -73,6 +73,8 @@ describe('ReportsService', () => {
 
     // Default: no go-live opening balances.
     mockPrisma.clientOpeningBalance.findUnique.mockResolvedValue(null);
+    // ClientBalanceService (built on this mock in the cross-check tests) reads it via findFirst.
+    mockPrisma.clientOpeningBalance.findFirst.mockResolvedValue(null);
     mockPrisma.supplierOpeningBalance.findUnique.mockResolvedValue(null);
 
     const module: TestingModule = await Test.createTestingModule({
