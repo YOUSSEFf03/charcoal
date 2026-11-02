@@ -25,10 +25,16 @@ vi.mock('../hooks/useSuppliers', () => ({
   useUpdateSupplier: () => ({ mutate: vi.fn(), isPending: false }),
 }))
 
+let mockRole = 'owner'
+vi.mock('../hooks/useMe', () => ({
+  useMe: () => ({ data: { role: mockRole } }),
+}))
+
 import Suppliers from './Suppliers'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockRole = 'owner'
 })
 
 describe('Suppliers page — New Supplier modal contract', () => {
@@ -76,5 +82,46 @@ describe('Suppliers page — New Supplier modal contract', () => {
     expect(body.contactPersons).toBeUndefined()
     expect(body.bankDetails).toBeUndefined()
     expect(body.notes).toBeUndefined()
+    expect(body.openingBalance).toBeUndefined()
+  })
+})
+
+describe('Suppliers page — opening balance on create', () => {
+  it('sends a positive amount when "We owe supplier" (default)', async () => {
+    const user = userEvent.setup({ delay: null })
+    render(<MemoryRouter><Suppliers /></MemoryRouter>)
+
+    await user.click(screen.getByRole('button', { name: /New Supplier/ }))
+    await user.type(screen.getByPlaceholderText('Company name'), 'Cedar Charcoal Co')
+    await user.type(screen.getByLabelText(/Opening balance amount/), '1250')
+    await user.click(screen.getByRole('button', { name: /Add Supplier/ }))
+
+    await waitFor(() => expect(mockCreateSupplierMutate).toHaveBeenCalled())
+    const [body] = mockCreateSupplierMutate.mock.calls[0]
+    expect(body.openingBalance).toMatchObject({ amount: '1250.00' })
+    expect(body.openingBalance.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  it('sends a negative amount when "Supplier owes us (advance)" is picked', async () => {
+    const user = userEvent.setup({ delay: null })
+    render(<MemoryRouter><Suppliers /></MemoryRouter>)
+
+    await user.click(screen.getByRole('button', { name: /New Supplier/ }))
+    await user.type(screen.getByPlaceholderText('Company name'), 'Prepaid Supplier')
+    await user.type(screen.getByLabelText(/Opening balance amount/), '300.5')
+    await user.click(screen.getByRole('radio', { name: 'Supplier owes us (advance)' }))
+    await user.click(screen.getByRole('button', { name: /Add Supplier/ }))
+
+    await waitFor(() => expect(mockCreateSupplierMutate).toHaveBeenCalled())
+    expect(mockCreateSupplierMutate.mock.calls[0][0].openingBalance).toMatchObject({ amount: '-300.50' })
+  })
+
+  it('hides the opening balance from non-owners', async () => {
+    mockRole = 'accountant'
+    const user = userEvent.setup({ delay: null })
+    render(<MemoryRouter><Suppliers /></MemoryRouter>)
+
+    await user.click(screen.getByRole('button', { name: /New Supplier/ }))
+    expect(screen.queryByLabelText(/Opening balance amount/)).toBeNull()
   })
 })

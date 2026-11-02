@@ -13,6 +13,8 @@ import { AddPhoneDto } from './dto/add-phone.dto';
 import { DeactivatePhoneDto } from './dto/deactivate-phone.dto';
 import { CreateClientLocationDto } from './dto/create-client-location.dto';
 import { UpdateClientLocationDto } from './dto/update-client-location.dto';
+import { SetOpeningBalanceDto } from '../common/dto/set-opening-balance.dto';
+import { buildOpeningBalanceData, serializeOpeningBalance } from '../common/utils/opening-balance';
 
 interface PhoneEntry {
   number: string;
@@ -280,9 +282,16 @@ export class ClientsService {
    * Create a new client. Each phone entry from the DTO is augmented with
    * isActive=true and a dateAdded timestamp.
    *
+   * An optional opening balance is created in the same write, so a client
+   * never exists without the balance the owner entered for it.
+   *
    * @param dto - Client creation data
+   * @param clerkUserId - Caller, recorded as setBy on the opening balance
    */
-  async create(dto: CreateClientDto) {
+  async create(dto: CreateClientDto, clerkUserId?: string) {
+    const openingBalance = dto.openingBalance
+      ? await buildOpeningBalanceData(this.prisma, dto.openingBalance, clerkUserId ?? '')
+      : undefined;
     return this.prisma.client.create({
       data: {
         name: dto.name,
@@ -297,6 +306,7 @@ export class ClientsService {
           ? { paymentTerms: dto.paymentTerms }
           : {}),
         phones: (dto.phones ?? []) as Prisma.InputJsonValue,
+        ...(openingBalance ? { openingBalance: { create: openingBalance } } : {}),
       },
     });
   }
@@ -568,5 +578,38 @@ export class ClientsService {
     const client = await this.findOne(clientId);
     const balance = await this.clientBalanceService.computeBalance(clientId);
     return { balance: balance.toFixed(2), currency: client.currency };
+  }
+
+  // ── Opening balance (go-live carry-forward) ──────────────────────────────
+  // One per client, in the client's own currency, signed. See the
+  // ClientOpeningBalance model doc comment for why this is not an Invoice.
+
+  /** The client's opening balance, or null if none was entered. */
+  async getOpeningBalance(clientId: string) {
+    await this.findOneBare(clientId);
+    const row = await this.prisma.clientOpeningBalance.findUnique({
+      where: { clientId },
+      include: { setBy: { select: { name: true } } },
+    });
+    return serializeOpeningBalance(row);
+  }
+
+  /** Create or replace the client's opening balance. */
+  async setOpeningBalance(clientId: string, dto: SetOpeningBalanceDto, clerkUserId: string) {
+    await this.findOneBare(clientId);
+    const data = await buildOpeningBalanceData(this.prisma, dto, clerkUserId);
+    const row = await this.prisma.clientOpeningBalance.upsert({
+      where: { clientId },
+      create: { clientId, ...data },
+      update: data,
+      include: { setBy: { select: { name: true } } },
+    });
+    return serializeOpeningBalance(row);
+  }
+
+  /** Remove the client's opening balance (no-op if there is none). */
+  async clearOpeningBalance(clientId: string): Promise<void> {
+    await this.findOneBare(clientId);
+    await this.prisma.clientOpeningBalance.deleteMany({ where: { clientId } });
   }
 }

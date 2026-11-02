@@ -16,6 +16,7 @@ describe('SuppliersService', () => {
     container: { count: fn() },
     stockLot: { findMany: fn() },
     supplierPayment: { findMany: fn(), create: fn(), count: fn() },
+    supplierOpeningBalance: { findUnique: fn(), findMany: fn(), upsert: fn(), deleteMany: fn() },
     user: { findUnique: fn() },
     $transaction: fn(),
   };
@@ -33,6 +34,8 @@ describe('SuppliersService', () => {
     mockPrisma.container.count.mockResolvedValue(0);
     mockPrisma.stockLot.findMany.mockResolvedValue([]);
     mockPrisma.supplierPayment.findMany.mockResolvedValue([]);
+    mockPrisma.supplierOpeningBalance.findUnique.mockResolvedValue(null);
+    mockPrisma.supplierOpeningBalance.findMany.mockResolvedValue([]);
     mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-1' });
     mockSettings.getExchangeRate.mockResolvedValue('89550');
 
@@ -91,6 +94,57 @@ describe('SuppliersService', () => {
     it('throws NotFoundException when the clerk user is not synced', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
       await expect(service.createPayment('sup-1', validBody, 'clerk-1')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ===========================================================================
+  // Go-live opening balance (SupplierOpeningBalance, USD, signed)
+  // ===========================================================================
+  describe('opening balance', () => {
+    const row = { amount: { toString: () => '1500' }, date: new Date('2026-11-01'), notes: 'Old notebook', updatedAt: new Date(), setBy: { name: 'Owner' } };
+
+    it('findOne(): outstandingUsd includes the opening balance on top of purchases − payments', async () => {
+      mockPrisma.stockLot.findMany.mockResolvedValue([
+        { kgReceived: { toString: () => '1000' }, kgRemaining: { toString: () => '0' }, costPerKg: { toString: () => '0.5' }, charcoalType: 'Oak', grade: 'A' },
+      ]);
+      mockPrisma.supplierPayment.findMany.mockResolvedValue([{ amount: { toString: () => '200' }, currency: 'USD' }]);
+      mockPrisma.supplierOpeningBalance.findUnique.mockResolvedValue({ amount: { toString: () => '1500' } });
+
+      const result = await service.findOne('sup-1');
+
+      // 1500 opening + 500 purchased − 200 paid
+      expect(result.outstandingUsd).toBe('1800.00');
+      expect(result.openingBalanceUsd).toBe('1500.00');
+    });
+
+    it('setOpeningBalance(): upserts the one row for this supplier with the resolved user', async () => {
+      mockPrisma.supplierOpeningBalance.upsert.mockResolvedValue(row);
+
+      const result = await service.setOpeningBalance('sup-1', { amount: '1500', date: '2026-11-01', notes: ' Old notebook ' }, 'clerk-1');
+
+      const call = mockPrisma.supplierOpeningBalance.upsert.mock.calls[0][0];
+      expect(call.where).toEqual({ supplierId: 'sup-1' });
+      expect(call.update).toEqual(expect.objectContaining({ amount: '1500.00', notes: 'Old notebook', setById: 'user-1' }));
+      expect(result).toEqual(expect.objectContaining({ amount: '1500.00', setByName: 'Owner' }));
+    });
+
+    it('setOpeningBalance(): rejects a zero amount (use DELETE instead)', async () => {
+      await expect(
+        service.setOpeningBalance('sup-1', { amount: '0', date: '2026-11-01' }, 'clerk-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.supplierOpeningBalance.upsert).not.toHaveBeenCalled();
+    });
+
+    it('setOpeningBalance(): 404 for an unknown supplier', async () => {
+      mockPrisma.supplier.findUnique.mockResolvedValue(null);
+      await expect(
+        service.setOpeningBalance('missing', { amount: '10', date: '2026-11-01' }, 'clerk-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('clearOpeningBalance(): deletes only this supplier\'s row', async () => {
+      await service.clearOpeningBalance('sup-1');
+      expect(mockPrisma.supplierOpeningBalance.deleteMany).toHaveBeenCalledWith({ where: { supplierId: 'sup-1' } });
     });
   });
 });

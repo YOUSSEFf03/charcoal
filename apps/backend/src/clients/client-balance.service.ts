@@ -15,7 +15,11 @@ export class ClientBalanceService {
    *
    * balance = Σ invoice.total (status ∉ {draft, cancelled})
    *         + Σ StockExit.amount (exitType = 'client_bags_fill', amount NOT NULL)
+   *         + ClientOpeningBalance.amount (at most one, signed; 0 if none)
    *         − Σ payment.amount
+   *
+   * The opening balance is the go-live carry-forward the owner enters once
+   * (see the ClientOpeningBalance model) — applies to normal and Fill Clients.
    *
    * Stock exits are operational records, not accounting documents, and are
    * excluded from balance — EXCEPT exitType='client_bags_fill' rows that carry
@@ -52,7 +56,7 @@ export class ClientBalanceService {
   ): Promise<Decimal> {
     const db = tx ?? this.prisma;
 
-    const [invoices, fillPickups, payments] = await Promise.all([
+    const [invoices, fillPickups, payments, opening] = await Promise.all([
       (db as any).invoice.findMany({
         where: {
           clientId,
@@ -74,7 +78,13 @@ export class ClientBalanceService {
         where: { clientId, ...(asOf ? { date: { lte: asOf.lte } } : {}) },
         select: { amount: true },
       }),
+      (db as any).clientOpeningBalance.findFirst({
+        where: { clientId, ...(asOf ? { date: { lte: asOf.lte } } : {}) },
+        select: { amount: true },
+      }),
     ]);
+
+    const openingAmount = new Decimal(opening?.amount?.toString() ?? '0');
 
     const invoiceSum = invoices.reduce(
       (sum: Decimal, inv: any) => sum.plus(new Decimal(inv.total.toString())),
@@ -92,6 +102,6 @@ export class ClientBalanceService {
       new Decimal(0),
     );
 
-    return invoiceSum.plus(fillPickupSum).minus(paymentSum);
+    return invoiceSum.plus(fillPickupSum).plus(openingAmount).minus(paymentSum);
   }
 }

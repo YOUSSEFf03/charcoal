@@ -260,9 +260,18 @@ export interface CreateSupplierDto {
   paymentTerms?: string | null;
   leadTimeDays?: number | null;
   notes?: string | null;
+  /** Owner only — saved with the new supplier. Positive = we owe them (USD). */
+  openingBalance?: SetOpeningBalanceDto;
 }
 
-export type UpdateSupplierDto = Partial<CreateSupplierDto>;
+export type UpdateSupplierDto = Partial<Omit<CreateSupplierDto, 'openingBalance'>>;
+
+/** Go-live carry-forward balance (client or supplier). Signed decimal string. */
+export interface SetOpeningBalanceDto {
+  amount: string;
+  date: string; // YYYY-MM-DD
+  notes?: string;
+}
 
 /** GET /suppliers/:id — includes purchase history rollup. */
 export interface SupplierDetail extends Supplier {
@@ -853,9 +862,11 @@ export interface CreateClientDto {
   creditLimit?: string | null; // Decimal string
   notes?: string | null;
   notesEn?: string | null;
+  /** Owner only — saved with the new client. Positive = the client owes us, in the client's currency. */
+  openingBalance?: SetOpeningBalanceDto;
 }
 
-export type UpdateClientDto = Partial<CreateClientDto> & { isActive?: boolean; multiLocationEnabled?: boolean };
+export type UpdateClientDto = Partial<Omit<CreateClientDto, 'openingBalance'>> & { isActive?: boolean; multiLocationEnabled?: boolean };
 
 /** POST /clients/:id/phones — add a number (never deletes — CONSTRAINT 14). */
 export interface AddClientPhoneDto {

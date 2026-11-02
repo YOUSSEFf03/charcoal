@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useSuppliers, useCreateSupplier, useUpdateSupplier } from '../hooks/useSuppliers'
 import type { Supplier, ContactPerson, SupplierCharcoalType, CreateSupplierDto } from '../types/api'
+import { useMe } from '../hooks/useMe'
+import OpeningBalanceFields, { emptyOpeningBalance, isOpeningBalanceInvalid, toOpeningBalanceDto } from '../components/ui/OpeningBalanceFields'
 
 // Derive 2-letter initials from a supplier name for the avatar tile.
 function initialsOf(name: string) {
@@ -49,6 +51,8 @@ export default function Suppliers() {
   const [newBankAccount, setNewBankAccount] = useState('')
   const [newBankSwift, setNewBankSwift] = useState('')
   const [newNotes, setNewNotes] = useState('')
+  const [newOpening, setNewOpening] = useState(emptyOpeningBalance)
+  const isOwner = useMe().data?.role === 'owner'
   // Edit-supplier form fields, wired to useUpdateSupplier — seeded from the
   // selected supplier each time the Edit modal is opened (see the Edit button).
   const [editName, setEditName] = useState('')
@@ -70,6 +74,8 @@ export default function Suppliers() {
 
   function submitNewSupplier() {
     if (!newName.trim()) return
+    if (isOwner && isOpeningBalanceInvalid(newOpening)) return
+    const openingBalance = isOwner ? toOpeningBalanceDto(newOpening) : undefined
     const bankDetails = newBankName.trim() || newBankBranch.trim() || newBankAccount.trim() || newBankSwift.trim()
       ? {
           bank_name: newBankName.trim(),
@@ -92,10 +98,13 @@ export default function Suppliers() {
         : undefined,
       bankDetails,
       notes: newNotes.trim() || undefined,
+      ...(openingBalance ? { openingBalance } : {}),
     }
     createSupplier.mutate(body, {
+      onError: (err: any) => showToast(err?.error ?? 'Failed to add supplier'),
       onSuccess: () => {
         setNewModalOpen(false)
+        setNewOpening(emptyOpeningBalance())
         setNewName('')
         setNewLeadTimeDays('')
         setNewPaymentTerms('Net 30')
@@ -467,6 +476,16 @@ export default function Suppliers() {
                   </select>
                 </div>
               </div>
+
+              {isOwner && (
+                <OpeningBalanceFields
+                  value={newOpening}
+                  onChange={setNewOpening}
+                  currency="USD"
+                  positiveLabel="We owe supplier"
+                  negativeLabel="Supplier owes us (advance)"
+                />
+              )}
 
               <div className="form-divider" style={{ margin: '20px 0', borderTop: '1px solid var(--border)' }} />
 

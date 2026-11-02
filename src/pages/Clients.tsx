@@ -9,6 +9,8 @@ import type { Client, ClientType, Currency, PhoneLabel, PaymentMethod } from '..
 import { useRate } from '../context/RateContext'
 import { roundDp, formatUsd } from '../lib/money'
 import { formatDate, toDateOnlyString } from '../lib/date'
+import { useMe } from '../hooks/useMe'
+import OpeningBalanceFields, { emptyOpeningBalance, isOpeningBalanceInvalid, toOpeningBalanceDto } from '../components/ui/OpeningBalanceFields'
 
 type ClientTab = 'all' | 'alerts' | 'debit'
 
@@ -65,6 +67,8 @@ export default function Clients() {
   const [newClientCurrency] = useState<Currency>('USD')
   const [errName, setErrName] = useState(false)
   const [errPhone, setErrPhone] = useState(false)
+  const [newClientOpening, setNewClientOpening] = useState(emptyOpeningBalance)
+  const isOwner = useMe().data?.role === 'owner'
   // Client selected for the pay / add-phone modals.
   const [activeClient, setActiveClient] = useState<Client | null>(null)
 
@@ -205,20 +209,25 @@ export default function Clients() {
     setErrName(!nameOk)
     setErrPhone(!phoneOk)
     if (!nameOk || !phoneOk) return
+    if (isOwner && isOpeningBalanceInvalid(newClientOpening)) return
+    const openingBalance = isOwner ? toOpeningBalanceDto(newClientOpening) : undefined
     createClient.mutate(
       {
         name: newClientName.trim(),
         type: newClientType,
         currency: newClientCurrency,
         phones: [{ number: newClientPhone.trim(), label: 'mobile', isActive: true, dateAdded: new Date().toISOString() }],
+        ...(openingBalance ? { openingBalance } : {}),
       },
       {
         onSuccess: () => {
           setNewClientOpen(false)
           setNewClientName('')
           setNewClientPhone('')
+          setNewClientOpening(emptyOpeningBalance())
           showToast('Client added successfully')
         },
+        onError: (err: any) => showToast(err?.error ?? 'Failed to add client'),
       },
     )
   }
@@ -635,6 +644,15 @@ export default function Clients() {
                 <input className="form-input" type="tel" placeholder="+961 3 000 000" value={newClientPhone} onChange={e => { setNewClientPhone(e.target.value); setErrPhone(false) }} />
                 {errPhone && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 4 }}>Phone is required</div>}
               </div>
+              {isOwner && (
+                <OpeningBalanceFields
+                  value={newClientOpening}
+                  onChange={setNewClientOpening}
+                  currency={newClientCurrency}
+                  positiveLabel="Client owes us"
+                  negativeLabel="We owe client (credit)"
+                />
+              )}
               <div className="form-group">
                 <label className="form-label">Preferred payment</label>
                 <div className="method-pills">

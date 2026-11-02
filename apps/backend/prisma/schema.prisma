@@ -205,6 +205,8 @@ model User {
   cashHolder               CashHolder?
   workerEntity              Worker?           @relation("WorkerUser")
   wasteEntriesCreated      WasteEntry[]       @relation("WasteEntryCreatedBy")
+  clientOpeningBalancesSet   ClientOpeningBalance[]   @relation("ClientOpeningBalanceSetBy")
+  supplierOpeningBalancesSet SupplierOpeningBalance[] @relation("SupplierOpeningBalanceSetBy")
 
   @@map("users")
 }
@@ -298,6 +300,7 @@ model Supplier {
   stockLots        StockLot[]
   productLines     ContainerProductLine[]
   supplierPayments SupplierPayment[]
+  openingBalance   SupplierOpeningBalance?
 
   @@map("suppliers")
 }
@@ -321,6 +324,30 @@ model SupplierPayment {
   @@index([supplierId])
   @@index([date])
   @@map("supplier_payments")
+}
+
+/// Go-live opening balance for a supplier — what we already owed (or were
+/// owed) from before the app existed, entered once by the owner. At most one
+/// per supplier (supplierId @unique); editing replaces it. Not a purchase: it
+/// never touches stock lots, COGS or container costing — it is only a debit
+/// term in the supplier's outstanding balance and Statement of Account.
+///
+/// amount is SIGNED and always USD (the supplier ledger is USD-denominated):
+/// positive = we owe the supplier, negative = the supplier owes us / prepaid.
+model SupplierOpeningBalance {
+  id         String   @id @default(uuid())
+  supplierId String   @unique
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  amount     Decimal  @db.Decimal(14, 2)
+  /// The date the balance is carried forward as of (usually the go-live date).
+  date       DateTime @db.Date
+  notes      String?
+  setById    String
+  setBy      User     @relation("SupplierOpeningBalanceSetBy", fields: [setById], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("supplier_opening_balances")
 }
 
 model Container {
@@ -921,8 +948,35 @@ model Client {
   stockExits     StockExit[]
   fillJobs       FillJob[]
   locations      ClientLocation[]
+  openingBalance ClientOpeningBalance?
 
   @@map("clients")
+}
+
+/// Go-live opening balance — what a client already owed (or was owed) from
+/// before the app existed, entered once by the owner. At most one per client
+/// (clientId @unique); editing replaces it. Deliberately NOT an Invoice: it is
+/// a balance carried forward, not a sale, so P&L / revenue / sales reports
+/// (which all read Invoice) never see it. It IS a debit term in
+/// ClientBalanceService.computeBalance() and the client Statement of Account,
+/// for normal clients and Fill Clients alike.
+///
+/// amount is SIGNED, in the client's own currency: positive = client owes us,
+/// negative = client has a credit with us.
+model ClientOpeningBalance {
+  id        String   @id @default(uuid())
+  clientId  String   @unique
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  amount    Decimal  @db.Decimal(14, 2)
+  /// The date the balance is carried forward as of (usually the go-live date).
+  date      DateTime @db.Date
+  notes     String?
+  setById   String
+  setBy     User     @relation("ClientOpeningBalanceSetBy", fields: [setById], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("client_opening_balances")
 }
 
 /// A named branch/location belonging to one client (e.g. "Hamra Branch"),

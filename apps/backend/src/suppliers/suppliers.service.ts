@@ -10,6 +10,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
+import { SetOpeningBalanceDto } from '../common/dto/set-opening-balance.dto';
+import { buildOpeningBalanceData, serializeOpeningBalance } from '../common/utils/opening-balance';
 
 @Injectable()
 export class SuppliersService {
@@ -45,7 +47,7 @@ export class SuppliersService {
     // already uses for LBP amounts elsewhere in this codebase.
     const rate = new Decimal(await this.settingsService.getExchangeRate());
 
-    const [spentRows, paidRows] = await Promise.all([
+    const [spentRows, paidRows, openingRows] = await Promise.all([
       ids.length > 0
         ? this.prisma.$queryRaw<{ supplierId: string; total_spent: number }[]>`
             SELECT "supplierId", COALESCE(SUM("kgReceived"::numeric * "costPerKg"::numeric), 0) AS total_spent
@@ -65,15 +67,25 @@ export class SuppliersService {
             WHERE "supplier_id" = ANY(${ids})
             GROUP BY "supplier_id"`
         : [],
+      ids.length > 0
+        ? this.prisma.supplierOpeningBalance.findMany({
+            where: { supplierId: { in: ids } },
+            select: { supplierId: true, amount: true },
+          })
+        : [],
     ]);
 
-    const spentMap  = new Map((spentRows as any[]).map(r => [r.supplierId, parseFloat(r.total_spent)]));
-    const paidMap   = new Map((paidRows as any[]).map(r => [r.supplierId, parseFloat(r.total_paid)]));
+    const spentMap   = new Map((spentRows as any[]).map(r => [r.supplierId, parseFloat(r.total_spent)]));
+    const paidMap    = new Map((paidRows as any[]).map(r => [r.supplierId, parseFloat(r.total_paid)]));
+    const openingMap = new Map<string, number>(
+      (openingRows as { supplierId: string; amount: Prisma.Decimal }[]).map(r => [r.supplierId, parseFloat(r.amount.toString())]),
+    );
 
     const enriched = data.map(s => {
       const spent       = spentMap.get(s.id) ?? 0;
       const paid        = paidMap.get(s.id)  ?? 0;
-      const outstanding = spent - paid;
+      // Go-live opening balance (USD, signed) is owed on top of purchases.
+      const outstanding = (openingMap.get(s.id) ?? 0) + spent - paid;
       return {
         ...s,
         totalSpentUsd:  spent.toFixed(2),
@@ -145,17 +157,25 @@ export class SuppliersService {
     // payments. Now fetches all payments and converts LBP using the same
     // global-rate pattern used everywhere else currency conversion happens.
     const rate = new Decimal(await this.settingsService.getExchangeRate());
-    const allPayments = await this.prisma.supplierPayment.findMany({
-      where: { supplierId: id },
-      select: { amount: true, currency: true },
-    });
+    const [allPayments, opening] = await Promise.all([
+      this.prisma.supplierPayment.findMany({
+        where: { supplierId: id },
+        select: { amount: true, currency: true },
+      }),
+      this.prisma.supplierOpeningBalance.findUnique({
+        where: { supplierId: id },
+        select: { amount: true },
+      }),
+    ]);
+    const openingUsd = opening ? parseFloat(opening.amount.toString()) : 0;
     const paidUsd = allPayments
       .reduce((sum, p) => {
         const amt = new Decimal(p.amount.toString());
         return sum.plus(p.currency === 'LBP' ? (rate.gt(0) ? amt.div(rate) : new Decimal(0)) : amt);
       }, new Decimal(0))
       .toNumber();
-    const outstandingUsd = totalSpentUsd - paidUsd;
+    // Go-live opening balance (USD, signed) is owed on top of purchases.
+    const outstandingUsd = openingUsd + totalSpentUsd - paidUsd;
 
     return {
       ...supplier,
@@ -166,6 +186,7 @@ export class SuppliersService {
       totalSpentUsd: totalSpentUsd.toFixed(2),
       totalPaidUsd: paidUsd.toFixed(2),
       outstandingUsd: outstandingUsd.toFixed(2),
+      openingBalanceUsd: openingUsd.toFixed(2),
       avgPricePerKg: avgPricePerKg != null ? avgPricePerKg.toFixed(4) : null,
       purchasedTypes,
     };
@@ -227,10 +248,17 @@ export class SuppliersService {
   /**
    * Create a new supplier with the provided data.
    *
+   * An optional opening balance is created in the same write, so a supplier
+   * never exists without the balance the owner entered for it.
+   *
    * @param dto - Supplier creation data
+   * @param clerkUserId - Caller, recorded as setBy on the opening balance
    * @returns Newly created Supplier object
    */
-  async create(dto: CreateSupplierDto) {
+  async create(dto: CreateSupplierDto, clerkUserId?: string) {
+    const openingBalance = dto.openingBalance
+      ? await buildOpeningBalanceData(this.prisma, dto.openingBalance, clerkUserId ?? '')
+      : undefined;
     return this.prisma.supplier.create({
       data: {
         name: dto.name,
@@ -247,6 +275,7 @@ export class SuppliersService {
         paymentTerms: dto.paymentTerms,
         leadTimeDays: dto.leadTimeDays,
         notes: dto.notes,
+        ...(openingBalance ? { openingBalance: { create: openingBalance } } : {}),
       },
     });
   }
@@ -309,5 +338,42 @@ export class SuppliersService {
       });
     }
     await this.prisma.supplier.delete({ where: { id } });
+  }
+
+  // ── Opening balance (go-live carry-forward) ──────────────────────────────
+  // One per supplier, always USD, signed. See the SupplierOpeningBalance model.
+
+  private async assertExists(id: string) {
+    const supplier = await this.prisma.supplier.findUnique({ where: { id }, select: { id: true } });
+    if (!supplier) throw new NotFoundException({ error: 'Supplier not found', code: 'NOT_FOUND' });
+  }
+
+  /** The supplier's opening balance, or null if none was entered. */
+  async getOpeningBalance(supplierId: string) {
+    await this.assertExists(supplierId);
+    const row = await this.prisma.supplierOpeningBalance.findUnique({
+      where: { supplierId },
+      include: { setBy: { select: { name: true } } },
+    });
+    return serializeOpeningBalance(row);
+  }
+
+  /** Create or replace the supplier's opening balance. */
+  async setOpeningBalance(supplierId: string, dto: SetOpeningBalanceDto, clerkUserId: string) {
+    await this.assertExists(supplierId);
+    const data = await buildOpeningBalanceData(this.prisma, dto, clerkUserId);
+    const row = await this.prisma.supplierOpeningBalance.upsert({
+      where: { supplierId },
+      create: { supplierId, ...data },
+      update: data,
+      include: { setBy: { select: { name: true } } },
+    });
+    return serializeOpeningBalance(row);
+  }
+
+  /** Remove the supplier's opening balance (no-op if there is none). */
+  async clearOpeningBalance(supplierId: string): Promise<void> {
+    await this.assertExists(supplierId);
+    await this.prisma.supplierOpeningBalance.deleteMany({ where: { supplierId } });
   }
 }

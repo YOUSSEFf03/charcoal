@@ -19,10 +19,11 @@ vi.mock('../components/layout/Topbar', () => ({
 }))
 
 const mockUseClients = vi.fn()
+const mockCreateClientMutate = vi.fn()
 vi.mock('../hooks/useClients', () => ({
   useClients: (...args: unknown[]) => mockUseClients(...args),
   useClientsCounts: () => ({ data: { allCount: 0, balanceCount: 0, overdueCount: 0 } }),
-  useCreateClient: () => ({ mutate: vi.fn(), isPending: false }),
+  useCreateClient: () => ({ mutate: (...args: unknown[]) => mockCreateClientMutate(...args), isPending: false }),
   useAddPhone: () => ({ mutate: vi.fn(), isPending: false }),
   useOverdueClients: () => ({ data: [], isLoading: false, isError: false }),
 }))
@@ -38,6 +39,11 @@ vi.mock('../hooks/useOrders', () => ({
 
 vi.mock('../context/RateContext', () => ({
   useRate: () => ({ rate: '89,550', rawRate: 89550, setRate: vi.fn(), isSaving: false }),
+}))
+
+let mockRole = 'owner'
+vi.mock('../hooks/useMe', () => ({
+  useMe: () => ({ data: { role: mockRole } }),
 }))
 
 import Clients from './Clients'
@@ -87,6 +93,7 @@ function lastMainCallParams() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockRole = 'owner'
   mockUseClients.mockReturnValue({
     data: { data: [client('a'), client('b')], total: 2 },
     isLoading: false,
@@ -295,5 +302,51 @@ describe('Clients page — pagination', () => {
 
     await user.selectOptions(screen.getByDisplayValue('All types'), 'Restaurant')
     await waitFor(() => expect(lastMainCallParams()).toMatchObject({ page: 1, type: 'restaurant' }))
+  })
+})
+
+describe('Clients page — opening balance on create', () => {
+  async function openAndFill(user: ReturnType<typeof userEvent.setup>) {
+    render(<MemoryRouter><Clients /></MemoryRouter>)
+    await user.click(screen.getByRole('button', { name: /New client/ }))
+    await user.type(screen.getByPlaceholderText('Restaurant, company, or person name…'), 'Cedar Grill')
+    await user.type(screen.getByPlaceholderText('+961 3 000 000'), '+961 3 111 222')
+  }
+
+  it('sends a positive amount when "Client owes us" (default)', async () => {
+    const user = userEvent.setup({ delay: null })
+    await openAndFill(user)
+    await user.type(screen.getByLabelText(/Opening balance amount/), '480')
+    await user.click(screen.getByRole('button', { name: /Add client/ }))
+
+    await waitFor(() => expect(mockCreateClientMutate).toHaveBeenCalled())
+    expect(mockCreateClientMutate.mock.calls[0][0].openingBalance).toMatchObject({ amount: '480.00' })
+  })
+
+  it('sends a negative amount for a client credit', async () => {
+    const user = userEvent.setup({ delay: null })
+    await openAndFill(user)
+    await user.type(screen.getByLabelText(/Opening balance amount/), '75')
+    await user.click(screen.getByRole('radio', { name: 'We owe client (credit)' }))
+    await user.click(screen.getByRole('button', { name: /Add client/ }))
+
+    await waitFor(() => expect(mockCreateClientMutate).toHaveBeenCalled())
+    expect(mockCreateClientMutate.mock.calls[0][0].openingBalance).toMatchObject({ amount: '-75.00' })
+  })
+
+  it('omits openingBalance when left empty', async () => {
+    const user = userEvent.setup({ delay: null })
+    await openAndFill(user)
+    await user.click(screen.getByRole('button', { name: /Add client/ }))
+    await waitFor(() => expect(mockCreateClientMutate).toHaveBeenCalled())
+    expect(mockCreateClientMutate.mock.calls[0][0].openingBalance).toBeUndefined()
+  })
+
+  it('hides the opening balance from sales reps', async () => {
+    mockRole = 'sales_rep'
+    const user = userEvent.setup({ delay: null })
+    render(<MemoryRouter><Clients /></MemoryRouter>)
+    await user.click(screen.getByRole('button', { name: /New client/ }))
+    expect(screen.queryByLabelText(/Opening balance amount/)).toBeNull()
   })
 })

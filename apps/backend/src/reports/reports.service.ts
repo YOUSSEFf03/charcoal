@@ -1359,8 +1359,19 @@ export class ReportsService {
     // exitType='client_bags_fill' rows (see computeBalance()'s doc comment),
     // so this term is always 0 for them and the pre-existing invoice/payment
     // opening balance is unchanged.
+    // Go-live carry-forward (ClientOpeningBalance) — at most one per client. It
+    // is folded into the pre-period opening figure when dated before dateFrom,
+    // otherwise shown as its own 'opening_balance' entry when inside the period.
+    const goLive = await this.prisma.clientOpeningBalance.findUnique({
+      where: { clientId },
+      select: { id: true, amount: true, date: true, notes: true },
+    });
+
     let openingBalance = new Decimal(0);
     if (dateFilter?.gte) {
+      if (goLive && goLive.date < dateFilter.gte) {
+        openingBalance = openingBalance.plus(new Decimal(goLive.amount.toString()));
+      }
       const [priorInv, priorFillPickups, priorPay] = await Promise.all([
         this.prisma.invoice.aggregate({
           where: {
@@ -1384,7 +1395,8 @@ export class ReportsService {
           _sum: { amount: true },
         }),
       ]);
-      openingBalance = new Decimal(priorInv._sum.total?.toString()  ?? '0')
+      openingBalance = openingBalance
+        .plus(new Decimal(priorInv._sum.total?.toString()  ?? '0'))
         .plus(new Decimal(priorFillPickups._sum.amount?.toString() ?? '0'))
         .minus(new Decimal(priorPay._sum.amount?.toString() ?? '0'));
     }
@@ -1463,10 +1475,23 @@ export class ReportsService {
           total: Decimal; source: string | null; lines: any[]; status: string;
           orderId: string | null; orderDisplayId: string | null; locationName: string | null }
       | { kind: 'fillPickup'; date: Date; id: string; amount: Decimal; reason: string | null }
+      | { kind: 'goLive'; date: Date; id: string; amount: Decimal; notes: string | null }
       | { kind: 'payment'; date: Date; id: string; displayId: string | null;
           amount: Decimal; method: string };
 
+    // goLive.date is a plain @db.Date column — same gte/lte bounds as payment.date.
+    const goLiveInPeriod = goLive != null
+      && (!dateFilter?.gte || goLive.date >= dateFilter.gte)
+      && (!dateFilter?.lte || goLive.date <= dateFilter.lte);
+
     const items: EntryItem[] = [
+      ...(goLiveInPeriod ? [{
+        kind:   'goLive' as const,
+        date:   goLive!.date,
+        id:     goLive!.id,
+        amount: new Decimal(goLive!.amount.toString()),
+        notes:  goLive!.notes,
+      }] : []),
       ...invoices.map((inv) => ({
         kind:      'invoice' as const,
         date:      inv.issuedAt ?? inv.createdAt,
@@ -1500,10 +1525,14 @@ export class ReportsService {
     // Chronological; debits (invoice / fillPickup) before credits (payment) on
     // the same timestamp — generalized from the original invoice-before-payment
     // rule so Fill Client pickups sort the same way invoices always have.
+    // The go-live carry-forward always sorts first on its own date — it
+    // represents everything that happened before the app existed.
     const isDebit = (kind: EntryItem['kind']) => kind === 'invoice' || kind === 'fillPickup';
     items.sort((a, b) => {
       const diff = a.date.getTime() - b.date.getTime();
       if (diff !== 0) return diff;
+      if (a.kind === 'goLive') return -1;
+      if (b.kind === 'goLive') return  1;
       if (isDebit(a.kind) && b.kind === 'payment') return -1;
       if (a.kind === 'payment' && isDebit(b.kind)) return  1;
       return 0;
@@ -1536,6 +1565,20 @@ export class ReportsService {
           // shown reference). null for a WAREHOUSE_SALE invoice (no order).
           orderId:        item.orderId,
           orderDisplayId: item.orderDisplayId,
+        };
+      } else if (item.kind === 'goLive') {
+        // Signed: a positive carry-forward is a debit, a negative one (client
+        // credit) a credit — so debit/credit columns stay non-negative.
+        runningBalance = runningBalance.plus(item.amount);
+        return {
+          date:           item.date,
+          type:           'opening_balance' as const,
+          reference:      item.id,
+          displayId:      null,
+          description:    item.notes ? `Opening balance (carried forward) · ${item.notes}` : 'Opening balance (carried forward)',
+          debit:          item.amount.gt(0) ? item.amount.toFixed(2) : '0.00',
+          credit:         item.amount.lt(0) ? item.amount.abs().toFixed(2) : '0.00',
+          runningBalance: runningBalance.toFixed(2),
         };
       } else if (item.kind === 'fillPickup') {
         runningBalance = runningBalance.plus(item.amount);
@@ -1615,7 +1658,18 @@ export class ReportsService {
 
     // ── Opening balance — aggregate of all purchases and payments strictly BEFORE
     // dateFrom. Zero when no start-date filter is supplied.
+    // Go-live carry-forward (SupplierOpeningBalance, USD) — same handling as
+    // getClientLedger(): folded into the pre-period figure when dated before
+    // dateFrom, otherwise its own 'opening_balance' entry.
+    const goLive = await this.prisma.supplierOpeningBalance.findUnique({
+      where: { supplierId },
+      select: { id: true, amount: true, date: true, notes: true },
+    });
+
     let openingBalance = new Decimal(0);
+    if (goLive && dateFilter?.gte && goLive.date < dateFilter.gte) {
+      openingBalance = new Decimal(goLive.amount.toString());
+    }
     if (dateFilter?.gte) {
       const [priorLines, priorLots, priorPayments] = await Promise.all([
         this.prisma.containerProductLine.findMany({
@@ -1645,7 +1699,7 @@ export class ReportsService {
         new Decimal(0),
       );
 
-      openingBalance = priorLineTotal.plus(priorLotTotal).minus(priorPaymentTotal);
+      openingBalance = openingBalance.plus(priorLineTotal).plus(priorLotTotal).minus(priorPaymentTotal);
     }
 
     // ── Period entries ────────────────────────────────────────────────────────
@@ -1686,10 +1740,22 @@ export class ReportsService {
           containerId: string | null; containerNumber: string | null }
       | { kind: 'directLot'; date: Date; id: string;
           amount: Decimal; charcoalType: string; grade: string; kgReceived: string }
+      | { kind: 'goLive'; date: Date; id: string; amount: Decimal; notes: string | null }
       | { kind: 'payment'; date: Date; id: string; displayId: string | null;
           amount: Decimal; method: string };
 
+    const goLiveInPeriod = goLive != null
+      && (!dateFilter?.gte || goLive.date >= dateFilter.gte)
+      && (!dateFilter?.lte || goLive.date <= dateFilter.lte);
+
     const items: EntryItem[] = [
+      ...(goLiveInPeriod ? [{
+        kind:   'goLive' as const,
+        date:   goLive!.date,
+        id:     goLive!.id,
+        amount: new Decimal(goLive!.amount.toString()),
+        notes:  goLive!.notes,
+      }] : []),
       ...productLines.map((line) => {
         const tonnage = new Decimal(line.paidBags).mul(new Decimal(line.kgPerBag.toString())).div(1000);
         return {
@@ -1728,6 +1794,8 @@ export class ReportsService {
     items.sort((a, b) => {
       const diff = a.date.getTime() - b.date.getTime();
       if (diff !== 0) return diff;
+      if (a.kind === 'goLive') return -1;
+      if (b.kind === 'goLive') return  1;
       if (a.kind !== 'payment' && b.kind === 'payment') return -1;
       if (a.kind === 'payment' && b.kind !== 'payment') return 1;
       return 0;
@@ -1750,6 +1818,22 @@ export class ReportsService {
           description:    this.buildPaymentDescription(item.method),
           debit:          '0.00',
           credit:         item.amount.toFixed(2),
+          runningBalance: runningBalance.toFixed(2),
+        };
+      }
+
+      if (item.kind === 'goLive') {
+        // Carried-forward balance — moves the running balance but is not a
+        // purchase, so it never counts toward totalPurchased.
+        runningBalance = runningBalance.plus(item.amount);
+        return {
+          date:           item.date,
+          type:           'opening_balance' as const,
+          reference:      item.id,
+          displayId:      null,
+          description:    item.notes ? `Opening balance (carried forward) · ${item.notes}` : 'Opening balance (carried forward)',
+          debit:          item.amount.gt(0) ? item.amount.toFixed(2) : '0.00',
+          credit:         item.amount.lt(0) ? item.amount.abs().toFixed(2) : '0.00',
           runningBalance: runningBalance.toFixed(2),
         };
       }
@@ -2079,8 +2163,18 @@ export class ReportsService {
         WITH client_balances AS (
           SELECT
             c.id,
-            COALESCE(inv.invoiced, 0) - COALESCE(pmt.paid, 0) AS balance
+            COALESCE(inv.invoiced, 0) + COALESCE(ob.opening, 0) - COALESCE(pmt.paid, 0) AS balance
           FROM "clients" c
+          -- Go-live opening balance (ClientOpeningBalance) — in the client's own
+          -- currency, so LBP is converted at the current global rate (no snapshot).
+          LEFT JOIN (
+            SELECT ob."clientId", CASE WHEN cl."currency" = 'LBP'
+                   THEN ob."amount"::numeric / NULLIF(${rate.toString()}::numeric, 0)
+                   ELSE ob."amount"::numeric
+              END AS opening
+            FROM "client_opening_balances" ob
+            JOIN "clients" cl ON cl.id = ob."clientId"
+          ) ob ON ob."clientId" = c.id
           LEFT JOIN (
             SELECT "clientId", SUM(
               CASE WHEN "currency" = 'LBP'

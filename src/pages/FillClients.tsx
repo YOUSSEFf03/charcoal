@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useClients, useCreateClient } from '../hooks/useClients'
+import { useMe } from '../hooks/useMe'
+import OpeningBalanceFields, { emptyOpeningBalance, isOpeningBalanceInvalid, toOpeningBalanceDto } from '../components/ui/OpeningBalanceFields'
 
 type FillClient = {
   id: string; initials: string; color: string; name: string; nameAr: string
@@ -38,6 +40,8 @@ export default function FillClients() {
   const [form, setForm] = useState<NewForm>(EMPTY_FORM)
   const [errors, setErrors] = useState<Partial<Record<keyof NewForm, string>>>({})
   const [toast, setToast] = useState('')
+  const [opening, setOpening] = useState(emptyOpeningBalance)
+  const isOwner = useMe().data?.role === 'owner'
 
   // Live clients sourced for the fill-client grid (no fill-specific API; map the
   // shared Client list into the card view-model gracefully).
@@ -90,6 +94,8 @@ export default function FillClients() {
 
   function save() {
     if (!validate()) return
+    if (isOwner && isOpeningBalanceInvalid(opening)) return
+    const openingBalance = isOwner ? toOpeningBalanceDto(opening) : undefined
     createClient.mutate(
       {
         name: form.name.trim(),
@@ -99,10 +105,12 @@ export default function FillClients() {
         phones: form.contactPhone.trim()
           ? [{ number: form.contactPhone.trim(), label: 'mobile', isActive: true, dateAdded: new Date().toISOString() }]
           : [],
+        ...(openingBalance ? { openingBalance } : {}),
       },
       {
         onSuccess: (created) => {
           setShowNew(false)
+          setOpening(emptyOpeningBalance())
           setToast(`Fill client "${form.name.trim()}" created`)
           setTimeout(() => setToast(''), 2800)
           navigate(`/fill-clients/${created.id}`)
@@ -354,6 +362,26 @@ export default function FillClients() {
                   style={{ minHeight: 72, width: '100%' }}
                 />
               </div>
+
+              {/* SECTION 4 — Opening balance (owner only) */}
+              {isOwner && (
+                <>
+                  <div className="compose-section">
+                    <div className="step-num">4</div>
+                    <div className="stitle">Opening balance</div>
+                    <div className="ssub">optional — carried forward from the old books</div>
+                  </div>
+                  <div style={{ padding: '16px 22px 24px' }}>
+                    <OpeningBalanceFields
+                      value={opening}
+                      onChange={setOpening}
+                      currency={form.currency}
+                      positiveLabel="Client owes us"
+                      negativeLabel="We owe client (credit)"
+                    />
+                  </div>
+                </>
+              )}
 
             </div>
 

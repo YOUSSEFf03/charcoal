@@ -1,11 +1,14 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
@@ -19,6 +22,10 @@ import { DeactivatePhoneDto } from './dto/deactivate-phone.dto';
 import { CreateClientLocationDto } from './dto/create-client-location.dto';
 import { UpdateClientLocationDto } from './dto/update-client-location.dto';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { ClerkUser } from '../auth/clerk.strategy';
+import { SetOpeningBalanceDto } from '../common/dto/set-opening-balance.dto';
+import { assertCanSetOpeningBalance } from '../common/utils/opening-balance';
 
 @ApiTags('clients')
 @ApiBearerAuth()
@@ -91,8 +98,9 @@ export class ClientsController {
   @ApiResponse({ status: 400, description: 'Bad request / constraint violation' })
   @Post()
   @Roles('owner', 'sales_rep')
-  create(@Body() dto: CreateClientDto) {
-    return this.clientsService.create(dto);
+  create(@Body() dto: CreateClientDto, @CurrentUser() user: ClerkUser) {
+    if (dto.openingBalance) assertCanSetOpeningBalance(user.role);
+    return this.clientsService.create(dto, user.userId);
   }
 
   @ApiOperation({ summary: 'Update a client' })
@@ -228,5 +236,41 @@ export class ClientsController {
     @Query('limit', new ParseLimitPipe(20)) limit: number,
   ) {
     return this.clientsService.getPayments(id, page, limit);
+  }
+
+  // ── Opening balance (go-live carry-forward) ───────────────────────────────
+  // Read by anyone who can see the client's statement; written by the owner only,
+  // since it directly changes what the client is recorded as owing.
+  @ApiOperation({ summary: 'Get a client\'s opening balance (null if none)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Get(':id/opening-balance')
+  @Roles('owner', 'accountant', 'sales_rep')
+  getOpeningBalance(@Param('id', ParseUUIDPipe) id: string) {
+    return this.clientsService.getOpeningBalance(id);
+  }
+
+  @ApiOperation({ summary: 'Set or replace a client\'s opening balance (owner only)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 400, description: 'Validation error / zero amount' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Put(':id/opening-balance')
+  @Roles('owner')
+  setOpeningBalance(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetOpeningBalanceDto,
+    @CurrentUser() user: ClerkUser,
+  ) {
+    return this.clientsService.setOpeningBalance(id, dto, user.userId);
+  }
+
+  @ApiOperation({ summary: 'Remove a client\'s opening balance (owner only)' })
+  @ApiResponse({ status: 204, description: 'Removed' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Delete(':id/opening-balance')
+  @Roles('owner')
+  @HttpCode(204)
+  clearOpeningBalance(@Param('id', ParseUUIDPipe) id: string) {
+    return this.clientsService.clearOpeningBalance(id);
   }
 }

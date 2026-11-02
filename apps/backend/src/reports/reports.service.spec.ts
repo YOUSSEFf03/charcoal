@@ -40,6 +40,8 @@ describe('ReportsService', () => {
     containerProductLine: { findMany: fn() },
     supplier:             { findUnique: fn() },
     supplierPayment:      { findMany: fn() },
+    supplierOpeningBalance: { findUnique: fn() },
+    clientOpeningBalance:   { findUnique: fn() },
     client:               { findUnique: fn(), findMany: fn() },
     payment:              { findMany: fn(), aggregate: fn(), groupBy: fn() },
     worker:               { findUnique: fn() },
@@ -68,6 +70,10 @@ describe('ReportsService', () => {
 
     // Default exchange rate — individual tests override this when they need a specific rate.
     mockSettings.getExchangeRate.mockResolvedValue(89550);
+
+    // Default: no go-live opening balances.
+    mockPrisma.clientOpeningBalance.findUnique.mockResolvedValue(null);
+    mockPrisma.supplierOpeningBalance.findUnique.mockResolvedValue(null);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -1847,6 +1853,52 @@ describe('ReportsService', () => {
       await expect(service.getClientLedger('nonexistent', {})).rejects.toThrow(NotFoundException);
     });
 
+    // ── Go-live opening balance (ClientOpeningBalance) ─────────────────────────
+    it('opening balance: shown as the FIRST entry on its date and carried into the running balance', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD' });
+      const goLive = new Date('2026-11-01');
+      mockPrisma.clientOpeningBalance.findUnique.mockResolvedValue({ id: 'ob-1', amount: dec('500.00'), date: goLive, notes: 'Old notebook' });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      // Same-day payment must still sort AFTER the carry-forward.
+      mockPrisma.payment.findMany.mockResolvedValue([{ id: 'pmt-1', date: goLive, amount: dec('100.00'), method: 'cash' }]);
+
+      const result = await service.getClientLedger('client-1', {});
+
+      expect(result.entries[0]).toEqual(expect.objectContaining({
+        type: 'opening_balance', debit: '500.00', credit: '0.00', runningBalance: '500.00',
+        description: 'Opening balance (carried forward) · Old notebook',
+      }));
+      expect(result.entries[1].type).toBe('payment');
+      expect(result.balance).toBe('400.00');
+    });
+
+    it('opening balance: a negative carry-forward (client credit) appears in the credit column', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD' });
+      mockPrisma.clientOpeningBalance.findUnique.mockResolvedValue({ id: 'ob-1', amount: dec('-75.00'), date: new Date('2026-11-01'), notes: null });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('client-1', {});
+
+      expect(result.entries[0]).toEqual(expect.objectContaining({ debit: '0.00', credit: '75.00', runningBalance: '-75.00' }));
+      expect(result.balance).toBe('-75.00');
+    });
+
+    it('opening balance: dated before dateFrom → folded into openingBalance, not listed as an entry', async () => {
+      mockPrisma.client.findUnique.mockResolvedValue({ id: 'client-1', currency: 'USD' });
+      mockPrisma.clientOpeningBalance.findUnique.mockResolvedValue({ id: 'ob-1', amount: dec('500.00'), date: new Date('2026-11-01'), notes: null });
+      mockPrisma.invoice.aggregate.mockResolvedValue({ _sum: { total: null } });
+      mockPrisma.payment.aggregate.mockResolvedValue({ _sum: { amount: dec('50.00') } });
+      mockPrisma.invoice.findMany.mockResolvedValue([]);
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await service.getClientLedger('client-1', { dateFrom: '2026-12-01', dateTo: '2026-12-31' });
+
+      expect(result.openingBalance).toBe('450.00');
+      expect(result.entries).toHaveLength(0);
+      expect(result.balance).toBe('450.00');
+    });
+
     // ── Phase 5: cancelled invoices excluded ──────────────────────────────────
     it('P5: query filters out cancelled and draft invoices', async () => {
       mockPrisma.client.findUnique.mockResolvedValue({ id: 'c-1', currency: 'USD' });
@@ -2501,6 +2553,22 @@ describe('ReportsService', () => {
         outstanding:    '0.00',
         openingBalance: '0.00',
       });
+    });
+
+    it('opening balance: carry-forward moves outstanding but never counts as a purchase', async () => {
+      mockPrisma.supplier.findUnique.mockResolvedValue({ id: 's-1' });
+      noPriorRecords();
+      const goLive = new Date('2026-11-01');
+      mockPrisma.supplierOpeningBalance.findUnique.mockResolvedValue({ id: 'sob-1', amount: dec('2000.00'), date: goLive, notes: null });
+      mockPrisma.supplierPayment.findMany.mockResolvedValue([
+        { id: 'sp-1', displayId: 'SP-1', date: goLive, amount: dec('500.00'), currency: 'USD', method: 'cash' },
+      ]);
+
+      const result = await service.getSupplierLedger('s-1', {});
+
+      expect(result.entries[0]).toEqual(expect.objectContaining({ type: 'opening_balance', debit: '2000.00', runningBalance: '2000.00' }));
+      expect(result.entries[1].type).toBe('payment');
+      expect(result.summary).toEqual(expect.objectContaining({ totalPurchased: '0.00', totalPaid: '500.00', outstanding: '1500.00' }));
     });
 
     it('statement generation: mixed sources produce correct entries, running balance, and summary', async () => {

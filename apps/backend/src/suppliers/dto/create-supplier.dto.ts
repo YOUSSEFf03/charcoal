@@ -5,8 +5,11 @@ import {
   IsOptional,
   IsString,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
+import { SetOpeningBalanceDto } from '../../common/dto/set-opening-balance.dto';
 
 export class CreateSupplierDto {
   @ApiProperty({ description: 'Supplier company name', example: 'Indonesian Charcoal Co.' })
@@ -47,4 +50,14 @@ export class CreateSupplierDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiProperty({
+    description: 'Optional go-live opening balance in USD, saved together with the new supplier (owner only). Same shape and sign as PUT /suppliers/:id/opening-balance.',
+    required: false,
+    type: () => SetOpeningBalanceDto,
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SetOpeningBalanceDto)
+  openingBalance?: SetOpeningBalanceDto;
 }

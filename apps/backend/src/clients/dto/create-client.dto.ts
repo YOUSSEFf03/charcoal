@@ -6,9 +6,12 @@ import {
   IsOptional,
   IsString,
   IsArray,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ClientType, Currency } from '@prisma/client';
 import { ApiProperty } from '@nestjs/swagger';
+import { SetOpeningBalanceDto } from '../../common/dto/set-opening-balance.dto';
 
 export class CreateClientDto {
   @ApiProperty({ description: 'Client full name', example: 'Acme Trading Co.' })
@@ -71,4 +74,14 @@ export class CreateClientDto {
   @IsOptional()
   @IsBoolean()
   multiLocationEnabled?: boolean;
+
+  @ApiProperty({
+    description: 'Optional go-live opening balance, saved together with the new client (owner only). Same shape and sign as PUT /clients/:id/opening-balance.',
+    required: false,
+    type: () => SetOpeningBalanceDto,
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SetOpeningBalanceDto)
+  openingBalance?: SetOpeningBalanceDto;
 }

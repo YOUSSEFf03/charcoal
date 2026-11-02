@@ -147,6 +147,7 @@ describe('ClientsService — create()/update() profile fields (nameAr/address/cr
       create: fn(),
       update: fn(),
     },
+    user: { findUnique: fn() },
   };
 
   const mockBalanceService = { computeBalance: fn() };
@@ -197,6 +198,40 @@ describe('ClientsService — create()/update() profile fields (nameAr/address/cr
     expect(createCall.data).not.toHaveProperty('address');
     expect(createCall.data).not.toHaveProperty('creditLimit');
     expect(createCall.data).not.toHaveProperty('notesEn');
+    expect(createCall.data).not.toHaveProperty('openingBalance');
+  });
+
+  it('create() writes the opening balance in the same nested create, with the caller as setBy', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'owner-1' });
+    mockPrisma.client.create.mockResolvedValue({ id: 'new-client' });
+
+    await service.create(
+      {
+        name: 'Cedar Grill',
+        type: 'restaurant' as any,
+        currency: 'USD' as any,
+        openingBalance: { amount: '-75.5', date: '2026-11-01', notes: 'From old notebook' },
+      },
+      'clerk_owner',
+    );
+
+    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({ where: { clerkId: 'clerk_owner' } });
+    const createCall = mockPrisma.client.create.mock.calls[0][0] as { data: Record<string, any> };
+    expect(createCall.data.openingBalance.create).toMatchObject({
+      amount: '-75.50',
+      notes: 'From old notebook',
+      setById: 'owner-1',
+    });
+  });
+
+  it('create() rejects a zero opening balance without creating the client', async () => {
+    await expect(
+      service.create(
+        { name: 'Zero', type: 'shop' as any, currency: 'USD' as any, openingBalance: { amount: '0', date: '2026-11-01' } },
+        'clerk_owner',
+      ),
+    ).rejects.toThrow('Opening balance cannot be zero');
+    expect(mockPrisma.client.create).not.toHaveBeenCalled();
   });
 
   it('update() forwards nameAr/address/creditLimit/notesEn to Prisma when provided — the exact fields the Edit Client modal now sends', async () => {
@@ -265,6 +300,7 @@ describe('ClientBalanceService — computeBalance()', () => {
     invoice: { findMany: fn() },
     stockExit: { findMany: fn() },
     payment: { findMany: fn() },
+    clientOpeningBalance: { findFirst: fn() },
     $transaction: fn(),
   };
 
@@ -274,6 +310,8 @@ describe('ClientBalanceService — computeBalance()', () => {
     // (all normal-client scenarios) is unaffected unless it explicitly
     // overrides this.
     mockPrisma.stockExit.findMany.mockResolvedValue([]);
+    // Default: no go-live opening balance.
+    mockPrisma.clientOpeningBalance.findFirst.mockResolvedValue(null);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -320,6 +358,39 @@ describe('ClientBalanceService — computeBalance()', () => {
     expect(mockPrisma.payment.findMany).toHaveBeenCalledTimes(1);
     expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { clientId } }),
+    );
+  });
+
+  // ── Go-live opening balance (ClientOpeningBalance) ──────────────────────────
+  it('opening balance: a positive carry-forward adds to the balance (works with no invoices — e.g. a Fill Client)', async () => {
+    mockPrisma.invoice.findMany.mockResolvedValue([]);
+    mockPrisma.payment.findMany.mockResolvedValue([{ amount: { toString: () => '200' } }]);
+    mockPrisma.clientOpeningBalance.findFirst.mockResolvedValue({ amount: { toString: () => '1000' } });
+
+    const result = await balanceService.computeBalance('c-ob');
+
+    expect(result.toFixed(2)).toBe('800.00');
+  });
+
+  it('opening balance: a negative carry-forward (client credit) reduces the balance', async () => {
+    mockPrisma.invoice.findMany.mockResolvedValue([{ total: { toString: () => '300' } }]);
+    mockPrisma.payment.findMany.mockResolvedValue([]);
+    mockPrisma.clientOpeningBalance.findFirst.mockResolvedValue({ amount: { toString: () => '-100' } });
+
+    const result = await balanceService.computeBalance('c-ob');
+
+    expect(result.toFixed(2)).toBe('200.00');
+  });
+
+  it('opening balance: an asOf bound only counts a carry-forward dated on/before it', async () => {
+    mockPrisma.invoice.findMany.mockResolvedValue([]);
+    mockPrisma.payment.findMany.mockResolvedValue([]);
+    const lte = new Date('2026-11-01T00:00:00Z');
+
+    await balanceService.computeBalance('c-ob', undefined, { lte, businessLt: lte });
+
+    expect(mockPrisma.clientOpeningBalance.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { clientId: 'c-ob', date: { lte } } }),
     );
   });
 

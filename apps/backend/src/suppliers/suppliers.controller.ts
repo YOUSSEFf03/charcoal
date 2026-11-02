@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
@@ -20,6 +21,8 @@ import { UpdateSupplierDto } from './dto/update-supplier.dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ClerkUser } from '../auth/clerk.strategy';
+import { SetOpeningBalanceDto } from '../common/dto/set-opening-balance.dto';
+import { assertCanSetOpeningBalance } from '../common/utils/opening-balance';
 
 class CreateSupplierPaymentDto {
   @IsNumberString() @IsNotEmpty() amount: string;
@@ -68,8 +71,9 @@ export class SuppliersController {
   @ApiResponse({ status: 422, description: 'Validation error' })
   @Post()
   @Roles('owner', 'accountant')
-  create(@Body() dto: CreateSupplierDto) {
-    return this.suppliersService.create(dto);
+  create(@Body() dto: CreateSupplierDto, @CurrentUser() user: ClerkUser) {
+    if (dto.openingBalance) assertCanSetOpeningBalance(user.role);
+    return this.suppliersService.create(dto, user.userId);
   }
 
   @ApiOperation({ summary: 'Update a supplier' })
@@ -106,6 +110,40 @@ export class SuppliersController {
     @CurrentUser() user: ClerkUser,
   ) {
     return this.suppliersService.createPayment(id, dto, user.userId);
+  }
+
+  // ── Opening balance (go-live carry-forward, always USD) ───────────────────
+  @ApiOperation({ summary: 'Get a supplier\'s opening balance (null if none)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 404, description: 'Supplier not found' })
+  @Get(':id/opening-balance')
+  @Roles('owner', 'accountant')
+  getOpeningBalance(@Param('id', ParseUUIDPipe) id: string) {
+    return this.suppliersService.getOpeningBalance(id);
+  }
+
+  @ApiOperation({ summary: 'Set or replace a supplier\'s opening balance (owner only)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 400, description: 'Validation error / zero amount' })
+  @ApiResponse({ status: 404, description: 'Supplier not found' })
+  @Put(':id/opening-balance')
+  @Roles('owner')
+  setOpeningBalance(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetOpeningBalanceDto,
+    @CurrentUser() user: ClerkUser,
+  ) {
+    return this.suppliersService.setOpeningBalance(id, dto, user.userId);
+  }
+
+  @ApiOperation({ summary: 'Remove a supplier\'s opening balance (owner only)' })
+  @ApiResponse({ status: 204, description: 'Removed' })
+  @ApiResponse({ status: 404, description: 'Supplier not found' })
+  @Delete(':id/opening-balance')
+  @Roles('owner')
+  @HttpCode(204)
+  clearOpeningBalance(@Param('id', ParseUUIDPipe) id: string) {
+    return this.suppliersService.clearOpeningBalance(id);
   }
 
   @ApiOperation({ summary: 'Delete a supplier' })
