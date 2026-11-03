@@ -49,26 +49,30 @@ export default function OpeningBalanceFields({
   return (
     <div className="form-group">
       <label className="form-label">Opening balance (optional)</label>
-      <div className="flex gap-2">
+      {/* Stacked, not side by side: .form-input's width:100% overrides Tailwind
+          width utilities, and the native date picker's min width then squeezed
+          the amount box to a few pixels in narrow modals. */}
+      <input
+        className="form-input"
+        type="number"
+        min="0"
+        step="0.01"
+        inputMode="decimal"
+        placeholder={`0.00 ${currency}`}
+        aria-label={`Opening balance amount in ${currency}`}
+        value={value.amount}
+        onChange={e => onChange({ ...value, amount: e.target.value })}
+      />
+      <label className="mt-2 flex items-center gap-2" style={{ fontSize: 12, color: 'var(--text3)' }}>
+        <span className="shrink-0">As of</span>
         <input
-          className="form-input flex-1"
-          type="number"
-          min="0"
-          step="0.01"
-          inputMode="decimal"
-          placeholder={`0.00 ${currency}`}
-          aria-label={`Opening balance amount in ${currency}`}
-          value={value.amount}
-          onChange={e => onChange({ ...value, amount: e.target.value })}
-        />
-        <input
-          className="form-input w-40"
+          className="form-input"
           type="date"
           aria-label="Opening balance date"
           value={value.date}
           onChange={e => onChange({ ...value, date: e.target.value })}
         />
-      </div>
+      </label>
       <div className="method-pills mt-2" role="radiogroup" aria-label="Who owes whom">
         {[true, false].map(pos => (
           <div
