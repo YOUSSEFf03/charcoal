@@ -99,6 +99,24 @@ export function useWasteSummary() {
   })
 }
 
+/**
+ * Record waste thrown away (not sold) — removes kg from the waste pool.
+ * Rejected with WASTE_POOL_INSUFFICIENT when the pool has less than `kg`.
+ * POST /waste/disposals (owner / accountant)
+ */
+export function useCreateWasteDisposal() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: { kg: string; date: string; note?: string }) => {
+      const res = await api.post('/waste/disposals', body)
+      return res.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['waste'] })
+    },
+  })
+}
+
 /** Query params accepted by GET /waste/ledger. */
 export interface WasteLedgerQuery {
   page?: number
@@ -436,6 +454,8 @@ export function useCreateStockExit() {
       // anonymous walk-in sales (WarehouseSales.tsx); every other caller of
       // this hook simply omits it and gets no idempotency protection.
       idempotencyKey?: string
+      // Waste-pool mode: sell kgQuantity from the combined waste pool (walk_in only, no lotId).
+      fromWastePool?: boolean
     }) => {
       const res = await api.post('/stock-exits', body)
       return res.data
@@ -454,6 +474,8 @@ export function useCreateStockExit() {
       qc.invalidateQueries({ queryKey: ['warehouse', 'container-material-flow'] })
       // Invalidate all client queries so balance/overdue update immediately
       qc.invalidateQueries({ queryKey: ['clients'] })
+      // A waste-pool sale changes the waste balance/ledger.
+      qc.invalidateQueries({ queryKey: ['waste'] })
     },
   })
 }

@@ -11,6 +11,7 @@ import { SettingsService } from '../settings/settings.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { InvoiceLineDto } from './dto/invoice-line.dto';
+import { returnSaleToWastePool } from '../common/inventory/waste-pool';
 
 @Injectable()
 export class InvoicesService {
@@ -582,8 +583,22 @@ export class InvoicesService {
       // Restore any stock this invoice's creation deducted — see this
       // method's doc comment. Scoped by invoiceId, so this is a no-op for
       // ORDER invoices (which never have a linked StockExit before delivery).
-      const linkedExits = await tx.stockExit.findMany({ where: { invoiceId: id } });
+      const linkedExits = await tx.stockExit.findMany({
+        where: { invoiceId: id },
+        include: { wasteEntry: { select: { kg: true, createdById: true } } },
+      });
       for (const exit of linkedExits) {
+        // Waste-pool sale: no lot/packed row to restore — put the kg back into
+        // the pool with a reversing ledger entry (the original entry is kept).
+        if (exit.wasteEntry) {
+          await returnSaleToWastePool(tx, {
+            kg: new Decimal(exit.wasteEntry.kg.toString()).abs(),
+            date: exit.date,
+            createdById: exit.wasteEntry.createdById,
+            note: `Invoice ${invoice.displayId ?? invoice.id} cancelled — waste returned to pool`,
+          });
+          continue;
+        }
         if (exit.packedStockId) {
           await tx.packedStock.update({
             where: { id: exit.packedStockId },

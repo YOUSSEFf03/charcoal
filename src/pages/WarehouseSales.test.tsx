@@ -72,11 +72,15 @@ const mockFifoDrawMutateAsync = vi.fn()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockUseGroupedStockExits = vi.fn((_params?: unknown): any => ({ data: { data: [] as any[], total: 0 }, isLoading: false }))
 
+const mockCreateExitMutateAsync = vi.fn()
+let mockWasteKgOnHand = '200.000'
+
 vi.mock('../hooks/useWarehouse', () => ({
+  useWasteSummary: () => ({ data: { kgOnHand: mockWasteKgOnHand }, isLoading: false }),
   useAvailableStockLots: () => ({ data: [] }),
   usePackedStockSummary: () => ({ data: [{ bagTypeId: BAG_TYPE.id, totalBags: 50, availableBags: 50 }] }),
   useGroupedStockExits: (params: unknown) => mockUseGroupedStockExits(params),
-  useCreateStockExit: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCreateStockExit: () => ({ mutateAsync: mockCreateExitMutateAsync, isPending: false }),
   useUpdateStockExit: () => ({ mutate: vi.fn(), isPending: false }),
   useWalkInSummary: () => ({ data: { bags: 0, kg: '0' }, isLoading: false }),
   useWarehouseCashSummary: () => ({ data: { cashCollected: '0' }, isLoading: false, isError: false }),
@@ -127,6 +131,60 @@ beforeEach(() => {
     available: 50,
   })
   mockCreateWalkInSaleMutateAsync.mockResolvedValue({ id: 'invoice-1' })
+  mockCreateExitMutateAsync.mockResolvedValue({ id: 'exit-1' })
+  mockWasteKgOnHand = '200.000'
+})
+
+describe('WarehouseSales — selling waste (waste pool)', () => {
+  async function fillWaste(user: ReturnType<typeof userEvent.setup>, kg: string, price: string) {
+    await user.click(screen.getByText('Waste'))
+    await user.type(screen.getByLabelText(/Weight \(kg\)/), kg)
+    await user.type(screen.getByLabelText('Price / kg'), price)
+  }
+
+  it('shows how much waste is available', async () => {
+    const user = userEvent.setup()
+    render(<WarehouseSales />)
+    await user.click(screen.getByText('Waste'))
+    expect(screen.getByTestId('waste-available').textContent).toContain('200 kg')
+  })
+
+  it('registered client: sends ONE waste line through the invoiced walk-in sale', async () => {
+    const user = userEvent.setup()
+    render(<WarehouseSales />)
+    await selectRegisteredBuyer(user)
+    await fillWaste(user, '120', '0.40')
+    await user.click(screen.getByRole('button', { name: /Record this sale/i }))
+    await waitFor(() => expect(mockCreateWalkInSaleMutateAsync).toHaveBeenCalledTimes(1))
+    const payload = mockCreateWalkInSaleMutateAsync.mock.calls[0][0]
+    expect(payload.wasteLines).toEqual([{ kgQuantity: '120.000', pricePerKg: '0.40', currency: 'USD' }])
+    expect(payload.bags).toBeUndefined()
+    expect(payload.kgLines).toBeUndefined()
+    expect(mockCreateExitMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('walk-in customer: records an anonymous exit from the waste pool with its amount', async () => {
+    const user = userEvent.setup()
+    render(<WarehouseSales />)
+    await fillWaste(user, '30', '0.50')
+    await user.click(screen.getByRole('button', { name: /Record this sale/i }))
+    await waitFor(() => expect(mockCreateExitMutateAsync).toHaveBeenCalledTimes(1))
+    const body = mockCreateExitMutateAsync.mock.calls[0][0]
+    expect(body).toMatchObject({ fromWastePool: true, kgQuantity: 30, exitType: 'walk_in', amount: 15, currency: 'USD' })
+    expect(body.lotId).toBeUndefined()
+    expect(mockCreateWalkInSaleMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('blocks more kg than the pool holds, without calling the server', async () => {
+    mockWasteKgOnHand = '25.000'
+    const user = userEvent.setup()
+    render(<WarehouseSales />)
+    await fillWaste(user, '30', '0.50')
+    expect(screen.getByText(/only 25 kg available/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Record this sale/i }))
+    await waitFor(() => expect(screen.getByText(/Only 25 kg of waste available/)).toBeInTheDocument())
+    expect(mockCreateExitMutateAsync).not.toHaveBeenCalled()
+  })
 })
 
 describe('WarehouseSales — receiver-required validation (bug #2)', () => {

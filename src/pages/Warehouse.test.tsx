@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
+
+const { mockUseWasteSummary, mockUseWasteLedger, mockDisposalMutate } = vi.hoisted(() => ({
+  mockUseWasteSummary: vi.fn((): unknown => ({ data: undefined, isLoading: false })),
+  mockUseWasteLedger: vi.fn((): unknown => ({ data: { data: [], total: 0, page: 1, limit: 50 }, isLoading: false, isError: false, refetch: () => {} })),
+  mockDisposalMutate: vi.fn(),
+}))
 
 // ---------------------------------------------------------------------------
 // Regression coverage for the stock-adjustment audit: a non-owner (accountant/
@@ -95,8 +101,9 @@ vi.mock('../hooks/useWarehouse', () => ({
   useLotMaterialFlow: () => ({ data: undefined }),
   useAvailableStockLots: () => ({ data: [] }),
   usePackedStock: (...args: unknown[]) => mockUsePackedStock(...args),
-  useWasteSummary: () => ({ data: undefined, isLoading: false }),
-  useWasteLedger: () => ({ data: { data: [], total: 0, page: 1, limit: 50 }, isLoading: false, isError: false, refetch: vi.fn() }),
+  useWasteSummary: () => mockUseWasteSummary(),
+  useWasteLedger: () => mockUseWasteLedger(),
+  useCreateWasteDisposal: () => ({ mutate: mockDisposalMutate, isPending: false }),
 }))
 
 vi.mock('../hooks/usePacking', () => ({
@@ -108,6 +115,11 @@ vi.mock('../hooks/useBagTypes', () => ({
 }))
 
 import Warehouse from './Warehouse'
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function wasteLedgerResult(rows: any[] = []) {
+  return { data: { data: rows, total: rows.length, page: 1, limit: 50 }, isLoading: false, isError: false, refetch: vi.fn() }
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -665,5 +677,66 @@ describe('Warehouse — Packed stock by source lot: pagination', () => {
 
     expect(screen.getByText('Page 1 of 3')).toBeInTheDocument()
     expect(screen.getByText('LOT-001')).toBeInTheDocument()
+  })
+})
+
+describe('Warehouse — Waste tab: disposals and sales in the ledger', () => {
+  beforeEach(() => {
+    mockUseWasteSummary.mockReturnValue({
+      data: { kgOnHand: '80.000', collectedThisMonthKg: '100.000', soldThisMonthKg: '20.000', disposedThisMonthKg: '0.000', lastAdjustmentDate: null },
+      isLoading: false,
+    })
+    mockUseWasteLedger.mockReturnValue(wasteLedgerResult())
+    mockDisposalMutate.mockReset()
+  })
+
+  async function openWasteTab(user: ReturnType<typeof userEvent.setup>) {
+    render(<Warehouse />)
+    await user.click(screen.getByRole('button', { name: /Waste/ }))
+  }
+
+  it('records a disposal with kg, date and trimmed reason', async () => {
+    const user = userEvent.setup()
+    await openWasteTab(user)
+    await user.click(screen.getByRole('button', { name: /Record disposal/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Record waste disposal' })
+    await user.type(within(dialog).getByLabelText('Kg thrown away'), '35.5')
+    await user.type(within(dialog).getByLabelText('Reason (optional)'), '  wet dust ')
+    await user.click(within(dialog).getByRole('button', { name: /Record disposal/ }))
+    expect(mockDisposalMutate).toHaveBeenCalledTimes(1)
+    expect(mockDisposalMutate.mock.calls[0][0]).toMatchObject({ kg: '35.500', note: 'wet dust' })
+    expect(mockDisposalMutate.mock.calls[0][0].date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  it('refuses to dispose more than the pool holds (no request sent)', async () => {
+    const user = userEvent.setup()
+    await openWasteTab(user)
+    await user.click(screen.getByRole('button', { name: /Record disposal/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Record waste disposal' })
+    await user.type(within(dialog).getByLabelText('Kg thrown away'), '90')
+    await user.click(within(dialog).getByRole('button', { name: /Record disposal/ }))
+    expect(mockDisposalMutate).not.toHaveBeenCalled()
+    expect(within(dialog).getAllByText(/Only 80 kg in the pool/).length).toBeGreaterThan(0)
+  })
+
+  it('ledger names who bought the waste, and shows cancelled sales as returned', () => {
+    mockUseWasteLedger.mockReturnValue(wasteLedgerResult([
+      { id: 'e1', type: 'sale', kg: '-120.000', date: '2026-11-05', createdBy: { id: 'u', name: 'Owner' },
+        session: null, adjustment: null, note: 'Sold to Acme', stockExit: { id: 'x', recipient: 'Acme', amount: null, currency: 'USD' },
+        invoice: { id: 'i', displayId: 'SI-0042', client: { id: 'c', name: 'Acme' } } },
+      { id: 'e2', type: 'sale', kg: '-30.000', date: '2026-11-05', createdBy: { id: 'u', name: 'Owner' },
+        session: null, adjustment: null, note: null, stockExit: { id: 'y', recipient: 'Bakery', amount: '15.00', currency: 'USD' }, invoice: null },
+      { id: 'e3', type: 'sale', kg: '120.000', date: '2026-11-06', createdBy: { id: 'u', name: 'Owner' },
+        session: null, adjustment: null, note: 'Invoice SI-0042 cancelled — waste returned to pool', stockExit: null, invoice: null },
+      { id: 'e4', type: 'disposal', kg: '-5.000', date: '2026-11-06', createdBy: { id: 'u', name: 'Owner' },
+        session: null, adjustment: null, note: 'wet dust', stockExit: null, invoice: null },
+    ]))
+    render(<Warehouse />)
+    return userEvent.setup().click(screen.getByRole('button', { name: /Waste/ })).then(() => {
+      expect(screen.getByText(/SI-0042 · Acme/)).toBeInTheDocument()
+      expect(screen.getByText(/· Bakery/)).toBeInTheDocument()
+      expect(screen.getByText('Sale cancelled — returned')).toBeInTheDocument()
+      expect(screen.getByText(/wet dust/)).toBeInTheDocument()
+    })
   })
 })

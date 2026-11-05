@@ -7,6 +7,7 @@ import { SubmitPhysicalCountDto } from './dto/physical-count.dto';
 import { buildGeneralExpenseWhere } from '../general-expenses/general-expenses.service';
 import { ClientBalanceService } from '../clients/client-balance.service';
 import { StockExitsService } from '../stock-exits/stock-exits.service';
+import { WASTE_CHARCOAL_TYPE, WASTE_GRADE } from '../common/inventory/waste-pool';
 
 interface DateRangeFilter {
   /**
@@ -2334,6 +2335,7 @@ export class ReportsService {
           id: true, date: true, amount: true, currency: true, recipient: true, quantity: true, kgQuantity: true,
           bagType: { select: { name: true } },
           lot: { select: { charcoalType: true, grade: true } },
+          wasteEntry: { select: { id: true } },
         },
       }),
       this.prisma.payment.findMany({
@@ -2412,6 +2414,7 @@ export class ReportsService {
           exitType: true, quantity: true, kgQuantity: true,
           lot: { select: { charcoalType: true, grade: true } },
           packedStock: { select: { lot: { select: { charcoalType: true, grade: true } } } },
+          wasteEntry: { select: { id: true } },
         },
       }),
       this.prisma.stockLot.findMany({
@@ -2456,7 +2459,9 @@ export class ReportsService {
       clientId: null,
       client: null,
       currency: exit.currency,
-      description: exit.lot
+      description: exit.wasteEntry
+        ? `Anonymous walk-in · ${exit.kgQuantity} kg ${WASTE_CHARCOAL_TYPE}${exit.recipient ? ` — ${exit.recipient}` : ''}`
+        : exit.lot
         ? `Anonymous walk-in · ${exit.kgQuantity} kg ${exit.lot.charcoalType} ${exit.lot.grade}${exit.recipient ? ` — ${exit.recipient}` : ''}`
         : `Anonymous walk-in · ${exit.quantity ?? 0}× ${exit.bagType?.name ?? 'bags'}${exit.recipient ? ` — ${exit.recipient}` : ''}`,
       saleTotal: fmt2(exit.amount!),
@@ -2640,11 +2645,15 @@ export class ReportsService {
       exitType: string; quantity: number | null; kgQuantity: Prisma.Decimal | null;
       lot: { charcoalType: string; grade: string } | null;
       packedStock: { lot: { charcoalType: string; grade: string } } | null;
+      wasteEntry?: { id: string } | null;
     }>,
   ) {
     const byKey = new Map<string, { exitType: string; charcoalType: string; grade: string; bags: number; kg: Decimal }>();
     for (const e of exits) {
-      const lot = e.lot ?? e.packedStock?.lot ?? null;
+      // A waste-pool sale has no lot — it is labelled as the combined waste pool.
+      const lot = e.wasteEntry
+        ? { charcoalType: WASTE_CHARCOAL_TYPE, grade: WASTE_GRADE }
+        : (e.lot ?? e.packedStock?.lot ?? null);
       const charcoalType = lot?.charcoalType ?? 'Unknown';
       const grade = lot?.grade ?? 'Unknown';
       const key = `${e.exitType}::${charcoalType}::${grade}`;

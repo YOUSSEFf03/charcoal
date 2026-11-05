@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useApproveStockAdjustment, useRejectStockAdjustment, useStockExits, useLotMaterialFlow, useAvailableStockLots, usePackedStock, useWasteSummary, useWasteLedger } from '../hooks/useWarehouse'
+import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useApproveStockAdjustment, useRejectStockAdjustment, useStockExits, useLotMaterialFlow, useAvailableStockLots, usePackedStock, useWasteSummary, useWasteLedger, useCreateWasteDisposal } from '../hooks/useWarehouse'
 import type { StockLot } from '../types/api'
 import { usePackingSessions } from '../hooks/usePacking'
 import { useBagTypes } from '../hooks/useBagTypes'
@@ -42,6 +42,13 @@ export default function Warehouse() {
   const [wasteAdjQtyAfter, setWasteAdjQtyAfter] = useState('')
   const [wasteAdjReason, setWasteAdjReason] = useState('')
   const [wasteAdjError, setWasteAdjError] = useState('')
+  // Record-disposal modal (waste thrown away, not sold) — POST /waste/disposals.
+  const [disposalOpen, setDisposalOpen] = useState(false)
+  const [disposalKg, setDisposalKg] = useState('')
+  const [disposalDate, setDisposalDate] = useState(() => toDateOnlyString(new Date()))
+  const [disposalNote, setDisposalNote] = useState('')
+  const [disposalError, setDisposalError] = useState('')
+  const createDisposal = useCreateWasteDisposal()
   const [toast, setToast] = useState('')
   const [selectedBagTypeId, setSelectedBagTypeId] = useState<string | null>(null)
   const [packedStockPage, setPackedStockPage] = useState(1)
@@ -580,9 +587,9 @@ export default function Warehouse() {
 
         {/* Adjustments tab */}
         {/* Waste pool tab — one combined pool across all charcoal types, auto-fed from
-            packing-session variance (see WasteStock/WasteEntry doc comments). Selling
-            from the pool is not wired up yet (coming in a later phase) — this tab is
-            view + physical-count correction only. */}
+            packing-session variance (see WasteStock/WasteEntry doc comments). Waste is
+            sold from Warehouse Sales ("Waste" mode); this tab shows the balance and
+            ledger, corrects it after a physical count, and records disposals. */}
         {tab === 'waste' && (() => {
           const w = wasteSummaryQ.data
           const kgOnHand = w ? parseFloat(w.kgOnHand) : null
@@ -600,6 +607,20 @@ export default function Warehouse() {
               <div className="card" style={{ marginBottom: 14 }}>
                 <div className="card-head">
                   <div className="card-title"><i className="ti ti-recycle" /> Waste pool</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    className="btn"
+                    style={{ fontSize: 12 }}
+                    onClick={() => {
+                      setDisposalKg('')
+                      setDisposalDate(toDateOnlyString(new Date()))
+                      setDisposalNote('')
+                      setDisposalError('')
+                      setDisposalOpen(true)
+                    }}
+                  >
+                    <i className="ti ti-trash" style={{ fontSize: 13 }} /> Record disposal
+                  </button>
                   <button
                     className="btn primary"
                     style={{ fontSize: 12 }}
@@ -612,6 +633,7 @@ export default function Warehouse() {
                   >
                     <i className="ti ti-scale" style={{ fontSize: 13 }} /> Correct balance
                   </button>
+                  </div>
                 </div>
                 <div style={{ padding: '18px 20px' }}>
                   <div style={{ fontSize: 11, color: 'var(--text2)', fontWeight: 500, marginBottom: 4 }}>KG ON HAND</div>
@@ -659,12 +681,17 @@ export default function Warehouse() {
                   const isOut = kg < 0
                   const typeLabel =
                     e.type === 'packing_variance' ? 'Collected from packing'
-                    : e.type === 'sale' ? 'Sold'
+                    : e.type === 'sale' ? (kg > 0 ? 'Sale cancelled — returned' : 'Sold')
                     : e.type === 'disposal' ? 'Disposed'
                     : 'Physical-count correction'
+                  // Sales show who bought it; disposals and cancelled-sale returns show their note.
                   const sourceLabel = e.session
                     ? `Session ${new Date(e.session.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}${e.session.workerEntity ? ` · ${e.session.workerEntity.name}` : ''}`
-                    : e.adjustment?.reason ?? null
+                    : e.invoice
+                      ? `${e.invoice.displayId ?? 'Invoice'} · ${e.invoice.client.name}`
+                      : e.stockExit?.recipient
+                        ? e.stockExit.recipient
+                        : e.adjustment?.reason ?? e.note ?? null
                   return (
                     <div key={e.id} className="adj-row">
                       <div className="adj-icon" style={{ background: isOut ? 'var(--red-bg)' : 'var(--accent-bg)' }}>
@@ -1618,6 +1645,80 @@ export default function Warehouse() {
                 >
                   <i className="ti ti-check" style={{ fontSize: 13 }} />
                   {createAdj.isPending ? 'Saving…' : 'Save correction'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Record waste disposal modal — waste thrown away rather than sold.
+          POST /waste/disposals; the server rejects more kg than the pool holds. */}
+      {disposalOpen && (() => {
+        const kgOnHand = wasteSummaryQ.data ? parseFloat(wasteSummaryQ.data.kgOnHand) : 0
+        const kgNum = parseFloat(disposalKg)
+        const over = !isNaN(kgNum) && kgNum > kgOnHand
+        return (
+          <div className="modal-overlay open" onClick={() => setDisposalOpen(false)}>
+            <div className="modal" style={{ width: 460 }} onClick={e => e.stopPropagation()} role="dialog" aria-label="Record waste disposal">
+              <div className="modal-head">
+                <span className="modal-title">Record waste disposal</span>
+                <button className="panel-close" aria-label="Close" onClick={() => setDisposalOpen(false)}><i className="ti ti-x" /></button>
+              </div>
+              <div className="modal-body">
+                <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '10px 14px', fontSize: 12, fontFamily: "'IBM Plex Mono',monospace", marginBottom: 14 }}>
+                  In the pool now: <strong>{kgOnHand.toLocaleString()} kg</strong>
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="disposal-kg">Kg thrown away</label>
+                  <input
+                    id="disposal-kg"
+                    className="form-input"
+                    type="number" min="0" step="0.1" placeholder="0"
+                    value={disposalKg}
+                    onChange={e => setDisposalKg(e.target.value)}
+                    style={{ fontFamily: "'IBM Plex Mono',monospace", ...(over ? { borderColor: 'var(--red)', color: 'var(--red)' } : {}) }}
+                  />
+                  {over && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--red)' }}>Only {kgOnHand.toLocaleString()} kg in the pool</div>}
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="disposal-date">Date</label>
+                  <input id="disposal-date" className="form-input" type="date" value={disposalDate} onChange={e => setDisposalDate(e.target.value)} />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" htmlFor="disposal-note">Reason (optional)</label>
+                  <input
+                    id="disposal-note"
+                    className="form-input"
+                    type="text"
+                    placeholder="e.g. wet dust, not sellable"
+                    value={disposalNote}
+                    onChange={e => setDisposalNote(e.target.value)}
+                  />
+                </div>
+                {disposalError && <div style={{ marginTop: 10, fontSize: 12, color: 'var(--red)' }}>{disposalError}</div>}
+              </div>
+              <div className="modal-footer">
+                <button className="btn" onClick={() => setDisposalOpen(false)}>Cancel</button>
+                <button
+                  className="btn primary"
+                  disabled={createDisposal.isPending}
+                  onClick={() => {
+                    if (isNaN(kgNum) || kgNum <= 0) { setDisposalError('Enter the kg thrown away'); return }
+                    if (over) { setDisposalError(`Only ${kgOnHand.toLocaleString()} kg in the pool`); return }
+                    if (!disposalDate) { setDisposalError('Pick a date'); return }
+                    setDisposalError('')
+                    createDisposal.mutate(
+                      { kg: kgNum.toFixed(3), date: disposalDate, ...(disposalNote.trim() ? { note: disposalNote.trim() } : {}) },
+                      {
+                        onSuccess: () => { setDisposalOpen(false); showToast('Disposal recorded') },
+                        onError: (err: any) => setDisposalError(err?.error ?? err?.message ?? 'Failed to save'),
+                      },
+                    )
+                  }}
+                >
+                  <i className="ti ti-check" style={{ fontSize: 13 }} />
+                  {createDisposal.isPending ? 'Saving…' : 'Record disposal'}
                 </button>
               </div>
             </div>

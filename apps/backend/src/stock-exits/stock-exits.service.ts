@@ -14,6 +14,7 @@ import Decimal from 'decimal.js';
 import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { UsersService } from '../users/users.service';
 import { SettingsService } from '../settings/settings.service';
+import { drawFromWastePool, WASTE_CHARCOAL_TYPE, WASTE_GRADE } from '../common/inventory/waste-pool';
 
 // SPEC.md §3.4 — Worker: "Log non-sale exits (samples, internal use)" and
 // "Cannot see: prices, costs, client information". Workers are role-gated
@@ -44,6 +45,8 @@ export function computeStockExitFingerprint(dto: CreateStockExitDto): string {
     currency: dto.currency ?? null,
     collectedById: dto.collectedById ?? null,
     collectedBy: dto.collectedById ? null : (dto.collectedBy ?? null),
+    // Only present for waste-pool sales, so every existing exit's fingerprint is unchanged.
+    ...(dto.fromWastePool ? { fromWastePool: true } : {}),
   });
   return createHash('sha256').update(canonical).digest('hex');
 }
@@ -215,6 +218,8 @@ export class StockExitsService {
         packedStock: { include: { lot: { select: { id: true, charcoalType: true, grade: true } } } },
         loggedBy: { select: { id: true, name: true } },
         client: { select: { id: true, name: true } },
+        // Present only on a waste-pool sale (see drawFromWastePool).
+        wasteEntry: { select: { id: true } },
         invoice: {
           select: {
             id: true,
@@ -407,15 +412,17 @@ export class StockExitsService {
         }
 
         // Standalone (non-invoiced) exit — exactly one line, from its own fields.
-        const isRaw = !!rep.lotId;
+        // A waste-pool sale is a by-kg line with no lot (see drawFromWastePool).
+        const isWaste = !!rep.wasteEntry;
+        const isRaw = !!rep.lotId || isWaste;
         const line = isRaw
           ? {
               saleUnit: 'KG' as const,
               bagTypeId: null, bagTypeName: null, qty: null,
               kgQuantity: rep.kgQuantity?.toString() ?? null,
               pricePerBag: null, pricePerKg: null,
-              charcoalType: rep.lot?.charcoalType ?? null,
-              grade: rep.lot?.grade ?? null,
+              charcoalType: isWaste ? WASTE_CHARCOAL_TYPE : (rep.lot?.charcoalType ?? null),
+              grade: isWaste ? WASTE_GRADE : (rep.lot?.grade ?? null),
             }
           : {
               saleUnit: 'BAG' as const,
@@ -761,8 +768,9 @@ export class StockExitsService {
           SELECT COALESCE("invoiceId", "id") AS key FROM "stock_exits" WHERE "clientId" = ${clientId} GROUP BY key
         ) t
       `),
+      // By-kg exits: raw-lot sales plus waste-pool sales (no lot, linked wasteEntry).
       this.prisma.stockExit.aggregate({
-        where: { clientId, lotId: { not: null } },
+        where: { clientId, OR: [{ lotId: { not: null } }, { wasteEntry: { isNot: null } }] },
         _sum: { kgQuantity: true },
       }),
       this.prisma.stockExit.groupBy({
@@ -785,6 +793,7 @@ export class StockExitsService {
           lotId: true,
           bagTypeId: true,
           lot: { select: { charcoalType: true, grade: true } },
+          wasteEntry: { select: { id: true } },
           invoice: { select: { lines: true, currency: true } },
         },
       }),
@@ -817,13 +826,23 @@ export class StockExitsService {
     // exitDisplayAmountUsd(), ported (not reinvented).
     const unresolvedAmount = unresolvedExits.reduce((sum, exit) => {
       const lines: any[] = (exit.invoice?.lines as any[]) ?? [];
+      const isWaste = !!exit.wasteEntry;
+      if (isWaste) {
+        // One waste exit carries ALL of the sale's waste lines (one pool draw), so
+        // its amount is the sum of those lines, not one line's price × total kg.
+        const wasteAmt = lines
+          .filter((l) => l.saleUnit === 'KG' && l.charcoalType === WASTE_CHARCOAL_TYPE)
+          .reduce((s, l) => s.plus(new Decimal(toNum(l.kgQuantity)).mul(toNum(l.pricePerKg))), new Decimal(0));
+        return sum.plus(toUsd(wasteAmt, exit.invoice?.currency ?? 'USD'));
+      }
+      const byKg = !!exit.lotId;
       const line = exit.lotId
         ? (lines.find((l) => l.saleUnit === 'KG' && exit.lot && l.description === `${exit.lot.charcoalType} Grade ${exit.lot.grade}`)
           ?? lines.find((l) => l.saleUnit === 'KG'))
         : lines.find((l) => l.bagTypeId === exit.bagTypeId);
       if (!line) return sum;
-      const qty = exit.lotId ? new Decimal(toNum(exit.kgQuantity)) : new Decimal(exit.quantity ?? 0);
-      const unitPrice = new Decimal(toNum(exit.lotId ? line.pricePerKg : line.pricePerBag));
+      const qty = byKg ? new Decimal(toNum(exit.kgQuantity)) : new Decimal(exit.quantity ?? 0);
+      const unitPrice = new Decimal(toNum(byKg ? line.pricePerKg : line.pricePerBag));
       const amt = qty.mul(unitPrice);
       return sum.plus(toUsd(amt, exit.invoice?.currency ?? 'USD'));
     }, new Decimal(0));
@@ -973,9 +992,32 @@ export class StockExitsService {
         ...collectorFields,
       };
 
-      // ── MODE A: Raw lot (by-kg sale) ──────────────────────────────────────
+      // ── MODE W: Waste pool (by-kg sale from the combined waste pile) ───────
       let exit: any;
-      if (dto.lotId && dto.kgQuantity) {
+      if (dto.fromWastePool) {
+        if (dto.exitType !== 'walk_in' || dto.lotId || dto.packedStockId || !dto.kgQuantity) {
+          throw new BadRequestException({
+            error: 'A waste-pool sale needs exitType=walk_in and kgQuantity, with no lotId or packedStockId',
+            code: 'VALIDATION_ERROR',
+          });
+        }
+        exit = await tx.stockExit.create({
+          data: { ...commonData, kgQuantity: new Decimal(dto.kgQuantity).toFixed(3) },
+          include: { loggedBy: { select: { id: true, name: true } } },
+        });
+        // Locks the pool, rejects WASTE_POOL_INSUFFICIENT (rolling this exit back),
+        // and writes the linked negative WasteEntry.
+        await drawFromWastePool(tx, {
+          type: 'sale',
+          kg: new Decimal(dto.kgQuantity),
+          date: new Date(dto.date),
+          createdById: user.id,
+          stockExitId: exit.id,
+          note: dto.recipient ? `Sold to ${dto.recipient}` : 'Walk-in sale',
+        });
+      }
+      // ── MODE A: Raw lot (by-kg sale) ──────────────────────────────────────
+      else if (dto.lotId && dto.kgQuantity) {
         // Lock the lot row before reading kgRemaining — mirrors the FOR UPDATE
         // pattern in payments.service.ts / payment-allocation.service.ts. Two
         // concurrent exits against the same lot now serialize on this lock:

@@ -317,13 +317,12 @@ export interface UpdateContainerExpenseDto {
  * combined balance (not split by charcoal type) fed automatically by packing-session
  * variance and corrected only by a waste adjustment (physical count) — see
  * WasteEntry/WasteStock's doc comments in schema.prisma for the full ledger design.
- * No $ figure yet — selling from the pool isn't wired up (coming in a later phase);
- * an always-zero USD field would misrepresent functionality that doesn't exist yet.
+ * kg only — sale money lives on the invoice / stock exit of each waste sale.
  */
 export interface WasteSummary {
   kgOnHand: string // Decimal — WasteStock.kgOnHand
   collectedThisMonthKg: string // Decimal — Σ packing_variance entries this month
-  soldThisMonthKg: string // Decimal — always '0.000' until selling from the pool exists
+  soldThisMonthKg: string // Decimal — net kg sold this month (cancelled sales add back)
   disposedThisMonthKg: string // Decimal
   lastAdjustmentDate: string | null // ISO date of the most recent physical-count correction
 }
@@ -339,6 +338,10 @@ export interface WasteEntry {
   session: { id: string; date: string; workerEntity: { id: string; name: string } | null } | null
   stockExitId: string | null
   invoiceId: string | null
+  /** The sale's stock exit (every waste sale has one). Optional: older API responses omit it. */
+  stockExit?: { id: string; recipient: string | null; amount: string | null; currency: string } | null
+  /** The invoice, when the waste was sold to a registered client. */
+  invoice?: { id: string; displayId: string | null; client: { id: string; name: string } } | null
   adjustmentId: string | null
   adjustment: { id: string; reason: string; status: string } | null
   note: string | null

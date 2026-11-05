@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import Topbar from '../components/layout/Topbar'
 import { useBagTypes } from '../hooks/useBagTypes'
-import { useAvailableStockLots, usePackedStockSummary, useGroupedStockExits, useCreateStockExit, useUpdateStockExit, useWalkInSummary, useWarehouseCashSummary, useOnAccountCount, useFifoDraw } from '../hooks/useWarehouse'
+import { useAvailableStockLots, usePackedStockSummary, useGroupedStockExits, useCreateStockExit, useUpdateStockExit, useWalkInSummary, useWarehouseCashSummary, useOnAccountCount, useFifoDraw, useWasteSummary } from '../hooks/useWarehouse'
 import { useClients } from '../hooks/useClients'
 import { useCashReceivers } from '../hooks/useUsers'
 import { useCreateWalkInSale } from '../hooks/useWalkInSales'
@@ -9,7 +9,7 @@ import { useRate } from '../context/RateContext'
 import { roundDp } from '../lib/money'
 import { toDateOnlyString, currentWeekToDateRange } from '../lib/date'
 
-type SaleMode = 'packed' | 'kg'
+type SaleMode = 'packed' | 'kg' | 'waste'
 type SaleTab = 'entry' | 'log'
 
 interface PackedLine {
@@ -113,6 +113,10 @@ export default function WarehouseSales() {
   const createExit = useCreateStockExit()
   const createWalkInSale = useCreateWalkInSale()
   const fifoDraw = useFifoDraw()
+  // Waste pool (packing offcuts/sweepings from every lot, one combined pile) —
+  // the source for the "Waste" sale mode. Server re-checks availability.
+  const wasteSummaryQ = useWasteSummary()
+  const wasteOnHandKg = parseFloat(wasteSummaryQ.data?.kgOnHand ?? '0') || 0
 
   const bagTypes = bagTypesQ.data ?? []
   const activeLots = lotsQ.data ?? []
@@ -276,7 +280,7 @@ export default function WarehouseSales() {
     if (lines.length > 1) return `${lines.length} items`
     const l = lines[0]
     return l.saleUnit === 'KG'
-      ? `${(parseFloat(l.kgQuantity ?? '0') || 0).toFixed(1)} kg raw`
+      ? `${(parseFloat(l.kgQuantity ?? '0') || 0).toFixed(1)} kg ${l.charcoalType === 'Waste' ? 'waste' : 'raw'}`
       : `${l.qty ?? 0} × ${l.bagTypeName ?? '—'}`
   }
 
@@ -301,14 +305,16 @@ export default function WarehouseSales() {
     totalUSD = roundDp(totalUSD, 2)
     breakdown = parts.length ? parts.join(' · ') : 'Add bag, qty and price'
   } else {
+    // By kg and Waste share the weight / price / currency inputs.
     const w = parseFloat(kgWeight) || 0
     const p = parseFloat(kgPrice) || 0
     const sub = roundDp(w * p, 2)
     totalUSD = kgCurr === 'LBP' ? roundDp(rawRate > 0 ? sub / rawRate : 0, 2) : sub
     const lot = activeLots.find(l => l.id === kgLotId)
+    const source = mode === 'waste' ? 'waste charcoal' : `${lot?.charcoalType || ''} Grade ${lot?.grade || ''}`
     breakdown = w > 0 && p > 0
-      ? `${w} kg × ${kgCurr === 'USD' ? '$' : ''}${p}${kgCurr === 'LBP' ? ' LL' : ''}/kg · ${lot?.charcoalType || ''} Grade ${lot?.grade || ''}`
-      : 'Pick a lot, enter weight and price'
+      ? `${w} kg × ${kgCurr === 'USD' ? '$' : ''}${p}${kgCurr === 'LBP' ? ' LL' : ''}/kg · ${source}`
+      : mode === 'waste' ? 'Enter weight and price' : 'Pick a lot, enter weight and price'
   }
 
   const usdNum = parseFloat(rcvUsd) || 0
@@ -551,6 +557,67 @@ export default function WarehouseSales() {
         if (remaining > 0) {
           showToast(`Could not fulfill full quantity — only ${qty - remaining} bags deducted`)
         }
+      }
+    } else if (mode === 'waste') {
+      // Waste: sold by kg from the combined waste pool (no lot). The server
+      // re-checks the pool under a lock and rejects WASTE_POOL_INSUFFICIENT.
+      if (!kgWeight || !kgPrice) { showToast('Enter weight and price/kg'); return }
+      const kgNum = parseFloat(kgWeight)
+      if (!(kgNum > 0)) { showToast('Enter a weight greater than zero'); return }
+      if (kgNum > wasteOnHandKg) {
+        showToast(`Only ${wasteOnHandKg.toLocaleString()} kg of waste available`)
+        return
+      }
+
+      if (isRegisteredClient) {
+        const mappedMethod = PAY_METHOD_MAP[payMethod]
+        try {
+          await createWalkInSale.mutateAsync({
+            clientId: selectedBuyerId!,
+            date: saleDate,
+            wasteLines: [{
+              kgQuantity: kgNum.toFixed(3),
+              pricePerKg: (parseFloat(kgPrice) || 0).toFixed(2),
+              currency:   kgCurr,
+            }],
+            ...(usdNum > 0 ? { receivedUsd: usdNum.toFixed(2) } : {}),
+            ...(lbpNum > 0 ? { receivedLbp: lbpNum.toFixed(2) } : {}),
+            method:    mappedMethod ?? 'cash',
+            ...(receiverId ? { receiverId } : {}),
+            recipient: buyerName,
+            notes:     notes || undefined,
+            idempotencyKey: saleIdempotencyKey,
+          })
+        } catch (err: any) {
+          showToast(err?.error ?? err?.response?.data?.error ?? 'Failed to record sale')
+          return
+        }
+        showToast(`Sale recorded · invoiced ${buyerName}`)
+        setBuyerInput(''); setSelectedBuyerId(null)
+        setRcvUsd(''); setRcvLbp('')
+        setKgWeight(''); setKgPrice('')
+        setNotes('')
+        setSaleIdempotencyKey(crypto.randomUUID())
+        return
+      }
+
+      // Anonymous waste sale — no invoice; amount recorded directly on the exit.
+      try {
+        const kgAmt = roundDp(kgNum * (parseFloat(kgPrice) || 0) * (kgCurr === 'LBP' ? (rawRate > 0 ? 1 / rawRate : 0) : 1), 2)
+        await createExit.mutateAsync({
+          fromWastePool: true,
+          kgQuantity: kgNum,
+          exitType:  'walk_in',
+          date:      saleDate,
+          recipient: buyerName,
+          reason:    notes || undefined,
+          ...(kgAmt > 0 ? { amount: kgAmt, currency: kgCurr } : {}),
+          ...(receiverId ? { collectedById: receiverId } : {}),
+          idempotencyKey: saleIdempotencyKey,
+        })
+      } catch (err: any) {
+        showToast(err?.error ?? 'Failed to record sale')
+        return
       }
     } else {
       // By-kg: validate inputs and lot availability first (common to all paths).
@@ -809,11 +876,19 @@ export default function WarehouseSales() {
                     >
                       <i className="ti ti-weight" /> By kilogram
                     </div>
+                    <div
+                      className={`mode-opt${mode === 'waste' ? ' active' : ''}`}
+                      onClick={() => setMode('waste')}
+                    >
+                      <i className="ti ti-recycle" /> Waste
+                    </div>
                   </div>
                   <p style={{ fontSize: 11.5, color: 'var(--text3)', margin: '8px 0 14px', fontFamily: "'IBM Plex Mono', monospace" }}>
                     {mode === 'packed'
                       ? 'Packed: each bag size has its own price & currency'
-                      : 'By kg: pick the charcoal lot (type · supplier · grade) then enter weight × price/kg'}
+                      : mode === 'waste'
+                        ? 'Waste: sold by kg from the waste pile collected during packing (all lots combined)'
+                        : 'By kg: pick the charcoal lot (type · supplier · grade) then enter weight × price/kg'}
                   </p>
 
                   {/* Step 3a: Packed bags */}
@@ -976,6 +1051,65 @@ export default function WarehouseSales() {
                       </div>
                     </div>
                   )}
+
+                  {/* Step 3c: Waste pool */}
+                  {mode === 'waste' && (() => {
+                    const kgNum = parseFloat(kgWeight) || 0
+                    const overKg = kgNum > wasteOnHandKg
+                    const monoRight = { fontFamily: "'IBM Plex Mono', monospace", textAlign: 'right' as const, fontWeight: 600 }
+                    return (
+                    <div>
+                      <div className="section-title"><span className="step">3</span> Waste sold by kg</div>
+                      <div className="kg-block">
+                        <div style={{ marginBottom: 12, fontSize: 12.5, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 6 }} data-testid="waste-available">
+                          <i className="ti ti-recycle" style={{ fontSize: 15 }} />
+                          {wasteSummaryQ.isLoading
+                            ? 'Loading waste pool…'
+                            : <>Waste pool: <strong style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{wasteOnHandKg.toLocaleString()} kg</strong> available</>}
+                        </div>
+                        <div className="kg-price">
+                          <div>
+                            <label className="form-label" style={{ fontSize: 10.5 }} htmlFor="waste-kg">
+                              Weight (kg){wasteOnHandKg > 0 ? ` — max ${wasteOnHandKg.toLocaleString()} kg` : ''}
+                            </label>
+                            <input
+                              id="waste-kg"
+                              className="form-input"
+                              style={{ ...monoRight, ...(overKg ? { borderColor: 'var(--red)', color: 'var(--red)' } : {}) }}
+                              type="number" min="0" step="0.1" placeholder="0"
+                              max={wasteOnHandKg > 0 ? wasteOnHandKg : undefined}
+                              value={kgWeight}
+                              onChange={e => setKgWeight(e.target.value)}
+                            />
+                            {overKg && (
+                              <div style={{ fontSize: 10, color: 'var(--red)', fontFamily: "'IBM Plex Mono',monospace", marginTop: 2 }}>
+                                only {wasteOnHandKg.toLocaleString()} kg available
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <label className="form-label" style={{ fontSize: 10.5 }} htmlFor="waste-price">Price / kg</label>
+                            <input
+                              id="waste-price"
+                              className="form-input"
+                              style={monoRight}
+                              type="number" min="0" step="0.01" placeholder="0.00"
+                              value={kgPrice}
+                              onChange={e => setKgPrice(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="form-label" style={{ fontSize: 10.5 }} htmlFor="waste-curr">Currency</label>
+                            <select id="waste-curr" className="form-input" value={kgCurr} onChange={e => setKgCurr(e.target.value as 'USD' | 'LBP')}>
+                              <option>USD</option>
+                              <option>LBP</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    )
+                  })()}
 
                   {/* Total preview */}
                   <div className="total-preview" style={{ marginTop: 14 }}>

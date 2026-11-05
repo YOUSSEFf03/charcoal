@@ -61,6 +61,26 @@ export class WalkInKgLineDto {
   @IsEnum(Currency) currency: Currency;
 }
 
+/**
+ * One waste-charcoal line in a walk-in sale. Draws from the combined waste pool
+ * (WasteStock — packing offcuts/sweepings from every lot), never from a lot. The
+ * buyer's price is captured in its own currency; the service converts to the
+ * client's currency for the invoice.
+ */
+export class WalkInWasteLineDto {
+  @ApiProperty({ description: 'Quantity in kg drawn from the waste pool (decimal string, > 0)', example: '120.000' })
+  @IsNumberString() @IsNotEmpty() kgQuantity: string;
+
+  @ApiProperty({ description: 'Price per kg in the line currency (decimal string)', example: '0.40' })
+  @IsNumberString() @IsNotEmpty() pricePerKg: string;
+
+  @ApiProperty({ description: 'Currency the pricePerKg is quoted in', enum: Currency })
+  @IsEnum(Currency) currency: Currency;
+
+  @ApiProperty({ description: 'Invoice line description (defaults to "Waste charcoal")', required: false, example: 'Waste charcoal' })
+  @IsOptional() @IsString() description?: string;
+}
+
 export class CreateWalkInSaleDto {
   @ApiProperty({ description: 'Registered client UUID. Anonymous walk-ins use POST /stock-exits instead.' })
   @IsUUID('all') clientId: string;
@@ -85,6 +105,15 @@ export class CreateWalkInSaleDto {
   @IsOptional()
   @IsArray() @ValidateNested({ each: true }) @Type(() => WalkInKgLineDto)
   kgLines?: WalkInKgLineDto[];
+
+  /**
+   * Waste-pool lines sold. Optional; at least one of bags / kgLines / wasteLines
+   * must be non-empty — enforced in the service.
+   */
+  @ApiProperty({ description: 'Waste-pool lines sold (optional)', type: [WalkInWasteLineDto], required: false })
+  @IsOptional()
+  @IsArray() @ValidateNested({ each: true }) @Type(() => WalkInWasteLineDto)
+  wasteLines?: WalkInWasteLineDto[];
 
   @ApiProperty({ description: 'Amount received in USD (decimal string)', required: false, example: '50.00' })
   @IsOptional() @IsNumberString() receivedUsd?: string;

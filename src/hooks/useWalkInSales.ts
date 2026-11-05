@@ -24,14 +24,26 @@ export interface WalkInKgLine {
 }
 
 /**
+ * One waste-charcoal line — drawn from the combined waste pool (packing
+ * offcuts/sweepings), not from a lot. Invoiced as a KG line.
+ */
+export interface WalkInWasteLine {
+  kgQuantity: string    // decimal string, e.g. "120.000"
+  pricePerKg: string    // decimal string
+  currency: 'USD' | 'LBP'
+  description?: string  // defaults to "Waste charcoal" on the invoice
+}
+
+/**
  * Payload for POST /walk-in-sales.
- * At least one of `bags` or `kgLines` must be non-empty.
+ * At least one of `bags`, `kgLines` or `wasteLines` must be non-empty.
  */
 export interface CreateWalkInSaleDto {
   clientId: string
   date: string
   bags?: WalkInBagLine[]
   kgLines?: WalkInKgLine[]
+  wasteLines?: WalkInWasteLine[]
   receivedUsd?: string
   receivedLbp?: string
   method: 'cash' | 'whish' | 'omt' | 'bank_transfer' | 'cheque'
@@ -79,6 +91,8 @@ export function useCreateWalkInSale() {
       qc.invalidateQueries({ queryKey: ['warehouse', 'walk-in-summary'] })
       // Invalidate lot data — kgRemaining changes for KG sales.
       qc.invalidateQueries({ queryKey: ['stock-lots'] })
+      // Waste-pool balance/ledger change for waste sales.
+      qc.invalidateQueries({ queryKey: ['waste'] })
       if (vars.clientId) {
         qc.invalidateQueries({ queryKey: ['clients', vars.clientId, 'balance'] })
       }

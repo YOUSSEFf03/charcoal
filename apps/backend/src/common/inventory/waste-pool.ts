@@ -90,3 +90,90 @@ export async function syncPackingVarianceWasteEntry(
     });
   }
 }
+
+/** Display labels stamped on waste-sale invoice lines and used by reports. */
+export const WASTE_CHARCOAL_TYPE = 'Waste';
+export const WASTE_GRADE = 'Mixed';
+
+/**
+ * Take `kg` OUT of the waste pool (a sale or a disposal) inside the caller's
+ * transaction: locks the singleton row FOR UPDATE (same lock order as
+ * syncPackingVarianceWasteEntry), rejects with 400 WASTE_POOL_INSUFFICIENT
+ * instead of ever driving kgOnHand negative, decrements the pool and writes the
+ * matching NEGATIVE WasteEntry — so Σ(WasteEntry.kg) keeps equalling kgOnHand.
+ *
+ * A waste SALE always passes `stockExitId` (every waste sale has one StockExit so
+ * it shows in the warehouse sales history); an invoiced sale also passes
+ * `invoiceId`. "Exit has a wasteEntry" is how reports recognise a waste exit.
+ */
+export async function drawFromWastePool(
+  tx: Prisma.TransactionClient,
+  params: {
+    type: 'sale' | 'disposal';
+    kg: Decimal;
+    date: Date;
+    createdById: string;
+    stockExitId?: string;
+    invoiceId?: string;
+    note?: string;
+  },
+) {
+  const kg = new Decimal(params.kg);
+  if (!kg.gt(0)) {
+    throw new BadRequestException({
+      message: `Waste kg must be greater than zero (got ${kg.toFixed(3)})`,
+      error: `Waste kg must be greater than zero (got ${kg.toFixed(3)})`,
+      code: 'CONSTRAINT_VIOLATION',
+    });
+  }
+
+  await tx.$queryRaw(Prisma.sql`SELECT id FROM "waste_stock" WHERE id = ${WASTE_STOCK_ID} FOR UPDATE`);
+  const stock = await tx.wasteStock.findUnique({ where: { id: WASTE_STOCK_ID } });
+  const kgOnHand = new Decimal(stock?.kgOnHand.toString() ?? '0');
+  if (kg.gt(kgOnHand)) {
+    throw new BadRequestException({
+      message: `Not enough waste in the pool — available: ${kgOnHand.toFixed(3)} kg, requested: ${kg.toFixed(3)} kg`,
+      error: `Not enough waste in the pool — available: ${kgOnHand.toFixed(3)} kg, requested: ${kg.toFixed(3)} kg`,
+      code: 'WASTE_POOL_INSUFFICIENT',
+    });
+  }
+
+  await tx.wasteStock.update({
+    where: { id: WASTE_STOCK_ID },
+    data: { kgOnHand: kgOnHand.minus(kg).toFixed(3) },
+  });
+  return tx.wasteEntry.create({
+    data: {
+      type: params.type,
+      kg: kg.negated().toFixed(3),
+      date: params.date,
+      createdById: params.createdById,
+      ...(params.stockExitId ? { stockExitId: params.stockExitId } : {}),
+      ...(params.invoiceId ? { invoiceId: params.invoiceId } : {}),
+      ...(params.note ? { note: params.note } : {}),
+    },
+  });
+}
+
+/**
+ * Put a cancelled waste sale's kg BACK into the pool. The ledger is append-only,
+ * so the original (negative) sale entry is kept and a POSITIVE 'sale' entry
+ * reverses it — Σ(sale entries) is therefore the NET kg sold, which is exactly
+ * what WasteService.getSummary()'s soldThisMonthKg reports.
+ */
+export async function returnSaleToWastePool(
+  tx: Prisma.TransactionClient,
+  params: { kg: Decimal; date: Date; createdById: string; note: string },
+) {
+  const kg = new Decimal(params.kg);
+  if (!kg.gt(0)) return;
+  await tx.$queryRaw(Prisma.sql`SELECT id FROM "waste_stock" WHERE id = ${WASTE_STOCK_ID} FOR UPDATE`);
+  await tx.wasteStock.upsert({
+    where: { id: WASTE_STOCK_ID },
+    create: { id: WASTE_STOCK_ID, kgOnHand: kg.toFixed(3) },
+    update: { kgOnHand: { increment: kg.toFixed(3) } },
+  });
+  await tx.wasteEntry.create({
+    data: { type: 'sale', kg: kg.toFixed(3), date: params.date, createdById: params.createdById, note: params.note },
+  });
+}

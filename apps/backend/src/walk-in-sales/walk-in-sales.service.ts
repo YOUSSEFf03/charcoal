@@ -15,6 +15,10 @@ import { LedgerWriteService } from '../ledger/ledger-write.service';
 import { UsersService } from '../users/users.service';
 import { RECEIVER_REQUIRED_METHODS } from '../payments/payments.service';
 import { CreateWalkInSaleDto } from './dto/create-walk-in-sale.dto';
+import { drawFromWastePool, WASTE_CHARCOAL_TYPE, WASTE_GRADE } from '../common/inventory/waste-pool';
+
+/** Default invoice-line description for a waste-pool line. */
+export const WASTE_LINE_DESCRIPTION = 'Waste charcoal';
 
 /**
  * SHA-256 of the fields that define WHAT is being sold and collected — never
@@ -38,6 +42,12 @@ export function computeSaleFingerprint(dto: CreateWalkInSaleDto): string {
       pricePerKg: k.pricePerKg, currency: k.currency, description: k.description,
     }))
     .sort((a, b) => a.lotId.localeCompare(b.lotId));
+  const wasteLines = (dto.wasteLines ?? [])
+    .map((w) => ({
+      kgQuantity: w.kgQuantity, pricePerKg: w.pricePerKg, currency: w.currency,
+      description: w.description ?? null,
+    }))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 
   const canonical = JSON.stringify({
     clientId: dto.clientId,
@@ -49,6 +59,8 @@ export function computeSaleFingerprint(dto: CreateWalkInSaleDto): string {
     receiverName: dto.receiverId ? null : (dto.receiverName ?? null), // receiverId takes priority (matches create()'s own resolution — see below), so an ignored receiverName must not affect the fingerprint
     bags,
     kgLines,
+    // Only present when waste is sold, so every existing sale's fingerprint is unchanged.
+    ...(wasteLines.length ? { wasteLines } : {}),
   });
   return createHash('sha256').update(canonical).digest('hex');
 }
@@ -171,11 +183,12 @@ export class WalkInSalesService {
 
     const bags    = dto.bags    ?? [];
     const kgLines = dto.kgLines ?? [];
+    const wasteLines = dto.wasteLines ?? [];
 
-    if (bags.length === 0 && kgLines.length === 0) {
+    if (bags.length === 0 && kgLines.length === 0 && wasteLines.length === 0) {
       throw new BadRequestException({
-        message: 'At least one bag line or KG line is required',
-        error: 'At least one bag line or KG line is required',
+        message: 'At least one bag line, KG line or waste line is required',
+        error: 'At least one bag line, KG line or waste line is required',
         code: 'VALIDATION_ERROR',
       });
     }
@@ -234,9 +247,34 @@ export class WalkInSalesService {
       };
     });
 
+    // WASTE lines — sold from the combined waste pool, invoiced as KG lines.
+    const wasteInvoiceLines = wasteLines.map((w) => {
+      const priceInClientCcy = toClientCurrency(new Decimal(w.pricePerKg), w.currency);
+      return {
+        saleUnit:    'KG' as const,
+        kgQuantity:  w.kgQuantity,
+        description: w.description?.trim() || WASTE_LINE_DESCRIPTION,
+        pricePerKg:  priceInClientCcy.toFixed(2),
+      };
+    });
+    // Same positivity rule as KG lines (a non-positive kg would ADD waste to the
+    // pool and produce a negative invoice line) — checked before any write.
+    let wasteKgTotal = new Decimal(0);
+    for (const w of wasteLines) {
+      const kg = new Decimal(w.kgQuantity);
+      if (!kg.gt(0)) {
+        throw new BadRequestException({
+          error: `Waste kgQuantity must be greater than zero (got ${kg.toFixed(3)})`,
+          code: 'CONSTRAINT_VIOLATION',
+        });
+      }
+      wasteKgTotal = wasteKgTotal.plus(kg);
+    }
+
     const { lines: enrichedLines, subtotal } = this.calculator.computeLines([
       ...bagInvoiceLines,
       ...kgInvoiceLines,
+      ...wasteInvoiceLines,
     ]);
     const total = this.calculator.computeTotal(subtotal);
 
@@ -348,10 +386,13 @@ export class WalkInSalesService {
       // is positionally [...bag lines in bags[] order, ...kg lines in kgLines[]
       // order] — exactly matching bagStock/kgStock above, since both are built
       // by iterating the same bags/kgLines arrays in the same order.
+      // Waste lines come last and are stamped 'Waste' / 'Mixed' (one combined pool).
       const linesWithType = enrichedLines.map((line, i) =>
         i < bagStock.length
           ? { ...line, charcoalType: bagStock[i].charcoalType, grade: bagStock[i].grade }
-          : { ...line, charcoalType: kgStock[i - bagStock.length].charcoalType, grade: kgStock[i - bagStock.length].grade },
+          : i < bagStock.length + kgStock.length
+            ? { ...line, charcoalType: kgStock[i - bagStock.length].charcoalType, grade: kgStock[i - bagStock.length].grade }
+            : { ...line, charcoalType: WASTE_CHARCOAL_TYPE, grade: WASTE_GRADE },
       );
 
       // ── 2) Create the issued invoice — every line has already been validated,
@@ -424,6 +465,35 @@ export class WalkInSalesService {
             ...(dto.recipient ? { recipient: dto.recipient } : {}),
             ...(dto.notes     ? { reason:    dto.notes     } : {}),
           },
+        });
+      }
+
+      // ── 4b) Process WASTE lines — one StockExit + one pool draw for the whole
+      // sale (the pool is a single combined pile, so several waste lines collapse
+      // into one movement). drawFromWastePool locks the pool row and rejects
+      // WASTE_POOL_INSUFFICIENT, rolling back the invoice/exits above with it.
+      if (wasteKgTotal.gt(0)) {
+        const wasteExit = await tx.stockExit.create({
+          data: {
+            kgQuantity: wasteKgTotal.toFixed(3),
+            exitType:   'walk_in',
+            date:       new Date(dto.date),
+            clientId:   dto.clientId,
+            invoiceId:  invoice.id,
+            loggedById: user.id,
+            amount:     null, // priced on the invoice — keeps it out of the P&L walk-in aggregate
+            ...(dto.recipient ? { recipient: dto.recipient } : {}),
+            ...(dto.notes     ? { reason:    dto.notes     } : {}),
+          },
+        });
+        await drawFromWastePool(tx, {
+          type: 'sale',
+          kg: wasteKgTotal,
+          date: new Date(dto.date),
+          createdById: user.id,
+          stockExitId: wasteExit.id,
+          invoiceId: invoice.id,
+          note: `Sold to ${client.name}`,
         });
       }
 

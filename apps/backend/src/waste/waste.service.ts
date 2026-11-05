@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, WasteEntryType } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
-import { WASTE_STOCK_ID } from '../common/inventory/waste-pool';
+import { drawFromWastePool, WASTE_STOCK_ID } from '../common/inventory/waste-pool';
+import { CreateWasteDisposalDto } from './dto/create-waste-disposal.dto';
 
 @Injectable()
 export class WasteService {
@@ -11,14 +12,12 @@ export class WasteService {
   /**
    * Waste-pool balance + this-month activity.
    *
-   * Phase 1/2 (current): the pool is fed only by packing-session variance
-   * (syncPackingVarianceWasteEntry, see packing-sessions.service.ts) and corrected only
-   * by waste adjustments (stock-adjustments.service.ts, adjustmentType='waste'). Selling
-   * from the pool (Phase 3 — WalkInSalesService/StockExitsService) is not wired yet, so
-   * soldThisMonthKg is always 0 today; the query is written against type='sale' now so
-   * it needs no revisiting once that phase lands. No $ figure is returned yet — there is
-   * nowhere a dollar amount is captured for a waste sale until Phase 3 exists; returning
-   * an always-zero USD field now would misrepresent functionality that isn't built.
+   * The pool is fed by packing-session variance (syncPackingVarianceWasteEntry), corrected
+   * by waste adjustments (stock-adjustments.service.ts, adjustmentType='waste'), drawn by
+   * waste sales (WalkInSalesService wasteLines / StockExitsService fromWastePool — both via
+   * drawFromWastePool) and by disposals (createDisposal below). soldThisMonthKg is NET of
+   * cancelled sales (a cancellation writes a reversing positive 'sale' entry). Sale money
+   * lives on the invoice / stock exit, not here — this summary is kg only.
    */
   async getSummary() {
     const monthStart = startOfMonthUtc(new Date());
@@ -56,8 +55,7 @@ export class WasteService {
   /**
    * Paginated waste-pool ledger (append-only — see WasteEntry's doc comment).
    * Joins just enough to let the UI link each entry back to its source (packing
-   * session, adjustment) — stockExit/invoice joins return null today since Phase 3
-   * (selling from the pool) isn't wired yet, same as getSummary() above.
+   * session, adjustment, the sale's stock exit / invoice).
    */
   async getLedger(
     page: number,
@@ -89,6 +87,8 @@ export class WasteService {
         include: {
           session: { select: { id: true, date: true, workerEntity: { select: { id: true, name: true } } } },
           adjustment: { select: { id: true, reason: true, status: true } },
+          stockExit: { select: { id: true, recipient: true, amount: true, currency: true } },
+          invoice: { select: { id: true, displayId: true, client: { select: { id: true, name: true } } } },
           createdBy: { select: { id: true, name: true } },
         },
       }),
@@ -96,6 +96,25 @@ export class WasteService {
     ]);
 
     return { data, total, page, limit };
+  }
+
+  /**
+   * Record waste thrown away (not sold): one negative 'disposal' WasteEntry and the
+   * matching pool decrement, atomically. Rejects WASTE_POOL_INSUFFICIENT rather than
+   * driving the pool negative (see drawFromWastePool).
+   */
+  async createDisposal(dto: CreateWasteDisposalDto, clerkUserId: string) {
+    const user = await this.prisma.user.findUnique({ where: { clerkId: clerkUserId } });
+    if (!user) throw new NotFoundException({ error: 'User not found', code: 'NOT_FOUND' });
+    return this.prisma.$transaction((tx) =>
+      drawFromWastePool(tx, {
+        type: 'disposal',
+        kg: new Decimal(dto.kg),
+        date: new Date(dto.date),
+        createdById: user.id,
+        note: dto.note?.trim() || undefined,
+      }),
+    );
   }
 }
 

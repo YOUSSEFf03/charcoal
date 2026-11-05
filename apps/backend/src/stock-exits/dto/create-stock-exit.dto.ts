@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsInt,
@@ -121,4 +122,14 @@ export class CreateStockExitDto {
   @IsOptional()
   @IsUUID('all')
   idempotencyKey?: string;
+
+  /**
+   * Waste-pool mode: sell `kgQuantity` kg from the combined waste pool
+   * (WasteStock) instead of a lot or packed stock. Only valid for
+   * exitType='walk_in' with no lotId/packedStockId — see StockExitsService.create().
+   */
+  @ApiProperty({ description: 'Sell kgQuantity from the waste pool (walk_in only; no lotId/packedStockId)', required: false })
+  @IsOptional()
+  @IsBoolean()
+  fromWastePool?: boolean;
 }

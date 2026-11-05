@@ -1,9 +1,12 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { WasteEntryType } from '@prisma/client';
 import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { WasteService } from './waste.service';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { ClerkUser } from '../auth/clerk.strategy';
+import { CreateWasteDisposalDto } from './dto/create-waste-disposal.dto';
 
 @ApiTags('waste')
 @ApiBearerAuth()
@@ -31,5 +34,14 @@ export class WasteController {
     @Query('dateTo') dateTo?: string,
   ) {
     return this.wasteService.getLedger(page, limit, type, dateFrom, dateTo);
+  }
+
+  @ApiOperation({ summary: 'Record waste thrown away (removes kg from the waste pool)' })
+  @ApiResponse({ status: 201, description: 'Disposal recorded' })
+  @ApiResponse({ status: 400, description: 'WASTE_POOL_INSUFFICIENT — not enough waste in the pool' })
+  @Post('disposals')
+  @Roles('owner', 'accountant')
+  createDisposal(@Body() dto: CreateWasteDisposalDto, @CurrentUser() user: ClerkUser) {
+    return this.wasteService.createDisposal(dto, user.userId);
   }
 }

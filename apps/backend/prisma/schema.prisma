@@ -870,11 +870,13 @@ model WasteStock {
 ///     SAME transaction as the session that produced it — sessionId is @unique so a
 ///     session's variance can only ever have one entry (upserted on session edit,
 ///     never duplicated).
-///   sale:             −kg, written by walk-in-sales.service.ts / stock-exits.service.ts.
+///   sale:             −kg, written by walk-in-sales.service.ts / stock-exits.service.ts
+///     via drawFromWastePool (common/inventory/waste-pool.ts). A cancelled waste-sale
+///     invoice adds a reversing +kg 'sale' entry (no links), so Σ(sale) = net kg sold.
 ///   adjustment:        ±kg, a physical-count correction (StockAdjustment.adjustmentType
 ///     = 'waste') — the ONLY path that reconciles this auto-fed pool against what's
 ///     actually on the floor; see WasteStock's own doc comment for why this matters.
-///   disposal:         −kg, waste thrown away rather than sold.
+///   disposal:         −kg, waste thrown away rather than sold (POST /waste/disposals).
 model WasteEntry {
   id            String          @id @default(uuid())
   type          WasteEntryType
@@ -885,11 +887,12 @@ model WasteEntry {
   /// came from. @unique enforces at most one entry per session (see doc comment above).
   sessionId     String?         @unique
   session       PackingSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  /// Set only for type='sale' via the anonymous cash-sale path (POST /stock-exits).
-  /// @unique — one waste cash-sale exit produces exactly one ledger entry.
+  /// Set for every waste SALE — each one creates one StockExit (no lot / packed
+  /// stock) so it shows in the warehouse sales history; "exit has a wasteEntry" is how
+  /// reports recognise a waste exit. @unique — one exit, exactly one ledger entry.
   stockExitId   String?         @unique
   stockExit     StockExit?      @relation(fields: [stockExitId], references: [id])
-  /// Set only for type='sale' via the registered-client path (POST /walk-in-sales).
+  /// Also set for a waste sale to a registered client (POST /walk-in-sales).
   /// @unique — a sale's wasteLines (however many) collapse into ONE entry for the
   /// combined pool's total kg, same "one pool, one number" reasoning as WasteStock.
   invoiceId     String?         @unique
@@ -1184,8 +1187,8 @@ model StockExit {
   /// DIFFERENT fingerprint is rejected (409 IDEMPOTENCY_KEY_REUSED), never
   /// silently treated as a retry.
   requestFingerprint String?
-  /// At most one — set when this exit is itself a waste-pool cash sale (Phase 3,
-  /// not yet wired). See WasteEntry's doc comment.
+  /// At most one — set when this exit is a waste-pool sale (anonymous or invoiced).
+  /// See WasteEntry's doc comment.
   wasteEntry         WasteEntry?
 
   @@index([date])
@@ -1264,8 +1267,8 @@ model Invoice {
   /// Authoritative record of how much of which payments applied to this invoice.
   /// paidAmount/status are a cache recomputed FROM this — see PaymentAllocation.
   allocations          PaymentAllocation[]
-  /// At most one — set when this invoice's wasteLines sold from the waste pool
-  /// (Phase 3, not yet wired). See WasteEntry's doc comment.
+  /// At most one — set when this invoice's wasteLines sold from the waste pool.
+  /// See WasteEntry's doc comment.
   wasteEntry           WasteEntry?
 
   @@index([clientId])
