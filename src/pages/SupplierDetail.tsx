@@ -1,12 +1,14 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useSupplier, useSupplierPayments, useCreateSupplierPayment, useUpdateSupplier } from '../hooks/useSuppliers'
 import { useContainers } from '../hooks/useContainers'
 import { useSupplierLedger } from '../hooks/useReports'
 import { exportExcel, type ExcelColumn } from '../lib/excelExport'
-import { buildStatementPdf, exportStatementPdf, statementPdfFilename, type StatementPdfConfig } from '../lib/statementPdf'
-import { toWhatsAppDigits } from '../lib/phone'
+import { t as docT } from '../lib/i18n/docLabels'
+import type { StatementPdfConfig } from '../lib/statementPdf'
+import { StatementActionDialog } from '../components/share/StatementActionDialog'
+import { supplierContacts } from '../lib/share/contacts'
 import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
 import { formatUsd } from '../lib/money'
 import { formatDate, toDateOnlyString } from '../lib/date'
@@ -89,6 +91,8 @@ export default function SupplierDetail() {
   const [toast, setToast] = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
   const { openExportModal, exportColumnsModal } = useExportColumnsModal()
+  // Print / Export PDF / Share all open one dialog (language + action + contact); nothing is remembered between opens.
+  const [stmtDialogOpen, setStmtDialogOpen] = useState(false)
 
   // Edit-supplier modal — seeded from the loaded supplier when opened (see openEditModal below).
   const [editOpen, setEditOpen] = useState(false)
@@ -130,28 +134,6 @@ export default function SupplierDetail() {
       },
     )
   }
-
-  // ── Export-PDF split-button menu (Download / Share / Share via WhatsApp) —
-  // mirrors ClientDetail.tsx's Statement of Account export exactly. ──────────
-  const [exportMenuOpen, setExportMenuOpen] = useState(false)
-  const exportMenuRef = useRef<HTMLDivElement>(null)
-  const [canShareFiles] = useState(() => {
-    try {
-      return typeof navigator !== 'undefined' && !!navigator.canShare &&
-        navigator.canShare({ files: [new File([''], 'test.pdf', { type: 'application/pdf' })] })
-    } catch {
-      return false
-    }
-  })
-  useEffect(() => {
-    function handler(e: MouseEvent) {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
-        setExportMenuOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
 
   // Statement of Account sub-view filters. dateFrom/dateTo are sent to the backend
   // (the opening balance is computed server-side for the exact selected range);
@@ -241,24 +223,24 @@ export default function SupplierDetail() {
       })),
     ]
     const columns: ExcelColumn<StmtRow>[] = [
-      { key: 'date', header: 'Date', type: 'date', value: r => new Date(r.rawDate) },
-      { key: 'source', header: 'Source', value: r => r.source || null },
-      { key: 'ref', header: 'Ref', value: r => r.ref || null },
-      { key: 'desc', header: 'Description', value: r => r.desc },
-      { key: 'debit', header: 'Debit', type: 'currency', value: r => r.debit, total: 'sum' },
-      { key: 'credit', header: 'Credit', type: 'currency', value: r => r.credit, total: 'sum' },
+      { key: 'date', header: 'Date', headerAr: docT('ar', 'common.date'), type: 'date', value: r => new Date(r.rawDate) },
+      { key: 'source', header: 'Source', headerAr: docT('ar', 'excel.col.source'), value: r => r.source || null },
+      { key: 'ref', header: 'Ref', headerAr: docT('ar', 'excel.col.ref'), value: r => r.ref || null },
+      { key: 'desc', header: 'Description', headerAr: docT('ar', 'common.description'), value: r => r.desc },
+      { key: 'debit', header: 'Debit', headerAr: docT('ar', 'statement.col.debit'), type: 'currency', value: r => r.debit, total: 'sum' },
+      { key: 'credit', header: 'Credit', headerAr: docT('ar', 'statement.col.credit'), type: 'currency', value: r => r.credit, total: 'sum' },
       // 'last', not 'sum' — same fix as ClientDetail's Client Statement:
       // every row's balance is already the running balance as of that row,
       // so the Total row should show the final row's balance, not Σ(all balances).
-      { key: 'balance', header: 'Balance', type: 'currency', value: r => r.balance, total: 'last' },
+      { key: 'balance', header: 'Balance', headerAr: docT('ar', 'statement.col.balance'), type: 'currency', value: r => r.balance, total: 'last' },
     ]
     openExportModal({
       title: 'Supplier Statement', subtitle: supplier?.name ?? 'Supplier', columns,
-      onExport: async selectedColumns => {
+      onExport: async (selectedColumns, lang) => {
         await exportExcel({
           filename: `${supplierId}-statement`, sheetName: 'Statement',
           title: `Supplier Statement — ${supplier?.name ?? 'Supplier'}`,
-          columns: selectedColumns, rows, emphasizeRowIndexes: [0],
+          columns: selectedColumns, lang, rows, emphasizeRowIndexes: [0],
         })
         showToast(`Exported ${stmtFiltered.length} rows`)
       },
@@ -282,68 +264,17 @@ export default function SupplierDetail() {
         currency: 'USD',
       },
       partyLabel: 'Supplier',
-      from: stmtFrom ? new Date(stmtFrom).toISOString() : (stmtFiltered[0]?.rawDate ?? null),
-      to: stmtTo ? new Date(stmtTo).toISOString() : (stmtFiltered[stmtFiltered.length - 1]?.rawDate ?? null),
-      rows: stmtFiltered.map(e => ({ ref: e.ref, rawDate: e.rawDate, desc: e.desc, debit: e.debit, credit: e.credit, balance: e.balance })),
+      // Every row of the period (LEDGER), not the on-screen Debit/Credit/search
+      // filtered view: the server's closing balance covers the whole period,
+      // so a filtered PDF would not reconcile (Opening + Debit − Credit ≠ Closing).
+      from: stmtFrom ? new Date(stmtFrom).toISOString() : (LEDGER[0]?.rawDate ?? null),
+      to: stmtTo ? new Date(stmtTo).toISOString() : (LEDGER[LEDGER.length - 1]?.rawDate ?? null),
+      rows: LEDGER.map(e => ({ ref: e.ref, rawDate: e.rawDate, desc: e.desc, debit: e.debit, credit: e.credit, balance: e.balance })),
       openingBalance: stmtOpening,
-      periodDebitTotal: stmtDebit,
-      periodCreditTotal: stmtCredit,
+      periodDebitTotal: LEDGER.reduce((s, e) => s + e.debit, 0),
+      periodCreditTotal: LEDGER.reduce((s, e) => s + e.credit, 0),
       closingBalance: stmtClosing,
     }
-  }
-
-  async function downloadStatementPdf() {
-    try {
-      await exportStatementPdf(statementPdfConfig())
-    } catch (e) {
-      console.error('Failed to export statement PDF:', e)
-      showToast('Failed to export statement PDF')
-    }
-  }
-
-  async function shareStatementPdf() {
-    try {
-      const doc = await buildStatementPdf(statementPdfConfig())
-      const filename = statementPdfFilename(supplier?.name ?? 'Supplier', 'Supplier')
-      const file = new File([doc.output('blob')], filename, { type: 'application/pdf' })
-      await navigator.share({ files: [file] })
-    } catch (e) {
-      if ((e as Error)?.name === 'AbortError') return // user closed the share sheet — not a failure
-      console.error('Failed to share statement PDF:', e)
-      showToast('Failed to share statement PDF')
-    }
-  }
-
-  async function shareStatementViaWhatsApp() {
-    const primaryPhone = supplier?.contactPersons[0]?.phone ?? null
-    const digits = toWhatsAppDigits(primaryPhone)
-    if (!digits) {
-      showToast('No phone number on file for this supplier')
-      return
-    }
-
-    if (canShareFiles) {
-      try {
-        const doc = await buildStatementPdf(statementPdfConfig())
-        const filename = statementPdfFilename(supplier?.name ?? 'Supplier', 'Supplier')
-        const file = new File([doc.output('blob')], filename, { type: 'application/pdf' })
-        await navigator.share({ files: [file] })
-        return
-      } catch (e) {
-        if ((e as Error)?.name === 'AbortError') return // user closed the share sheet — not a failure
-        console.error('Failed to share statement PDF, falling back to download:', e)
-        // fall through to the download+wa.me fallback below
-      }
-    }
-    try {
-      await exportStatementPdf(statementPdfConfig())
-    } catch (e) {
-      console.error('Failed to export statement PDF:', e)
-      showToast('Failed to export statement PDF')
-      return
-    }
-    window.open(`https://wa.me/${digits}`, '_blank', 'noreferrer')
-    showToast('Statement downloaded — attach it in the WhatsApp chat that just opened')
   }
 
   function showToast(msg: string) {
@@ -764,27 +695,10 @@ export default function SupplierDetail() {
                 </div>
               </div>
               <div className="stmt-actions no-print">
-                <button className="btn" onClick={() => window.print()}><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print</button>
-                <div ref={exportMenuRef} style={{ position: 'relative' }}>
-                  <button className="btn-export" onClick={() => setExportMenuOpen(o => !o)}>
-                    <i className="ti ti-download" /> Export PDF <i className="ti ti-chevron-down" style={{ fontSize: 11 }} />
-                  </button>
-                  {exportMenuOpen && (
-                    <div className="export-menu">
-                      <button className="export-menu-item" onClick={() => { setExportMenuOpen(false); downloadStatementPdf() }}>
-                        <i className="ti ti-download" /> Download
-                      </button>
-                      {canShareFiles && (
-                        <button className="export-menu-item" onClick={() => { setExportMenuOpen(false); shareStatementPdf() }}>
-                          <i className="ti ti-share-2" /> Share…
-                        </button>
-                      )}
-                      <button className="export-menu-item whatsapp" onClick={() => { setExportMenuOpen(false); shareStatementViaWhatsApp() }}>
-                        <i className="ti ti-brand-whatsapp" /> Share via WhatsApp
-                      </button>
-                    </div>
-                  )}
-                </div>
+                <button className="btn" onClick={() => setStmtDialogOpen(true)}><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print</button>
+                <button className="btn-export" onClick={() => setStmtDialogOpen(true)}>
+                  <i className="ti ti-download" /> Export PDF
+                </button>
                 <button className="btn-export" onClick={exportStatement}><i className="ti ti-table-export" /> Export Excel</button>
               </div>
             </div>
@@ -1016,6 +930,16 @@ export default function SupplierDetail() {
       )}
 
       {exportColumnsModal}
+
+      <StatementActionDialog
+        open={stmtDialogOpen}
+        onClose={() => setStmtDialogOpen(false)}
+        title={`Statement of account — ${supplier?.name ?? 'Supplier'}`}
+        partyName={supplier?.name ?? 'Supplier'}
+        buildConfig={statementPdfConfig}
+        contacts={supplierContacts(supplier?.contactPersons)}
+        printPageInEnglish
+      />
 
       {/* Toast */}
       <div className={`toast ${toast ? 'show' : ''}`}>

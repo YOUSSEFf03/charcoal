@@ -7,7 +7,10 @@
 // to fetch live data as a separate follow-up.
 export const COMPANY_INFO = {
   name: 'Farah Charcoal',
-  address: 'Beirut, Lebanon',
+  // Arabic drafts for bilingual documents - pending native-speaker review.
+  nameAr: 'فرح للفحم',
+  address: 'Zgharta, Lebanon',
+  addressAr: 'زغرتا، لبنان',
   phone: '+961 1 234 567',
   email: 'contact@farahcharcoal.lb',
 }

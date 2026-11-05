@@ -1,14 +1,27 @@
+
 import { useParams } from 'react-router-dom'
 import { useInvoice } from '../hooks/useInvoices'
+import { useDocLang } from '../lib/i18n/useDocLang'
+import { DocLangToggle } from '../components/ui/DocLangToggle'
+import { t } from '../lib/i18n/docLabels'
+import type { DocLang } from '../lib/i18n/docLang'
+import { InvoiceDocument } from '../components/documents/InvoiceDocument'
+
 
 /**
  * Standalone printable invoice page.
  * Opened in a new tab from OrderDetail and ClientDetail via
  * <a href="/invoice/:id" target="_blank">.
  * No sidebar — full-page receipt layout optimised for window.print().
+ *
+ * Language: `/invoice/:id?lang=en|ar`. Absent or invalid => English (the
+ * historical output, unchanged). `ar` renders the receipt card with
+ * dir="rtl" lang="ar", dictionary labels (docLabels.ts) and LTR-isolated
+ * numbers/refs/dates.
  */
 export default function InvoicePrint() {
   const { id } = useParams<{ id: string }>()
+  const [lang, setLang] = useDocLang('en')
   const { data: invoice, isLoading, isError, error } = useInvoice(id ?? '')
 
   if (isLoading) {
@@ -32,71 +45,40 @@ export default function InvoicePrint() {
   if (isError || !invoice) {
     const status = (error as any)?.status as number | undefined
     const msg =
-      status === 401 ? 'Authentication required' :
-      status === 404 ? 'Invoice not found' :
-      isError ? 'Failed to load invoice' :
-      'Invoice not found'
+      status === 401 ? t(lang, 'invoice.authRequired') :
+      status === 404 ? t(lang, 'invoice.notFound') :
+      isError ? t(lang, 'invoice.loadFailed') :
+      t(lang, 'invoice.notFound')
     return (
-      <div style={{ minHeight: '100vh', background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, color: '#666' }}>
+      <div
+        dir={lang === 'ar' ? 'rtl' : undefined}
+        lang={lang === 'ar' ? 'ar' : undefined}
+        style={{ minHeight: '100vh', background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, color: '#666' }}
+      >
         {msg}
       </div>
     )
   }
 
-  const issuedDate = invoice.issuedAt ?? invoice.createdAt
-  const formattedDate = new Date(issuedDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f5', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px' }}>
       {/* Print action bar — hidden when printing */}
-      <div className="no-print" style={{ width: '100%', maxWidth: 480, display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+      <div className="no-print" style={{ width: '100%', maxWidth: 480, display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 13, color: '#666' }}>
           Invoice&nbsp;<strong style={{ fontFamily: "'IBM Plex Mono', monospace" }} title={invoice.id}>{invoice.displayId ?? invoice.id}</strong>
         </div>
-        <button
-          onClick={() => window.print()}
-          style={{ padding: '8px 18px', background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
-        >
-          <i className="ti ti-printer" style={{ fontSize: 15 }} /> Print
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <DocLangToggle value={lang} onChange={(l) => setLang(l as DocLang)} />
+          <button
+            onClick={() => window.print()}
+            style={{ padding: '8px 18px', background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <i className="ti ti-printer" style={{ fontSize: 15 }} /> Print
+          </button>
+        </div>
       </div>
 
-      {/* Receipt card */}
-      <div className="receipt" style={{ width: '100%', maxWidth: 380, fontSize: 13 }}>
-        <div className="receipt-title">FARAH CHARCOAL</div>
-        <div className="receipt-sub">Tax Invoice</div>
-        <hr className="receipt-divider" />
-        <div className="receipt-row">
-          <span>Invoice #</span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace" }} title={invoice.id}>{invoice.displayId ?? invoice.id}</span>
-        </div>
-        <div className="receipt-row"><span>Date</span><span>{formattedDate}</span></div>
-        {invoice.dueDate && <div className="receipt-row"><span>Due</span><span>{new Date(invoice.dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>}
-        <div className="receipt-row"><span>Client</span><span>{invoice.client.name}</span></div>
-        <hr className="receipt-divider" />
-        {invoice.lines.map((line, i) => (
-          <div className="receipt-row" key={i}>
-            <span>
-              {line.saleUnit === 'KG'
-                ? `${line.kgQuantity} kg — ${line.description}`
-                : `${line.qty}× ${line.bagTypeName}`}
-            </span>
-            <span>{Number(line.lineTotal).toFixed(2)}</span>
-          </div>
-        ))}
-        <hr className="receipt-divider" />
-        <div className="receipt-row total"><span>TOTAL</span><span>{Number(invoice.total).toFixed(2)} {invoice.currency}</span></div>
-        <div className="receipt-row" style={{ color: 'var(--accent)' }}><span>PAID</span><span>{Number(invoice.paidAmount).toFixed(2)} {invoice.currency}</span></div>
-        {/* balanceDue — same field the Invoice Detail page shows, computed
-            once by InvoicesService.findOne() so the two views can never
-            silently disagree on what's still owed. */}
-        <div className="receipt-row" style={{ color: Number(invoice.balanceDue) > 0 ? 'var(--red)' : 'var(--accent)', fontWeight: 700 }}>
-          <span>BALANCE DUE</span><span>{Number(invoice.balanceDue).toFixed(2)} {invoice.currency}</span>
-        </div>
-        <div className="receipt-sig">
-          <div className="receipt-sig-line">Client signature</div>
-        </div>
-      </div>
+      <InvoiceDocument invoice={invoice} lang={lang} />
 
       <style>{`
         @media print {

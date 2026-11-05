@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useClient, useUpdateClient, useAddPhone, useDeactivatePhone, useClientLocations, useCreateClientLocation, useUpdateClientLocation } from '../hooks/useClients'
+import { clientDocumentAddress } from '../lib/clientAddress'
 import { useInvoices } from '../hooks/useInvoices'
 import { useClientLedger } from '../hooks/useReports'
 import { useOrders, useCreateOrder } from '../hooks/useOrders'
@@ -13,7 +14,12 @@ import { useRate } from '../context/RateContext'
 import { roundDp, formatUsd } from '../lib/money'
 import { formatDate, formatDateTime, toDateOnlyString } from '../lib/date'
 import { exportExcel, type ExcelColumn } from '../lib/excelExport'
-import { buildStatementPdf, exportStatementPdf, statementPdfFilename, type StatementPdfConfig } from '../lib/statementPdf'
+import type { StatementPdfConfig } from '../lib/statementPdf'
+import { StatementActionDialog } from '../components/share/StatementActionDialog'
+import { InvoiceActionDialog } from '../components/share/InvoiceActionDialog'
+import { DeliveryReceiptActionDialogById } from '../components/share/DeliveryReceiptActionDialog'
+import { clientPhoneContacts } from '../lib/share/contacts'
+import { t as docT } from '../lib/i18n/docLabels'
 import { toWhatsAppDigits } from '../lib/phone'
 import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
 import SortHeader, { toggleSort } from '../components/ui/SortHeader'
@@ -507,31 +513,12 @@ export default function ClientDetail() {
   const [toast, setToast] = useState('')
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
 
-  // ── Export-PDF split-button menu (Download / Share / Share via WhatsApp) ──
-  const [exportMenuOpen, setExportMenuOpen] = useState(false)
-  const exportMenuRef = useRef<HTMLDivElement>(null)
-  // Web Share API file-sharing (Level 2) is the only mechanism that can hand
-  // the PDF directly to an installed app (WhatsApp Desktop, Mail, etc.) via
-  // the native OS share sheet — supported in Chromium on Windows 10 1809+/11
-  // (and Android/iOS), not in Firefox or non-secure contexts. Checked once;
-  // the "Share…" menu item only renders when this is true.
-  const [canShareFiles] = useState(() => {
-    try {
-      return typeof navigator !== 'undefined' && !!navigator.canShare &&
-        navigator.canShare({ files: [new File([''], 'test.pdf', { type: 'application/pdf' })] })
-    } catch {
-      return false
-    }
-  })
-  useEffect(() => {
-    function handler(e: MouseEvent) {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
-        setExportMenuOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
+  // Print / Export PDF / Share all open ONE dialog (language + action +
+  // contact) — nothing is remembered between opens (owner requirement).
+  const [stmtDialogOpen, setStmtDialogOpen] = useState(false)
+  // Row-level document dialogs: the invoice / order whose print+share dialog is open.
+  const [invoiceDialog, setInvoiceDialog] = useState<{ id: string; displayId?: string | null } | null>(null)
+  const [receiptDialogOrderId, setReceiptDialogOrderId] = useState<string | null>(null)
   // The column-selection modal itself owns the in-flight/disabled UX for
   // each export now (see useExportColumnsModal below), so a per-export
   // "am I currently exporting" flag on the trigger button is no longer
@@ -568,20 +555,20 @@ export default function ClientDetail() {
   function exportOrders() {
     if (filteredOrders.length === 0) { showToast('Nothing to export'); return }
     const columns: ExcelColumn<(typeof filteredOrders)[number]>[] = [
-      { key: 'date', header: 'Date', type: 'date', value: o => o.rawDate ? new Date(o.rawDate) : null },
-      { key: 'orderNo', header: 'Order #', value: o => o.displayId },
-      { key: 'type', header: 'Type', value: o => o.isBag ? 'Bag' : 'KG' },
-      { key: 'charcoal', header: 'Charcoal', value: o => o.char },
-      { key: 'weight', header: 'Weight', value: o => o.items },
-      { key: 'price', header: 'Price/bag', type: 'currency', value: o => o.total },
-      { key: 'status', header: 'Status', value: o => o.status },
+      { key: 'date', header: 'Date', headerAr: docT('ar', 'common.date'), type: 'date', value: o => o.rawDate ? new Date(o.rawDate) : null },
+      { key: 'orderNo', header: 'Order #', headerAr: docT('ar', 'excel.col.orderNo'), value: o => o.displayId },
+      { key: 'type', header: 'Type', headerAr: docT('ar', 'common.type'), value: o => o.isBag ? 'Bag' : 'KG' },
+      { key: 'charcoal', header: 'Charcoal', headerAr: docT('ar', 'report.col.charcoal'), value: o => o.char },
+      { key: 'weight', header: 'Weight', headerAr: docT('ar', 'excel.col.weight'), value: o => o.items },
+      { key: 'price', header: 'Price/bag', headerAr: docT('ar', 'excel.col.pricePerBag'), type: 'currency', value: o => o.total },
+      { key: 'status', header: 'Status', headerAr: docT('ar', 'common.status'), value: o => o.status },
     ]
     openExportModal({
       title: 'Orders', subtitle: client.name, columns,
-      onExport: async selectedColumns => {
+      onExport: async (selectedColumns, lang) => {
         await exportExcel({
           filename: `${cid}-orders`, sheetName: 'Orders', title: `Orders — ${client.name}`,
-          columns: selectedColumns, rows: filteredOrders,
+          columns: selectedColumns, lang, rows: filteredOrders,
         })
         showToast(`Exported ${filteredOrders.length} rows`)
       },
@@ -596,17 +583,17 @@ export default function ClientDetail() {
     // open immediately — the full-history page-fetch loop only runs once the
     // user actually confirms, so Cancel costs nothing.
     const columns: ExcelColumn<Invoice>[] = [
-      { key: 'issued', header: 'Issued', type: 'date', value: inv => new Date(inv.issuedAt ?? inv.createdAt) },
-      { key: 'invoiceNo', header: 'Invoice #', value: inv => inv.displayId ?? inv.id.slice(0, 8).toUpperCase() },
-      { key: 'fromOrder', header: 'From Order', value: inv => inv.orderId ? (orderDisplayById.get(inv.orderId) ?? inv.orderId) : null },
-      { key: 'amount', header: 'Amount', type: 'currency', value: inv => parseFloat(inv.total), total: 'sum' },
-      { key: 'paid', header: 'Paid', type: 'currency', value: inv => parseFloat(inv.paidAmount), total: 'sum' },
-      { key: 'due', header: 'Due', type: 'currency', value: inv => parseFloat(inv.total) - parseFloat(inv.paidAmount), total: 'sum' },
-      { key: 'status', header: 'Status', value: inv => inv.status },
+      { key: 'issued', header: 'Issued', headerAr: docT('ar', 'excel.col.issued'), type: 'date', value: inv => new Date(inv.issuedAt ?? inv.createdAt) },
+      { key: 'invoiceNo', header: 'Invoice #', headerAr: docT('ar', 'excel.col.invoiceNo'), value: inv => inv.displayId ?? inv.id.slice(0, 8).toUpperCase() },
+      { key: 'fromOrder', header: 'From Order', headerAr: docT('ar', 'excel.col.fromOrder'), value: inv => inv.orderId ? (orderDisplayById.get(inv.orderId) ?? inv.orderId) : null },
+      { key: 'amount', header: 'Amount', headerAr: docT('ar', 'common.amount'), type: 'currency', value: inv => parseFloat(inv.total), total: 'sum' },
+      { key: 'paid', header: 'Paid', headerAr: docT('ar', 'common.paid'), type: 'currency', value: inv => parseFloat(inv.paidAmount), total: 'sum' },
+      { key: 'due', header: 'Due', headerAr: docT('ar', 'invoice.due'), type: 'currency', value: inv => parseFloat(inv.total) - parseFloat(inv.paidAmount), total: 'sum' },
+      { key: 'status', header: 'Status', headerAr: docT('ar', 'common.status'), value: inv => inv.status },
     ]
     openExportModal({
       title: 'Invoices', subtitle: client.name, columns,
-      onExport: async selectedColumns => {
+      onExport: async (selectedColumns, lang) => {
         try {
           let all: Invoice[] = []
           let fetchPage = 1
@@ -625,7 +612,7 @@ export default function ClientDetail() {
           if (all.length === 0) { showToast('Nothing to export'); return }
           await exportExcel({
             filename: `${cid}-invoices`, sheetName: 'Invoices', title: `Invoices — ${client.name}`,
-            columns: selectedColumns, rows: all,
+            columns: selectedColumns, lang, rows: all,
           })
           showToast(`Exported ${all.length} rows`)
         } catch (e) {
@@ -645,17 +632,17 @@ export default function ClientDetail() {
   }
   function exportWarehouse() {
     const columns: ExcelColumn<WarehouseExportRow>[] = [
-      { key: 'date', header: 'Date', type: 'date', value: r => r.date },
-      { key: 'bagType', header: 'Bag type', value: r => r.bagType },
-      { key: 'charcoal', header: 'Charcoal', value: r => r.charcoal },
-      { key: 'qty', header: 'Qty', type: 'number', value: r => r.qty },
-      { key: 'kg', header: 'Kg sold', type: 'number', decimals: 2, value: r => r.kg },
-      { key: 'amount', header: 'Amount', type: 'currency', value: r => r.amount, total: 'sum' },
-      { key: 'loggedBy', header: 'Logged by', value: r => r.loggedBy },
+      { key: 'date', header: 'Date', headerAr: docT('ar', 'common.date'), type: 'date', value: r => r.date },
+      { key: 'bagType', header: 'Bag type', headerAr: docT('ar', 'excel.col.bagType'), value: r => r.bagType },
+      { key: 'charcoal', header: 'Charcoal', headerAr: docT('ar', 'report.col.charcoal'), value: r => r.charcoal },
+      { key: 'qty', header: 'Qty', headerAr: docT('ar', 'common.quantity'), type: 'number', value: r => r.qty },
+      { key: 'kg', header: 'Kg sold', headerAr: docT('ar', 'excel.col.kgSold'), type: 'number', decimals: 2, value: r => r.kg },
+      { key: 'amount', header: 'Amount', headerAr: docT('ar', 'common.amount'), type: 'currency', value: r => r.amount, total: 'sum' },
+      { key: 'loggedBy', header: 'Logged by', headerAr: docT('ar', 'excel.col.loggedBy'), value: r => r.loggedBy },
     ]
     openExportModal({
       title: 'Warehouse sales', subtitle: client.name, columns,
-      onExport: async selectedColumns => {
+      onExport: async (selectedColumns, lang) => {
         try {
           // One row per GROUPED sale (forensic audit, 2026-08-28) — /stock-exits
           // is raw, one row per StockExit; /stock-exits/grouped collapses a
@@ -694,7 +681,7 @@ export default function ClientDetail() {
           })
           await exportExcel({
             filename: `${cid}-warehouse`, sheetName: 'Warehouse', title: `Warehouse sales — ${client.name}`,
-            columns: selectedColumns, rows: exportRows,
+            columns: selectedColumns, lang, rows: exportRows,
           })
           showToast(`Exported ${exportRows.length} rows`)
         } catch (e) {
@@ -710,19 +697,19 @@ export default function ClientDetail() {
   // Mirrors exportInvoices()'s / exportWarehouse()'s page-loop exactly.
   function exportPayments() {
     const columns: ExcelColumn<any>[] = [
-      { key: 'receiptNo', header: 'Receipt #', value: p => p.displayId ?? p.id.slice(0, 8) },
-      { key: 'date', header: 'Date', type: 'date', value: p => p.date ? new Date(p.date) : null },
-      { key: 'method', header: 'Method', value: p => p.method },
-      { key: 'invoice', header: 'Invoice', value: p => p.invoiceId ? (p.invoice?.displayId ?? p.invoiceId) : null },
-      { key: 'receivedBy', header: 'Received by', value: p => p.receiver?.name ?? p.receiverName ?? '—' },
+      { key: 'receiptNo', header: 'Receipt #', headerAr: docT('ar', 'excel.col.receiptNo'), value: p => p.displayId ?? p.id.slice(0, 8) },
+      { key: 'date', header: 'Date', headerAr: docT('ar', 'common.date'), type: 'date', value: p => p.date ? new Date(p.date) : null },
+      { key: 'method', header: 'Method', headerAr: docT('ar', 'common.method'), value: p => p.method },
+      { key: 'invoice', header: 'Invoice', headerAr: docT('ar', 'excel.col.invoice'), value: p => p.invoiceId ? (p.invoice?.displayId ?? p.invoiceId) : null },
+      { key: 'receivedBy', header: 'Received by', headerAr: docT('ar', 'excel.col.receivedBy'), value: p => p.receiver?.name ?? p.receiverName ?? '—' },
       // Deselected by default — the one free-text/optional field among all 7
       // exports' columns; every transactional column stays checked.
-      { key: 'notes', header: 'Notes', value: p => p.notes ?? null, defaultSelected: false },
-      { key: 'amount', header: 'Amount', type: 'currency', value: p => parseFloat(p.amount), total: 'sum' },
+      { key: 'notes', header: 'Notes', headerAr: docT('ar', 'common.notes'), value: p => p.notes ?? null, defaultSelected: false },
+      { key: 'amount', header: 'Amount', headerAr: docT('ar', 'common.amount'), type: 'currency', value: p => parseFloat(p.amount), total: 'sum' },
     ]
     openExportModal({
       title: 'Payments', subtitle: client.name, columns,
-      onExport: async selectedColumns => {
+      onExport: async (selectedColumns, lang) => {
         try {
           let all: any[] = []
           let fetchPage = 1
@@ -741,7 +728,7 @@ export default function ClientDetail() {
           if (all.length === 0) { showToast('Nothing to export'); return }
           await exportExcel({
             filename: `${cid}-payments`, sheetName: 'Payments', title: `Payments — ${client.name}`,
-            columns: selectedColumns, rows: all,
+            columns: selectedColumns, lang, rows: all,
           })
           showToast(`Exported ${all.length} rows`)
         } catch (e) {
@@ -760,40 +747,48 @@ export default function ClientDetail() {
       ...stmtFiltered.map(e => ({ rawDate: e.rawDate, ref: e.ref, desc: e.desc, debit: e.debit || null, credit: e.credit || null, balance: e.balance })),
     ]
     const columns: ExcelColumn<StmtRow>[] = [
-      { key: 'date', header: 'Date', type: 'date', value: r => new Date(r.rawDate) },
-      { key: 'ref', header: 'Ref', value: r => r.ref || null },
-      { key: 'desc', header: 'Description', value: r => r.desc },
-      { key: 'debit', header: 'Debit', type: 'currency', value: r => r.debit, total: 'sum' },
-      { key: 'credit', header: 'Credit', type: 'currency', value: r => r.credit, total: 'sum' },
+      { key: 'date', header: 'Date', headerAr: docT('ar', 'common.date'), type: 'date', value: r => new Date(r.rawDate) },
+      { key: 'ref', header: 'Ref', headerAr: docT('ar', 'excel.col.ref'), value: r => r.ref || null },
+      { key: 'desc', header: 'Description', headerAr: docT('ar', 'common.description'), value: r => r.desc },
+      { key: 'debit', header: 'Debit', headerAr: docT('ar', 'statement.col.debit'), type: 'currency', value: r => r.debit, total: 'sum' },
+      { key: 'credit', header: 'Credit', headerAr: docT('ar', 'statement.col.credit'), type: 'currency', value: r => r.credit, total: 'sum' },
       // 'last', not 'sum' — every row's balance is already the running
       // balance as of that row (from the ledger's authoritative
       // runningBalance), so the Total row should show the final row's
       // balance, not Σ(all balances).
-      { key: 'balance', header: 'Balance', type: 'currency', value: r => r.balance, total: 'last' },
+      { key: 'balance', header: 'Balance', headerAr: docT('ar', 'statement.col.balance'), type: 'currency', value: r => r.balance, total: 'last' },
     ]
     openExportModal({
       title: 'Client Statement', subtitle: client.name, columns,
-      onExport: async selectedColumns => {
+      onExport: async (selectedColumns, lang) => {
         await exportExcel({
           filename: `${cid}-statement`, sheetName: 'Statement', title: `Client Statement — ${client.name}`,
-          columns: selectedColumns, rows, emphasizeRowIndexes: [0],
+          columns: selectedColumns, lang, rows, emphasizeRowIndexes: [0],
         })
         showToast(`Exported ${stmtFiltered.length} rows`)
       },
     })
   }
 
-  // Shared by all three export/share actions below so Download, Share, and
-  // Share-via-WhatsApp always render the exact same document from the exact
+  // Shared by Print, Download PDF and Share (all via StatementActionDialog) so they always render the exact same document from the exact
   // same stmtFiltered/stmtOpening/stmtDebit/stmtCredit/stmtClosing figures
   // already shown on screen and in exportStatement()'s Excel export — no
   // second accounting calculation, no drift between the three actions.
+  //
+  // Exception: the PDF always lists EVERY row of the selected period
+  // (STMT_LEDGER), ignoring the on-screen Debit/Credit/search display
+  // filters. Those filters hide rows, but the server's closing balance always
+  // covers the whole period — a filtered PDF would show
+  // Opening + Debit − Credit ≠ Closing on a customer-facing document.
   function statementPdfConfig(): StatementPdfConfig {
     const primaryPhone = client.phones.find(p => p.active)?.number ?? client.phones[0]?.number ?? null
+    const pdfRows = STMT_LEDGER
     return {
       client: {
         name: client.name,
-        address: client.address || null,
+        nameAr: client.nameAr || null,
+        // Multi-location clients: every active location's address, one per line.
+        address: clientDocumentAddress(client.address, clientLocations, client.multiLocationEnabled),
         phone: primaryPhone,
         currency: client.currency,
       },
@@ -801,99 +796,16 @@ export default function ClientDetail() {
       // full range when "All time"/"Custom" is chosen (falls back to the
       // actual first/last row date so the PDF never shows a bare "—" for a
       // statement that plainly does cover real dates).
-      from: stmtDateFrom ? new Date(stmtDateFrom).toISOString() : (stmtFiltered[0]?.rawDate ?? null),
-      to: stmtDateTo ? new Date(stmtDateTo).toISOString() : (stmtFiltered[stmtFiltered.length - 1]?.rawDate ?? null),
-      rows: stmtFiltered.map(e => ({ ref: e.ref, rawDate: e.rawDate, desc: e.desc, debit: e.debit, credit: e.credit, balance: e.balance })),
+      from: stmtDateFrom ? new Date(stmtDateFrom).toISOString() : (pdfRows[0]?.rawDate ?? null),
+      to: stmtDateTo ? new Date(stmtDateTo).toISOString() : (pdfRows[pdfRows.length - 1]?.rawDate ?? null),
+      rows: pdfRows.map(e => ({ ref: e.ref, rawDate: e.rawDate, desc: e.desc, debit: e.debit, credit: e.credit, balance: e.balance })),
       openingBalance: stmtOpening,
-      periodDebitTotal: stmtDebit,
-      periodCreditTotal: stmtCredit,
+      periodDebitTotal: pdfRows.reduce((s, e) => s + e.debit, 0),
+      periodCreditTotal: pdfRows.reduce((s, e) => s + e.credit, 0),
       closingBalance: stmtClosing,
+      // Lets the Arabic PDF show the branch on its own line (exact name match only).
+      locationNames: clientLocations.map(l => l.name),
     }
-  }
-
-  // Downloads the Statement of Account as a PDF directly — no column-picker
-  // modal (unlike the Excel export, this always has the complete period;
-  // stmtFiltered is never a paginated slice, so there's nothing to fetch first).
-  async function downloadStatementPdf() {
-    try {
-      await exportStatementPdf(statementPdfConfig())
-    } catch (e) {
-      console.error('Failed to export statement PDF:', e)
-      showToast('Failed to export statement PDF')
-    }
-  }
-
-  // Hands the PDF to the native OS share sheet (Web Share API, file
-  // sharing) — the only way a browser can pass a file directly to an
-  // installed app. On Windows 10 1809+/11 with a Chromium browser, WhatsApp
-  // Desktop shows up there automatically (alongside Mail, Nearby Share,
-  // etc.) if it's installed — same file, same document, no manual attach
-  // step. Only ever called when canShareFiles is true (menu item is hidden
-  // otherwise — Firefox and non-secure contexts don't support this).
-  // Deliberately no title/text — some share targets (WhatsApp included) show
-  // those as a caption alongside the file, and the ask here is the file
-  // alone, no message.
-  async function shareStatementPdf() {
-    try {
-      const doc = await buildStatementPdf(statementPdfConfig())
-      const filename = statementPdfFilename(client.name)
-      const file = new File([doc.output('blob')], filename, { type: 'application/pdf' })
-      await navigator.share({ files: [file] })
-    } catch (e) {
-      if ((e as Error)?.name === 'AbortError') return // user closed the share sheet — not a failure
-      console.error('Failed to share statement PDF:', e)
-      showToast('Failed to share statement PDF')
-    }
-  }
-
-  // WhatsApp has no URL scheme that accepts a pre-attached file (neither
-  // wa.me links nor the desktop app's protocol handler expose that, for
-  // security reasons — this isn't a gap in this app). So when the native OS
-  // share sheet is available (canShareFiles), this hands it the file first —
-  // same mechanism as shareStatementPdf() — and the file arrives already
-  // attached the moment the user picks WhatsApp from that panel, no manual
-  // step. Only when that's unsupported does this fall back to downloading
-  // the file and opening a bare WhatsApp chat (wa.me, no pre-filled text) to
-  // the client's own number, where the user attaches the just-downloaded
-  // file themselves — a genuine platform limitation on browsers/OSes without
-  // Web Share file support, not something a web page can route around.
-  //
-  // Requires a stored phone number even on the native-share branch — this
-  // button's whole point is "send to THIS client", so it must never open a
-  // blank/unaddressed share with nothing identifying who it's for (see
-  // toWhatsAppDigits() in lib/phone.ts for why a naive digit-strip of the
-  // stored number isn't enough — real client records include both bare
-  // local numbers and malformed "+961 0…" entries).
-  async function shareStatementViaWhatsApp() {
-    const primaryPhone = client.phones.find(p => p.active)?.number ?? client.phones[0]?.number ?? null
-    const digits = toWhatsAppDigits(primaryPhone)
-    if (!digits) {
-      showToast('No phone number on file for this client')
-      return
-    }
-
-    if (canShareFiles) {
-      try {
-        const doc = await buildStatementPdf(statementPdfConfig())
-        const filename = statementPdfFilename(client.name)
-        const file = new File([doc.output('blob')], filename, { type: 'application/pdf' })
-        await navigator.share({ files: [file] })
-        return
-      } catch (e) {
-        if ((e as Error)?.name === 'AbortError') return // user closed the share sheet — not a failure
-        console.error('Failed to share statement PDF, falling back to download:', e)
-        // fall through to the download+wa.me fallback below
-      }
-    }
-    try {
-      await exportStatementPdf(statementPdfConfig())
-    } catch (e) {
-      console.error('Failed to export statement PDF:', e)
-      showToast('Failed to export statement PDF')
-      return
-    }
-    window.open(`https://wa.me/${digits}`, '_blank', 'noreferrer')
-    showToast('Statement downloaded — attach it in the WhatsApp chat that just opened')
   }
 
   function openEditModal() {
@@ -1512,7 +1424,7 @@ export default function ClientDetail() {
                         <td>
                           <div className="row-actions" onClick={e => e.stopPropagation()}>
                             <button className="icon-btn" title="View" onClick={() => navigate('/orders/' + o.id)}><i className="ti ti-arrow-up-right" /></button>
-                            <a className="icon-btn" href={`/invoice/${o.id}`} target="_blank" rel="noreferrer" title="Invoice"><i className="ti ti-printer" /></a>
+                            <button className="icon-btn" title="Print / share delivery receipt" aria-label="Print or share delivery receipt" onClick={() => setReceiptDialogOrderId(o.id)}><i className="ti ti-printer" /></button>
                           </div>
                         </td>
                       </tr>
@@ -1578,7 +1490,7 @@ export default function ClientDetail() {
                           <td>{statusBadge(inv.status)}</td>
                           <td>
                             <div className="row-actions">
-                              <a className="icon-btn" href={`/invoice/${inv.id}`} target="_blank" rel="noreferrer" title="Open"><i className="ti ti-arrow-up-right" /></a>
+                              <button className="icon-btn" title="Print / share invoice" aria-label="Print or share invoice" onClick={() => setInvoiceDialog({ id: inv.id, displayId: inv.displayId })}><i className="ti ti-arrow-up-right" /></button>
                             </div>
                           </td>
                         </tr>
@@ -1691,27 +1603,10 @@ export default function ClientDetail() {
                 </div>
               </div>
               <div className="stmt-actions no-print">
-                <button className="btn" onClick={() => window.print()}><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print</button>
-                <div ref={exportMenuRef} style={{ position: 'relative' }}>
-                  <button className="btn-export" onClick={() => setExportMenuOpen(o => !o)}>
-                    <i className="ti ti-download" /> Export PDF <i className="ti ti-chevron-down" style={{ fontSize: 11 }} />
-                  </button>
-                  {exportMenuOpen && (
-                    <div className="export-menu">
-                      <button className="export-menu-item" onClick={() => { setExportMenuOpen(false); downloadStatementPdf() }}>
-                        <i className="ti ti-download" /> Download
-                      </button>
-                      {canShareFiles && (
-                        <button className="export-menu-item" onClick={() => { setExportMenuOpen(false); shareStatementPdf() }}>
-                          <i className="ti ti-share-2" /> Share…
-                        </button>
-                      )}
-                      <button className="export-menu-item whatsapp" onClick={() => { setExportMenuOpen(false); shareStatementViaWhatsApp() }}>
-                        <i className="ti ti-brand-whatsapp" /> Share via WhatsApp
-                      </button>
-                    </div>
-                  )}
-                </div>
+                <button className="btn" onClick={() => setStmtDialogOpen(true)}><i className="ti ti-printer" style={{ fontSize: 15 }} /> Print</button>
+                <button className="btn-export" onClick={() => setStmtDialogOpen(true)}>
+                  <i className="ti ti-download" /> Export PDF
+                </button>
                 <button className="btn-export" onClick={exportStatement}><i className="ti ti-table-export" /> Export Excel</button>
               </div>
             </div>
@@ -2236,6 +2131,27 @@ export default function ClientDetail() {
       )}
 
       {exportColumnsModal}
+
+      <StatementActionDialog
+        open={stmtDialogOpen}
+        onClose={() => setStmtDialogOpen(false)}
+        title={`Statement of account — ${client.name}`}
+        partyName={client.name}
+        buildConfig={statementPdfConfig}
+        contacts={clientPhoneContacts(c?.phones)}
+        printPageInEnglish
+      />
+      <InvoiceActionDialog
+        open={invoiceDialog != null}
+        onClose={() => setInvoiceDialog(null)}
+        invoiceId={invoiceDialog?.id ?? ''}
+        displayId={invoiceDialog?.displayId}
+      />
+      <DeliveryReceiptActionDialogById
+        open={receiptDialogOrderId != null}
+        onClose={() => setReceiptDialogOrderId(null)}
+        orderId={receiptDialogOrderId ?? ''}
+      />
 
       {/* Toast */}
       <div className={`toast ${toast ? 'show' : ''}`}>

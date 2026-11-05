@@ -448,3 +448,32 @@ describe('buildWorkbook — Total→Balance uses the final row, never a sum (Cli
     expect(formula).not.toMatch(/^SUM\(/)
   })
 })
+
+describe('buildWorkbook lang option', () => {
+  const rows: Row[] = [{ name: 'A', amount: 5, date: new Date(2026, 0, 1) }]
+  const cols: ExcelColumn<Row>[] = [
+    { key: 'name', header: 'Name', headerAr: 'الاسم', value: (r) => r.name },
+    { key: 'amount', header: 'Amount', type: 'currency', value: (r) => r.amount, total: 'sum' },
+  ]
+  const base = { filename: 'f', sheetName: 'S', columns: cols, rows }
+
+  it('defaults to English, left-to-right, with "Total"', async () => {
+    const { worksheet, headerRowNumber } = await roundTrip(base)
+    expect(worksheet.getRow(headerRowNumber).getCell(1).value).toBe('Name')
+    expect(worksheet.views[0].rightToLeft).toBeFalsy()
+    expect(worksheet.getRow(headerRowNumber + 2).getCell(1).value).toBe('Total')
+  })
+
+  it('ar: RTL sheet, Arabic headers (falling back to English), Arabic totals label', async () => {
+    const { worksheet, headerRowNumber } = await roundTrip({ ...base, lang: 'ar' })
+    expect(worksheet.getRow(headerRowNumber).getCell(1).value).toBe('الاسم')
+    expect(worksheet.getRow(headerRowNumber).getCell(2).value).toBe('Amount')
+    expect(worksheet.views[0].rightToLeft).toBe(true)
+    expect(worksheet.getRow(headerRowNumber + 2).getCell(1).value).toBe('الإجمالي')
+  })
+
+  it('an explicit totalsLabel wins over the language default', async () => {
+    const { worksheet, headerRowNumber } = await roundTrip({ ...base, lang: 'ar', totalsLabel: 'X' })
+    expect(worksheet.getRow(headerRowNumber + 2).getCell(1).value).toBe('X')
+  })
+})

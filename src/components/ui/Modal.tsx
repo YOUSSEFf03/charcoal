@@ -1,4 +1,4 @@
-import { ReactNode } from 'react'
+import { ReactNode, useId } from 'react'
 
 interface ModalProps {
   open: boolean
@@ -16,11 +16,15 @@ export default function Modal({
   width = 480, scrollable = false,
   children, footer,
 }: ModalProps) {
+  const titleId = useId()
   if (!open) return null
   return (
     <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && onClose()}>
       <div
         className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         style={{ width, ...(scrollable ? { maxHeight: '85vh', overflowY: 'auto' } : {}) }}
       >
         <div
@@ -28,7 +32,7 @@ export default function Modal({
           style={scrollable ? { position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 } : undefined}
         >
           <div>
-            <div className="modal-title">{title}</div>
+            <div className="modal-title" id={titleId}>{title}</div>
             {subtitle && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{subtitle}</div>}
           </div>
           <button className="panel-close-btn" aria-label="Close" onClick={onClose}>✕</button>

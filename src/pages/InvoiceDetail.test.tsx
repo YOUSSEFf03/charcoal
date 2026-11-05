@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import type { InvoiceDetail as InvoiceDetailType } from '../lib/types'
@@ -64,12 +66,18 @@ vi.mock('../hooks/useInvoices', () => ({
 import InvoiceDetail from './InvoiceDetail'
 
 function renderAt(id: string) {
+  // The Print / PDF dialog reads the invoice through react-query; seed it so no request is made.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+  const data = mockUseInvoice(id)?.data
+  if (data) qc.setQueryData(['invoices', id], data)
   return render(
-    <MemoryRouter initialEntries={[`/invoices/${id}`]}>
-      <Routes>
-        <Route path="/invoices/:id" element={<InvoiceDetail />} />
-      </Routes>
-    </MemoryRouter>,
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[`/invoices/${id}`]}>
+        <Routes>
+          <Route path="/invoices/:id" element={<InvoiceDetail />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
   )
 }
 
@@ -96,13 +104,51 @@ describe('InvoiceDetail page', () => {
     expect(screen.getAllByText('50.00 USD').length).toBeGreaterThan(0) // paid total + allocation row
   })
 
-  it('the Print/PDF action links to the existing /invoice/:id print route for the SAME invoice — reuses it, does not duplicate it', () => {
+  it('Print / PDF opens the language dialog; Print then opens the existing /invoice/:id print route for the SAME invoice with the chosen ?lang= — reuses it, does not duplicate it', async () => {
     mockUseInvoice.mockReturnValue({ data: baseInvoice(), isLoading: false, isError: false })
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({ opener: null } as unknown as Window)
+    const user = userEvent.setup()
     renderAt('inv-1')
 
-    const printLink = screen.getByRole('link', { name: /Print \/ PDF/ })
-    expect(printLink).toHaveAttribute('href', '/invoice/inv-1')
-    expect(printLink).toHaveAttribute('target', '_blank')
+    await user.click(screen.getByRole('button', { name: /Print \/ PDF/ }))
+    const dialog = screen.getByRole('dialog')
+    expect(openSpy).not.toHaveBeenCalled() // the user must choose first
+    expect(within(dialog).getByRole('radio', { name: 'English' })).toBeChecked()
+    await user.click(within(dialog).getByRole('radio', { name: 'العربية' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Print' }))
+
+    expect(openSpy).toHaveBeenCalledWith('/invoice/inv-1?lang=ar', '_blank')
+    openSpy.mockRestore()
+  })
+
+  it('Print falls back to same-tab navigation when the popup is blocked', async () => {
+    mockUseInvoice.mockReturnValue({ data: baseInvoice(), isLoading: false, isError: false })
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+    const assign = vi.fn()
+    const original = window.location
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, assign } })
+    const user = userEvent.setup()
+    renderAt('inv-1')
+
+    await user.click(screen.getByRole('button', { name: /Print \/ PDF/ }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Print' }))
+
+    expect(assign).toHaveBeenCalledWith('/invoice/inv-1?lang=en')
+    Object.defineProperty(window, 'location', { configurable: true, value: original })
+    openSpy.mockRestore()
+  })
+
+  it("Share offers the invoice client's saved numbers as contacts", async () => {
+    mockUseInvoice.mockReturnValue({
+      data: baseInvoice({ client: { id: 'c1', name: 'Acme Trading', type: 'restaurant', currency: 'USD', phones: [{ number: '+961 70 000003', label: 'mobile', isActive: true, dateAdded: '2026-01-01' }] } }),
+      isLoading: false, isError: false,
+    })
+    const user = userEvent.setup()
+    renderAt('inv-1')
+
+    await user.click(screen.getByRole('button', { name: /Print \/ PDF/ }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Share' }))
+    expect(within(screen.getByRole('dialog')).getByRole('radio', { name: /Mobile/ })).toBeInTheDocument()
   })
 
   it('shows "Cancel invoice" for an unpaid, non-cancelled invoice', () => {

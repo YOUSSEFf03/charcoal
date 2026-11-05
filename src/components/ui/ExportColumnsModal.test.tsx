@@ -116,3 +116,37 @@ describe('ExportColumnsModal / useExportColumnsModal', () => {
     expect(screen.getByLabelText('Name')).toBeChecked()
   })
 })
+
+describe('ExportColumnsModal language choice', () => {
+  it('asks for the language on every export (default English) and passes it to onExport with the chosen columns', async () => {
+    const user = userEvent.setup()
+    const onExport = vi.fn().mockResolvedValue(undefined)
+    render(<TestHarness onExport={onExport} />)
+    await user.click(screen.getByText('Open'))
+    expect(screen.getByRole('radio', { name: 'English' })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: 'العربية' }))
+    await user.click(screen.getByRole('button', { name: /export excel/i }))
+
+    expect(onExport).toHaveBeenCalledTimes(1)
+    const [cols, lang] = onExport.mock.calls[0]
+    expect(lang).toBe('ar')
+    expect(cols.map((c: ExcelColumn<Row>) => c.key)).toEqual(['name', 'amount'])
+  })
+
+  it('does not remember the previous language when reopened', async () => {
+    const user = userEvent.setup()
+    render(<TestHarness onExport={vi.fn().mockResolvedValue(undefined)} />)
+    await user.click(screen.getByText('Open'))
+    await user.click(screen.getByRole('radio', { name: 'العربية' }))
+    await user.click(screen.getByRole('button', { name: /export excel/i }))
+    await user.click(screen.getByText('Open'))
+    expect(screen.getByRole('radio', { name: 'English' })).toBeChecked()
+  })
+
+  it('is an accessible dialog labelled by its title', async () => {
+    const user = userEvent.setup()
+    render(<TestHarness onExport={vi.fn()} />)
+    await user.click(screen.getByText('Open'))
+    expect(screen.getByRole('dialog')).toHaveAccessibleName('Export to Excel')
+  })
+})

@@ -49,6 +49,11 @@ vi.mock('../hooks/useSuppliers', () => ({
   useUpdateSupplier: () => ({ mutate: vi.fn(), isPending: false }),
 }))
 
+const mockExportStatementPdf = vi.fn()
+vi.mock('../lib/statementPdf', () => ({
+  exportStatementPdf: (config: unknown) => mockExportStatementPdf(config),
+  buildStatementPdfFile: async () => new File(['pdf'], 'Supplier_Statement.pdf', { type: 'application/pdf' }),
+}))
 vi.mock('../hooks/useContainers', () => ({
   useContainers: () => ({ data: { data: [], total: 0 } }),
 }))
@@ -256,12 +261,27 @@ describe('SupplierDetail — Statement of account: ending balance', () => {
 })
 
 describe('SupplierDetail — Statement of account: print', () => {
-  it('the Print button calls window.print()', async () => {
+  it('the Print button opens the language dialog; choosing English then Print calls window.print() once the dialog is closed', async () => {
     const printSpy = vi.spyOn(window, 'print').mockImplementation(() => {})
     const { user } = await openStatementView()
-    await user.click(screen.getByRole('button', { name: /Print/ }))
-    expect(printSpy).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByRole('button', { name: /^Print$/ }))
+    const dialog = screen.getByRole('dialog')
+    expect(printSpy).not.toHaveBeenCalled() // the user must choose first
+    expect(within(dialog).getByRole('radio', { name: 'English' })).toBeChecked()
+    await user.click(within(dialog).getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(printSpy).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     printSpy.mockRestore()
+  })
+
+  it('Export PDF > Arabic > Download PDF exports the statement with lang "ar"', async () => {
+    const { user } = await openStatementView()
+    await user.click(screen.getByRole('button', { name: /Export PDF/ }))
+    const dialog = screen.getByRole('dialog')
+    await user.click(within(dialog).getByRole('radio', { name: 'العربية' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Download PDF' }))
+    await waitFor(() => expect(mockExportStatementPdf).toHaveBeenCalledTimes(1))
+    expect(mockExportStatementPdf.mock.calls[0][0]).toMatchObject({ lang: 'ar', partyLabel: 'Supplier' })
   })
 })
 

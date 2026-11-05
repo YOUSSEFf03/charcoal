@@ -5,7 +5,9 @@ import { useClient } from '../hooks/useClients'
 import { useClientLedger } from '../hooks/useReports'
 import { formatUsd } from '../lib/money'
 import { formatDate, formatDateTime, toDateOnlyString } from '../lib/date'
-import { exportStatementPdf } from '../lib/statementPdf'
+import type { StatementPdfConfig } from '../lib/statementPdf'
+import { StatementActionDialog } from '../components/share/StatementActionDialog'
+import { clientPhoneContacts } from '../lib/share/contacts'
 
 // Statement of Account presentation (monthly-statement unification,
 // 2026-09-07): the PRIMARY view is always a single calendar month, navigated
@@ -29,6 +31,8 @@ export default function FillClientStatement() {
 
   const clientQ = useClient(id ?? '')
   const client = clientQ.data
+  // Print PDF opens one dialog (language + action + contact); nothing is remembered between opens.
+  const [dialogOpen, setDialogOpen] = useState(false)
 
   const [statementMode, setStatementMode] = useState<StatementMode>('month')
   const [statementMonth, setStatementMonth] = useState(() => {
@@ -75,11 +79,11 @@ export default function FillClientStatement() {
     : statementMode === 'custom' ? (dateFrom || dateTo ? `${dateFrom ? formatDate(dateFrom, { day: '2-digit' }) : 'start'} — ${dateTo ? formatDate(dateTo, { day: '2-digit' }) : 'today'}` : 'Custom range')
     : statementMonthLabel
 
-  async function handlePrintPdf() {
-    if (!client) return
-    await exportStatementPdf({
+  function buildStatementConfig(client: NonNullable<typeof clientQ.data>): StatementPdfConfig {
+    return {
       client: {
         name: client.name,
+        nameAr: client.nameAr || null,
         // Fill Client has no stored address anywhere in this app, same as
         // normal Client (see ClientDetail.tsx's identical comment) — never
         // invent one.
@@ -101,16 +105,26 @@ export default function FillClientStatement() {
       periodDebitTotal: debitTotal,
       periodCreditTotal: creditTotal,
       closingBalance,
-    })
+    }
   }
 
   return (
     <>
       <Topbar title="Statement of account" back={{ label: 'Fill Client', to: `/fill-clients/${id}` }}>
-        <button className="btn" style={{ marginLeft: 'auto' }} disabled={!client} onClick={handlePrintPdf}>
+        <button className="btn" style={{ marginLeft: 'auto' }} disabled={!client} onClick={() => setDialogOpen(true)}>
           <i className="ti ti-printer" style={{ fontSize: 15 }} /> Print PDF
         </button>
       </Topbar>
+      {client && (
+        <StatementActionDialog
+          open={dialogOpen}
+          onClose={() => setDialogOpen(false)}
+          title={`Statement of account — ${client.name}`}
+          partyName={client.name}
+          buildConfig={() => buildStatementConfig(client)}
+          contacts={clientPhoneContacts(client.phones)}
+        />
+      )}
       <div className="content">
         <div className="page-header">
           <div>

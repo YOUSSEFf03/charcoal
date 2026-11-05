@@ -15,6 +15,8 @@
 // clicks an Export button.
 
 import { toDateOnlyString } from './date'
+import type { DocLang } from './i18n/docLang'
+import { t } from './i18n/docLabels'
 
 const BRAND_FILL = 'FF1D6B4A' // matches --accent in src/index.css
 const BRAND_TEXT = 'FFFFFFFF'
@@ -27,6 +29,8 @@ export interface ExcelColumn<Row> {
   /** Stable key, used only for the total-row lookup — not written to the sheet. */
   key: string
   header: string
+  /** Arabic header, used instead of `header` when the export's `lang` is 'ar'. Falls back to `header`. */
+  headerAr?: string
   type?: ExcelColumnType
   /** Column width in characters. Omit for a sensible type-based default. */
   width?: number
@@ -76,8 +80,19 @@ export interface ExcelExportConfig<Row> {
    * style as the totals row — e.g. a statement's "Opening balance" row.
    */
   emphasizeRowIndexes?: number[]
-  /** Label for the totals row, shown in the first column. Default 'Total'. Only rendered if any column has total:'sum'. */
+  /**
+   * Document language. Default 'en' (output identical to before). 'ar' sets the
+   * sheet right-to-left, uses `headerAr ?? header` for headers and an Arabic
+   * default totals label. Titles, subtitles and cell values are caller-supplied.
+   */
+  lang?: DocLang
+  /** Label for the totals row, shown in the first column. Default 'Total' ('الإجمالي' when lang is 'ar'). Only rendered if any column has total:'sum'. */
   totalsLabel?: string
+}
+
+/** Header text for a column in the given language. */
+function headerText<Row>(col: ExcelColumn<Row>, lang: DocLang): string {
+  return lang === 'ar' ? col.headerAr ?? col.header : col.header
 }
 
 function numberFormat<Row>(col: ExcelColumn<Row>): string | undefined {
@@ -106,23 +121,24 @@ function defaultAlign<Row>(col: ExcelColumn<Row>): 'left' | 'center' | 'right' {
   return col.type === 'number' || col.type === 'currency' || col.type === 'percent' ? 'right' : 'left'
 }
 
-function defaultWidth<Row>(col: ExcelColumn<Row>, rows: Row[]): number {
+function defaultWidth<Row>(col: ExcelColumn<Row>, rows: Row[], lang: DocLang = 'en'): number {
+  const header = headerText(col, lang)
   if (col.width) return col.width
   switch (col.type) {
     case 'date':
       return 13
     case 'currency':
-      return Math.max(col.header.length + 2, 13)
+      return Math.max(header.length + 2, 13)
     case 'number':
-      return Math.max(col.header.length + 2, 11)
+      return Math.max(header.length + 2, 11)
     case 'percent':
-      return Math.max(col.header.length + 2, 10)
+      return Math.max(header.length + 2, 10)
     default: {
       // Bounded content-aware width for text: wide enough to read most
       // values without wrapping, but capped so one long outlier (an address,
       // a note) can't blow the column out — long text wraps instead (see
       // wrap default below and the row-height estimate in exportExcel()).
-      let maxLen = col.header.length
+      let maxLen = header.length
       for (const row of rows) {
         const v = col.value(row)
         if (v == null) continue
@@ -155,7 +171,8 @@ export async function buildWorkbook<Row>(config: ExcelExportConfig<Row>) {
   const worksheet = workbook.addWorksheet(config.sheetName)
 
   const { columns, rows } = config
-  const widths = columns.map((c) => defaultWidth(c, rows))
+  const lang: DocLang = config.lang ?? 'en'
+  const widths = columns.map((c) => defaultWidth(c, rows, lang))
   worksheet.columns = columns.map((c, i) => ({ key: c.key, width: widths[i] }))
 
   let headerRowNumber = 1
@@ -178,7 +195,7 @@ export async function buildWorkbook<Row>(config: ExcelExportConfig<Row>) {
     headerRowNumber++
   }
 
-  const headerRow = worksheet.addRow(columns.map((c) => c.header))
+  const headerRow = worksheet.addRow(columns.map((c) => headerText(c, lang)))
   headerRow.height = 22
   headerRow.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: BRAND_TEXT } }
@@ -191,7 +208,7 @@ export async function buildWorkbook<Row>(config: ExcelExportConfig<Row>) {
       right: { style: 'thin', color: { argb: BORDER_COLOR } },
     }
   })
-  worksheet.views = [{ state: 'frozen', ySplit: headerRowNumber }]
+  worksheet.views = [{ state: 'frozen', ySplit: headerRowNumber, ...(lang === 'ar' ? { rightToLeft: true } : {}) }]
   worksheet.autoFilter = {
     from: { row: headerRowNumber, column: 1 },
     to: { row: headerRowNumber, column: columns.length },
@@ -243,7 +260,7 @@ export async function buildWorkbook<Row>(config: ExcelExportConfig<Row>) {
   if (totalCols.length > 0 && rows.length > 0) {
     const lastDataRow = firstDataRow + rows.length - 1
     const totalsRow = worksheet.addRow(columns.map(() => null))
-    totalsRow.getCell(1).value = config.totalsLabel ?? 'Total'
+    totalsRow.getCell(1).value = config.totalsLabel ?? t(lang, 'excel.total')
     // includeEmpty: the row is built from an all-null placeholder array
     // (only cell 1 has a value so far), so every totaled column's cell would
     // otherwise be skipped and never receive its formula.

@@ -3,16 +3,17 @@ import { useParams } from 'react-router-dom'
 import { useOrder } from '../hooks/useOrders'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { useArabicTranslations } from '../hooks/useTranslation'
-import { lookupCharcoalTypeAr } from '../lib/charcoalTypeGlossary'
+import { buildDeliveryReceiptData, receiptNeedsTranslation } from '../components/receipt/buildDeliveryReceiptData'
+import { useDocLang } from '../lib/i18n/useDocLang'
+import { DocLangToggle } from '../components/ui/DocLangToggle'
 import {
   DeliveryReceiptDocument,
   RECEIPT_WIDTHS_MM,
-  type DeliveryReceiptData,
-  type DeliveryReceiptItem,
   type ReceiptWidthMm,
 } from '../components/receipt/DeliveryReceiptDocument'
 
 const WIDTH_STORAGE_KEY = 'dr-width-mm'
+const RECEIPT_LANG_OPTIONS = ['bilingual', 'en', 'ar'] as const
 
 function loadStoredWidth(): ReceiptWidthMm {
   const stored = Number(localStorage.getItem(WIDTH_STORAGE_KEY))
@@ -32,82 +33,16 @@ export default function DeliveryReceiptPrint() {
   const bagTypesQ = useBagTypes()
   const order = orderQ.data
   const [widthMm, setWidthMm] = useState<ReceiptWidthMm>(loadStoredWidth)
+  // ?lang=bilingual|en|ar — absent keeps the historical bilingual layout.
+  const [lang, setLang] = useDocLang({ allowBilingual: true, fallback: 'bilingual' })
 
   function changeWidth(w: ReceiptWidthMm) {
     setWidthMm(w)
     localStorage.setItem(WIDTH_STORAGE_KEY, String(w))
   }
 
-  const isBagOrder = !!order?.bagTypeId
-  const pricePerUnit = order ? parseFloat(order.pricePerBag) : 0
-  const totalKg = order ? parseFloat(order.totalKgRequested) : 0
-  const bagTypeById = new Map((bagTypesQ.data ?? []).map((b) => [b.id, b]))
-  const totalBags = order && isBagOrder
-    ? (order.bagLines.length > 0
-        ? order.bagLines.reduce((s, l) => s + l.quantity, 0)
-        : order.bagType ? Math.round(totalKg / parseFloat(order.bagType.nominalKg)) : 0)
-    : 0
-  const totalAmount = order ? (isBagOrder ? totalBags * pricePerUnit : totalKg * pricePerUnit) : 0
-
-  // Item rows — mirrors OrderDetail.tsx's "Order details" card exactly
-  // (same bagLines-vs-single-bagType-vs-KG branching, same figures), just
-  // reshaped for the receipt table. Every row shares order.charcoalType as
-  // its English description, since a single order has one charcoal type —
-  // only the bag size/unit varies per row.
-  const items: DeliveryReceiptItem[] = []
-  if (order) {
-    if (isBagOrder && order.bagLines.length > 0) {
-      order.bagLines.forEach((l, i) => {
-        const bt = bagTypeById.get(l.bagTypeId)
-        items.push({
-          no: i + 1,
-          descriptionEn: order.charcoalType,
-          typeSize: bt ? `${parseFloat(bt.nominalKg)} KG` : '—',
-          unit: 'BAG',
-          quantity: l.quantity,
-          unitPrice: pricePerUnit,
-          lineTotal: l.quantity * pricePerUnit,
-        })
-      })
-    } else if (isBagOrder) {
-      items.push({
-        no: 1,
-        descriptionEn: order.charcoalType,
-        typeSize: order.bagType ? `${parseFloat(order.bagType.nominalKg)} KG` : '—',
-        unit: 'BAG',
-        quantity: totalBags,
-        unitPrice: pricePerUnit,
-        lineTotal: totalAmount,
-      })
-    } else {
-      items.push({
-        no: 1,
-        descriptionEn: order.charcoalType,
-        typeSize: `Grade ${order.grade}`,
-        unit: 'KG',
-        quantity: totalKg,
-        unitPrice: pricePerUnit,
-        lineTotal: totalAmount,
-      })
-    }
-  }
-
-  // Known-terminology check FIRST — see charcoalTypeGlossary.ts. This
-  // business's charcoalType field is free text, but every value that has
-  // ever actually been entered is one of four known terms; for those, a
-  // deterministic lookup is used instead of live machine translation, which
-  // was found (audit, 2026-08-28) to sometimes return fluent but WRONG
-  // Arabic for exactly these terms (e.g. "Restaurant Grade" → "rest line").
-  // A known term with no verified Arabic yet (lookup.ar === null, pending
-  // product decision) shows English only and is NOT sent to LibreTranslate
-  // either — that's deliberately different from a charcoalType that isn't
-  // one of the four known terms at all, which still falls through to
-  // useArabicTranslations() (LibreTranslate + the existing no-Arabic-
-  // detected filter), unchanged. Every row still shares one translation,
-  // since all rows in one order share the same charcoalType.
-  const known = order ? lookupCharcoalTypeAr(order.charcoalType) : { isKnown: false, ar: null }
-  const translations = useArabicTranslations(order && !known.isKnown ? [order.charcoalType] : [])
-  for (const it of items) it.descriptionAr = known.isKnown ? (known.ar ?? undefined) : translations.get(it.descriptionEn)
+  const bagTypes = bagTypesQ.data ?? []
+  const translations = useArabicTranslations(receiptNeedsTranslation(order, lang) && order ? [order.charcoalType] : [])
 
   if (orderQ.isLoading || bagTypesQ.isLoading) {
     return (
@@ -132,26 +67,7 @@ export default function DeliveryReceiptPrint() {
   }
 
   const orderDisplay = order.displayId ?? `#${order.id.slice(0, 8).toUpperCase()}`
-  // Delivery address: the shipment being delivered, when this order routes
-  // through one (see OrderDetail.tsx's Shipments card); orders delivered
-  // directly (no shipment — an existing, already-handled case there) fall
-  // back to the client's own address. Multi-stop orders use the first
-  // shipment's address.
-  const address = order.shipments[0]?.address ?? order.client.address ?? '—'
-
-  const data: DeliveryReceiptData = {
-    receiptNo: orderDisplay,
-    date: new Date().toLocaleDateString('en-GB'),
-    customerName: order.client.name,
-    customerNameAr: order.client.nameAr,
-    address,
-    currency: order.currency,
-    items,
-    totalItems: items.length,
-    totalQuantity: items.reduce((s, it) => s + it.quantity, 0),
-    totalAmount,
-    notes: order.notes,
-  }
+  const data = buildDeliveryReceiptData(order, bagTypes, lang, translations)
 
   return (
     <div className="dr-print-shell" style={{ minHeight: '100vh', background: '#e9e8e4', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '28px 16px 60px' }}>
@@ -160,6 +76,7 @@ export default function DeliveryReceiptPrint() {
           Delivery Receipt&nbsp;<strong style={{ fontFamily: "'IBM Plex Mono', monospace" }} title={order.id}>{orderDisplay}</strong>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <DocLangToggle value={lang} onChange={setLang} options={RECEIPT_LANG_OPTIONS} />
           <div style={{ display: 'flex', border: '1px solid #ccc', borderRadius: 8, overflow: 'hidden' }}>
             {RECEIPT_WIDTHS_MM.map((w) => (
               <button
@@ -183,7 +100,7 @@ export default function DeliveryReceiptPrint() {
         </div>
       </div>
 
-      <DeliveryReceiptDocument data={data} widthMm={widthMm} />
+      <DeliveryReceiptDocument data={data} widthMm={widthMm} lang={lang} />
 
       <style>{`
         @page { size: ${widthMm}mm auto; margin: 6mm; }

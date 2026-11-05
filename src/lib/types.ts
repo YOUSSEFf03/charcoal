@@ -1018,7 +1018,8 @@ export interface ClientOrderDetail extends ClientOrderBase {
   client: Pick<Client, 'id' | 'name' | 'nameAr' | 'type' | 'currency' | 'address'>;
   bagType: { id: string; name: string; nominalKg: string } | null;
   driver: { id: string; name: string } | null;
-  location: { id: string; name: string } | null;
+  /** `address` is returned by GET /orders/:id only (used by the delivery receipt). */
+  location: { id: string; name: string; address?: string | null } | null;
   bagLines: OrderBagLine[];
   shipments: Shipment[];
   invoices: Invoice[];

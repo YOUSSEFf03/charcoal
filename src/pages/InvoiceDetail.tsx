@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useInvoice, useCancelInvoice } from '../hooks/useInvoices'
 import { formatDate } from '../lib/date'
+import { InvoiceActionDialog } from '../components/share/InvoiceActionDialog'
 
 function statusBadge(status: string) {
   if (status === 'paid') return <span className="badge badge-green">Paid</span>
@@ -35,6 +37,8 @@ export default function InvoiceDetail() {
   const navigate = useNavigate()
   const invoiceQ = useInvoice(id ?? '')
   const cancelInvoice = useCancelInvoice()
+  // Print / PDF / Share opens a dialog (language + action + contact); nothing is remembered between opens.
+  const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const invoice = invoiceQ.data
 
   if (invoiceQ.isLoading) {
@@ -76,12 +80,13 @@ export default function InvoiceDetail() {
   return (
     <>
       <Topbar title={invoiceDisplay} back={{ label: 'Invoices', to: '/invoices' }}>
-        {/* Reuses the existing, already-authoritative print/PDF page (same
-            GET /invoices/:id this page reads) — window.print() there lets the
-            user save as PDF. No second invoice-rendering system. */}
-        <a className="btn" href={`/invoice/${invoice.id}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+        {/* Opens the Print / Download PDF / Share dialog. Print inside it reuses the
+            existing, already-authoritative /invoice/:id print route (same
+            GET /invoices/:id this page reads) with ?lang= — no second invoice-
+            rendering system. */}
+        <button className="btn" onClick={() => setPrintDialogOpen(true)}>
           <i className="ti ti-printer" style={{ fontSize: 15 }} /> Print / PDF
-        </a>
+        </button>
         {canCancel && (
           <button
             className="btn"
@@ -99,6 +104,12 @@ export default function InvoiceDetail() {
           </button>
         )}
       </Topbar>
+      <InvoiceActionDialog
+        open={printDialogOpen}
+        onClose={() => setPrintDialogOpen(false)}
+        invoiceId={invoice.id}
+        displayId={invoice.displayId}
+      />
 
       <div className="content">
         {/* HEADER */}

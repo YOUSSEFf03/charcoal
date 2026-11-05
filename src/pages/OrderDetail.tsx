@@ -5,6 +5,8 @@ import { useOrder, useDeleteOrder, useMarkOrderDelivered, useGenerateOrderInvoic
 import { useBagTypes } from '../hooks/useBagTypes'
 import type { OrderStatus, ShipmentStatus } from '../types/api'
 import { formatUsd } from '../lib/money'
+import { DeliveryReceiptActionDialog } from '../components/share/DeliveryReceiptActionDialog'
+import { InvoiceActionDialog } from '../components/share/InvoiceActionDialog'
 
 function orderStatusMeta(s: OrderStatus): { cls: string; label: string } {
   switch (s) {
@@ -39,6 +41,9 @@ export default function OrderDetail() {
   const order = orderQ.data
 
   const [toast, setToast] = useState('')
+  // Print / PDF / Share buttons open a dialog (language + action + contact); nothing is remembered between opens.
+  const [receiptDialogOpen, setReceiptDialogOpen] = useState(false)
+  const [invoiceDialogOpen, setInvoiceDialogOpen] = useState(false)
   function showToast(msg: string) {
     setToast(msg)
     setTimeout(() => setToast(''), 2800)
@@ -89,13 +94,13 @@ export default function OrderDetail() {
   return (
     <>
       <Topbar title={orderDisplay} back={{ label: 'Orders', to: '/orders' }}>
-        <a className="btn" href={`/orders/${order.id}/delivery-receipt`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+        <button className="btn" onClick={() => setReceiptDialogOpen(true)}>
           <i className="ti ti-file-invoice" style={{ fontSize: 15 }} /> Print Delivery Receipt
-        </a>
+        </button>
         {invoice && (
-          <a className="btn" href={`/invoice/${invoice.id}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+          <button className="btn" onClick={() => setInvoiceDialogOpen(true)}>
             <i className="ti ti-printer" style={{ fontSize: 15 }} /> Print invoice
-          </a>
+          </button>
         )}
         <button className="btn" onClick={() => navigate(`/orders/${order.id}/edit`)}><i className="ti ti-edit" style={{ fontSize: 15 }} /> Edit</button>
         {order.status === 'draft' && (
@@ -338,9 +343,9 @@ export default function OrderDetail() {
               <div className="card-head">
                 <div className="card-title"><i className="ti ti-receipt" /> Invoice &amp; payment</div>
                 {invoice && (
-                  <a className="card-action" href={`/invoice/${invoice.id}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <button className="card-action" onClick={() => setInvoiceDialogOpen(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                     <i className="ti ti-arrow-up-right" style={{ fontSize: 12 }} /> View invoice
-                  </a>
+                  </button>
                 )}
               </div>
               {!invoice ? (
@@ -381,6 +386,21 @@ export default function OrderDetail() {
           </div>
         </div>
       </div>
+
+      <DeliveryReceiptActionDialog
+        open={receiptDialogOpen}
+        onClose={() => setReceiptDialogOpen(false)}
+        order={order}
+        bagTypes={bagTypesQ.data ?? []}
+      />
+      {invoice && (
+        <InvoiceActionDialog
+          open={invoiceDialogOpen}
+          onClose={() => setInvoiceDialogOpen(false)}
+          invoiceId={invoice.id}
+          displayId={invoice.displayId}
+        />
+      )}
 
       {/* TOAST */}
       {toast && (

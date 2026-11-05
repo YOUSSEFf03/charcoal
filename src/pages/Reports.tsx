@@ -11,7 +11,9 @@ import { useToast } from '../context/ToastContext'
 import { roundDp, formatUsd } from '../lib/money'
 import { currentMonthToDateRange, currentWeekToDateRange, toDateOnlyString } from '../lib/date'
 import { exportExcel, type ExcelColumn } from '../lib/excelExport'
+import { t as docT } from '../lib/i18n/docLabels'
 import { useExportColumnsModal } from '../components/ui/ExportColumnsModal'
+import { DailyReportActionDialog } from '../components/share/DailyReportActionDialog'
 import type { Worker } from '../types/api'
 
 type Tab = 'pnl' | 'variance' | 'worker' | 'ledger' | 'stock' | 'daily'
@@ -79,6 +81,8 @@ export default function Reports() {
 
   const { showToast } = useToast()
   const { openExportModal, exportColumnsModal } = useExportColumnsModal()
+  // The Full Day Report's Print / PDF / Share opens a dialog (language + action); nothing is remembered between opens.
+  const [dailyDialogOpen, setDailyDialogOpen] = useState(false)
 
   // Date range drives all report queries. Defaults to current month-to-date —
   // the SAME shared helper Dashboard.tsx uses for its own default — so the two
@@ -597,17 +601,17 @@ export default function Reports() {
               function exportLedger() {
                 if (allClients.length === 0) { showToast('Nothing to export'); return }
                 const columns: ExcelColumn<(typeof allClients)[number]>[] = [
-                  { key: 'client', header: 'Client', value: c => c.name },
-                  { key: 'type', header: 'Type', value: c => c.type },
-                  { key: 'balance', header: 'Balance', type: 'currency', value: c => parseFloat(c.balance), total: 'sum' },
-                  { key: 'status', header: 'Status', value: c => parseFloat(c.balance) > 0 ? 'Has balance' : 'Clear' },
+                  { key: 'client', header: 'Client', headerAr: docT('ar', 'common.client'), value: c => c.name },
+                  { key: 'type', header: 'Type', headerAr: docT('ar', 'common.type'), value: c => c.type },
+                  { key: 'balance', header: 'Balance', headerAr: docT('ar', 'statement.col.balance'), type: 'currency', value: c => parseFloat(c.balance), total: 'sum' },
+                  { key: 'status', header: 'Status', headerAr: docT('ar', 'common.status'), value: c => parseFloat(c.balance) > 0 ? 'Has balance' : 'Clear' },
                 ]
                 openExportModal({
                   title: 'Client Ledger', columns,
-                  onExport: async selectedColumns => {
+                  onExport: async (selectedColumns, lang) => {
                     await exportExcel({
                       filename: 'client-ledger', sheetName: 'Client ledger', title: 'Client Ledger',
-                      columns: selectedColumns, rows: allClients,
+                      columns: selectedColumns, lang, rows: allClients,
                     })
                     showToast(`Exported ${allClients.length} rows`)
                   },
@@ -775,15 +779,14 @@ export default function Reports() {
                 (end-of-day summary — not the Period range above)
               </span>
               <div style={{ flex: 1 }} />
-              <a
+              <button
                 className="btn primary"
-                href={`/reports/daily/${dailyReportDate}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ fontSize: 12, padding: '6px 12px', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                onClick={() => setDailyDialogOpen(true)}
+                disabled={!dailyReportDate}
+                style={{ fontSize: 12, padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }}
               >
                 <i className="ti ti-printer" style={{ fontSize: 13 }} /> Open printable report
-              </a>
+              </button>
             </div>
 
             {dailyReportQ.isLoading ? (
@@ -901,6 +904,7 @@ export default function Reports() {
       )}
 
       {exportColumnsModal}
+      <DailyReportActionDialog open={dailyDialogOpen} onClose={() => setDailyDialogOpen(false)} date={dailyReportDate} />
     </>
   )
 }

@@ -829,11 +829,30 @@ tr.entry-clickable:hover td { background: var(--surface2); }
 .receipt-divider { border: none; border-top: 1px dashed var(--border2); margin: 8px 0; }
 .receipt-row   { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; padding: 1px 0; }
 .receipt-row > span:first-child { flex: 1 1 auto; min-width: 0; overflow-wrap: break-word; }
-.receipt-row > span:last-child  { flex: 0 0 auto; white-space: nowrap; text-align: right; }
+.receipt-row > span:last-child  { flex: 0 0 auto; white-space: nowrap; text-align: end; }
 .receipt-row.total { font-weight: 600; font-size: 12px; border-top: 1px dashed var(--border2); padding-top: 6px; margin-top: 4px; }
 .receipt-row.paid  { color: var(--accent); font-weight: 600; }
 .receipt-sig   { margin-top: 16px; font-size: 11px; color: var(--text3); }
 .receipt-sig-line { border-top: 1px solid var(--text3); margin-top: 20px; padding-top: 3px; }
+.receipt[dir="rtl"] { font-family: 'Noto Sans Arabic', 'IBM Plex Mono', monospace; }
+/* Arabic invoice (InvoiceDocument → InvoiceDocumentAr): larger text and more
+   line height, since Arabic glyphs are hard to read at the 11px receipt size. */
+.inv-ar { font-size: 13px; line-height: 1.75; }
+.inv-ar .receipt-title { font-size: 17px; font-weight: 700; margin-bottom: 0; }
+.inv-ar .inv-company { text-align: center; font-size: 11.5px; color: var(--text3); }
+.inv-ar .receipt-sub { font-size: 12px; margin: 2px 0 10px; }
+.inv-ar .receipt-row { font-size: 12.5px; padding: 2px 0; }
+.inv-ar .receipt-row.total { font-size: 14px; font-weight: 700; margin-top: 6px; }
+.inv-ar .inv-ref { font-family: 'IBM Plex Mono', monospace; }
+.inv-ar .inv-client > span:last-child { white-space: normal; max-width: 65%; text-align: start; }
+.inv-ar .inv-items-head { display: flex; justify-content: space-between; font-size: 11.5px; font-weight: 600; color: var(--text3); padding-bottom: 7px; margin-bottom: 2px; border-bottom: 1px solid var(--border2); }
+.inv-ar .inv-item { padding: 6px 0; border-bottom: 1px dotted var(--border2); }
+.inv-ar .inv-item:last-of-type { border-bottom: none; }
+.inv-ar .inv-item-main { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; font-weight: 600; }
+.inv-ar .inv-item-main > span:first-child { flex: 1 1 auto; min-width: 0; overflow-wrap: break-word; }
+.inv-ar .inv-item-main > span:last-child { flex: 0 0 auto; white-space: nowrap; }
+.inv-ar .inv-item-meta { display: flex; flex-wrap: wrap; column-gap: 14px; font-size: 11.5px; color: var(--text2); }
+.inv-ar .inv-status { margin-top: 8px; padding: 5px 8px 9px; border: 1px solid currentColor; border-radius: 6px; text-align: center; font-size: 12px; font-weight: 600; }
 
 /* ── CLIENTS ── */
 .alert-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 10px; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
@@ -2512,7 +2531,7 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 .dr-th-ar { font-family: 'Noto Sans Arabic', sans-serif; font-weight: 400; }
 
 .dr-table { width: 100%; border-collapse: collapse; margin-top: 0.5em; table-layout: fixed; }
-.dr-table th, .dr-table td { border: 1px solid #1a1a1a; padding: 0.5em 0.4em; text-align: left; vertical-align: top; word-wrap: break-word; }
+.dr-table th, .dr-table td { border: 1px solid #1a1a1a; padding: 0.5em 0.4em; text-align: start; vertical-align: top; word-wrap: break-word; }
 .dr-table thead th { background: #f3f2ef; font-size: 0.92em; line-height: 1.35; }
 .dr-table thead .dr-th-ar { display: block; font-size: 0.95em; }
 .dr-c-no { width: 6%; text-align: center; }
@@ -2521,17 +2540,17 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 .dr-c-desc { width: auto; }
 .dr-c-type { width: 16%; }
 .dr-c-unit { width: 12%; }
-.dr-c-qty { width: 10%; text-align: right; }
-.dr-c-price { width: 14%; text-align: right; }
-.dr-c-total { width: 14%; text-align: right; }
-.dr-table td.dr-c-no, .dr-table td.dr-c-qty, .dr-table td.dr-c-price, .dr-table td.dr-c-total { text-align: right; }
+.dr-c-qty { width: 10%; text-align: end; }
+.dr-c-price { width: 14%; text-align: end; }
+.dr-c-total { width: 14%; text-align: end; }
+.dr-table td.dr-c-no, .dr-table td.dr-c-qty, .dr-table td.dr-c-price, .dr-table td.dr-c-total { text-align: end; }
 .dr-table td.dr-c-no { text-align: center; }
 .dr-desc-ar { direction: rtl; font-family: 'Noto Sans Arabic', sans-serif; text-align: right; font-size: 0.95em; margin-top: 0.15em; }
 .dr-desc-sub { color: #5a5750; font-size: 0.88em; margin-top: 0.15em; }
 
 .dr-totals-row { display: flex; border: 1px solid #1a1a1a; border-top: none; }
-.dr-totals-cell { flex: 1; padding: 0.5em 0.6em; border-left: 1px solid #1a1a1a; font-weight: 700; }
-.dr-totals-cell:first-child { border-left: none; }
+.dr-totals-cell { flex: 1; padding: 0.5em 0.6em; border-inline-start: 1px solid #1a1a1a; font-weight: 700; }
+.dr-totals-cell:first-child { border-inline-start: none; }
 .dr-totals-amount { display: flex; align-items: center; justify-content: space-between; gap: 0.6em; }
 .dr-totals-value { font-size: 1.3em; font-weight: 700; }
 .dr-totals-value-lg { font-size: 1.7em; }
@@ -2542,13 +2561,23 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 .dr-sig-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 1.5em; margin-top: 1.6em; }
 .dr-sig-block { flex: 1 1 55%; }
 .dr-sig-line { border-top: 1px solid #1a1a1a; width: 70%; margin-top: 2.2em; }
-.dr-sig-total { text-align: right; }
+.dr-sig-total { text-align: end; }
 .dr-page[data-compact] .dr-sig-row { flex-direction: column; align-items: stretch; gap: 1em; }
-.dr-page[data-compact] .dr-sig-total { text-align: left; }
+.dr-page[data-compact] .dr-sig-total { text-align: start; }
 
 .dr-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.3em 1.2em; margin-top: 1.6em; padding-top: 0.6em; border-top: 1px solid #1a1a1a; font-size: 0.85em; color: #3a3832; }
-.dr-footer .dr-th-ar { margin-left: 0.35em; }
+.dr-footer .dr-th-ar { margin-inline-start: 0.35em; }
 .dr-page[data-compact] .dr-footer { flex-direction: column; align-items: center; text-align: center; gap: 0.25em; }
+
+/* Single-language receipts (?lang=en | ar). Bilingual (no data-lang) is unchanged. */
+.dr-page[data-lang] .dr-title-row { justify-content: center; }
+.dr-page[data-lang="ar"] { font-family: 'Noto Sans Arabic', 'IBM Plex Sans', sans-serif; }
+.dr-page[data-lang="ar"] .dr-title-ar { font-size: 2em; }
+.dr-page[data-lang="ar"] .dr-th-ar { font-weight: 700; }
+.dr-page[data-lang="ar"] .dr-field.dr-ar,
+.dr-page[data-lang="ar"] .dr-notes-line { text-align: start; }
+.dr-page[data-lang="ar"] .dr-table thead .dr-th-ar { font-weight: 600; }
+.dr-page[data-lang="en"] .dr-notes-line { direction: ltr; text-align: start; font-family: inherit; }
 
 @media print {
   .dr-print-shell { background: #fff !important; padding: 0 !important; }
@@ -2570,7 +2599,7 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 .day-report-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1a1a1a; padding-bottom: 10px; margin-bottom: 14px; }
 .day-report-logo { height: 3.2em; width: auto; }
 .day-report-title { font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 1.6em; }
-.day-report-meta { text-align: right; font-size: 0.95em; color: #5a5750; }
+.day-report-meta { text-align: end; font-size: 0.95em; color: #5a5750; }
 
 .day-report-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
 .day-report-kpi { border: 1px solid #ddd9cf; border-radius: 4px; padding: 8px 10px; background: #faf9f6; }
@@ -2584,12 +2613,12 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 .day-report-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
 .day-report table { width: 100%; border-collapse: collapse; font-size: 0.92em; }
-.day-report th, .day-report td { border: 1px solid #ddd9cf; padding: 4px 6px; text-align: left; vertical-align: top; }
+.day-report th, .day-report td { border: 1px solid #ddd9cf; padding: 4px 6px; text-align: start; vertical-align: top; }
 .day-report th { background: #f3f2ef; font-weight: 600; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.3px; color: #5a5750; }
-.day-report td.num, .day-report th.num { text-align: right; font-family: 'IBM Plex Mono', monospace; }
+.day-report td.num, .day-report th.num { text-align: end; font-family: 'IBM Plex Mono', monospace; }
 
 .day-report-exceptions { list-style: none; padding: 0; margin: 0; }
-.day-report-exceptions li { padding: 5px 8px; border-left: 3px solid #b03a2e; background: #fbeceb; margin-bottom: 4px; font-size: 0.92em; }
+.day-report-exceptions li { padding: 5px 8px; border-inline-start: 3px solid #b03a2e; background: #fbeceb; margin-bottom: 4px; font-size: 0.92em; }
 
 @media print {
   .day-report-shell { background: #fff !important; padding: 0 !important; }
@@ -2597,3 +2626,10 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
   .day-report-section { break-inside: avoid; }
 }
 
+
+/* Full Day Report in Arabic (?lang=ar): Arabic font, and no letter-spacing /
+   uppercasing, which would break Arabic letter joining. */
+.day-report[dir="rtl"] { font-family: 'Noto Sans Arabic', 'IBM Plex Sans', sans-serif; }
+.day-report[dir="rtl"] th,
+.day-report[dir="rtl"] .day-report-kpi-label { letter-spacing: 0; text-transform: none; }
+.day-report[dir="rtl"] .day-report-title { font-family: 'Noto Sans Arabic', sans-serif; }

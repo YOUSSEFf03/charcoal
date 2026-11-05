@@ -1253,7 +1253,7 @@ describe('OrdersService', () => {
           client: true,
           driver: { select: { id: true, name: true } },
           bagType: { select: { id: true, name: true, nominalKg: true } },
-          location: { select: { id: true, name: true } },
+          location: { select: { id: true, name: true, address: true } },
           shipments: { include: { bags: { include: { bagType: true } } } },
           orderBagLines: { include: { bagType: true } },
           invoices: true,

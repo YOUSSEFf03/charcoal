@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import Modal from './Modal'
 import type { ExcelColumn } from '../../lib/excelExport'
+import type { DocLang } from '../../lib/i18n/docLang'
+import { t } from '../../lib/i18n/docLabels'
 
 /**
  * The ONE reusable "choose which columns to export" popup for every Excel
@@ -22,8 +24,12 @@ export interface ExportColumnsModalState {
   /** Optional line under the title, e.g. a client/supplier name or period. */
   subtitle?: string
   columns: ExcelColumn<any>[]
-  /** Runs the caller's existing fetch+exportExcel() logic with only the checked columns. */
-  onExport: (selectedColumns: ExcelColumn<any>[]) => Promise<void>
+  /**
+   * Runs the caller's existing fetch+exportExcel() logic with only the checked columns.
+   * `lang` is the language chosen in the modal on EVERY export (never remembered);
+   * callers that support Arabic pass it on to exportExcel() together with each column's `headerAr`.
+   */
+  onExport: (selectedColumns: ExcelColumn<any>[], lang: DocLang) => Promise<void>
 }
 
 interface ExportColumnsModalProps extends ExportColumnsModalState {
@@ -35,6 +41,8 @@ function ExportColumnsModal({ title, subtitle, columns, onExport, onClose }: Exp
     () => new Set(columns.filter(c => c.defaultSelected !== false).map(c => c.key)),
   )
   const [exporting, setExporting] = useState(false)
+  // Chosen on every export; deliberately not persisted between opens.
+  const [lang, setLang] = useState<DocLang>('en')
   const [error, setError] = useState('')
 
   function toggle(key: string) {
@@ -50,7 +58,7 @@ function ExportColumnsModal({ title, subtitle, columns, onExport, onClose }: Exp
     setExporting(true)
     setError('')
     try {
-      await onExport(columns.filter(c => selected.has(c.key)))
+      await onExport(columns.filter(c => selected.has(c.key)), lang)
       onClose()
     } catch (e) {
       // Preserve the real underlying error for debugging (console), and
@@ -84,6 +92,24 @@ function ExportColumnsModal({ title, subtitle, columns, onExport, onClose }: Exp
         </>
       }
     >
+      <fieldset style={{ border: 0, margin: '0 0 14px', padding: 0 }} disabled={exporting}>
+        <legend className="form-label" style={{ marginBottom: 8, padding: 0 }}>{t('en', 'share.language')}</legend>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {(['en', 'ar'] as const).map(l => (
+            <label
+              key={l}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', fontSize: 13, cursor: 'pointer',
+                border: '1px solid', borderColor: lang === l ? 'var(--text)' : 'var(--border)', borderRadius: 'var(--radius)',
+                fontWeight: lang === l ? 600 : 400,
+              }}
+            >
+              <input type="radio" name="export-lang" value={l} checked={lang === l} onChange={() => setLang(l)} style={{ accentColor: 'var(--accent)' }} />
+              <span lang={l === 'ar' ? 'ar' : undefined}>{t('en', l === 'ar' ? 'share.langAr' : 'share.langEn')}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
       <div className="form-label" style={{ marginBottom: 10 }}>Select columns to export</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 14 }}>
         {columns.map(col => (

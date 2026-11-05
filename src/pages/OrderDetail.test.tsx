@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom'
 import type { ReactNode } from 'react'
@@ -181,5 +182,51 @@ describe('OrderDetail — "Mark as delivered" error handling', () => {
 
     await user.click(screen.getByRole('button', { name: /Mark as delivered/ }))
     expect(await screen.findByText('Failed to mark order as delivered')).toBeInTheDocument()
+  })
+})
+
+describe('OrderDetail — Print / share buttons open the language dialog', () => {
+  function renderWithQuery() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    qc.setQueryData(['clients', 'client-1'], { id: 'client-1', phones: [] })
+    return render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/orders/order-1']}>
+          <Routes>
+            <Route path="/orders/:id" element={<OrderDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  it('"Print Delivery Receipt" opens the dialog (Bilingual preselected) instead of opening the print page directly', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as Window)
+    const user = userEvent.setup()
+    renderWithQuery()
+    await user.click(screen.getByRole('button', { name: /Print Delivery Receipt/ }))
+    const dialog = screen.getByRole('dialog')
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(within(dialog).getByRole('radio', { name: 'Bilingual' })).toBeChecked()
+    await user.click(within(dialog).getByRole('button', { name: 'Print' }))
+    expect(openSpy).toHaveBeenCalledWith('/orders/order-1/delivery-receipt?lang=bilingual', '_blank')
+    openSpy.mockRestore()
+  })
+
+  it('"Print invoice" opens the invoice dialog (English or Arabic only)', async () => {
+    mockUseOrder.mockReturnValue({
+      data: makeOrder({ invoices: [{ id: 'inv-9', displayId: 'SI-0009', total: '100.00', paidAmount: '0.00', status: 'issued' }] }),
+      isLoading: false, isError: false, refetch: vi.fn(),
+    })
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as Window)
+    const user = userEvent.setup()
+    renderWithQuery()
+    await user.click(screen.getByRole('button', { name: /Print invoice/ }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).queryByRole('radio', { name: 'Bilingual' })).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('radio', { name: 'العربية' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Print' }))
+    expect(openSpy).toHaveBeenCalledWith('/invoice/inv-9?lang=ar', '_blank')
+    openSpy.mockRestore()
   })
 })

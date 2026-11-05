@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import type { ReactNode } from 'react'
@@ -38,6 +38,7 @@ vi.mock('../hooks/useReports', () => ({
 const mockExportStatementPdf = vi.fn().mockResolvedValue(undefined)
 vi.mock('../lib/statementPdf', () => ({
   exportStatementPdf: (config: unknown) => mockExportStatementPdf(config),
+  buildStatementPdfFile: async () => new File(['pdf'], 'Statement.pdf', { type: 'application/pdf' }),
 }))
 
 import FillClientStatement from './FillClientStatement'
@@ -121,17 +122,39 @@ describe('FillClientStatement', () => {
     expect(lastCall![1]).toEqual({ dateFrom: undefined, dateTo: undefined })
   })
 
-  it('Print PDF calls the SAME exportStatementPdf used by the normal Client Statement, with the on-screen figures, no invented address, and the client\'s active phone', async () => {
+  it('Print PDF opens the language/action dialog first; Download PDF then calls the SAME exportStatementPdf used by the normal Client Statement, with the on-screen figures, no invented address, and the client\'s active phone', async () => {
     const user = userEvent.setup({ delay: null })
     renderAt('fc-1')
     await user.click(screen.getByRole('button', { name: /Print PDF/ }))
 
-    expect(mockExportStatementPdf).toHaveBeenCalledTimes(1)
+    // Nothing is exported until the user picks a language and an action.
+    expect(mockExportStatementPdf).not.toHaveBeenCalled()
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByRole('radio', { name: 'English' })).toBeChecked()
+    await user.click(within(dialog).getByRole('button', { name: 'Download PDF' }))
+
+    await waitFor(() => expect(mockExportStatementPdf).toHaveBeenCalledTimes(1))
     const config = mockExportStatementPdf.mock.calls[0][0]
-    expect(config.client).toEqual({ name: 'Cedar Fill Co', address: null, phone: '+961-1-234567', currency: 'USD' })
+    expect(config.lang).toBe('en')
+    expect(config.client).toEqual({ name: 'Cedar Fill Co', nameAr: null, address: null, phone: '+961-1-234567', currency: 'USD' })
     expect(config.openingBalance).toBe(100)
     expect(config.closingBalance).toBe(250)
     expect(config.rows).toHaveLength(2)
+  })
+
+  it('choosing العربية passes lang "ar" with the same on-screen figures', async () => {
+    const user = userEvent.setup({ delay: null })
+    renderAt('fc-1')
+    await user.click(screen.getByRole('button', { name: /Print PDF/ }))
+    const dialog = screen.getByRole('dialog')
+    await user.click(within(dialog).getByRole('radio', { name: 'العربية' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Download PDF' }))
+
+    await waitFor(() => expect(mockExportStatementPdf).toHaveBeenCalledTimes(1))
+    const config = mockExportStatementPdf.mock.calls[0][0]
+    expect(config.lang).toBe('ar')
+    expect(config.openingBalance).toBe(100)
+    expect(config.closingBalance).toBe(250)
   })
 
   it('empty state when the ledger has no entries', () => {
