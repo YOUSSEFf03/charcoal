@@ -70,6 +70,7 @@ export function useUpdateUserRole() {
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['users'] })
       qc.invalidateQueries({ queryKey: ['users', id] })
+      qc.invalidateQueries({ queryKey: ['workers'] }) // drivers also appear on Employees
     },
   })
 }
@@ -87,6 +88,7 @@ export function useCreateLocalUser() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] })
+      qc.invalidateQueries({ queryKey: ['workers'] }) // drivers also appear on Employees
     },
   })
 }
@@ -105,6 +107,7 @@ export function useUpdateUserName() {
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['users'] })
       qc.invalidateQueries({ queryKey: ['users', id] })
+      qc.invalidateQueries({ queryKey: ['workers'] }) // drivers also appear on Employees
     },
   })
 }
@@ -121,6 +124,7 @@ export function useDeleteLocalUser() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] })
+      qc.invalidateQueries({ queryKey: ['workers'] }) // drivers also appear on Employees
     },
   })
 }

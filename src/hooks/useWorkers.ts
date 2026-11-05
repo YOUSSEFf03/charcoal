@@ -119,6 +119,7 @@ export function useUpdateWorker() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['workers'] })
+      qc.invalidateQueries({ queryKey: ['users'] }) // name/phone sync to the linked user (e.g. a driver)
     },
   })
 }

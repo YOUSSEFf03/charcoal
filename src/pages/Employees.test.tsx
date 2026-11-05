@@ -618,3 +618,32 @@ describe('Employee Profile — Performance Analytics', () => {
     expect(lastCall[1]).toEqual(monthRange(0))
   })
 })
+
+describe('Employees — drivers added as users show here, labelled Driver', () => {
+  it('labels a worker linked to a driver account "Driver", others "Warehouse worker"', () => {
+    mockUseWorkers.mockReturnValue({
+      data: [
+        makeWorker({ id: 'w-drv', name: 'Sami', user: { id: 'u-drv', role: 'driver' } }),
+        makeWorker({ id: 'w1', name: 'Ahmad', user: { id: 'u-1', role: 'worker' } }),
+      ],
+      isLoading: false,
+      isError: false,
+    })
+    render(<Employees />)
+    const sami = screen.getByText('Sami').parentElement as HTMLElement
+    expect(sami).toHaveTextContent('Driver')
+    const ahmad = screen.getByText('Ahmad').parentElement as HTMLElement
+    expect(ahmad).toHaveTextContent('Warehouse worker')
+  })
+
+  it('shows "Driver" in the detail header too', async () => {
+    mockUseWorkers.mockReturnValue({
+      data: [makeWorker({ name: 'Ahmad', user: { id: 'u-drv', role: 'driver' } })],
+      isLoading: false,
+      isError: false,
+    })
+    const user = userEvent.setup()
+    await openAhmad(user)
+    expect(screen.getAllByText('Driver').length).toBeGreaterThan(0)
+  })
+})

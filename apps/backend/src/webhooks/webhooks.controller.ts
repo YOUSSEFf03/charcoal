@@ -13,6 +13,7 @@ import { Webhook } from 'svix';
 import { Public } from '../common/decorators/public.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { Role } from '@prisma/client';
+import { ensureDriverEmployee } from '../common/utils/driver-employee';
 
 interface ClerkEmailAddress {
   id: string;
@@ -131,7 +132,7 @@ export class WebhooksController {
       'Unknown';
     const role = this.resolveRole(data);
 
-    await this.prisma.user.upsert({
+    const user = await this.prisma.user.upsert({
       where: { clerkId: data.id },
       create: {
         clerkId: data.id,
@@ -146,6 +147,8 @@ export class WebhooksController {
         deletedAt: null,
       },
     });
+    // A driver is also an employee (see ensureDriverEmployee). No-op otherwise.
+    await ensureDriverEmployee(this.prisma, user.id);
   }
 
   /**

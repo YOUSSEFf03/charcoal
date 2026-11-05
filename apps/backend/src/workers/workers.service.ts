@@ -34,6 +34,10 @@ import { LogDailyWageDto } from './dto/log-daily-wage.dto';
 // rewrite of history — see the WorkerCost model comment in schema.prisma.
 const EARNING_EDIT_WINDOW_HOURS = 24;
 
+// The linked login account's role lets the Employees page tag drivers.
+// Only id/role: nothing else about the account is exposed here.
+const LINKED_USER_SELECT = { select: { id: true, role: true } } as const;
+
 @Injectable()
 export class WorkersService {
   constructor(
@@ -82,7 +86,7 @@ export class WorkersService {
     const skip = (page - 1) * limit;
 
     const [workers, total] = await this.prisma.$transaction([
-      this.prisma.worker.findMany({ skip, take: limit, orderBy: { createdAt: 'desc' } }),
+      this.prisma.worker.findMany({ skip, take: limit, orderBy: { createdAt: 'desc' }, include: { user: LINKED_USER_SELECT } }),
       this.prisma.worker.count(),
     ]);
 
@@ -131,7 +135,7 @@ export class WorkersService {
   }
 
   async findOne(id: string) {
-    const worker = await this.prisma.worker.findUnique({ where: { id } });
+    const worker = await this.prisma.worker.findUnique({ where: { id }, include: { user: LINKED_USER_SELECT } });
     if (!worker) throw new NotFoundException({ error: 'Worker not found', code: 'NOT_FOUND' });
     const totals = await this.computeTotals(id);
     return { ...worker, ...totals };
@@ -171,14 +175,22 @@ export class WorkersService {
   }
 
   async update(id: string, dto: UpdateWorkerDto) {
-    await this.findOne(id);
-    return this.prisma.worker.update({
-      where: { id },
-      data: {
-        ...(dto.name !== undefined ? { name: dto.name } : {}),
-        ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
-        ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
-      },
+    const existing = await this.findOne(id);
+    const identity = {
+      ...(dto.name !== undefined ? { name: dto.name } : {}),
+      ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+    };
+    return this.prisma.$transaction(async (tx) => {
+      const worker = await tx.worker.update({
+        where: { id },
+        data: { ...identity, ...(dto.notes !== undefined ? { notes: dto.notes } : {}) },
+      });
+      // Keep the linked user account (e.g. a driver in Settings → Users) showing
+      // the same name/phone as the Employees record.
+      if (existing.userId && Object.keys(identity).length > 0) {
+        await tx.user.update({ where: { id: existing.userId }, data: identity });
+      }
+      return worker;
     });
   }
 

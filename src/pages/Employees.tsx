@@ -17,7 +17,7 @@ import { useBagTypes } from '../hooks/useBagTypes'
 import { useToast } from '../context/ToastContext'
 import { toDateOnlyString, formatDate, formatDateTime } from '../lib/date'
 import { formatUsd } from '../lib/money'
-import { CATEGORY_LABEL, CATEGORY_OPTIONS, METHOD_LABEL, PAYMENT_METHODS } from '../lib/workerLabels'
+import { CATEGORY_LABEL, CATEGORY_OPTIONS, METHOD_LABEL, PAYMENT_METHODS, employeeRoleLabel } from '../lib/workerLabels'
 import type { Worker, WorkerCostCategory, PaymentMethod, WorkerStatementEntry, WorkerRate } from '../types/api'
 
 type View = 'list' | 'worker'
@@ -342,7 +342,7 @@ export default function Employees() {
                 <div className="emp-big-avatar" style={{ background: 'var(--accent)', color: '#fff' }}>{initials(w.name)}</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600, marginBottom: 2 }}>{w.name}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>Warehouse worker</div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>{employeeRoleLabel(w)}</div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontWeight: 700, color: owed > 0 ? 'var(--red)' : 'var(--accent)', fontSize: 15 }}>${owed.toFixed(2)} owed</div>
@@ -421,6 +421,7 @@ export default function Employees() {
           <div className="emp-big-avatar" style={{ background: 'var(--accent)', color: '#fff', width: 56, height: 56, fontSize: 20 }}>{initials(selectedWorker?.name ?? '')}</div>
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: 18 }}>{selectedWorker?.name ?? '—'}</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)' }}>{employeeRoleLabel(selectedWorker)}</div>
             {selectedWorker?.phone && <div style={{ fontSize: 13, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>{selectedWorker.phone}</div>}
           </div>
           <button className="btn" onClick={() => selectedWorker && openEditModal(selectedWorker)}>

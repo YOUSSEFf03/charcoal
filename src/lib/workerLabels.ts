@@ -29,3 +29,8 @@ export const METHOD_LABEL: Record<PaymentMethod, string> = {
   cash: 'Cash', whish: 'Whish', omt: 'OMT', bank_transfer: 'Bank', cheque: 'Cheque',
 }
 export const PAYMENT_METHODS = Object.keys(METHOD_LABEL) as PaymentMethod[]
+
+/** Job title shown under an employee's name: drivers (linked user role 'driver') vs warehouse staff. */
+export function employeeRoleLabel(worker: { user?: { role: string } | null } | null | undefined): string {
+  return worker?.user?.role === 'driver' ? 'Driver' : 'Warehouse worker'
+}

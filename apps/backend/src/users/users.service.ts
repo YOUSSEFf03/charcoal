@@ -9,6 +9,7 @@ import { clerkClient } from '@clerk/clerk-sdk-node';
 import { Role } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
+import { ensureDriverEmployee } from '../common/utils/driver-employee';
 
 @Injectable()
 export class UsersService {
@@ -77,14 +78,20 @@ export class UsersService {
   async createLocal(name: string, role: Role, phone?: string) {
     const syntheticClerkId = `local_${crypto.randomUUID()}`;
     const syntheticEmail = `${syntheticClerkId}@local.internal`;
-    return this.prisma.user.create({
-      data: {
-        clerkId: syntheticClerkId,
-        email: syntheticEmail,
-        name: name.trim(),
-        role,
-        phone: phone?.trim() ?? null,
-      },
+    // A driver also gets a linked Employees (Worker) record, in the same
+    // transaction so the user never exists without it.
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          clerkId: syntheticClerkId,
+          email: syntheticEmail,
+          name: name.trim(),
+          role,
+          phone: phone?.trim() ?? null,
+        },
+      });
+      await ensureDriverEmployee(tx, user.id);
+      return user;
     });
   }
 
@@ -151,17 +158,24 @@ export class UsersService {
       }
     }
 
-    return this.prisma.user.update({ where: { id }, data: { role } });
+    const updated = await this.prisma.user.update({ where: { id }, data: { role } });
+    // Becoming a driver adds them to Employees. Switching away from driver keeps
+    // the employee record, since it may hold wages and payments.
+    await ensureDriverEmployee(this.prisma, id);
+    return updated;
   }
 
   async updateName(id: string, name: string, phone?: string | null) {
-    const user = await this.findOne(id);
-    return this.prisma.user.update({
-      where: { id },
-      data: {
-        name: name.trim(),
-        ...(phone !== undefined ? { phone: phone?.trim() ?? null } : {}),
-      },
+    await this.findOne(id);
+    const data = {
+      name: name.trim(),
+      ...(phone !== undefined ? { phone: phone?.trim() ?? null } : {}),
+    };
+    // Keep the linked Employees record (if any) showing the same name/phone.
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.update({ where: { id }, data });
+      await tx.worker.updateMany({ where: { userId: id }, data });
+      return user;
     });
   }
 }

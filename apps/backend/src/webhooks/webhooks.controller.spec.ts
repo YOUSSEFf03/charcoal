@@ -38,7 +38,9 @@ describe('WebhooksController', () => {
     user: {
       upsert:     fn(),
       updateMany: fn(),
+      findUnique: fn(),
     },
+    worker: { create: fn() },
   };
 
   const mockConfigService = { get: fn() };
@@ -46,6 +48,10 @@ describe('WebhooksController', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     mockConfigService.get.mockReturnValue(TEST_WEBHOOK_SECRET);
+    // Defaults for the driver→employee step that follows every upsert.
+    mockPrisma.user.upsert.mockResolvedValue({ id: 'local-uuid' });
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    mockPrisma.worker.create.mockResolvedValue({ id: 'w-1' });
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [WebhooksController],
@@ -328,6 +334,42 @@ describe('WebhooksController', () => {
       expect(result).toEqual({ received: true });
       expect(mockPrisma.user.upsert).not.toHaveBeenCalled();
       expect(mockPrisma.user.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // A Clerk user with role 'driver' also becomes an employee (Worker)
+  // =========================================================================
+  describe('upsertUser(): drivers are added to Employees', () => {
+    const driverData = {
+      id: 'clerk_drv',
+      email_addresses: [{ id: 'em_1', email_address: 'drv@example.com' }],
+      primary_email_address_id: 'em_1',
+      first_name: 'Sami',
+      last_name: 'Driver',
+      public_metadata: { role: 'driver' },
+    };
+
+    it('creates a linked Worker for a driver that has none', async () => {
+      mockPrisma.user.upsert.mockResolvedValue({ id: 'u-drv' });
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u-drv', name: 'Sami Driver', phone: null, role: 'driver', deletedAt: null, workerEntity: null });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (controller as any).upsertUser(driverData);
+      expect(mockPrisma.worker.create).toHaveBeenCalledWith({ data: { name: 'Sami Driver', userId: 'u-drv' } });
+    });
+
+    it('does not create a second Worker on a repeat delivery', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u-drv', name: 'Sami Driver', phone: null, role: 'driver', deletedAt: null, workerEntity: { id: 'w-1' } });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (controller as any).upsertUser(driverData);
+      expect(mockPrisma.worker.create).not.toHaveBeenCalled();
+    });
+
+    it('does nothing for non-driver roles', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u', name: 'A', phone: null, role: 'accountant', deletedAt: null, workerEntity: null });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (controller as any).upsertUser({ ...driverData, public_metadata: { role: 'accountant' } });
+      expect(mockPrisma.worker.create).not.toHaveBeenCalled();
     });
   });
 });

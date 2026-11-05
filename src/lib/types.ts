@@ -1351,6 +1351,8 @@ export interface Worker {
   pieceEarned: string;    // Decimal — Σ sessionEarnings (bag-rate earnings)
   costEarned: string;     // Decimal — Σ WorkerCost.amount (earnings entries)
   notes: string | null;
+  /** Linked login account (id/role only). role 'driver' = a driver added in Settings → Users. */
+  user?: { id: string; role: Role } | null;
   createdAt: string;
   updatedAt: string;
 }
