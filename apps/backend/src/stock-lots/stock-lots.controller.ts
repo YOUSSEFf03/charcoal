@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseBoolPipe,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -12,6 +14,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagg
 import { ParseLimitPipe, ParsePagePipe } from '../common/pipes/pagination.pipes';
 import { StockLotsService } from './stock-lots.service';
 import { CreateStockLotDto } from './dto/create-stock-lot.dto';
+import { UpdateStockLotDto } from './dto/update-stock-lot.dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ClerkUser } from '../auth/clerk.strategy';
@@ -84,5 +87,28 @@ export class StockLotsController {
     @CurrentUser() user: ClerkUser,
   ) {
     return this.stockLotsService.create(dto, user.userId);
+  }
+
+  @ApiOperation({ summary: 'Correct a local (direct) purchase, owner only. Type/grade only while unused; kg never below what is used.' })
+  @ApiResponse({ status: 200, description: 'Updated' })
+  @ApiResponse({ status: 400, description: 'Not a direct lot, or invalid kg/cost' })
+  @ApiResponse({ status: 409, description: 'LOT_IN_USE: type/grade change on a used lot' })
+  @Patch(':id')
+  @Roles('owner')
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateStockLotDto,
+    @CurrentUser() user?: ClerkUser,
+  ) {
+    return this.stockLotsService.update(id, dto, user?.role);
+  }
+
+  @ApiOperation({ summary: 'Delete a local (direct) purchase entered by mistake, owner only, and only while unused' })
+  @ApiResponse({ status: 200, description: 'Deleted' })
+  @ApiResponse({ status: 409, description: 'LOT_IN_USE: the lot has been packed, sold or adjusted' })
+  @Delete(':id')
+  @Roles('owner')
+  remove(@Param('id', ParseUUIDPipe) id: string) {
+    return this.stockLotsService.remove(id);
   }
 }

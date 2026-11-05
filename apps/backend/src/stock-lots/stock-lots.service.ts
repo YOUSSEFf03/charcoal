@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStockLotDto } from './dto/create-stock-lot.dto';
+import { UpdateStockLotDto } from './dto/update-stock-lot.dto';
 
 // GET /suppliers (contactPersons, bankDetails, paymentTerms) is owner/accountant
 // only (SuppliersController) — but /stock-lots and its siblings below are also
@@ -186,5 +187,126 @@ export class StockLotsService {
       },
       include: { supplier: SAFE_SUPPLIER_SELECT },
     });
+  }
+
+  // ── Local (direct) purchase corrections ──────────────────────────────────
+  // Only source='direct' lots: a container lot's kg/cost come from its
+  // container's product lines and are corrected there. Both paths lock the lot
+  // row FOR UPDATE first (same pattern as consume-lots.ts) so a concurrent
+  // packing session or sale cannot draw from it between our read and write.
+
+  /**
+   * Lock a direct lot and report whether anything has drawn on it yet. `used`
+   * is true once any packing session, fill job, packed stock, raw exit or stock
+   * adjustment references it, or its remaining kg differs from what was bought.
+   */
+  private async lockDirectLot(tx: Prisma.TransactionClient, id: string) {
+    await tx.$queryRaw(Prisma.sql`SELECT id FROM "stock_lots" WHERE id = ${id} FOR UPDATE`);
+    const lot = await tx.stockLot.findUnique({
+      where: { id },
+      include: {
+        _count: {
+          select: { sessionLots: true, fillJobLots: true, packedStocks: true, rawExits: true, stockAdjustments: true },
+        },
+      },
+    });
+    if (!lot) {
+      throw new NotFoundException({ error: 'Stock lot not found', code: 'NOT_FOUND' });
+    }
+    if (lot.source !== 'direct') {
+      throw new BadRequestException({
+        error: 'Only local purchases can be changed here; container stock is corrected on its container',
+        code: 'NOT_DIRECT_LOT',
+      });
+    }
+    const c = lot._count;
+    const used =
+      c.sessionLots + c.fillJobLots + c.packedStocks + c.rawExits + c.stockAdjustments > 0 ||
+      !new Decimal(lot.kgRemaining.toString()).eq(new Decimal(lot.kgReceived.toString()));
+    return { lot, used };
+  }
+
+  /**
+   * Correct a local purchase (PATCH /stock-lots/:id, owner only).
+   * - kgReceived: kgRemaining moves by the same difference; rejected if that would
+   *   take it below 0 (i.e. below what was already packed/sold/used).
+   * - charcoalType / grade: only while the lot is unused, because once it has been
+   *   packed or sold, history already reports it under the old type.
+   * - supplierId / costPerKg / dateReceived / notes: always. The supplier balance
+   *   and statement are computed live from the lot, so they follow the fix.
+   */
+  async update(id: string, dto: UpdateStockLotDto, userRole?: string) {
+    if (dto.kgReceived !== undefined && !new Decimal(dto.kgReceived).gt(0)) {
+      throw new BadRequestException({ error: 'Kg must be greater than zero', code: 'CONSTRAINT_VIOLATION' });
+    }
+    if (dto.costPerKg !== undefined && new Decimal(dto.costPerKg).lt(0)) {
+      throw new BadRequestException({ error: 'Cost per kg cannot be negative', code: 'CONSTRAINT_VIOLATION' });
+    }
+    if (dto.supplierId !== undefined) {
+      const supplier = await this.prisma.supplier.findUnique({ where: { id: dto.supplierId } });
+      if (!supplier) {
+        throw new NotFoundException({ error: 'Supplier not found', code: 'NOT_FOUND' });
+      }
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const { lot, used } = await this.lockDirectLot(tx, id);
+
+      const typeChanged =
+        (dto.charcoalType !== undefined && dto.charcoalType.trim() !== lot.charcoalType) ||
+        (dto.grade !== undefined && dto.grade !== lot.grade);
+      if (typeChanged && used) {
+        throw new ConflictException({
+          error: 'Type and grade can no longer be changed because this stock has already been used',
+          code: 'LOT_IN_USE',
+        });
+      }
+
+      const data: Prisma.StockLotUpdateInput = {};
+      if (dto.kgReceived !== undefined) {
+        const oldReceived = new Decimal(lot.kgReceived.toString());
+        const oldRemaining = new Decimal(lot.kgRemaining.toString());
+        const newReceived = new Decimal(dto.kgReceived);
+        const newRemaining = oldRemaining.plus(newReceived.minus(oldReceived));
+        if (newRemaining.lt(0)) {
+          const usedKg = oldReceived.minus(oldRemaining);
+          throw new BadRequestException({
+            error: `${usedKg.toNumber()} kg of this lot is already used, so kg bought cannot be less than that`,
+            code: 'CONSTRAINT_VIOLATION',
+          });
+        }
+        data.kgReceived = newReceived.toFixed(3);
+        data.kgRemaining = newRemaining.toFixed(3);
+      }
+      if (dto.charcoalType !== undefined) data.charcoalType = dto.charcoalType.trim();
+      if (dto.grade !== undefined) data.grade = dto.grade;
+      if (dto.supplierId !== undefined) data.supplier = { connect: { id: dto.supplierId } };
+      if (dto.costPerKg !== undefined) data.costPerKg = dto.costPerKg;
+      if (dto.dateReceived !== undefined) data.dateReceived = new Date(dto.dateReceived);
+      if (dto.notes !== undefined) data.notes = dto.notes.trim() || null;
+
+      return tx.stockLot.update({ where: { id }, data, include: { supplier: SAFE_SUPPLIER_SELECT } });
+    });
+
+    return this.maybeStrip(updated, userRole);
+  }
+
+  /**
+   * Delete a local purchase entered by mistake (DELETE /stock-lots/:id, owner only).
+   * Only while nothing has used it; afterwards correct it with update() or a stock
+   * adjustment instead, so packing/sales history never points at a missing lot.
+   */
+  async remove(id: string) {
+    await this.prisma.$transaction(async (tx) => {
+      const { used } = await this.lockDirectLot(tx, id);
+      if (used) {
+        throw new ConflictException({
+          error: 'This stock has already been used (packed, sold or adjusted) and cannot be deleted. Edit it instead.',
+          code: 'LOT_IN_USE',
+        });
+      }
+      await tx.stockLot.delete({ where: { id } });
+    });
+    return { id, deleted: true };
   }
 }

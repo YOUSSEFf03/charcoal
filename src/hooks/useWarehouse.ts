@@ -219,12 +219,57 @@ export function useCreateStockLot() {
       const res = await api.post<StockLot>('/stock-lots', body)
       return res.data
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['stock-lots'] })
-      qc.invalidateQueries({ queryKey: ['warehouse'] })
-      qc.invalidateQueries({ queryKey: ['suppliers'] })
-      qc.invalidateQueries({ queryKey: ['reports'] })
+    onSuccess: () => invalidateAfterLotChange(qc),
+  })
+}
+
+/** Body for PATCH /stock-lots/:id — every field optional. */
+export interface UpdateStockLotBody {
+  supplierId?: string
+  /** Only accepted while the lot is unused (server answers 409 LOT_IN_USE otherwise). */
+  charcoalType?: string
+  grade?: string
+  /** Corrected kg bought; remaining moves by the same difference, never below 0. */
+  kgReceived?: string
+  costPerKg?: string
+  dateReceived?: string
+  /** Empty string clears the notes. */
+  notes?: string
+}
+
+function invalidateAfterLotChange(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ['stock-lots'] })
+  qc.invalidateQueries({ queryKey: ['warehouse'] })
+  qc.invalidateQueries({ queryKey: ['suppliers'] })
+  qc.invalidateQueries({ queryKey: ['reports'] })
+}
+
+/**
+ * Correct a local purchase. PATCH /stock-lots/:id (owner only, direct lots only)
+ */
+export function useUpdateStockLot() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, body }: { id: string; body: UpdateStockLotBody }) => {
+      const res = await api.patch<StockLot>(`/stock-lots/${id}`, body)
+      return res.data
     },
+    onSuccess: () => invalidateAfterLotChange(qc),
+  })
+}
+
+/**
+ * Delete a local purchase entered by mistake. Only while nothing has used it
+ * (409 LOT_IN_USE otherwise). DELETE /stock-lots/:id (owner only)
+ */
+export function useDeleteStockLot() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await api.delete<{ id: string; deleted: true }>(`/stock-lots/${id}`)
+      return res.data
+    },
+    onSuccess: () => invalidateAfterLotChange(qc),
   })
 }
 

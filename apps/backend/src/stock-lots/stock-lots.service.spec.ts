@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { StockLotsService } from './stock-lots.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -336,6 +336,118 @@ describe('StockLotsService', () => {
       mockPrisma.supplier.findUnique.mockResolvedValue(null);
       await expect(service.create(dto, 'clerk-1')).rejects.toBeInstanceOf(NotFoundException);
       expect(mockPrisma.stockLot.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // update() / remove() — correcting a local purchase
+  // =========================================================================
+  describe('update() and remove() — local purchase corrections', () => {
+    const noUse = { sessionLots: 0, fillJobLots: 0, packedStocks: 0, rawExits: 0, stockAdjustments: 0 };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function lot(overrides: Record<string, any> = {}) {
+      return {
+        id: 'lot-1', source: 'direct', charcoalType: 'Oak', grade: 'A', supplierId: 'sup-1',
+        kgReceived: '500.000', kgRemaining: '500.000', costPerKg: '0.8000', _count: { ...noUse },
+        ...overrides,
+      };
+    }
+    const tx = {
+      $queryRaw: fn(),
+      stockLot: { findUnique: fn(), update: fn(), delete: fn() },
+    };
+
+    beforeEach(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      tx.$queryRaw.mockResolvedValue([]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      tx.stockLot.update.mockImplementation(async (args: any) => ({ id: 'lot-1', costPerKg: '0.9', ...args.data }));
+      tx.stockLot.delete.mockResolvedValue({ id: 'lot-1' });
+      mockPrisma.supplier.findUnique.mockResolvedValue({ id: 'sup-2' });
+    });
+
+    it('locks the row FOR UPDATE before reading it', async () => {
+      tx.stockLot.findUnique.mockResolvedValue(lot());
+      await service.update('lot-1', { notes: 'x' });
+      const sql = tx.$queryRaw.mock.calls[0][0] as { strings: string[] };
+      expect(sql.strings.join('?')).toContain('FOR UPDATE');
+      expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.stockLot.findUnique.mock.invocationCallOrder[0]);
+    });
+
+    it('raising kg on a partly used lot moves remaining by the same difference', async () => {
+      tx.stockLot.findUnique.mockResolvedValue(lot({ kgRemaining: '200.000', _count: { ...noUse, sessionLots: 1 } }));
+      await service.update('lot-1', { kgReceived: '550' });
+      expect(tx.stockLot.update.mock.calls[0][0].data).toMatchObject({ kgReceived: '550.000', kgRemaining: '250.000' });
+    });
+
+    it('rejects lowering kg below what is already used', async () => {
+      tx.stockLot.findUnique.mockResolvedValue(lot({ kgRemaining: '200.000' })); // 300 used
+      await expect(service.update('lot-1', { kgReceived: '299' })).rejects.toMatchObject({
+        response: { error: expect.stringMatching(/^300 kg of this lot is already used/) },
+      });
+      expect(tx.stockLot.update).not.toHaveBeenCalled();
+    });
+
+    it('allows lowering kg to exactly what is used (remaining becomes 0)', async () => {
+      tx.stockLot.findUnique.mockResolvedValue(lot({ kgRemaining: '200.000' }));
+      await service.update('lot-1', { kgReceived: '300' });
+      expect(tx.stockLot.update.mock.calls[0][0].data).toMatchObject({ kgReceived: '300.000', kgRemaining: '0.000' });
+    });
+
+    it('changes type/grade, supplier, cost, date and notes on an unused lot', async () => {
+      tx.stockLot.findUnique.mockResolvedValue(lot());
+      await service.update('lot-1', {
+        charcoalType: ' Lemon wood ', grade: 'B', supplierId: 'sup-2', costPerKg: '0.9', dateReceived: '2026-11-01', notes: '  ',
+      });
+      const data = tx.stockLot.update.mock.calls[0][0].data;
+      expect(data).toMatchObject({ charcoalType: 'Lemon wood', grade: 'B', supplier: { connect: { id: 'sup-2' } }, costPerKg: '0.9', notes: null });
+      expect(data.dateReceived).toEqual(new Date('2026-11-01'));
+    });
+
+    it('rejects a type change once the lot has been used, but still allows a cost fix', async () => {
+      tx.stockLot.findUnique.mockResolvedValue(lot({ _count: { ...noUse, rawExits: 1 } }));
+      await expect(service.update('lot-1', { grade: 'B' })).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.stockLot.update).not.toHaveBeenCalled();
+      await service.update('lot-1', { costPerKg: '0.9', grade: 'A', charcoalType: 'Oak' }); // unchanged type/grade is fine
+      expect(tx.stockLot.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses container lots', async () => {
+      tx.stockLot.findUnique.mockResolvedValue(lot({ source: 'container' }));
+      await expect(service.update('lot-1', { notes: 'x' })).rejects.toMatchObject({ response: { code: 'NOT_DIRECT_LOT' } });
+      await expect(service.remove('lot-1')).rejects.toMatchObject({ response: { code: 'NOT_DIRECT_LOT' } });
+      expect(tx.stockLot.update).not.toHaveBeenCalled();
+      expect(tx.stockLot.delete).not.toHaveBeenCalled();
+    });
+
+    it('rejects 0 kg and negative cost before opening a transaction', async () => {
+      await expect(service.update('lot-1', { kgReceived: '0' })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.update('lot-1', { costPerKg: '-1' })).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('deletes an unused local purchase', async () => {
+      tx.stockLot.findUnique.mockResolvedValue(lot());
+      await expect(service.remove('lot-1')).resolves.toEqual({ id: 'lot-1', deleted: true });
+      expect(tx.stockLot.delete).toHaveBeenCalledWith({ where: { id: 'lot-1' } });
+    });
+
+    it.each([
+      ['packed', { _count: { ...noUse, sessionLots: 1 } }],
+      ['used in a fill job', { _count: { ...noUse, fillJobLots: 1 } }],
+      ['sold raw', { _count: { ...noUse, rawExits: 1 } }],
+      ['adjusted', { _count: { ...noUse, stockAdjustments: 1 } }],
+      ['partly consumed', { kgRemaining: '499.000' }],
+    ])('refuses to delete a lot that was %s', async (_label, overrides) => {
+      tx.stockLot.findUnique.mockResolvedValue(lot(overrides));
+      await expect(service.remove('lot-1')).rejects.toMatchObject({ response: { code: 'LOT_IN_USE' } });
+      expect(tx.stockLot.delete).not.toHaveBeenCalled();
+    });
+
+    it('404s for an unknown lot', async () => {
+      tx.stockLot.findUnique.mockResolvedValue(null);
+      await expect(service.remove('nope')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 });

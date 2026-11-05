@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import Topbar from '../components/layout/Topbar'
-import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useApproveStockAdjustment, useRejectStockAdjustment, useStockExits, useLotMaterialFlow, useAvailableStockLots, usePackedStock, useWasteSummary, useWasteLedger, useCreateWasteDisposal } from '../hooks/useWarehouse'
+import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useApproveStockAdjustment, useRejectStockAdjustment, useStockExits, useLotMaterialFlow, useAvailableStockLots, usePackedStock, useWasteSummary, useWasteLedger, useCreateWasteDisposal, useDeleteStockLot } from '../hooks/useWarehouse'
 import type { StockLot } from '../types/api'
 import { usePackingSessions } from '../hooks/usePacking'
 import { useBagTypes } from '../hooks/useBagTypes'
@@ -54,6 +54,9 @@ export default function Warehouse() {
   // Add local purchase (stock bought without a container) — owner only, like POST /stock-lots.
   const [localPurchaseOpen, setLocalPurchaseOpen] = useState(false)
   const isOwner = useMe().data?.role === 'owner'
+  // Edit / delete a local purchase from its detail page.
+  const [editLotId, setEditLotId] = useState<string | null>(null)
+  const deleteLot = useDeleteStockLot()
   const [toast, setToast] = useState('')
   const [selectedBagTypeId, setSelectedBagTypeId] = useState<string | null>(null)
   const [packedStockPage, setPackedStockPage] = useState(1)
@@ -104,6 +107,9 @@ export default function Warehouse() {
   const packedStockTableQ = usePackedStock({ page: packedStockPage, limit: PACKED_STOCK_PAGE_SIZE })
 
   const stockLots = stockLotsQ.data?.data ?? []
+  // Raw API rows by id. The edit form needs fields LotVM doesn't keep (supplierId, notes).
+  const rawStockLotById = new Map(stockLots.map(l => [l.id, l]))
+  const editLot = editLotId ? rawStockLotById.get(editLotId) : undefined
   const packedSummary = packedQ.data ?? []
   const sessions = sessionsQ.data?.data ?? []
   const packedStockRows = packedStockTableQ.data?.data ?? []
@@ -980,7 +986,32 @@ export default function Warehouse() {
                 <span style={{ fontSize: 12, color: 'var(--text2)', marginLeft: 8 }}>{liveLot.supplier} · {liveLot.arrival}</span>
               </div>
             </div>
-            <span className={`badge ${liveLot.status === 'active' ? 'badge-green' : 'badge-gray'}`}>{liveLot.status}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {/* Local purchases can be corrected or removed by the owner. Delete is
+                  only accepted by the server while nothing has used the lot. */}
+              {isOwner && liveLot.source === 'direct' && rawStockLotById.has(liveLot.id) && (
+                <>
+                  <button className="btn" style={{ fontSize: 12 }} onClick={() => setEditLotId(liveLot.id)}>
+                    <i className="ti ti-pencil" style={{ fontSize: 13 }} /> Edit
+                  </button>
+                  <button
+                    className="btn"
+                    style={{ fontSize: 12, color: 'var(--red)' }}
+                    disabled={deleteLot.isPending}
+                    onClick={() => {
+                      if (!confirm('Delete this local purchase? This only works if none of it has been packed, sold or adjusted.')) return
+                      deleteLot.mutate(liveLot.id, {
+                        onSuccess: () => { setLotPanelOpen(false); setSelectedLot(null); showToast('Local purchase deleted') },
+                        onError: (err: any) => showToast(err?.error ?? 'Failed to delete'),
+                      })
+                    }}
+                  >
+                    <i className="ti ti-trash" style={{ fontSize: 13 }} /> Delete
+                  </button>
+                </>
+              )}
+              <span className={`badge ${liveLot.status === 'active' ? 'badge-green' : 'badge-gray'}`}>{liveLot.status}</span>
+            </div>
           </div>
 
           {/* Body */}
@@ -1462,7 +1493,8 @@ export default function Warehouse() {
 
       {/* Toast */}
       {toast && (
-        <div className="toast show">
+        // zIndex lifts it above the full-screen lot detail page (zIndex 100).
+        <div className="toast show" style={{ zIndex: 120 }}>
           <i className="ti ti-check" style={{ color: 'var(--accent)', fontSize: 15 }} /> {toast}
         </div>
       )}
@@ -1749,6 +1781,19 @@ export default function Warehouse() {
           onSaved={showToast}
           knownTypes={Array.from(new Set(lots.map(l => l.charcoalType).filter(t => t && t !== '—'))).sort()}
         />
+      )}
+      {/* Edit opens from the full-screen lot detail page (zIndex 100); the wrapper
+          puts the modal's fixed overlay above it. */}
+      {editLot && (
+        <div style={{ position: 'relative', zIndex: 110 }}>
+          <AddLocalPurchaseModal
+            open
+            lot={editLot}
+            onClose={() => setEditLotId(null)}
+            onSaved={showToast}
+            knownTypes={Array.from(new Set(lots.map(l => l.charcoalType).filter(t => t && t !== '—'))).sort()}
+          />
+        </div>
       )}
 
       {/* Edit adjustment modal */}

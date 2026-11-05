@@ -4,8 +4,10 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 
-const { mockUseWasteSummary, mockUseWasteLedger, mockDisposalMutate, mockCreateLotMutate, mockUseMe, mockUseSuppliers } = vi.hoisted(() => ({
+const { mockUseWasteSummary, mockUseWasteLedger, mockDisposalMutate, mockCreateLotMutate, mockUpdateLotMutate, mockDeleteLotMutate, mockUseMe, mockUseSuppliers } = vi.hoisted(() => ({
   mockCreateLotMutate: vi.fn(),
+  mockUpdateLotMutate: vi.fn(),
+  mockDeleteLotMutate: vi.fn(),
   mockUseMe: vi.fn((): unknown => ({ data: { role: 'owner' } })),
   mockUseSuppliers: vi.fn((): unknown => ({ data: { data: [{ id: 'sup-local', name: 'Zgharta Charcoal' }] }, isLoading: false })),
   mockUseWasteSummary: vi.fn((): unknown => ({ data: undefined, isLoading: false })),
@@ -108,6 +110,8 @@ vi.mock('../hooks/useWarehouse', () => ({
   useWasteLedger: () => mockUseWasteLedger(),
   useCreateWasteDisposal: () => ({ mutate: mockDisposalMutate, isPending: false }),
   useCreateStockLot: () => ({ mutate: mockCreateLotMutate, isPending: false }),
+  useUpdateStockLot: () => ({ mutate: mockUpdateLotMutate, isPending: false }),
+  useDeleteStockLot: () => ({ mutate: mockDeleteLotMutate, isPending: false }),
 }))
 
 vi.mock('../hooks/useMe', () => ({ useMe: () => mockUseMe() }))
@@ -791,6 +795,91 @@ describe('Warehouse — Add local purchase (stock without a container)', () => {
     render(<Warehouse />)
     expect(screen.queryByRole('button', { name: /Add local purchase/ })).not.toBeInTheDocument()
     expect(mockUseSuppliers).not.toHaveBeenCalled()
+  })
+
+  function directLot(overrides: Record<string, unknown> = {}) {
+    return makeLot({
+      source: 'direct', supplierId: 'sup-local', supplier: { id: 'sup-local', name: 'Zgharta Charcoal' },
+      charcoalType: 'Oak', grade: 'A', kgReceived: '500.000', kgRemaining: '500.000', costPerKg: '0.8000',
+      dateReceived: '2026-11-01T00:00:00.000Z', notes: 'market', ...overrides,
+    })
+  }
+  async function openLotPage(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByText('Oak'))
+  }
+
+  it('edits a local purchase: form is prefilled and sends the corrected fields', async () => {
+    mockUseStockLots.mockReturnValue({ data: { data: [directLot()] }, isLoading: false, isError: false })
+    const user = userEvent.setup()
+    render(<Warehouse />)
+    await openLotPage(user)
+    await user.click(screen.getByRole('button', { name: /^Edit$/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Edit local purchase' })
+    expect(within(dialog).getByLabelText('Kg bought')).toHaveValue(500)
+    expect(within(dialog).getByLabelText('Date received')).toHaveValue('2026-11-01')
+    expect(within(dialog).getByLabelText('Supplier')).toHaveValue('sup-local')
+    await user.clear(within(dialog).getByLabelText('Kg bought'))
+    await user.type(within(dialog).getByLabelText('Kg bought'), '520')
+    await user.click(within(dialog).getByRole('button', { name: /Save changes/ }))
+    expect(mockUpdateLotMutate).toHaveBeenCalledTimes(1)
+    const { id, body } = mockUpdateLotMutate.mock.calls[0][0]
+    expect(id).toBe('lot-1')
+    expect(body).toMatchObject({ supplierId: 'sup-local', kgReceived: '520.000', costPerKg: '0.8000', dateReceived: '2026-11-01', notes: 'market' })
+    // Type/grade unchanged → not sent, so a used lot's cost fix never trips the server guard.
+    expect(body).not.toHaveProperty('charcoalType')
+    expect(body).not.toHaveProperty('grade')
+  })
+
+  it('a partly used lot locks type/grade and refuses kg below what is used', async () => {
+    mockUseStockLots.mockReturnValue({ data: { data: [directLot({ kgRemaining: '200.000' })] }, isLoading: false, isError: false })
+    const user = userEvent.setup()
+    render(<Warehouse />)
+    await openLotPage(user)
+    await user.click(screen.getByRole('button', { name: /^Edit$/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Edit local purchase' })
+    expect(within(dialog).getByLabelText('Charcoal type')).toBeDisabled()
+    expect(within(dialog).getByLabelText('Grade')).toBeDisabled()
+    expect(within(dialog).getByTestId('lp-used')).toHaveTextContent('300 kg already used')
+    await user.clear(within(dialog).getByLabelText('Kg bought'))
+    await user.type(within(dialog).getByLabelText('Kg bought'), '250')
+    await user.click(within(dialog).getByRole('button', { name: /Save changes/ }))
+    expect(within(dialog).getByRole('alert')).toHaveTextContent("300 kg is already used")
+    expect(mockUpdateLotMutate).not.toHaveBeenCalled()
+  })
+
+  it('deletes a local purchase after confirmation', async () => {
+    mockUseStockLots.mockReturnValue({ data: { data: [directLot()] }, isLoading: false, isError: false })
+    const user = userEvent.setup()
+    render(<Warehouse />)
+    await openLotPage(user)
+    await user.click(screen.getByRole('button', { name: /^Delete$/ }))
+    expect(window.confirm).toHaveBeenCalled()
+    expect(mockDeleteLotMutate).toHaveBeenCalledWith('lot-1', expect.anything())
+  })
+
+  it('does nothing when delete is not confirmed', async () => {
+    vi.mocked(window.confirm).mockReturnValue(false)
+    mockUseStockLots.mockReturnValue({ data: { data: [directLot()] }, isLoading: false, isError: false })
+    const user = userEvent.setup()
+    render(<Warehouse />)
+    await openLotPage(user)
+    await user.click(screen.getByRole('button', { name: /^Delete$/ }))
+    expect(mockDeleteLotMutate).not.toHaveBeenCalled()
+  })
+
+  it('container lots and non-owners get no Edit/Delete', async () => {
+    const user = userEvent.setup()
+    mockUseStockLots.mockReturnValue({ data: { data: [makeLot({ charcoalType: 'Oak' })] }, isLoading: false, isError: false })
+    const { unmount } = render(<Warehouse />)
+    await openLotPage(user)
+    expect(screen.queryByRole('button', { name: /^Edit$/ })).not.toBeInTheDocument()
+    unmount()
+    mockUseMe.mockReturnValue({ data: { role: 'accountant' } })
+    mockUseStockLots.mockReturnValue({ data: { data: [directLot()] }, isLoading: false, isError: false })
+    render(<Warehouse />)
+    await openLotPage(user)
+    expect(screen.queryByRole('button', { name: /^Edit$/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Delete$/ })).not.toBeInTheDocument()
   })
 
   it('marks direct lots with a Local badge', () => {
