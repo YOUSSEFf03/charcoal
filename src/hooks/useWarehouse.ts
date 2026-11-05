@@ -194,6 +194,40 @@ export function useStockLot(id: string) {
   })
 }
 
+/** Body for POST /stock-lots — a direct purchase (e.g. from a local supplier), no container. */
+export interface CreateStockLotBody {
+  supplierId: string
+  charcoalType: string
+  grade: string
+  /** Decimal string — the kg bought; becomes both kgReceived and kgRemaining. */
+  kgRemaining: string
+  /** Decimal string, USD. kg × costPerKg is charged to the supplier's balance. */
+  costPerKg: string
+  dateReceived?: string
+  notes?: string
+}
+
+/**
+ * Record stock bought outside a container (local supplier). Creates a raw lot
+ * with source 'direct' that is packed and sold like any other lot.
+ * POST /stock-lots (owner only)
+ */
+export function useCreateStockLot() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: CreateStockLotBody) => {
+      const res = await api.post<StockLot>('/stock-lots', body)
+      return res.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['stock-lots'] })
+      qc.invalidateQueries({ queryKey: ['warehouse'] })
+      qc.invalidateQueries({ queryKey: ['suppliers'] })
+      qc.invalidateQueries({ queryKey: ['reports'] })
+    },
+  })
+}
+
 /** GET /packed-stock — paginated, includes `lot`/`bagType`/`session.date`. */
 export interface PackedStockPage {
   data: PackedStock[]

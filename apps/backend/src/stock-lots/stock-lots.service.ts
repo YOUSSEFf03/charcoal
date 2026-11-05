@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStockLotDto } from './dto/create-stock-lot.dto';
 
@@ -149,6 +150,15 @@ export class StockLotsService {
    * @throws NotFoundException if supplier or user does not exist
    */
   async create(dto: CreateStockLotDto, userId: string) {
+    // A purchase must bring in real kg; cost may be 0 (free goods) but never negative —
+    // kgReceived × costPerKg is what the supplier balance/statement charges for it.
+    if (!new Decimal(dto.kgRemaining).gt(0)) {
+      throw new BadRequestException({ error: 'Kg must be greater than zero', code: 'CONSTRAINT_VIOLATION' });
+    }
+    if (new Decimal(dto.costPerKg).lt(0)) {
+      throw new BadRequestException({ error: 'Cost per kg cannot be negative', code: 'CONSTRAINT_VIOLATION' });
+    }
+
     // Validate user exists
     const user = await this.prisma.user.findUnique({ where: { clerkId: userId } });
     if (!user) {

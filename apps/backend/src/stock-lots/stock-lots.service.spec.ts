@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { StockLotsService } from './stock-lots.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -290,6 +290,52 @@ describe('StockLotsService', () => {
       await service.findAvailable('worker');
       const args = mockPrisma.stockLot.findMany.mock.calls[0][0];
       expect(args.include).toEqual({ supplier: { select: { id: true, name: true } } });
+    });
+  });
+
+  // =========================================================================
+  // create() — direct (local) purchase, no container
+  // =========================================================================
+  describe('create()', () => {
+    const dto = {
+      supplierId: 'sup-1', charcoalType: 'BBQ Hardwood', grade: 'A',
+      kgRemaining: '500', costPerKg: '0.8', dateReceived: '2026-11-05', notes: 'Local purchase',
+    };
+
+    beforeEach(() => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1' });
+      mockPrisma.supplier.findUnique.mockResolvedValue({ id: 'sup-1' });
+      mockPrisma.stockLot.create.mockImplementation(async (args: any) => ({ id: 'lot-1', ...args.data }));
+    });
+
+    it('creates a direct lot with no container, kgReceived = kgRemaining', async () => {
+      await service.create(dto, 'clerk-1');
+      const data = mockPrisma.stockLot.create.mock.calls[0][0].data;
+      expect(data).toMatchObject({
+        source: 'direct', containerId: null, supplierId: 'sup-1',
+        kgReceived: '500', kgRemaining: '500', costPerKg: '0.8', notes: 'Local purchase',
+      });
+      expect(data.dateReceived).toEqual(new Date('2026-11-05'));
+    });
+
+    it('allows a zero cost (free goods)', async () => {
+      await expect(service.create({ ...dto, costPerKg: '0' }, 'clerk-1')).resolves.toBeDefined();
+    });
+
+    it.each(['0', '-5'])('rejects kg = %s without writing', async (kg) => {
+      await expect(service.create({ ...dto, kgRemaining: kg }, 'clerk-1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.stockLot.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a negative cost per kg without writing', async () => {
+      await expect(service.create({ ...dto, costPerKg: '-0.1' }, 'clerk-1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.stockLot.create).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFound for an unknown supplier', async () => {
+      mockPrisma.supplier.findUnique.mockResolvedValue(null);
+      await expect(service.create(dto, 'clerk-1')).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockPrisma.stockLot.create).not.toHaveBeenCalled();
     });
   });
 });

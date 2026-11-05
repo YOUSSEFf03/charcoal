@@ -4,7 +4,10 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 
-const { mockUseWasteSummary, mockUseWasteLedger, mockDisposalMutate } = vi.hoisted(() => ({
+const { mockUseWasteSummary, mockUseWasteLedger, mockDisposalMutate, mockCreateLotMutate, mockUseMe, mockUseSuppliers } = vi.hoisted(() => ({
+  mockCreateLotMutate: vi.fn(),
+  mockUseMe: vi.fn((): unknown => ({ data: { role: 'owner' } })),
+  mockUseSuppliers: vi.fn((): unknown => ({ data: { data: [{ id: 'sup-local', name: 'Zgharta Charcoal' }] }, isLoading: false })),
   mockUseWasteSummary: vi.fn((): unknown => ({ data: undefined, isLoading: false })),
   mockUseWasteLedger: vi.fn((): unknown => ({ data: { data: [], total: 0, page: 1, limit: 50 }, isLoading: false, isError: false, refetch: () => {} })),
   mockDisposalMutate: vi.fn(),
@@ -104,6 +107,13 @@ vi.mock('../hooks/useWarehouse', () => ({
   useWasteSummary: () => mockUseWasteSummary(),
   useWasteLedger: () => mockUseWasteLedger(),
   useCreateWasteDisposal: () => ({ mutate: mockDisposalMutate, isPending: false }),
+  useCreateStockLot: () => ({ mutate: mockCreateLotMutate, isPending: false }),
+}))
+
+vi.mock('../hooks/useMe', () => ({ useMe: () => mockUseMe() }))
+vi.mock('../hooks/useSuppliers', () => ({ useSuppliers: () => mockUseSuppliers() }))
+vi.mock('react-router-dom', () => ({
+  Link: ({ children, to }: { children?: ReactNode; to: string }) => <a href={to}>{children}</a>,
 }))
 
 vi.mock('../hooks/usePacking', () => ({
@@ -123,6 +133,7 @@ function wasteLedgerResult(rows: any[] = []) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockUseMe.mockReturnValue({ data: { role: 'owner' } })
   approveIsPending = false
   rejectIsPending = false
   vi.spyOn(window, 'confirm').mockReturnValue(true)
@@ -738,5 +749,53 @@ describe('Warehouse — Waste tab: disposals and sales in the ledger', () => {
       expect(screen.getByText('Sale cancelled — returned')).toBeInTheDocument()
       expect(screen.getByText(/wet dust/)).toBeInTheDocument()
     })
+  })
+})
+
+describe('Warehouse — Add local purchase (stock without a container)', () => {
+  it('owner adds 500 kg from a local supplier as a direct lot', async () => {
+    const user = userEvent.setup()
+    render(<Warehouse />)
+    await user.click(screen.getByRole('button', { name: /Add local purchase/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Add local purchase' })
+    await user.selectOptions(within(dialog).getByLabelText('Supplier'), 'sup-local')
+    await user.type(within(dialog).getByLabelText('Charcoal type'), ' Lemon wood ')
+    await user.selectOptions(within(dialog).getByLabelText('Grade'), 'B')
+    await user.type(within(dialog).getByLabelText('Kg bought'), '500')
+    await user.type(within(dialog).getByLabelText('Cost per kg ($)'), '0.8')
+    expect(within(dialog).getByTestId('lp-total')).toHaveTextContent('$400.00')
+    await user.click(within(dialog).getByRole('button', { name: /Add to stock/ }))
+    expect(mockCreateLotMutate).toHaveBeenCalledTimes(1)
+    const body = mockCreateLotMutate.mock.calls[0][0]
+    expect(body).toMatchObject({ supplierId: 'sup-local', charcoalType: 'Lemon wood', grade: 'B', kgRemaining: '500.000', costPerKg: '0.8000' })
+    expect(body.dateReceived).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(body.notes).toBeUndefined()
+  })
+
+  it('does not send without a supplier or kg', async () => {
+    const user = userEvent.setup()
+    render(<Warehouse />)
+    await user.click(screen.getByRole('button', { name: /Add local purchase/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Add local purchase' })
+    await user.click(within(dialog).getByRole('button', { name: /Add to stock/ }))
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Choose the supplier')
+    await user.selectOptions(within(dialog).getByLabelText('Supplier'), 'sup-local')
+    await user.type(within(dialog).getByLabelText('Charcoal type'), 'Oak')
+    await user.click(within(dialog).getByRole('button', { name: /Add to stock/ }))
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Enter the kg bought')
+    expect(mockCreateLotMutate).not.toHaveBeenCalled()
+  })
+
+  it('is hidden for non-owners, and suppliers are never fetched for them', () => {
+    mockUseMe.mockReturnValue({ data: { role: 'sales_rep' } })
+    render(<Warehouse />)
+    expect(screen.queryByRole('button', { name: /Add local purchase/ })).not.toBeInTheDocument()
+    expect(mockUseSuppliers).not.toHaveBeenCalled()
+  })
+
+  it('marks direct lots with a Local badge', () => {
+    mockUseStockLots.mockReturnValue({ data: { data: [makeLot({ source: 'direct' })] }, isLoading: false, isError: false })
+    render(<Warehouse />)
+    expect(screen.getByText('Local')).toBeInTheDocument()
   })
 })

@@ -5,6 +5,8 @@ import type { StockLot } from '../types/api'
 import { usePackingSessions } from '../hooks/usePacking'
 import { useBagTypes } from '../hooks/useBagTypes'
 import { formatDate, toDateOnlyString } from '../lib/date'
+import { useMe } from '../hooks/useMe'
+import AddLocalPurchaseModal from '../components/warehouse/AddLocalPurchaseModal'
 
 const PACKED_STOCK_PAGE_SIZE = 20
 
@@ -49,6 +51,9 @@ export default function Warehouse() {
   const [disposalNote, setDisposalNote] = useState('')
   const [disposalError, setDisposalError] = useState('')
   const createDisposal = useCreateWasteDisposal()
+  // Add local purchase (stock bought without a container) — owner only, like POST /stock-lots.
+  const [localPurchaseOpen, setLocalPurchaseOpen] = useState(false)
+  const isOwner = useMe().data?.role === 'owner'
   const [toast, setToast] = useState('')
   const [selectedBagTypeId, setSelectedBagTypeId] = useState<string | null>(null)
   const [packedStockPage, setPackedStockPage] = useState(1)
@@ -361,6 +366,11 @@ export default function Warehouse() {
                 <div className="card-title">
                   <i className="ti ti-stack-2" /> Raw stock lots
                 </div>
+                {isOwner && (
+                  <button className="btn primary" style={{ fontSize: 12 }} onClick={() => setLocalPurchaseOpen(true)}>
+                    <i className="ti ti-plus" style={{ fontSize: 13 }} /> Add local purchase
+                  </button>
+                )}
                 <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
                   Depleted lots move to <a href="#" onClick={e => { e.preventDefault(); setTab('history') }} style={{ color: 'inherit', textDecoration: 'underline' }}>Warehouse history</a>
                 </span>
@@ -410,6 +420,11 @@ export default function Warehouse() {
                           <td>
                             <div style={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
                               {lot.charcoalType}
+                              {lot.source === 'direct' && (
+                                <span className="badge" style={{ fontSize: 10, padding: '1px 6px' }} title="Bought locally, not from a container">
+                                  Local
+                                </span>
+                              )}
                               {adjustedLotIds.has(lot.id) && (
                                 <span
                                   className="badge badge-amber"
@@ -1102,7 +1117,7 @@ export default function Warehouse() {
                 <div className="card">
                   <div className="card-head"><div className="card-title">Lot details</div></div>
                   {[
-                    ['Source', liveLot.source === 'container' ? 'Container' : 'Direct'],
+                    ['Source', liveLot.source === 'container' ? 'Container' : 'Local purchase'],
                     ['Date received', liveLot.arrival],
                     ['Lot value (remaining)', `$${Math.round(liveLot.remainKg * liveLot.costPerKg).toLocaleString()}`],
                   ].map(([l, v]) => (
@@ -1725,6 +1740,16 @@ export default function Warehouse() {
           </div>
         )
       })()}
+
+      {/* Mounted only while open: it loads GET /suppliers, which is owner/accountant-only. */}
+      {localPurchaseOpen && (
+        <AddLocalPurchaseModal
+          open
+          onClose={() => setLocalPurchaseOpen(false)}
+          onSaved={showToast}
+          knownTypes={Array.from(new Set(lots.map(l => l.charcoalType).filter(t => t && t !== '—'))).sort()}
+        />
+      )}
 
       {/* Edit adjustment modal */}
       {editAdj && (
