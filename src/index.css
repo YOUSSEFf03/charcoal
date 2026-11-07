@@ -2180,6 +2180,14 @@ select.form-input { appearance:none; -webkit-appearance:none; background-image:u
 .ps-cell.waste .pval { color: var(--accent2); }
 .ps-cell .psub { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
 .btn-add-bag { margin-top: 10px; padding: 8px 14px; background: transparent; border: 1.5px dashed var(--border2); border-radius: var(--radius); color: var(--text2); font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-family: 'IBM Plex Sans', sans-serif; font-weight: 500; }
+/* Edit bags & pricing modal — big, fully visible numbers (no spinner arrows eating the space) */
+.bag-editor .input.bag-num { font-family: 'IBM Plex Mono', monospace; font-size: 15px; font-weight: 600; text-align: right; padding-right: 10px; color: var(--text); }
+.bag-editor .input-prefix .input.bag-num { padding-left: 24px; }
+.bag-editor .input-prefix-text { font-size: 13px; }
+.bag-editor .input.bag-num::placeholder { font-weight: 400; color: var(--text3); }
+.bag-editor .input.bag-num::-webkit-outer-spin-button,
+.bag-editor .input.bag-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.bag-editor .input.bag-num { -moz-appearance: textfield; appearance: textfield; }
 .btn-add-bag:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
 .btn-full-load { padding: 9px 16px; background: var(--text); color: #fff; border: 1px solid var(--text); border-radius: var(--radius); font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-family: 'IBM Plex Sans', sans-serif; }
 .btn-full-load:hover { background: #2d2b28; }

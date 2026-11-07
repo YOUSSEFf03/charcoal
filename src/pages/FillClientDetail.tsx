@@ -887,7 +887,7 @@ export default function FillClientDetail() {
       {/* ── Modal: Bag editor ── */}
       {showBagEditor && (
         <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setShowBagEditor(false)}>
-          <div className="modal" style={{ width: 820, maxWidth: '96vw' }}>
+          <div className="modal bag-editor" style={{ width: 1000, maxWidth: '96vw' }}>
             <div className="compose-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0' }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.2px' }}><i className="ti ti-edit" style={{ marginRight: 8 }} />Edit bags &amp; pricing</div>
@@ -895,71 +895,71 @@ export default function FillClientDetail() {
               </div>
               <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} aria-label="Close" onClick={() => setShowBagEditor(false)}><i className="ti ti-x" /></button>
             </div>
-            <div style={{ padding: 0 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <div style={{ padding: 0, overflowX: 'auto' }}>
+              <table style={{ width: '100%', minWidth: 900, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <colgroup>
-                  <col style={{ width: '3%' }} />
-                  <col style={{ width: '24%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '13%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '6%' }} />
+                  <col style={{ width: 40 }} />
+                  <col />
+                  <col style={{ width: 110 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 130 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 130 }} />
+                  <col style={{ width: 52 }} />
                 </colgroup>
                 <thead>
                   <tr style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)' }}>
-                    {['#', 'Charcoal spec', 'Size kg', 'Price/bag $', 'Worker $', 'Supply', 'Bag cost $', ''].map((h, i) => (
-                      <th key={i} style={{ padding: '11px 12px', textAlign: i >= 2 && i <= 6 ? 'right' : 'left', fontSize: 10.5, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 400 }}>{h}</th>
+                    {['#', 'Charcoal spec', 'Size (kg)', 'Price / bag', 'Worker pay', 'Supply', 'Bag cost', ''].map((h, i) => (
+                      <th key={i} style={{ padding: '11px 8px', textAlign: i >= 2 && i <= 6 && i !== 5 ? 'right' : 'left', fontSize: 10.5, fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 400, whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {bags.map((b, idx) => (
                     <tr key={b.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                      <td style={{ padding: '9px 12px', fontFamily: "'IBM Plex Mono',monospace", fontSize: 11, color: 'var(--text3)', textAlign: 'center' }}>{idx + 1}</td>
-                      <td style={{ padding: '7px 12px' }}>
-                        <input className="input" value={b.charcoal}
-                          onChange={e => updateBag(b.id, { charcoal: e.target.value })} />
+                      <td style={{ padding: '9px 8px', fontFamily: "'IBM Plex Mono',monospace", fontSize: 11, color: 'var(--text3)', textAlign: 'center' }}>{idx + 1}</td>
+                      <td style={{ padding: '8px' }}>
+                        <input className="input" value={b.charcoal} placeholder="e.g. Grade A"
+                          onChange={e => updateBag(b.id, { charcoal: e.target.value })}
+                          style={{ fontSize: 14 }} />
                       </td>
-                      <td style={{ padding: '7px 12px' }}>
-                        <input className="input" type="number" min={0} step={0.001} value={b.size}
-                          onChange={e => updateBag(b.id, { size: parseFloat(e.target.value) || 0 })}
-                          style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right' }} />
+                      <td style={{ padding: '8px' }}>
+                        <input className="input bag-num" type="number" inputMode="decimal" min={0} step={0.001} value={b.size} onFocus={e => e.target.select()}
+                          onChange={e => updateBag(b.id, { size: parseFloat(e.target.value) || 0 })} />
                       </td>
-                      <td style={{ padding: '7px 12px' }}>
-                        <div style={{ position: 'relative' }}>
-                          <span style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', fontSize: 11, color: 'var(--text3)', pointerEvents: 'none', zIndex: 1 }}>$</span>
-                          <input className="input" type="number" min={0} step={0.01} value={b.price}
-                            onChange={e => updateBag(b.id, { price: parseFloat(e.target.value) || 0 })}
-                            style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', paddingLeft: 18 }} />
+                      <td style={{ padding: '8px' }}>
+                        <div className="input-prefix">
+                          <span className="input-prefix-text">$</span>
+                          <input className="input bag-num" type="number" inputMode="decimal" min={0} step={0.01} value={b.price} onFocus={e => e.target.select()}
+                            onChange={e => updateBag(b.id, { price: parseFloat(e.target.value) || 0 })} />
                         </div>
                       </td>
-                      <td style={{ padding: '7px 12px' }}>
-                        <div style={{ position: 'relative' }}>
-                          <span style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', fontSize: 11, color: 'var(--text3)', pointerEvents: 'none', zIndex: 1 }}>$</span>
-                          <input className="input" type="number" min={0} step={0.01} value={b.worker}
-                            onChange={e => updateBag(b.id, { worker: parseFloat(e.target.value) || 0 })}
-                            style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', paddingLeft: 18 }} />
+                      <td style={{ padding: '8px' }}>
+                        <div className="input-prefix">
+                          <span className="input-prefix-text">$</span>
+                          <input className="input bag-num" type="number" inputMode="decimal" min={0} step={0.01} value={b.worker} onFocus={e => e.target.select()}
+                            onChange={e => updateBag(b.id, { worker: parseFloat(e.target.value) || 0 })} />
                         </div>
                       </td>
-                      <td style={{ padding: '7px 12px' }}>
+                      <td style={{ padding: '8px' }}>
                         <select className="select" value={b.ours ? 'ours' : 'theirs'}
-                          onChange={e => updateBag(b.id, { ours: e.target.value === 'ours' })}>
+                          onChange={e => updateBag(b.id, { ours: e.target.value === 'ours' })}
+                          style={{ fontSize: 14, paddingRight: 6 }}>
                           <option value="theirs">Their bag</option>
                           <option value="ours">We supply</option>
                         </select>
                       </td>
-                      <td style={{ padding: '7px 12px' }}>
-                        <div style={{ position: 'relative' }}>
-                          <span style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', fontSize: 11, color: 'var(--text3)', pointerEvents: 'none', zIndex: 1 }}>$</span>
-                          <input className="input" type="number" min={0} step={0.01} value={b.bagCost}
+                      <td style={{ padding: '8px' }}>
+                        <div className="input-prefix">
+                          <span className="input-prefix-text">$</span>
+                          <input className="input bag-num" type="number" inputMode="decimal" min={0} step={0.01} value={b.ours ? b.bagCost : ''} placeholder={b.ours ? undefined : '—'} onFocus={e => e.target.select()}
                             disabled={!b.ours}
+                            title={b.ours ? undefined : 'Only when we supply the bag'}
                             onChange={e => updateBag(b.id, { bagCost: parseFloat(e.target.value) || 0 })}
-                            style={{ fontFamily: "'IBM Plex Mono',monospace", textAlign: 'right', paddingLeft: 18, background: b.ours ? undefined : 'var(--surface2)', opacity: b.ours ? 1 : 0.45 }} />
+                            style={b.ours ? undefined : { background: 'var(--surface2)', cursor: 'not-allowed' }} />
                         </div>
                       </td>
-                      <td style={{ padding: '7px 12px', textAlign: 'center' }}>
+                      <td style={{ padding: '8px', textAlign: 'center' }}>
                         <button className="icon-btn danger" title="Delete row" disabled={bags.length === 1}
                           onClick={() => setBags(prev => prev.filter(r => r.id !== b.id))}>
                           <i className="ti ti-trash" style={{ fontSize: 14 }} />
