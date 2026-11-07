@@ -1,12 +1,13 @@
-import { ArgumentsHost, BadRequestException, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
+import { ArgumentsHost, BadRequestException, HttpException, HttpStatus, Logger, NotFoundException } from '@nestjs/common';
 import { HttpExceptionFilter } from './http-exception.filter';
 
 function makeHost() {
   const json = jest.fn();
   const status = jest.fn().mockReturnValue({ json });
   const response = { status };
+  const request = { method: 'POST', originalUrl: '/api/v1/orders?token=secret', user: { userId: 'user_1', role: 'owner' } };
   const host = {
-    switchToHttp: () => ({ getResponse: () => response }),
+    switchToHttp: () => ({ getResponse: () => response, getRequest: () => request }),
   } as unknown as ArgumentsHost;
   return { host, status, json };
 }
@@ -16,6 +17,34 @@ describe('HttpExceptionFilter', () => {
 
   beforeEach(() => {
     filter = new HttpExceptionFilter();
+  });
+
+  describe('error logging', () => {
+    let errorSpy: jest.SpyInstance;
+    beforeEach(() => {
+      errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    });
+    afterEach(() => errorSpy.mockRestore());
+
+    it('logs unhandled exceptions with method, path (no query) and user', () => {
+      const { host } = makeHost();
+      filter.catch(new Error('boom'), host);
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Unhandled exception on POST /api/v1/orders user=user_1',
+        expect.stringContaining('boom'),
+      );
+    });
+
+    it('logs thrown 5xx HttpExceptions but not 4xx', () => {
+      const { host } = makeHost();
+      filter.catch(new NotFoundException('nope'), host);
+      expect(errorSpy).not.toHaveBeenCalled();
+      filter.catch(new HttpException('upstream down', HttpStatus.BAD_GATEWAY), host);
+      expect(errorSpy).toHaveBeenCalledWith(
+        'HTTP 502 on POST /api/v1/orders user=user_1: upstream down',
+        expect.any(String),
+      );
+    });
   });
 
   // Regression for the bug reported as "Internal Server Error" on Mark

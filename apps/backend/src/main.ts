@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { requestLogger } from './common/middleware/request-logger.middleware';
 import { parseCorsOrigins } from './common/utils/cors.utils';
 import { isDevAuthBypassEnabled } from './auth/auth.guard';
 
@@ -21,6 +22,10 @@ async function bootstrap() {
       '\n*** DEV AUTH BYPASS IS ACTIVE — "Authorization: Bearer dev:<role>" grants unauthenticated access to any role. NEVER enable this in a deployed environment. ***\n',
     );
   }
+
+  // First middleware, so every request (including ones rejected by guards or
+  // validation) gets an access-log line.
+  app.use(requestLogger);
 
   const configService = app.get(ConfigService);
 

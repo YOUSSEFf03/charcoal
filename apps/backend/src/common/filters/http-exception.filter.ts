@@ -6,7 +6,7 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 
 /**
  * Standard error code mapping by HTTP status. A handler may override the code
@@ -29,6 +29,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request & { user?: { userId?: string; role?: string } }>();
+    // Which request failed, and for whom — without this an "Unhandled exception"
+    // stack trace can't be tied back to a page or user. Query string dropped on purpose.
+    const where = request
+      ? `${request.method} ${(request.originalUrl ?? request.url ?? '').split('?')[0]} user=${request.user?.userId ?? '-'}`
+      : 'unknown request';
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Internal server error';
@@ -75,9 +81,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
       if (code === 'INTERNAL_ERROR') {
         code = STATUS_CODE_MAP[status] ?? 'INTERNAL_ERROR';
       }
+
+      // A deliberately thrown 5xx is still a server failure worth seeing.
+      if (status >= 500) {
+        this.logger.error(`HTTP ${status} on ${where}: ${message}`, exception.stack);
+      }
     } else {
       this.logger.error(
-        'Unhandled exception',
+        `Unhandled exception on ${where}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
     }
