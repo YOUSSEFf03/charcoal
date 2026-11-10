@@ -8,6 +8,7 @@ import { useCreateWalkInSale } from '../hooks/useWalkInSales'
 import { useRate } from '../context/RateContext'
 import { roundDp } from '../lib/money'
 import { toDateOnlyString, currentWeekToDateRange } from '../lib/date'
+import { randomUUID } from '../lib/uuid'
 
 type SaleMode = 'packed' | 'kg' | 'waste'
 type SaleTab = 'entry' | 'log'
@@ -193,7 +194,7 @@ export default function WarehouseSales() {
   // after a submission actually completes (every success path below —
   // registered-client and anonymous alike — calls this), never on every
   // keystroke or re-render, so retries of the SAME attempt keep the SAME key.
-  const [saleIdempotencyKey, setSaleIdempotencyKey] = useState(() => crypto.randomUUID())
+  const [saleIdempotencyKey, setSaleIdempotencyKey] = useState(() => randomUUID())
 
   const updateExit = useUpdateStockExit()
   const [selectedExit, setSelectedExit] = useState<any>(null)
@@ -490,7 +491,7 @@ export default function WarehouseSales() {
       // succeeded, so its key must never be reused (that would make the next
       // genuinely different sale look like a retry of this one and get
       // silently collapsed into it).
-      setSaleIdempotencyKey(crypto.randomUUID())
+      setSaleIdempotencyKey(randomUUID())
       return
     }
 
@@ -597,7 +598,7 @@ export default function WarehouseSales() {
         setRcvUsd(''); setRcvLbp('')
         setKgWeight(''); setKgPrice('')
         setNotes('')
-        setSaleIdempotencyKey(crypto.randomUUID())
+        setSaleIdempotencyKey(randomUUID())
         return
       }
 
@@ -664,7 +665,7 @@ export default function WarehouseSales() {
         setKgWeight(''); setKgPrice('')
         setNotes('')
         setPackedLines([{ id: Date.now(), bagTypeId: bagTypes[0]?.id ?? '', qty: '', price: '', curr: 'USD' }])
-        setSaleIdempotencyKey(crypto.randomUUID())
+        setSaleIdempotencyKey(randomUUID())
         return
       }
 
@@ -703,7 +704,7 @@ export default function WarehouseSales() {
     // registered-client branches (which regenerate their own key right before
     // their early `return`). This attempt already succeeded, so its key must
     // never be reused for a genuinely different next sale.
-    setSaleIdempotencyKey(crypto.randomUUID())
+    setSaleIdempotencyKey(randomUUID())
 
     showToast(`Sale recorded · $${totalUSD.toFixed(2)} from ${buyerName}`)
     setBuyerInput(''); setSelectedBuyerId(null)
