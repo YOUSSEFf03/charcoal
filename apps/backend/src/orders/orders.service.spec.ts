@@ -125,6 +125,9 @@ function makeDeliveryTx(
             bagTypeId: orderFixture?.bagTypeId ?? null,
             totalKgRequested: orderFixture?.totalKgRequested ?? '0',
             bagType: orderFixture?.bagType ?? null,
+            charcoalType: (orderFixture as any)?.charcoalType ?? 'Oak',
+            grade: (orderFixture as any)?.grade ?? 'A',
+            clientId: (orderFixture as any)?.clientId ?? 'client-1',
             shipments: shipRows.map((s) => ({ id: s.id, status: s.status })),
           };
         }
@@ -616,20 +619,56 @@ describe('OrdersService', () => {
       expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, undefined, true);
     });
 
-    it('KG order (no bagTypeId), no shipment: order still transitions to delivered with no packed-stock deduction attempted', async () => {
+    // KG order (no bagTypeId), no shipment → raw StockLot deduction, FIFO.
+    function kgDeliveryTx(totalKg: string, lots: { id: string; kgRemaining: string }[]) {
       const kgOrder = orderWith([]);
       (kgOrder as any).bagTypeId = null;
       mockPrisma.clientOrder.findUnique.mockResolvedValue(kgOrder);
-      const tx = makeDeliveryTx([], [], []);
+      const tx = makeDeliveryTx([], [], [], {
+        id: orderId, bagTypeId: null, totalKgRequested: totalKg, bagType: null,
+        charcoalType: 'Picking Ayin', grade: 'B', clientId: 'client-1',
+      } as any);
+      tx.$queryRaw = fn().mockImplementation(async (sql: any) =>
+        String(sql?.strings?.join('') ?? '').includes('stock_lots') ? lots : [],
+      );
+      tx.stockLot = { update: fn().mockResolvedValue({}) };
       mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+      return tx;
+    }
+
+    it('KG order, no shipment: deducts raw stock FIFO across matching lots and logs StockExit per lot', async () => {
+      const tx = kgDeliveryTx('534', [
+        { id: 'lot-old', kgRemaining: '500.000' },
+        { id: 'lot-new', kgRemaining: '1000.000' },
+      ]);
 
       await service.markDelivered(orderId, clerkUserId);
 
       expect(mockPackedStockService.getFifoDraw).not.toHaveBeenCalled();
+      expect(tx.stockLot.update).toHaveBeenCalledTimes(2);
+      expect(tx.stockLot.update.mock.calls[0][0]).toEqual({ where: { id: 'lot-old' }, data: { kgRemaining: { decrement: '500.000' } } });
+      expect(tx.stockLot.update.mock.calls[1][0]).toEqual({ where: { id: 'lot-new' }, data: { kgRemaining: { decrement: '34.000' } } });
+      expect(tx.stockExit.create).toHaveBeenCalledTimes(2);
+      expect(tx.stockExit.create.mock.calls[0][0].data).toMatchObject({
+        lotId: 'lot-old', kgQuantity: '500.000', exitType: 'order', orderId, clientId: 'client-1', loggedById: internalUserId,
+      });
+      expect(tx.stockExit.create.mock.calls[1][0].data).toMatchObject({ lotId: 'lot-new', kgQuantity: '34.000' });
       expect(tx.clientOrder.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: orderId }, data: { status: 'delivered' } }),
       );
       expect(mockInvoices.createFromOrder).toHaveBeenCalledWith(orderId, undefined, true);
+    });
+
+    it('KG order, insufficient raw stock: rejects with CONSTRAINT_VIOLATION, nothing written, no invoice', async () => {
+      const tx = kgDeliveryTx('600', [{ id: 'lot-1', kgRemaining: '500.000' }]);
+
+      await expect(service.markDelivered(orderId, clerkUserId)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'CONSTRAINT_VIOLATION' }),
+      });
+      expect(tx.stockLot.update).not.toHaveBeenCalled();
+      expect(tx.stockExit.create).not.toHaveBeenCalled();
+      expect(tx.clientOrder.update).not.toHaveBeenCalled();
+      expect(mockInvoices.createFromOrder).not.toHaveBeenCalled();
     });
 
     it('succeeds when at least one shipment is non-cancelled, even if others on the order are cancelled', async () => {

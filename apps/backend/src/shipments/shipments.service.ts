@@ -466,6 +466,69 @@ export class ShipmentsService {
   }
 
   /**
+   * Deduct raw (unpacked) stock for a KG order (no bag type) on delivery.
+   * Draws FIFO (oldest dateReceived first) across every StockLot whose
+   * charcoalType + grade match the order (case/whitespace-insensitive),
+   * decrementing StockLot.kgRemaining and creating one
+   * StockExit(exitType:'order', lotId, kgQuantity) per lot touched — the same
+   * row shape walk-in KG sales write, so COGS / stock reports pick it up.
+   *
+   * Locks the matching lot rows (FOR UPDATE) before reading. Rejects the whole
+   * operation (nothing written) if the matching lots can't cover `kg`.
+   * Must run inside the caller's transaction.
+   *
+   * @throws BadRequestException (CONSTRAINT_VIOLATION) on insufficient raw stock
+   */
+  async drainRawLotsDirect(
+    tx: Prisma.TransactionClient,
+    params: { charcoalType: string; grade: string; kg: Decimal; orderId: string; clientId: string | null; userId: string },
+  ): Promise<void> {
+    const { charcoalType, grade, kg, orderId, clientId, userId } = params;
+    if (!kg.gt(0)) return;
+
+    const lots = await tx.$queryRaw<{ id: string; kgRemaining: string }[]>(Prisma.sql`
+      SELECT id, "kgRemaining"::text AS "kgRemaining"
+      FROM "stock_lots"
+      WHERE lower(trim("charcoalType")) = lower(trim(${charcoalType}))
+        AND lower(trim("grade")) = lower(trim(${grade}))
+        AND "kgRemaining" > 0
+      ORDER BY "dateReceived" ASC, "createdAt" ASC, id ASC
+      FOR UPDATE
+    `);
+
+    const available = lots.reduce((sum, l) => sum.plus(l.kgRemaining), new Decimal(0));
+    if (kg.gt(available)) {
+      throw new BadRequestException({
+        error: `Insufficient warehouse stock for "${charcoalType}" grade ${grade} — available: ${available.toFixed(3)} kg, requested: ${kg.toFixed(3)} kg.`,
+        code: 'CONSTRAINT_VIOLATION',
+      });
+    }
+
+    let remaining = kg;
+    const date = new Date();
+    for (const lot of lots) {
+      if (!remaining.gt(0)) break;
+      const take = Decimal.min(remaining, new Decimal(lot.kgRemaining));
+      await tx.stockLot.update({
+        where: { id: lot.id },
+        data: { kgRemaining: { decrement: take.toFixed(3) } },
+      });
+      await tx.stockExit.create({
+        data: {
+          lotId: lot.id,
+          kgQuantity: take.toFixed(3),
+          exitType: 'order',
+          orderId,
+          clientId,
+          loggedById: userId,
+          date,
+        },
+      });
+      remaining = remaining.minus(take);
+    }
+  }
+
+  /**
    * Confirm delivery of a shipment. Drains packed stock FIFO via
    * {@link drainShipment}, updates order status, and optionally logs a payment.
    *

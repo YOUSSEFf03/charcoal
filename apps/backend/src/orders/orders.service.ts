@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { OrderStatus, Prisma } from '@prisma/client';
+import Decimal from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { ShipmentsService } from '../shipments/shipments.service';
@@ -469,9 +470,9 @@ export class OrdersService {
    * These two paths are mutually exclusive per order, so an order can never
    * be drained twice over for the same delivery.
    *
-   * KG orders (bagTypeId null) have no packed-stock line to deduct — this
-   * pre-existing gap (no order-level raw-lot deduction exists anywhere in
-   * this codebase, shipment-based or otherwise) is unchanged by this method.
+   * KG orders (bagTypeId null) have no packed-stock line — they deduct raw
+   * stock instead, FIFO across the StockLots matching the order's
+   * charcoalType + grade, via ShipmentsService.drainRawLotsDirect().
    *
    * Idempotent, including under concurrency: an order that is already
    * delivered/invoiced/paid short-circuits before opening a transaction at
@@ -581,9 +582,18 @@ export class OrdersService {
             parseFloat(freshOrder.bagType.nominalKg.toString()),
         );
         await this.shipments.drainPackedStockDirect(tx, freshOrder.bagTypeId, qty, id, user.id);
+      } else if (!freshOrder.bagTypeId) {
+        // KG order (sold loose by weight) — deduct raw warehouse stock FIFO
+        // from the lots matching the order's charcoal type + grade.
+        await this.shipments.drainRawLotsDirect(tx, {
+          charcoalType: freshOrder.charcoalType,
+          grade: freshOrder.grade,
+          kg: new Decimal(freshOrder.totalKgRequested.toString()),
+          orderId: id,
+          clientId: freshOrder.clientId,
+          userId: user.id,
+        });
       }
-      // KG order (bagTypeId null) with no shipment: nothing to deduct —
-      // pre-existing gap, see doc comment above.
 
       return tx.clientOrder.update({
         where: { id },
