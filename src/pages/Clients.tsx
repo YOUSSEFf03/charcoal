@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useClients, useClientsCounts, useCreateClient, useAddPhone, useOverdueClients } from '../hooks/useClients'
 import SortHeader, { toggleSort } from '../components/ui/SortHeader'
@@ -37,6 +37,18 @@ function typeBadgeClass(t: ClientType): string {
 export default function Clients() {
   const navigate = useNavigate()
   const [tab, setTab] = useState<ClientTab>('all')
+  // Opening Clients (sidebar, or pressing it again while already here) jumps
+  // to the top with the cursor in the search bar. Keyboard/mouse devices only:
+  // on touch screens focusing would pop the on-screen keyboard every time.
+  const location = useLocation()
+  const searchRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    setTab('all')
+    window.scrollTo({ top: 0 })
+    if (window.matchMedia?.('(pointer: fine)').matches) {
+      requestAnimationFrame(() => searchRef.current?.focus({ preventScroll: true }))
+    }
+  }, [location.key])
   const [payModalOpen, setPayModalOpen] = useState(false)
   const [newClientOpen, setNewClientOpen] = useState(false)
   const [rateOpen, setRateOpen] = useState(false)
@@ -310,7 +322,7 @@ export default function Clients() {
             <div className="filters">
               <div className="filter-input">
                 <i className="ti ti-search" />
-                <input type="text" placeholder="Search name, phone…" value={search} onChange={e => setSearch(e.target.value)} />
+                <input ref={searchRef} type="text" placeholder="Search name, phone…" value={search} onChange={e => setSearch(e.target.value)} />
               </div>
               <select className="filter-select" value={fType} onChange={e => setFType(e.target.value)}>
                 <option>All types</option>
