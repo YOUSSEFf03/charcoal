@@ -167,6 +167,35 @@ describe('Clients page — trueBalance includes draft orders', () => {
 
     expect(screen.getByText('$100.00')).toBeInTheDocument()
   })
+
+  it('does NOT add a delivered order (delivering always creates its invoice, already in c.balance)', () => {
+    mockUseClients.mockReturnValue({
+      data: { data: [client('a', { balance: '100.00' })], total: 1 },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    })
+    mockUseOrders.mockReturnValue({
+      data: {
+        data: [
+          {
+            id: 'o1', clientId: 'a', charcoalType: 'BBQ', grade: 'A',
+            totalKgRequested: '50', bagTypeId: null, pricePerBag: '1.00',
+            currency: 'USD', status: 'delivered', createdById: 'u1',
+            createdAt: '2026-01-01', updatedAt: '2026-01-01', notes: null,
+            supplierName: null, driverId: null,
+            client: { id: 'a', name: 'a' }, bagType: null,
+          },
+        ],
+        total: 1,
+      },
+    })
+
+    renderClients()
+
+    expect(screen.getByText('$100.00')).toBeInTheDocument()
+    expect(screen.queryByText('$150.00')).toBeNull()
+  })
 })
 
 describe('Clients page — loading and empty states', () => {

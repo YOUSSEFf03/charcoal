@@ -181,7 +181,11 @@ export default function Clients() {
       // Excluding it here silently zeroed out the true balance for every
       // client with only-draft open orders. 'invoiced'/'paid' stay excluded
       // — those already have an invoice, already reflected in c.balance.
-      if (!['draft', 'confirmed', 'partially_delivered', 'delivered'].includes(o.status)) continue
+      // 'delivered' is excluded too (2026-11-11): every path that sets it
+      // (markDelivered / last shipment delivered) also creates the order's
+      // invoice, so counting it here doubled the order in the Balance column
+      // (9 clients were shown too high; table total was 3,326.53 over).
+      if (!['draft', 'confirmed', 'partially_delivered'].includes(o.status)) continue
       const isBag = !!o.bagTypeId
       const totalKg = parseFloat(o.totalKgRequested)
       const pricePerUnit = parseFloat(o.pricePerBag)
