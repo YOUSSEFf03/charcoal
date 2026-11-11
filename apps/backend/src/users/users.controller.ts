@@ -65,9 +65,11 @@ export class UsersController {
 
   /**
    * Minimal, unbounded list of every user who can be a cash payment
-   * receiver (owner/accountant/sales_rep/worker/receiver — not driver, whose
-   * cash-on-delivery collection is auto-attributed to ClientOrder.driverId,
-   * never manually picked — see shipments.service.ts PR 10.1). Deliberately
+   * receiver (owner/accountant/sales_rep/worker/receiver/driver). Drivers
+   * were excluded at first (their cash-on-delivery is auto-attributed to
+   * ClientOrder.driverId, see shipments.service.ts PR 10.1), but they also
+   * collect manual payments from clients, so since 2026-11-11 they can be
+   * picked too; their balance / handover works like any other user. Deliberately
    * NOT gated to owner like the rest of this controller: every page that logs
    * a payment (Payment, Invoices, ClientDetail, WarehouseSales) has no role
    * restriction of its own, so an accountant/sales_rep/worker picking a

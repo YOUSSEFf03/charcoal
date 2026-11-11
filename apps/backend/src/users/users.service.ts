@@ -41,7 +41,7 @@ export class UsersService {
     return this.prisma.user.findMany({
       where: {
         deletedAt: null,
-        role: { in: ['owner', 'accountant', 'sales_rep', 'worker', 'receiver'] },
+        role: { in: ['owner', 'accountant', 'sales_rep', 'worker', 'receiver', 'driver'] },
       },
       select: { id: true, name: true, role: true },
       orderBy: { name: 'asc' },

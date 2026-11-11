@@ -176,3 +176,19 @@ describe('UsersService.deleteLocal()', () => {
     expect(mockPrisma.user.delete).toHaveBeenCalledWith({ where: { id: 'receiver-8' } });
   });
 });
+
+describe('UsersService.findReceivers()', () => {
+  it('includes drivers so they can be picked as a payment receiver', async () => {
+    const mockPrisma = { user: { findMany: fn() } };
+    mockPrisma.user.findMany.mockResolvedValue([]);
+    const service = new UsersService(mockPrisma as any);
+
+    await service.findReceivers();
+
+    const where = mockPrisma.user.findMany.mock.calls[0][0].where;
+    expect(where.deletedAt).toBeNull();
+    expect(where.role.in).toEqual(
+      expect.arrayContaining(['owner', 'accountant', 'sales_rep', 'worker', 'receiver', 'driver']),
+    );
+  });
+});
