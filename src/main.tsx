@@ -8,6 +8,9 @@ import { ToastProvider } from './context/ToastContext.tsx'
 import { RateProvider } from './context/RateContext.tsx'
 import { queryClient } from './lib/queryClient.ts'
 import { useTokenSync } from './lib/auth.ts'
+import { disableNumberInputWheel } from './lib/disableNumberWheel.ts'
+
+disableNumberInputWheel()
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 
