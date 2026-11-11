@@ -26,10 +26,6 @@ import SortHeader, { toggleSort } from '../components/ui/SortHeader'
 import { api } from '../lib/api'
 import type { Invoice, PaginatedResponse } from '../types/api'
 
-const PAY_METHOD_LABEL: Record<string, string> = {
-  cash: 'Cash', whish: 'Whish', omt: 'OMT', bank_transfer: 'Bank transfer', cheque: 'Cheque',
-}
-
 /* ── local edit-form view-model types ── */
 interface Phone { number: string; label: string; meta: string; active: boolean; primary: boolean }
 
@@ -48,7 +44,7 @@ function toPhoneVMs(phones: ReadonlyArray<{ number: string; label: string; isAct
 }
 interface ClientVM {
   name: string; nameAr: string; initials: string; type: string; currency: string
-  address: string; terms: string; prefPay: string; limit: number; notesAr: string; notesEn: string
+  address: string; terms: string; limit: number; notesAr: string; notesEn: string
   phones: Phone[]; preferred: string[]
   outstandingBal: number; openInvoices: number; daysSinceOrder: number; avgDays: number
   /** Multiple-locations audit, 2026-08-31 — see useClientLocations()'s doc comment. */
@@ -479,7 +475,7 @@ export default function ClientDetail() {
   // Editable client view-model (seeded from the API client).
   const [client, setClient] = useState<ClientVM>(() => ({
     name: c?.name ?? '', nameAr: c?.nameAr ?? '', initials, type: c?.type ?? 'restaurant', currency: c?.currency ?? 'USD',
-    address: c?.address ?? '', terms: c?.paymentTerms ?? '', prefPay: c?.preferredPaymentMethod ?? '', limit: c?.creditLimit ? parseFloat(c.creditLimit) : 0,
+    address: c?.address ?? '', terms: c?.paymentTerms ?? '', limit: c?.creditLimit ? parseFloat(c.creditLimit) : 0,
     notesAr: c?.notes ?? '', notesEn: c?.notesEn ?? '',
     phones: toPhoneVMs(activePhones),
     preferred, outstandingBal, openInvoices, daysSinceOrder, avgDays,
@@ -547,7 +543,7 @@ export default function ClientDetail() {
     if (!c) return
     setClient({
       name: c.name, nameAr: c.nameAr ?? '', initials, type: c.type, currency: c.currency,
-      address: c.address ?? '', terms: c.paymentTerms ?? '', prefPay: c.preferredPaymentMethod ?? '', limit: c.creditLimit ? parseFloat(c.creditLimit) : 0,
+      address: c.address ?? '', terms: c.paymentTerms ?? '', limit: c.creditLimit ? parseFloat(c.creditLimit) : 0,
       notesAr: c.notes ?? '', notesEn: c.notesEn ?? '',
       phones: toPhoneVMs(c.phones),
       preferred, outstandingBal, openInvoices, daysSinceOrder, avgDays,
@@ -913,7 +909,6 @@ export default function ClientDetail() {
           type: editForm.type as any,
           currency: editForm.currency as any,
           paymentTerms: editForm.terms.trim() || undefined,
-          preferredPaymentMethod: (editForm.prefPay || null) as any,
           address: editForm.address.trim() || null,
           creditLimit: editForm.limit ? editForm.limit.toFixed(2) : null,
           notes: editForm.notesAr.trim() || undefined,
@@ -1158,7 +1153,7 @@ export default function ClientDetail() {
             <button className="btn" onClick={() => navigate(`/orders/new?clientId=${cid}`)}>
               <i className="ti ti-plus" style={{ fontSize: 15 }} /> New order
             </button>
-            <button className="btn" onClick={() => { setPayDate(toDateOnlyString(new Date())); setPayMethod(['cash', 'whish', 'omt'].includes(client.prefPay) ? client.prefPay : 'cash'); setPayModalOpen(true) }}>
+            <button className="btn" onClick={() => { setPayDate(toDateOnlyString(new Date())); setPayModalOpen(true) }}>
               <i className="ti ti-receipt" style={{ fontSize: 15 }} /> Log payment
             </button>
           </>
@@ -1206,7 +1201,7 @@ export default function ClientDetail() {
                 <div className="action-ic green"><i className="ti ti-file-invoice" /></div>
                 <div className="action-tx"><span className="t">Make invoice</span><span className="s">issue a new charge</span></div>
               </button>
-              <button className="action-card" onClick={() => { setPayDate(toDateOnlyString(new Date())); setPayMethod(['cash', 'whish', 'omt'].includes(client.prefPay) ? client.prefPay : 'cash'); setPayModalOpen(true) }}>
+              <button className="action-card" onClick={() => { setPayDate(toDateOnlyString(new Date())); setPayModalOpen(true) }}>
                 <div className="action-ic dark"><i className="ti ti-receipt" /></div>
                 <div className="action-tx"><span className="t">Make payment</span><span className="s">log money received</span></div>
               </button>
@@ -1361,10 +1356,6 @@ export default function ClientDetail() {
                     <div>
                       <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 3 }}>Payment terms</div>
                       <div>{client.terms || <span style={{ color: 'var(--text3)' }}>Not set</span>}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 3 }}>Preferred payment</div>
-                      <div>{client.prefPay ? PAY_METHOD_LABEL[client.prefPay] ?? client.prefPay : <span style={{ color: 'var(--text3)' }}>Not set</span>}</div>
                     </div>
                     <div>
                       <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace", textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 3 }}>Notes</div>
@@ -1758,7 +1749,7 @@ export default function ClientDetail() {
                 </div>
               </div>
               <div className="stmt-actions">
-                <button className="btn" onClick={() => { setPayDate(toDateOnlyString(new Date())); setPayMethod(['cash', 'whish', 'omt'].includes(client.prefPay) ? client.prefPay : 'cash'); setPayModalOpen(true) }}><i className="ti ti-plus" style={{ fontSize: 15 }} /> Log payment</button>
+                <button className="btn" onClick={() => { setPayDate(toDateOnlyString(new Date())); setPayModalOpen(true) }}><i className="ti ti-plus" style={{ fontSize: 15 }} /> Log payment</button>
                 <button className="btn-export" onClick={exportPayments}><i className="ti ti-table-export" /> Export Excel</button>
               </div>
             </div>
@@ -1876,13 +1867,6 @@ export default function ClientDetail() {
                   <select className="select" value={editForm.terms} onChange={e => setEditForm(f => ({ ...f, terms: e.target.value }))}>
                     <option value="">— not set —</option>
                     {['Cash on delivery', 'Net 15 days from invoice', 'Net 30 days from invoice', 'Net 45 days from invoice', 'Prepaid'].map(t => <option key={t}>{t}</option>)}
-                  </select>
-                </div>
-                <div className="field">
-                  <span className="field-label">Preferred payment</span>
-                  <select className="select" value={editForm.prefPay} onChange={e => setEditForm(f => ({ ...f, prefPay: e.target.value }))}>
-                    <option value="">— not set —</option>
-                    {Object.entries(PAY_METHOD_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
                 </div>
                 <div className="field">

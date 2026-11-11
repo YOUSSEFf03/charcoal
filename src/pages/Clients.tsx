@@ -76,11 +76,6 @@ export default function Clients() {
   const [newClientPhone, setNewClientPhone] = useState('')
   const [newClientType, setNewClientType] = useState<ClientType>('restaurant')
   const [newClientCurrency] = useState<Currency>('USD')
-  // Payment terms / preferred payment / notes used to be unwired inputs that
-  // were never sent (2026-11-11). Same terms list as the client Edit form.
-  const [newClientTerms, setNewClientTerms] = useState('')
-  const [newClientPrefPay, setNewClientPrefPay] = useState<PaymentMethod | ''>('')
-  const [newClientNotes, setNewClientNotes] = useState('')
   const [errName, setErrName] = useState(false)
   const [errPhone, setErrPhone] = useState(false)
   const [newClientOpening, setNewClientOpening] = useState(emptyOpeningBalance)
@@ -233,10 +228,6 @@ export default function Clients() {
         type: newClientType,
         currency: newClientCurrency,
         phones: [{ number: newClientPhone.trim(), label: 'mobile', isActive: true, dateAdded: new Date().toISOString() }],
-        ...(newClientTerms ? { paymentTerms: newClientTerms } : {}),
-        ...(newClientPrefPay ? { preferredPaymentMethod: newClientPrefPay } : {}),
-        // Arabic text goes to the Arabic notes field, anything else to English notes.
-        ...(newClientNotes.trim() ? (/[؀-ۿ]/.test(newClientNotes) ? { notes: newClientNotes.trim() } : { notesEn: newClientNotes.trim() }) : {}),
         ...(openingBalance ? { openingBalance } : {}),
       },
       {
@@ -245,9 +236,6 @@ export default function Clients() {
           setNewClientName('')
           setNewClientPhone('')
           setNewClientOpening(emptyOpeningBalance())
-          setNewClientTerms('')
-          setNewClientPrefPay('')
-          setNewClientNotes('')
           showToast('Client added successfully')
         },
         onError: (err: any) => showToast(err?.error ?? 'Failed to add client'),
@@ -647,21 +635,12 @@ export default function Clients() {
                 <input className="form-input" type="text" placeholder="Restaurant, company, or person name…" value={newClientName} onChange={e => { setNewClientName(e.target.value); setErrName(false) }} />
                 {errName && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 4 }}>Name is required</div>}
               </div>
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Type</label>
-                  <select className="form-input" value={newClientType} onChange={e => setNewClientType(e.target.value as ClientType)}>
-                    <option value="restaurant">Restaurant</option><option value="shop">Shop</option><option value="wholesale">Wholesale</option>
-                    <option value="walk_in">Walk-in</option><option value="corporate">Corporate</option><option value="export">Export</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Payment terms</label>
-                  <select className="form-input" value={newClientTerms} onChange={e => setNewClientTerms(e.target.value)}>
-                    <option value="">— not set —</option>
-                    {['Cash on delivery', 'Net 15 days from invoice', 'Net 30 days from invoice', 'Net 45 days from invoice', 'Prepaid'].map(t => <option key={t}>{t}</option>)}
-                  </select>
-                </div>
+              <div className="form-group">
+                <label className="form-label">Type</label>
+                <select className="form-input" value={newClientType} onChange={e => setNewClientType(e.target.value as ClientType)}>
+                  <option value="restaurant">Restaurant</option><option value="shop">Shop</option><option value="wholesale">Wholesale</option>
+                  <option value="walk_in">Walk-in</option><option value="corporate">Corporate</option><option value="export">Export</option>
+                </select>
               </div>
               <div className="form-group">
                 <label className="form-label">Primary phone</label>
@@ -677,19 +656,6 @@ export default function Clients() {
                   negativeLabel="We owe client (credit)"
                 />
               )}
-              <div className="form-group">
-                <label className="form-label">Preferred payment</label>
-                <div className="method-pills">
-                  {(['cash', 'whish', 'omt'] as const).map(m => (
-                    <div key={m} className={`method-pill ${newClientPrefPay === m ? 'sel' : ''}`}
-                      onClick={() => setNewClientPrefPay(p => p === m ? '' : m)}>{m === 'omt' ? 'OMT' : m[0].toUpperCase() + m.slice(1)}</div>
-                  ))}
-                </div>
-              </div>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Notes (optional)</label>
-                <input className="form-input" type="text" placeholder="Delivery instructions, contacts…" dir="auto" value={newClientNotes} onChange={e => setNewClientNotes(e.target.value)} />
-              </div>
             </div>
             <div className="modal-footer" style={{ position: 'sticky', bottom: 0, background: 'var(--surface)' }}>
               <button className="btn" onClick={() => { setNewClientOpen(false); setErrName(false); setErrPhone(false) }}>Cancel</button>

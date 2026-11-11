@@ -838,8 +838,6 @@ export interface Client {
   multiLocationEnabled: boolean;
   /** Fill Clients "Edit bags & pricing" rows; null = never saved (PUT /clients/:id/fill-bags). */
   fillBags?: FillBag[] | null;
-  /** How the client usually pays (New client / Edit). */
-  preferredPaymentMethod?: PaymentMethod | null;
   createdAt: string;
   updatedAt: string;
   // Computed (CONSTRAINT 15)
@@ -862,7 +860,6 @@ export interface CreateClientDto {
   phones?: ClientPhone[];
   preferredTypes?: ClientPreferredType[];
   paymentTerms?: string | null;
-  preferredPaymentMethod?: PaymentMethod | null;
   address?: string | null;
   creditLimit?: string | null; // Decimal string
   notes?: string | null;

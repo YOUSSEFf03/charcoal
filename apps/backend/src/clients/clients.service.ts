@@ -307,7 +307,6 @@ export class ClientsService {
         ...(dto.paymentTerms !== undefined
           ? { paymentTerms: dto.paymentTerms }
           : {}),
-        ...(dto.preferredPaymentMethod !== undefined ? { preferredPaymentMethod: dto.preferredPaymentMethod } : {}),
         phones: (dto.phones ?? []) as Prisma.InputJsonValue,
         ...(openingBalance ? { openingBalance: { create: openingBalance } } : {}),
       },
@@ -336,7 +335,6 @@ export class ClientsService {
         ...(dto.address !== undefined ? { address: dto.address } : {}),
         ...(dto.creditLimit !== undefined ? { creditLimit: dto.creditLimit } : {}),
         ...(dto.paymentTerms !== undefined ? { paymentTerms: dto.paymentTerms } : {}),
-        ...(dto.preferredPaymentMethod !== undefined ? { preferredPaymentMethod: dto.preferredPaymentMethod } : {}),
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
         ...(dto.multiLocationEnabled !== undefined ? { multiLocationEnabled: dto.multiLocationEnabled } : {}),
       },
