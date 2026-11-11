@@ -1029,3 +1029,43 @@ describe('ClientsService — Client Locations', () => {
     });
   });
 });
+
+describe('ClientsService — setFillBags()', () => {
+  let service: ClientsService;
+  const mockPrisma = { client: { findUnique: fn(), update: fn() } };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockPrisma.client.update.mockImplementation((args: unknown) => Promise.resolve(args));
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ClientsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: ClientBalanceService, useValue: { computeBalance: fn() } },
+      ],
+    }).compile();
+    service = module.get<ClientsService>(ClientsService);
+  });
+
+  it('stores the bag list on the client (trimmed, bagCost 0 when they supply the bag)', async () => {
+    mockPrisma.client.findUnique.mockResolvedValue({ id: 'c1' });
+    await service.setFillBags('c1', {
+      bags: [
+        { id: 'a', size: 10, charcoal: ' Grade A ', price: 2.5, worker: 0.25, ours: true, bagCost: 0.3 },
+        { id: 'b', size: 5, charcoal: 'mix', price: 1, worker: 0.1, ours: false, bagCost: 9 },
+      ],
+    });
+    const args = mockPrisma.client.update.mock.calls[0][0] as { where: { id: string }; data: { fillBags: unknown[] } };
+    expect(args.where).toEqual({ id: 'c1' });
+    expect(args.data.fillBags).toEqual([
+      { id: 'a', size: 10, charcoal: 'Grade A', price: 2.5, worker: 0.25, ours: true, bagCost: 0.3 },
+      { id: 'b', size: 5, charcoal: 'mix', price: 1, worker: 0.1, ours: false, bagCost: 0 },
+    ]);
+  });
+
+  it('throws NotFound for an unknown client and writes nothing', async () => {
+    mockPrisma.client.findUnique.mockResolvedValue(null);
+    await expect(service.setFillBags('nope', { bags: [] })).rejects.toBeInstanceOf(NotFoundException);
+    expect(mockPrisma.client.update).not.toHaveBeenCalled();
+  });
+});

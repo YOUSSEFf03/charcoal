@@ -943,6 +943,11 @@ model Client {
   /// unaffected either way — see ClientLocation's doc comment: a location is
   /// provenance on an order, never a second ledger.
   multiLocationEnabled Boolean    @default(false)
+  /// Fill Clients "Edit bags & pricing" specs (size, charcoal spec, price per
+  /// bag, worker pay, who supplies the bag, bag cost). null = never saved.
+  /// Used to live only in the browser's localStorage, so other PCs never saw
+  /// it (2026-11-11). Shape: SetFillBagsDto.
+  fillBags       Json?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   orders         ClientOrder[]

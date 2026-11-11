@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import type { FillBag } from '../types/api'
 import Topbar from '../components/layout/Topbar'
-import { useClient, useClientBalance, useUpdateClient } from '../hooks/useClients'
+import { useClient, useClientBalance, useUpdateClient, useSetFillBags } from '../hooks/useClients'
 import { usePayments, useCreatePayment } from '../hooks/usePayments'
 import { useWorkers } from '../hooks/useWorkers'
 import { useCashReceivers } from '../hooks/useUsers'
@@ -17,6 +18,11 @@ interface BagSpec {
   id: string; size: number; charcoal: string; price: number; worker: number; ours: boolean; bagCost: number; stock: number
 }
 interface Contact { name: string; role: string; phone: string }
+
+/** Editor rows → stored rows (stock is computed per load, never saved). */
+function toFillBagRows(bags: BagSpec[]): FillBag[] {
+  return bags.map(({ id, size, charcoal, price, worker, ours, bagCost }) => ({ id, size, charcoal, price, worker, ours, bagCost }))
+}
 
 let _fjBagId = 1
 
@@ -105,21 +111,41 @@ export default function FillClientDetail() {
   const clientBalance = balanceQ.data ? parseFloat(String(balanceQ.data.balance)) : (client ? parseFloat(String(client.balance ?? '0')) : 0)
   const clientPhones = client?.phones?.filter((p: any) => p.isActive) ?? []
 
-  // Bags state — persisted to localStorage per client so pricing survives page reloads
-  const storageKey = `fill-bags-${id ?? 'unknown'}`
-  const [bags, setBagsRaw] = useState<BagSpec[]>(() => {
+  // Bags state — saved in the database on the client (Client.fillBags, PUT
+  // /clients/:id/fill-bags) so every PC sees the same bags & pricing. Until
+  // 2026-11-11 this lived only in the browser's localStorage, so a second PC
+  // never saw it; legacy localStorage bags are uploaded once (below).
+  const [showBagEditor, setShowBagEditor] = useState(false)
+  const legacyStorageKey = `fill-bags-${id ?? 'unknown'}`
+  const setFillBags = useSetFillBags()
+  const [bags, setBags] = useState<BagSpec[]>([])
+  const [bagsSnapshot, setBagsSnapshot] = useState<BagSpec[] | null>(null)
+  const [bagsSaving, setBagsSaving] = useState(false)
+  const legacyCheckedFor = useRef<string | null>(null)
+  const serverBags = client?.fillBags
+
+  // Load bags from the database. Never overwrite while the editor is open.
+  useEffect(() => {
+    if (!id || !client || client.id !== id || showBagEditor) return
+    if (serverBags != null) {
+      setBags(serverBags.map(b => ({ ...b, stock: 0 })))
+      return
+    }
+    if (legacyCheckedFor.current === id) return
+    legacyCheckedFor.current = id
+    let legacy: BagSpec[] = []
     try {
-      const saved = localStorage.getItem(storageKey)
-      return saved ? (JSON.parse(saved) as BagSpec[]) : []
-    } catch { return [] }
-  })
-  function setBags(update: BagSpec[] | ((prev: BagSpec[]) => BagSpec[])) {
-    setBagsRaw(prev => {
-      const next = typeof update === 'function' ? update(prev) : update
-      try { localStorage.setItem(storageKey, JSON.stringify(next)) } catch { /* quota */ }
-      return next
-    })
-  }
+      const saved = localStorage.getItem(legacyStorageKey)
+      if (saved) legacy = JSON.parse(saved) as BagSpec[]
+    } catch { /* unreadable → nothing to migrate */ }
+    setBags(legacy)
+    if (legacy.length > 0) {
+      setFillBags.mutate({ id, bags: toFillBagRows(legacy) }, {
+        onSuccess: () => { try { localStorage.removeItem(legacyStorageKey) } catch { /* ignore */ } },
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, client?.id, serverBags, showBagEditor])
 
   function getBag(bagId: string) {
     return bags.find(b => b.id === bagId)
@@ -136,29 +162,42 @@ export default function FillClientDetail() {
     return Object.entries(netStock).map(([specKey, v]) => ({ specKey, size: v.size, charcoal: v.charcoal }))
   }, [netStock])
 
-  // When fill jobs arrive (new or refetched), promote any NEW specs into bags
-  // so they appear in the editor. Existing bag pricing is never overwritten.
-  useEffect(() => {
-    if (specsFromJobs.length === 0) return
-    setBags(prev => {
-      const existing = new Set(prev.map(b => makeSpecKey(b.size, b.charcoal)))
-      const newSpecs = specsFromJobs.filter(s => !existing.has(s.specKey))
-      if (newSpecs.length === 0) return prev
-      return [
-        ...prev,
-        ...newSpecs.map(s => ({
-          id: s.specKey,
-          size: s.size,
-          charcoal: s.charcoal,
-          price: 0,
-          worker: 0,
-          ours: false,
-          bagCost: 0,
-          stock: 0,
-        })),
-      ]
-    })
-  }, [specsFromJobs])
+  // Opening the editor: snapshot for Cancel, and add any spec found in fill-job
+  // history that isn't a row yet (existing pricing is never overwritten).
+  function openBagEditor() {
+    setBagsSnapshot(bags)
+    const existing = new Set(bags.map(b => makeSpecKey(b.size, b.charcoal)))
+    const newSpecs = specsFromJobs.filter(s => !existing.has(s.specKey))
+    if (newSpecs.length > 0) {
+      setBags([...bags, ...newSpecs.map(s => ({
+        id: s.specKey, size: s.size, charcoal: s.charcoal,
+        price: 0, worker: 0, ours: false, bagCost: 0, stock: 0,
+      }))])
+    }
+    setShowBagEditor(true)
+  }
+
+  function cancelBagEditor() {
+    if (bagsSnapshot) setBags(bagsSnapshot)
+    setBagsSnapshot(null)
+    setShowBagEditor(false)
+  }
+
+  async function saveBagEditor() {
+    if (!id) return
+    setBagsSaving(true)
+    try {
+      await setFillBags.mutateAsync({ id, bags: toFillBagRows(bags) })
+      try { localStorage.removeItem(legacyStorageKey) } catch { /* ignore */ }
+      setBagsSnapshot(null)
+      setShowBagEditor(false)
+      showToast('Bag pricing saved')
+    } catch (e: any) {
+      showToast(e?.error ?? 'Failed to save bags — try again')
+    } finally {
+      setBagsSaving(false)
+    }
+  }
 
   // allBags = local bag editor specs merged with fill-job-derived specs + net stock counts
   const allBags = useMemo(() => {
@@ -205,7 +244,6 @@ export default function FillClientDetail() {
 
   // Modal state
   const updateClient = useUpdateClient()
-  const [showBagEditor, setShowBagEditor] = useState(false)
   const [showPickup, setShowPickup] = useState(false)
   const [showFillJob, setShowFillJob] = useState(false)
   const [showPay, setShowPay] = useState(false)
@@ -549,7 +587,7 @@ export default function FillClientDetail() {
             <div className="card">
               <div className="card-head">
                 <div className="card-title"><i className="ti ti-package" /> Bags &amp; pricing <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>per-bag rates · stock on hand</span></div>
-                <button className="card-action" onClick={() => setShowBagEditor(true)}><i className="ti ti-edit" style={{ fontSize: 13 }} /> Edit bags</button>
+                <button className="card-action" onClick={openBagEditor}><i className="ti ti-edit" style={{ fontSize: 13 }} /> Edit bags</button>
               </div>
               <div className="bags-grid">
                 {allBags.length === 0 && !fillJobsQ.isLoading && (
@@ -886,14 +924,14 @@ export default function FillClientDetail() {
 
       {/* ── Modal: Bag editor ── */}
       {showBagEditor && (
-        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && setShowBagEditor(false)}>
+        <div className="modal-overlay open" onClick={e => e.target === e.currentTarget && cancelBagEditor()}>
           <div className="modal bag-editor" style={{ width: 1000, maxWidth: '96vw' }}>
             <div className="compose-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0' }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.2px' }}><i className="ti ti-edit" style={{ marginRight: 8 }} />Edit bags &amp; pricing</div>
                 <div style={{ fontSize: 11, opacity: 0.6, fontFamily: "'IBM Plex Mono',monospace", marginTop: 3 }}>custom sizes · charcoal spec · worker pay · supply · fill price derived from fill jobs</div>
               </div>
-              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} aria-label="Close" onClick={() => setShowBagEditor(false)}><i className="ti ti-x" /></button>
+              <button className="icon-btn" style={{ background: 'rgba(255,255,255,0.12)', color: '#fff' }} aria-label="Close" onClick={cancelBagEditor}><i className="ti ti-x" /></button>
             </div>
             <div style={{ padding: 0, overflowX: 'auto' }}>
               <table style={{ width: '100%', minWidth: 900, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
@@ -979,8 +1017,8 @@ export default function FillClientDetail() {
             <div className="modal-footer">
               <span style={{ fontSize: 11.5, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>fill price is auto-calculated from fill job history</span>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn" onClick={() => setShowBagEditor(false)}>Cancel</button>
-                <button className="btn green" onClick={() => { setShowBagEditor(false); showToast('Bag pricing saved') }}><i className="ti ti-check" style={{ fontSize: 15 }} /> Save bags</button>
+                <button className="btn" onClick={cancelBagEditor} disabled={bagsSaving}>Cancel</button>
+                <button className="btn green" onClick={saveBagEditor} disabled={bagsSaving}><i className="ti ti-check" style={{ fontSize: 15 }} /> {bagsSaving ? 'Saving…' : 'Save bags'}</button>
               </div>
             </div>
           </div>

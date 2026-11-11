@@ -836,6 +836,8 @@ export interface Client {
    * ClientLocation's backend schema doc comment.
    */
   multiLocationEnabled: boolean;
+  /** Fill Clients "Edit bags & pricing" rows; null = never saved (PUT /clients/:id/fill-bags). */
+  fillBags?: FillBag[] | null;
   createdAt: string;
   updatedAt: string;
   // Computed (CONSTRAINT 15)
@@ -1981,4 +1983,15 @@ export interface ArSummary {
   openInvoiceCount: number;
   overdueCount: number;
   oldestOverdueDays: number;
+}
+
+/** One row of the Fill Clients "Edit bags & pricing" table, stored on Client.fillBags. */
+export interface FillBag {
+  id: string;
+  size: number;
+  charcoal: string;
+  price: number;
+  worker: number;
+  ours: boolean;
+  bagCost: number;
 }

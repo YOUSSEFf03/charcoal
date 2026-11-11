@@ -20,6 +20,7 @@ import { UpdateClientDto } from './dto/update-client.dto';
 import { AddPhoneDto } from './dto/add-phone.dto';
 import { DeactivatePhoneDto } from './dto/deactivate-phone.dto';
 import { SetPhonesDto } from './dto/set-phones.dto';
+import { SetFillBagsDto } from './dto/set-fill-bags.dto';
 import { CreateClientLocationDto } from './dto/create-client-location.dto';
 import { UpdateClientLocationDto } from './dto/update-client-location.dto';
 import { Roles } from '../auth/roles.decorator';
@@ -145,6 +146,20 @@ export class ClientsController {
     @Body() dto: SetPhonesDto,
   ) {
     return this.clientsService.setPhones(id, dto);
+  }
+
+  /** Fill Clients "Edit bags & pricing" table — saved on the client so every PC sees it. */
+  @ApiOperation({ summary: 'Replace a fill client\'s bag specs & pricing' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 400, description: 'Invalid bag row' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Put(':id/fill-bags')
+  @Roles('owner', 'sales_rep')
+  setFillBags(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetFillBagsDto,
+  ) {
+    return this.clientsService.setFillBags(id, dto);
   }
 
   /**

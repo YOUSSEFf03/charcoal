@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type {
   Client,
+  FillBag,
   CreateClientDto,
   UpdateClientDto,
   AddClientPhoneDto,
@@ -177,6 +178,23 @@ export function useAddPhone() {
   return useMutation({
     mutationFn: async ({ id, body }: { id: string; body: AddClientPhoneDto }) => {
       const res = await api.post<Client>(`/clients/${id}/phones`, body)
+      return res.data
+    },
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ['clients', id] })
+    },
+  })
+}
+
+/**
+ * Save the Fill Clients "Edit bags & pricing" table in the database (whole
+ * list). PUT /clients/:id/fill-bags — every PC sees the same bags.
+ */
+export function useSetFillBags() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, bags }: { id: string; bags: FillBag[] }) => {
+      const res = await api.put<{ id: string; fillBags: FillBag[] }>(`/clients/${id}/fill-bags`, { bags })
       return res.data
     },
     onSuccess: (_data, { id }) => {

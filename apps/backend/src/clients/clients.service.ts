@@ -12,6 +12,7 @@ import { UpdateClientDto } from './dto/update-client.dto';
 import { AddPhoneDto } from './dto/add-phone.dto';
 import { DeactivatePhoneDto } from './dto/deactivate-phone.dto';
 import { SetPhonesDto } from './dto/set-phones.dto';
+import { SetFillBagsDto } from './dto/set-fill-bags.dto';
 import { CreateClientLocationDto } from './dto/create-client-location.dto';
 import { UpdateClientLocationDto } from './dto/update-client-location.dto';
 import { SetOpeningBalanceDto } from '../common/dto/set-opening-balance.dto';
@@ -436,6 +437,33 @@ export class ClientsService {
 
   /** Existence check only — mirrors findOne() without the balance computation,
    *  which the location endpoints have no use for. */
+  /**
+   * Save the Fill Clients "Edit bags & pricing" table for a client (whole
+   * list, replaces the previous one). Stored on the client row so every PC
+   * sees the same bags — it used to live only in one browser's localStorage.
+   * `stock` is computed per page load and is never stored.
+   *
+   * @throws NotFoundException if client does not exist
+   */
+  async setFillBags(id: string, dto: SetFillBagsDto) {
+    await this.findOneBare(id);
+    const bags = dto.bags.map((b) => ({
+      id: b.id,
+      size: b.size,
+      charcoal: b.charcoal.trim(),
+      price: b.price,
+      worker: b.worker,
+      ours: b.ours,
+      bagCost: b.ours ? b.bagCost : 0,
+    }));
+    const updated = await this.prisma.client.update({
+      where: { id },
+      data: { fillBags: bags as unknown as Prisma.InputJsonValue },
+      select: { id: true, fillBags: true },
+    });
+    return updated;
+  }
+
   private async findOneBare(id: string) {
     const client = await this.prisma.client.findUnique({ where: { id } });
     if (!client) {

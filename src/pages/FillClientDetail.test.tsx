@@ -41,10 +41,13 @@ vi.mock('../components/layout/Topbar', () => ({
 
 const mockUseClient = vi.fn()
 const mockUseClientBalance = vi.fn()
+const mockSetFillBagsMutate = vi.fn()
+const mockSetFillBagsMutateAsync = vi.fn().mockResolvedValue({})
 vi.mock('../hooks/useClients', () => ({
   useClient: (id: string) => mockUseClient(id),
   useClientBalance: (id: string) => mockUseClientBalance(id),
   useUpdateClient: () => ({ mutateAsync: vi.fn() }),
+  useSetFillBags: () => ({ mutate: mockSetFillBagsMutate, mutateAsync: mockSetFillBagsMutateAsync }),
 }))
 
 const mockUsePayments = vi.fn()
@@ -258,5 +261,46 @@ describe('FillClientDetail — Log payment modal', () => {
     const [body] = mockCreatePaymentMutateAsync.mock.calls[0]
     expect(body.receiverId).toBe('receiver-b')
     expect(body.receiverId).not.toBe('receiver-a')
+  })
+})
+
+describe('FillClientDetail — bags & pricing are saved in the database (not one browser)', () => {
+  const row = { id: 'r1', size: 10, charcoal: 'Grade A', price: 2.5, worker: 0.25, ours: false, bagCost: 0 }
+
+  beforeEach(() => { localStorage.clear() })
+
+  it('shows the bags stored on the client and saves edits with PUT fill-bags', async () => {
+    mockUseClient.mockReturnValue({ data: { id: 'fc-1', name: 'Cedar Fill Co', currency: 'USD', type: 'fill_client', phones: [], fillBags: [row], createdAt: '2026-01-01T00:00:00.000Z' }, isLoading: false })
+    const user = userEvent.setup()
+    renderAt('fc-1')
+    await user.click(screen.getByText('Edit bags'))
+    const spec = screen.getByDisplayValue('Grade A')
+    await user.clear(spec)
+    await user.type(spec, 'Grade B')
+    await user.click(screen.getByText('Save bags'))
+    await waitFor(() => expect(mockSetFillBagsMutateAsync).toHaveBeenCalledWith({ id: 'fc-1', bags: [{ ...row, charcoal: 'Grade B' }] }))
+    expect(mockSetFillBagsMutate).not.toHaveBeenCalled()
+  })
+
+  it('Cancel throws away unsaved edits and saves nothing', async () => {
+    mockUseClient.mockReturnValue({ data: { id: 'fc-1', name: 'Cedar Fill Co', currency: 'USD', type: 'fill_client', phones: [], fillBags: [row], createdAt: '2026-01-01T00:00:00.000Z' }, isLoading: false })
+    const user = userEvent.setup()
+    renderAt('fc-1')
+    await user.click(screen.getByText('Edit bags'))
+    await user.clear(screen.getByDisplayValue('Grade A'))
+    await user.click(screen.getByText('Cancel'))
+    await user.click(screen.getByText('Edit bags'))
+    expect(screen.getByDisplayValue('Grade A')).toBeInTheDocument()
+    expect(mockSetFillBagsMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('uploads bags that were only in this browser (old localStorage) once, then clears them', async () => {
+    localStorage.setItem('fill-bags-fc-1', JSON.stringify([{ ...row, stock: 7 }]))
+    renderAt('fc-1')
+    await waitFor(() => expect(mockSetFillBagsMutate).toHaveBeenCalledTimes(1))
+    const [args, opts] = mockSetFillBagsMutate.mock.calls[0]
+    expect(args).toEqual({ id: 'fc-1', bags: [row] })
+    opts.onSuccess()
+    expect(localStorage.getItem('fill-bags-fc-1')).toBeNull()
   })
 })
