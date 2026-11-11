@@ -9,8 +9,10 @@ import { RateProvider } from './context/RateContext.tsx'
 import { queryClient } from './lib/queryClient.ts'
 import { useTokenSync } from './lib/auth.ts'
 import { disableNumberInputWheel } from './lib/disableNumberWheel.ts'
+import { keepModalsOpenOnOutsideClick } from './lib/keepModalsOpen.ts'
 
 disableNumberInputWheel()
+keepModalsOpenOnOutsideClick()
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 

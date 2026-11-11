@@ -405,7 +405,7 @@ export default function Settings() {
 
             {/* Add bag type modal */}
             {showAddBag && (
-              <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setShowAddBag(false)}>
+              <div data-modal-overlay="" style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setShowAddBag(false)}>
                 <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 440, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
                   <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ fontSize: 15, fontWeight: 600 }}>Add bag type</div>
@@ -455,7 +455,7 @@ export default function Settings() {
 
             {/* Edit bag type modal */}
             {editBagType && (
-              <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setEditBagType(null)}>
+              <div data-modal-overlay="" style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setEditBagType(null)}>
                 <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 440, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
                   <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ fontSize: 15, fontWeight: 600 }}>Edit bag type</div>
@@ -580,7 +580,7 @@ export default function Settings() {
 
             {/* Edit modal */}
             {editReceiver && (
-              <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setEditReceiver(null)}>
+              <div data-modal-overlay="" style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setEditReceiver(null)}>
                 <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 420, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
                   <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ fontSize: 15, fontWeight: 600 }}>Edit receiver</div>
@@ -797,7 +797,7 @@ export default function Settings() {
 
       {/* Add user modal */}
       {showAddUser && (
-        <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setShowAddUser(false)}>
+        <div data-modal-overlay="" style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setShowAddUser(false)}>
           <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 460, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
             <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
               <div style={{ fontSize: 15, fontWeight: 600 }}>Add team member</div>
@@ -854,7 +854,7 @@ export default function Settings() {
 
       {/* Edit user modal */}
       {editUserOpen && editingUser && (
-        <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setEditUserOpen(false)}>
+        <div data-modal-overlay="" style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setEditUserOpen(false)}>
           <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 460, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
             <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
               <div style={{ fontSize: 15, fontWeight: 600 }}>Edit user — {editingUser.name}</div>
@@ -896,7 +896,7 @@ export default function Settings() {
 
       {/* Delete user confirm modal */}
       {deleteUserOpen && editingUser && (
-        <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setDeleteUserOpen(false)}>
+        <div data-modal-overlay="" style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setDeleteUserOpen(false)}>
           <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 420, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
             <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--red)' }}><i className="ti ti-alert-triangle" style={{ marginRight: 6 }} />Remove user</div>
@@ -934,7 +934,7 @@ export default function Settings() {
 
       {/* Revoke mobile device confirm modal */}
       {revokeTarget && (
-        <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && !revokeMobileDevice.isPending && setRevokeTarget(null)}>
+        <div data-modal-overlay="" style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && !revokeMobileDevice.isPending && setRevokeTarget(null)}>
           <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 440, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }} role="alertdialog" aria-modal="true" aria-labelledby="revoke-device-title">
             <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)' }}>
               <div id="revoke-device-title" style={{ fontSize: 15, fontWeight: 600, color: 'var(--red)' }}><i className="ti ti-alert-triangle" style={{ marginRight: 6 }} />Revoke device</div>
@@ -972,7 +972,7 @@ export default function Settings() {
 
       {/* Danger zone modals */}
       {dangerModalOpen && (
-        <div style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setDangerModalOpen(null)}>
+        <div data-modal-overlay="" style={{ display: 'flex', position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 40, alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setDangerModalOpen(null)}>
           <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', width: 440, boxShadow: '0 8px 40px rgba(0,0,0,0.12)' }}>
             <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ fontSize: 15, fontWeight: 600, color: dangerModalOpen === 'export' ? 'var(--text)' : 'var(--red)' }}>
