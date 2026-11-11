@@ -37,14 +37,13 @@ function typeBadgeClass(t: ClientType): string {
 export default function Clients() {
   const navigate = useNavigate()
   const [tab, setTab] = useState<ClientTab>('all')
-  // Opening Clients (sidebar, or pressing it again while already here) jumps
-  // to the top with the cursor in the search bar. Keyboard/mouse devices only:
+  // Opening Clients (sidebar, or pressing it again while already here) puts
+  // the cursor in the search bar (Layout scrolls to the top). Keyboard/mouse only:
   // on touch screens focusing would pop the on-screen keyboard every time.
   const location = useLocation()
   const searchRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     setTab('all')
-    window.scrollTo({ top: 0 })
     if (window.matchMedia?.('(pointer: fine)').matches) {
       requestAnimationFrame(() => searchRef.current?.focus({ preventScroll: true }))
     }
