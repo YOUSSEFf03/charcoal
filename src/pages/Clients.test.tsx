@@ -350,3 +350,44 @@ describe('Clients page — opening balance on create', () => {
     expect(screen.queryByLabelText(/Opening balance amount/)).toBeNull()
   })
 })
+
+describe('Clients page — every New client field is saved', () => {
+  async function openAndFill(user: ReturnType<typeof userEvent.setup>) {
+    render(<MemoryRouter><Clients /></MemoryRouter>)
+    await user.click(screen.getByRole('button', { name: /New client/ }))
+    await user.type(screen.getByPlaceholderText('Restaurant, company, or person name…'), 'Cedar Grill')
+    await user.type(screen.getByPlaceholderText('+961 3 000 000'), '+961 3 111 222')
+  }
+
+  it('sends payment terms, preferred payment and English notes', async () => {
+    const user = userEvent.setup({ delay: null })
+    await openAndFill(user)
+    await user.selectOptions(screen.getByDisplayValue('— not set —'), 'Net 30 days from invoice')
+    await user.click(screen.getByText('Whish'))
+    await user.type(screen.getByPlaceholderText('Delivery instructions, contacts…'), 'Use back door')
+    await user.click(screen.getByRole('button', { name: /Add client/ }))
+
+    await waitFor(() => expect(mockCreateClientMutate).toHaveBeenCalled())
+    expect(mockCreateClientMutate.mock.calls[0][0]).toMatchObject({
+      name: 'Cedar Grill',
+      paymentTerms: 'Net 30 days from invoice',
+      preferredPaymentMethod: 'whish',
+      notesEn: 'Use back door',
+    })
+    expect(mockCreateClientMutate.mock.calls[0][0]).not.toHaveProperty('notes')
+  })
+
+  it('Arabic notes go to the Arabic notes field; empty optional fields are not sent', async () => {
+    const user = userEvent.setup({ delay: null })
+    await openAndFill(user)
+    await user.type(screen.getByPlaceholderText('Delivery instructions, contacts…'), 'الباب الخلفي')
+    await user.click(screen.getByRole('button', { name: /Add client/ }))
+
+    await waitFor(() => expect(mockCreateClientMutate).toHaveBeenCalled())
+    const body = mockCreateClientMutate.mock.calls[0][0]
+    expect(body.notes).toBe('الباب الخلفي')
+    expect(body).not.toHaveProperty('notesEn')
+    expect(body).not.toHaveProperty('paymentTerms')
+    expect(body).not.toHaveProperty('preferredPaymentMethod')
+  })
+})

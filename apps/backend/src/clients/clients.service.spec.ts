@@ -1069,3 +1069,40 @@ describe('ClientsService — setFillBags()', () => {
     expect(mockPrisma.client.update).not.toHaveBeenCalled();
   });
 });
+
+describe('ClientsService — New client form fields (terms / notes / preferred payment)', () => {
+  let service: ClientsService;
+  const mockPrisma = { client: { findUnique: fn(), create: fn(), update: fn() }, user: { findUnique: fn() } };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ClientsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: ClientBalanceService, useValue: { computeBalance: fn().mockResolvedValue({ toFixed: () => '0.00' }) } },
+      ],
+    }).compile();
+    service = module.get<ClientsService>(ClientsService);
+  });
+
+  it('create() saves paymentTerms, notes, notesEn and preferredPaymentMethod', async () => {
+    mockPrisma.client.create.mockResolvedValue({ id: 'c' });
+    await service.create({
+      name: 'X', type: 'restaurant' as any, currency: 'USD' as any,
+      paymentTerms: 'Cash on delivery', notes: 'ملاحظة', notesEn: 'Back door', preferredPaymentMethod: 'whish' as any,
+    });
+    expect((mockPrisma.client.create.mock.calls[0][0] as { data: unknown }).data).toMatchObject({
+      paymentTerms: 'Cash on delivery', notes: 'ملاحظة', notesEn: 'Back door', preferredPaymentMethod: 'whish',
+    });
+  });
+
+  it('update() can set and clear preferredPaymentMethod', async () => {
+    mockPrisma.client.findUnique.mockResolvedValue({ id: 'c' });
+    mockPrisma.client.update.mockResolvedValue({ id: 'c' });
+    await service.update('c', { preferredPaymentMethod: 'omt' as any });
+    await service.update('c', { preferredPaymentMethod: null });
+    expect((mockPrisma.client.update.mock.calls[0][0] as { data: unknown }).data).toEqual({ preferredPaymentMethod: 'omt' });
+    expect((mockPrisma.client.update.mock.calls[1][0] as { data: unknown }).data).toEqual({ preferredPaymentMethod: null });
+  });
+});

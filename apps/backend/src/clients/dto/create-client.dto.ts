@@ -9,7 +9,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ClientType, Currency } from '@prisma/client';
+import { ClientType, Currency, PaymentMethod } from '@prisma/client';
 import { ApiProperty } from '@nestjs/swagger';
 import { SetOpeningBalanceDto } from '../../common/dto/set-opening-balance.dto';
 
@@ -56,6 +56,11 @@ export class CreateClientDto {
   @IsOptional()
   @IsString()
   paymentTerms?: string;
+
+  @ApiProperty({ description: 'How the client usually pays', required: false, enum: PaymentMethod, nullable: true })
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  preferredPaymentMethod?: PaymentMethod | null;
 
   @ApiProperty({ description: 'Initial phone numbers array', required: false })
   @IsOptional()

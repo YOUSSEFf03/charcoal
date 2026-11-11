@@ -948,6 +948,8 @@ model Client {
   /// Used to live only in the browser's localStorage, so other PCs never saw
   /// it (2026-11-11). Shape: SetFillBagsDto.
   fillBags       Json?
+  /// How the client usually pays (set on New client / Edit). Display + default only.
+  preferredPaymentMethod PaymentMethod?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   orders         ClientOrder[]

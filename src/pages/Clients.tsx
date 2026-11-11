@@ -76,6 +76,11 @@ export default function Clients() {
   const [newClientPhone, setNewClientPhone] = useState('')
   const [newClientType, setNewClientType] = useState<ClientType>('restaurant')
   const [newClientCurrency] = useState<Currency>('USD')
+  // Payment terms / preferred payment / notes used to be unwired inputs that
+  // were never sent (2026-11-11). Same terms list as the client Edit form.
+  const [newClientTerms, setNewClientTerms] = useState('')
+  const [newClientPrefPay, setNewClientPrefPay] = useState<PaymentMethod | ''>('')
+  const [newClientNotes, setNewClientNotes] = useState('')
   const [errName, setErrName] = useState(false)
   const [errPhone, setErrPhone] = useState(false)
   const [newClientOpening, setNewClientOpening] = useState(emptyOpeningBalance)
@@ -228,6 +233,10 @@ export default function Clients() {
         type: newClientType,
         currency: newClientCurrency,
         phones: [{ number: newClientPhone.trim(), label: 'mobile', isActive: true, dateAdded: new Date().toISOString() }],
+        ...(newClientTerms ? { paymentTerms: newClientTerms } : {}),
+        ...(newClientPrefPay ? { preferredPaymentMethod: newClientPrefPay } : {}),
+        // Arabic text goes to the Arabic notes field, anything else to English notes.
+        ...(newClientNotes.trim() ? (/[؀-ۿ]/.test(newClientNotes) ? { notes: newClientNotes.trim() } : { notesEn: newClientNotes.trim() }) : {}),
         ...(openingBalance ? { openingBalance } : {}),
       },
       {
@@ -236,6 +245,9 @@ export default function Clients() {
           setNewClientName('')
           setNewClientPhone('')
           setNewClientOpening(emptyOpeningBalance())
+          setNewClientTerms('')
+          setNewClientPrefPay('')
+          setNewClientNotes('')
           showToast('Client added successfully')
         },
         onError: (err: any) => showToast(err?.error ?? 'Failed to add client'),
@@ -645,8 +657,9 @@ export default function Clients() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Payment terms</label>
-                  <select className="form-input">
-                    <option>Net 14 days</option><option>Net 30 days</option><option>On delivery</option>
+                  <select className="form-input" value={newClientTerms} onChange={e => setNewClientTerms(e.target.value)}>
+                    <option value="">— not set —</option>
+                    {['Cash on delivery', 'Net 15 days from invoice', 'Net 30 days from invoice', 'Net 45 days from invoice', 'Prepaid'].map(t => <option key={t}>{t}</option>)}
                   </select>
                 </div>
               </div>
@@ -667,14 +680,15 @@ export default function Clients() {
               <div className="form-group">
                 <label className="form-label">Preferred payment</label>
                 <div className="method-pills">
-                  {['Cash', 'Whish', 'OMT'].map(m => (
-                    <div key={m} className={`method-pill ${payMethod === m ? 'sel' : ''}`} onClick={() => setPayMethod(m)}>{m}</div>
+                  {(['cash', 'whish', 'omt'] as const).map(m => (
+                    <div key={m} className={`method-pill ${newClientPrefPay === m ? 'sel' : ''}`}
+                      onClick={() => setNewClientPrefPay(p => p === m ? '' : m)}>{m === 'omt' ? 'OMT' : m[0].toUpperCase() + m.slice(1)}</div>
                   ))}
                 </div>
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Notes (optional)</label>
-                <input className="form-input" type="text" placeholder="Delivery instructions, contacts…" />
+                <input className="form-input" type="text" placeholder="Delivery instructions, contacts…" dir="auto" value={newClientNotes} onChange={e => setNewClientNotes(e.target.value)} />
               </div>
             </div>
             <div className="modal-footer" style={{ position: 'sticky', bottom: 0, background: 'var(--surface)' }}>
