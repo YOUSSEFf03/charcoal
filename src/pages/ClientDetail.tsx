@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
-import { useClient, useUpdateClient, useAddPhone, useDeactivatePhone, useClientLocations, useCreateClientLocation, useUpdateClientLocation } from '../hooks/useClients'
+import { useClient, useUpdateClient, useSetPhones, useClientLocations, useCreateClientLocation, useUpdateClientLocation } from '../hooks/useClients'
 import { clientDocumentAddress } from '../lib/clientAddress'
 import { useInvoices } from '../hooks/useInvoices'
 import { useClientLedger } from '../hooks/useReports'
@@ -28,6 +28,20 @@ import type { Invoice, PaginatedResponse } from '../types/api'
 
 /* ── local edit-form view-model types ── */
 interface Phone { number: string; label: string; meta: string; active: boolean; primary: boolean }
+
+/**
+ * API phones → edit view-model. The first active number is the primary one
+ * (it is the number shown in lists, statements and share dialogs), so the
+ * Status dropdown reflects what is actually stored.
+ */
+function toPhoneVMs(phones: ReadonlyArray<{ number: string; label: string; isActive: boolean }>): Phone[] {
+  const primaryIdx = phones.findIndex(p => p.isActive)
+  return phones.map((p, i) => ({
+    number: p.number, label: p.label,
+    meta: i === primaryIdx ? 'primary' : p.isActive ? 'active' : 'inactive',
+    active: p.isActive, primary: i === primaryIdx,
+  }))
+}
 interface ClientVM {
   name: string; nameAr: string; initials: string; type: string; currency: string
   address: string; terms: string; limit: number; notesAr: string; notesEn: string
@@ -216,8 +230,7 @@ export default function ClientDetail() {
   const createOrder = useCreateOrder()
   const createPaymentM = useCreatePayment()
   const updateClient = useUpdateClient()
-  const addPhone = useAddPhone()
-  const deactivatePhone = useDeactivatePhone()
+  const setPhones = useSetPhones()
   // Multiple-locations audit, 2026-08-31 — provenance for normal Orders only,
   // never a second financial account. See ClientLocation's backend
   // schema.prisma doc comment.
@@ -464,7 +477,7 @@ export default function ClientDetail() {
     name: c?.name ?? '', nameAr: c?.nameAr ?? '', initials, type: c?.type ?? 'restaurant', currency: c?.currency ?? 'USD',
     address: c?.address ?? '', terms: c?.paymentTerms ?? '', limit: c?.creditLimit ? parseFloat(c.creditLimit) : 0,
     notesAr: c?.notes ?? '', notesEn: c?.notesEn ?? '',
-    phones: activePhones.map(p => ({ number: p.number, label: p.label, meta: p.isActive ? 'active' : 'inactive', active: p.isActive, primary: false })),
+    phones: toPhoneVMs(activePhones),
     preferred, outstandingBal, openInvoices, daysSinceOrder, avgDays,
     multiLocationEnabled: c?.multiLocationEnabled ?? false,
   }))
@@ -532,7 +545,7 @@ export default function ClientDetail() {
       name: c.name, nameAr: c.nameAr ?? '', initials, type: c.type, currency: c.currency,
       address: c.address ?? '', terms: c.paymentTerms ?? '', limit: c.creditLimit ? parseFloat(c.creditLimit) : 0,
       notesAr: c.notes ?? '', notesEn: c.notesEn ?? '',
-      phones: c.phones.map(p => ({ number: p.number, label: p.label, meta: p.isActive ? 'active' : 'inactive', active: p.isActive, primary: false })),
+      phones: toPhoneVMs(c.phones),
       preferred, outstandingBal, openInvoices, daysSinceOrder, avgDays,
       multiLocationEnabled: c.multiLocationEnabled,
     })
@@ -881,10 +894,9 @@ export default function ClientDetail() {
   // to blank on the next refetch, which is exactly the "edit doesn't save"
   // bug this fixes. name/type/currency/paymentTerms/notes go through the same
   // PATCH /clients/:id useUpdateClient() already used correctly by
-  // FillClientDetail.tsx. Phones go through the separate add/deactivate
-  // endpoints (CONSTRAINT 14 — phones are never deleted, only deactivated;
-  // there is no edit-in-place or reactivate endpoint, so those two actions
-  // remain local-only exactly as before, matching existing behavior).
+  // FillClientDetail.tsx. Phones are saved as one list via PUT
+  // /clients/:id/phones (CONSTRAINT 14 — a removed number is kept server-side
+  // as inactive, never deleted; edits, label changes and reactivation persist).
   async function saveEdit() {
     if (!cid || !editForm.name.trim()) return
     setEditSaving(true)
@@ -904,23 +916,21 @@ export default function ClientDetail() {
         },
       })
 
-      // Phone diff against the untouched pre-edit snapshot (`client.phones`
-      // is never mutated while the modal is open — only `editForm` is).
-      const originalPhones = client.phones
-      const newPhones = editForm.phones.filter(p => !originalPhones.some(op => op.number === p.number))
-      const toDeactivate = originalPhones.filter(op => {
-        if (!op.active) return false
-        const stillPresent = editForm.phones.find(p => p.number === op.number)
-        return !stillPresent || !stillPresent.active
+      // Phones: send the whole edited list in ONE request (PUT /clients/:id/phones).
+      // It used to fire "add" and "deactivate" in parallel; both rewrote the
+      // same JSON column, so one change was randomly lost (2026-11-10 bug).
+      // The primary number goes first — "first active" is what every screen
+      // shows. A row left at just the "+961 " prefix is an unused new row.
+      const rows = editForm.phones.filter(p => p.number.replace(/\D/g, '').length > 3)
+      const primaryIdx = rows.findIndex(p => p.primary && p.active)
+      const ordered = primaryIdx > 0 ? [rows[primaryIdx], ...rows.filter((_, i) => i !== primaryIdx)] : rows
+      const saved = await setPhones.mutateAsync({
+        id: cid,
+        phones: ordered.map(p => ({ number: p.number.trim(), label: p.label.trim() || 'mobile', isActive: p.active })),
       })
 
-      await Promise.all([
-        ...newPhones.map(p => addPhone.mutateAsync({ id: cid, body: { number: p.number, label: p.label as any } })),
-        ...toDeactivate.map(op => deactivatePhone.mutateAsync({ id: cid, body: { phoneNumber: op.number } })),
-      ])
-
       const ini = editForm.name.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]).join('').toUpperCase()
-      setClient({ ...editForm, initials: ini })
+      setClient({ ...editForm, initials: ini, phones: toPhoneVMs(saved.phones) })
       setEditOpen(false)
       showToast('Client info updated')
     } catch (e: any) {

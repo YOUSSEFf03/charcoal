@@ -69,14 +69,14 @@ const mockEntries = Array.from({ length: 45 }, (_, i) => ({
 
 const mockUseClient = vi.fn()
 const mockUpdateClientMutate = vi.fn()
+const mockSetPhones = vi.fn()
 const mockUseClientLocations = vi.fn()
 const mockCreateLocationMutate = vi.fn()
 const mockUpdateLocationMutate = vi.fn()
 vi.mock('../hooks/useClients', () => ({
   useClient: (...args: unknown[]) => mockUseClient(...args),
   useUpdateClient: () => ({ mutate: mockUpdateClientMutate, mutateAsync: vi.fn(), isPending: false }),
-  useAddPhone: () => ({ mutateAsync: vi.fn() }),
-  useDeactivatePhone: () => ({ mutateAsync: vi.fn() }),
+  useSetPhones: () => ({ mutateAsync: mockSetPhones }),
   // Multiple-locations audit, 2026-08-31 — provenance for normal Orders
   // only, never a second financial account.
   useClientLocations: (...args: unknown[]) => mockUseClientLocations(...args),
@@ -947,5 +947,48 @@ describe('ClientDetail — embedded "New order" modal, Location requirement', ()
     await user.type(within(modal).getByPlaceholderText('0.00'), '5')
     await user.click(within(modal).getByRole('button', { name: 'Save draft' }))
     expect(mockCreateOrderMutate).toHaveBeenCalled()
+  })
+})
+
+describe('ClientDetail — Edit client phone numbers (2026-11-10 lost-update bug)', () => {
+  async function openEdit(user: ReturnType<typeof userEvent.setup>) {
+    renderAt('client-1')
+    await user.click(screen.getAllByRole('button', { name: /^Edit$/ })[0])
+    return screen.getByText('Edit client').closest('.modal') as HTMLElement ?? document.body
+  }
+
+  it('saves the whole edited list in ONE request — an edited number replaces the old one', async () => {
+    mockSetPhones.mockResolvedValue({ ...mockClient, phones: [] })
+    const user = userEvent.setup()
+    await openEdit(user)
+    const input = screen.getByDisplayValue('+961 3 111 222')
+    await user.clear(input)
+    await user.type(input, '+961 70 999 888')
+    await user.click(screen.getByRole('button', { name: /Save changes/ }))
+
+    await waitFor(() => expect(mockSetPhones).toHaveBeenCalledTimes(1))
+    expect(mockSetPhones).toHaveBeenCalledWith({
+      id: 'client-1',
+      phones: [{ number: '+961 70 999 888', label: 'mobile', isActive: true }],
+    })
+  })
+
+  it('puts the number marked Primary first, and skips an untouched "+961 " row', async () => {
+    mockSetPhones.mockResolvedValue({ ...mockClient, phones: [] })
+    const user = userEvent.setup()
+    await openEdit(user)
+    await user.click(screen.getByRole('button', { name: /Add phone/ }))
+    await user.click(screen.getByRole('button', { name: /Add phone/ }))
+    const inputs = screen.getAllByPlaceholderText('+961 ...')
+    await user.type(inputs[1], '71 222 333')
+    const selects = screen.getAllByDisplayValue('Active')
+    await user.selectOptions(selects[0], 'primary')
+    await user.click(screen.getByRole('button', { name: /Save changes/ }))
+
+    await waitFor(() => expect(mockSetPhones).toHaveBeenCalledTimes(1))
+    expect(mockSetPhones.mock.calls[0][0].phones).toEqual([
+      { number: '+961 71 222 333', label: 'mobile', isActive: true },
+      { number: '+961 3 111 222', label: 'mobile', isActive: true },
+    ])
   })
 })

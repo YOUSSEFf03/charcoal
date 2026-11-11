@@ -11,6 +11,7 @@ import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { AddPhoneDto } from './dto/add-phone.dto';
 import { DeactivatePhoneDto } from './dto/deactivate-phone.dto';
+import { SetPhonesDto } from './dto/set-phones.dto';
 import { CreateClientLocationDto } from './dto/create-client-location.dto';
 import { UpdateClientLocationDto } from './dto/update-client-location.dto';
 import { SetOpeningBalanceDto } from '../common/dto/set-opening-balance.dto';
@@ -451,28 +452,96 @@ export class ClientsService {
    * @throws NotFoundException if client does not exist
    */
   async addPhone(id: string, dto: AddPhoneDto) {
-    const client = await this.prisma.client.findUnique({ where: { id } });
-    if (!client) {
-      throw new NotFoundException({ error: 'Client not found', code: 'NOT_FOUND' });
+    return this.mutatePhones(id, (phones) => {
+      const newPhone: PhoneEntry = {
+        number: dto.number,
+        label: dto.label,
+        isActive: true,
+        // Full timestamp, not truncated to a date-only value — matches how the
+        // frontend already constructs this exact field (Clients.tsx,
+        // FillClients.tsx) and avoids the server-timezone-dependent day-
+        // rollback risk that .split('T')[0] alone would carry.
+        dateAdded: new Date().toISOString(),
+      };
+      return [...phones, newPhone];
+    });
+  }
+
+  /**
+   * Read-modify-write of a client's phones JSON array under a row lock.
+   *
+   * Phones live in one JSON column, so two concurrent writers (e.g. the Edit
+   * modal firing "add new number" and "deactivate old number" in parallel)
+   * used to each read the same array and the last write silently dropped the
+   * other's change — the "edited number sometimes doesn't save / comes back"
+   * bug (2026-11-10). SELECT … FOR UPDATE serialises writers per client.
+   */
+  private async mutatePhones(id: string, change: (phones: PhoneEntry[]) => PhoneEntry[]) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM "clients" WHERE id = ${id} FOR UPDATE`);
+      const client = await tx.client.findUnique({ where: { id } });
+      if (!client) {
+        throw new NotFoundException({ error: 'Client not found', code: 'NOT_FOUND' });
+      }
+      const phones = ((client.phones as unknown as PhoneEntry[]) ?? []).map((p) => ({ ...p }));
+      const updated = change(phones);
+      return tx.client.update({
+        where: { id },
+        data: { phones: updated as unknown as Prisma.InputJsonValue },
+      });
+    });
+  }
+
+  /**
+   * Replace a client's phone list with the one edited in the Edit modal, in a
+   * single atomic write.
+   *
+   * CONSTRAINT 14 still holds: a stored number missing from the submitted
+   * list is never deleted — it is kept, marked inactive, after the submitted
+   * entries. Submitted order is preserved, so the first active entry is the
+   * primary number everywhere it is displayed. Numbers are matched on their
+   * digits, so "03 123 456" and "03123456" are the same number (an existing
+   * entry keeps its dateAdded; label/active/spacing are updated).
+   *
+   * @throws BadRequestException for a number with fewer than 6 digits or a
+   *   number listed twice
+   */
+  async setPhones(id: string, dto: SetPhonesDto) {
+    const digits = (n: string) => n.replace(/\D/g, '');
+    const submitted = dto.phones.map((p) => ({
+      number: p.number.replace(/\s+/g, ' ').trim(),
+      label: p.label.trim() || 'mobile',
+      isActive: p.isActive,
+    }));
+
+    const seen = new Set<string>();
+    for (const p of submitted) {
+      const d = digits(p.number);
+      if (d.length < 6) {
+        throw new BadRequestException({
+          error: `"${p.number}" is not a valid phone number`,
+          code: 'CONSTRAINT_VIOLATION',
+        });
+      }
+      if (seen.has(d)) {
+        throw new BadRequestException({
+          error: `${p.number} is listed twice`,
+          code: 'CONSTRAINT_VIOLATION',
+        });
+      }
+      seen.add(d);
     }
 
-    const phones = (client.phones as unknown as PhoneEntry[]) ?? [];
-    const newPhone: PhoneEntry = {
-      number: dto.number,
-      label: dto.label,
-      isActive: true,
-      // Full timestamp, not truncated to a date-only value — matches how the
-      // frontend already constructs this exact field (Clients.tsx,
-      // FillClients.tsx) and avoids the server-timezone-dependent day-
-      // rollback risk that .split('T')[0] alone would carry.
-      dateAdded: new Date().toISOString(),
-    };
-
-    const updated = [...phones, newPhone];
-
-    return this.prisma.client.update({
-      where: { id },
-      data: { phones: updated as unknown as Prisma.InputJsonValue },
+    return this.mutatePhones(id, (existing) => {
+      const now = new Date().toISOString();
+      const result: PhoneEntry[] = submitted.map((p) => {
+        const match = existing.find((e) => digits(e.number) === digits(p.number));
+        return { number: p.number, label: p.label, isActive: p.isActive, dateAdded: match?.dateAdded ?? now };
+      });
+      for (const e of existing) {
+        if (!seen.has(digits(e.number))) result.push({ ...e, isActive: false });
+      }
+      return result;
     });
   }
 
@@ -486,25 +555,16 @@ export class ClientsService {
    * @throws NotFoundException if client or phone not found
    */
   async deactivatePhone(id: string, dto: DeactivatePhoneDto) {
-    const client = await this.prisma.client.findUnique({ where: { id } });
-    if (!client) {
-      throw new NotFoundException({ error: 'Client not found', code: 'NOT_FOUND' });
-    }
-
-    const phones = (client.phones as unknown as PhoneEntry[]) ?? [];
-    const idx = phones.findIndex((p) => p.number === dto.phoneNumber);
-    if (idx === -1) {
-      throw new NotFoundException({
-        error: 'Phone number not found',
-        code: 'NOT_FOUND',
-      });
-    }
-
-    phones[idx] = { ...phones[idx], isActive: false };
-
-    return this.prisma.client.update({
-      where: { id },
-      data: { phones: phones as unknown as Prisma.InputJsonValue },
+    return this.mutatePhones(id, (phones) => {
+      const idx = phones.findIndex((p) => p.number === dto.phoneNumber);
+      if (idx === -1) {
+        throw new NotFoundException({
+          error: 'Phone number not found',
+          code: 'NOT_FOUND',
+        });
+      }
+      phones[idx] = { ...phones[idx], isActive: false };
+      return phones;
     });
   }
 

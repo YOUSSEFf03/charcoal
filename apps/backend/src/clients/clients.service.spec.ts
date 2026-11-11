@@ -33,6 +33,7 @@ describe('ClientsService — deactivatePhone()', () => {
     invoice: { findMany: fn(), count: fn() },
     payment: { findMany: fn(), count: fn() },
     $transaction: fn(),
+    $queryRaw: fn(),
   };
 
   // Minimal ClientBalanceService stub — not the focus of this suite
@@ -42,6 +43,9 @@ describe('ClientsService — deactivatePhone()', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // Phone writes run inside an interactive transaction (row lock); the
+    // mock just hands the callback the same mock client.
+    mockPrisma.$transaction.mockImplementation((cb: (tx: unknown) => unknown) => cb(mockPrisma));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -127,6 +131,99 @@ describe('ClientsService — deactivatePhone()', () => {
 
     // update must NEVER be called when the phone is missing
     expect(mockPrisma.client.update).not.toHaveBeenCalled();
+  });
+
+  it('locks the client row before reading phones (no lost concurrent writes)', async () => {
+    mockPrisma.client.findUnique.mockResolvedValue({ id: 'c1', phones: [] });
+    mockPrisma.client.update.mockResolvedValue({ id: 'c1' });
+
+    await service.addPhone('c1', { number: '+961 70 111111', label: 'mobile' });
+
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const sql = mockPrisma.$queryRaw.mock.calls[0][0] as { strings: string[] };
+    expect(sql.strings.join('?')).toContain('FOR UPDATE');
+  });
+});
+
+describe('ClientsService — setPhones()', () => {
+  let service: ClientsService;
+  const mockPrisma = {
+    client: { findUnique: fn(), update: fn() },
+    $transaction: fn(),
+    $queryRaw: fn(),
+  };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockPrisma.$transaction.mockImplementation((cb: (tx: unknown) => unknown) => cb(mockPrisma));
+    mockPrisma.client.update.mockImplementation((args: unknown) => Promise.resolve(args));
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ClientsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: ClientBalanceService, useValue: { computeBalance: fn() } },
+      ],
+    }).compile();
+    service = module.get<ClientsService>(ClientsService);
+  });
+
+  const saved = () =>
+    (mockPrisma.client.update.mock.calls[0][0] as { data: { phones: Array<{ number: string; label: string; isActive: boolean; dateAdded: string }> } }).data.phones;
+
+  it('editing a number in place adds the new one and keeps the old one as inactive, in one write', async () => {
+    mockPrisma.client.findUnique.mockResolvedValue({
+      id: 'c1',
+      phones: [{ number: '03 111111', label: 'mobile', isActive: true, dateAdded: '2026-01-01' }],
+    });
+
+    await service.setPhones('c1', { phones: [{ number: '03 222222', label: 'mobile', isActive: true }] });
+
+    expect(mockPrisma.client.update).toHaveBeenCalledTimes(1);
+    expect(saved()).toEqual([
+      expect.objectContaining({ number: '03 222222', isActive: true }),
+      { number: '03 111111', label: 'mobile', isActive: false, dateAdded: '2026-01-01' },
+    ]);
+  });
+
+  it('keeps submitted order (primary first), updates labels, reactivates, and matches numbers by digits', async () => {
+    mockPrisma.client.findUnique.mockResolvedValue({
+      id: 'c1',
+      phones: [
+        { number: '03111111', label: 'mobile', isActive: true, dateAdded: '2026-01-01' },
+        { number: '70 222 222', label: 'old', isActive: false, dateAdded: '2026-01-02' },
+      ],
+    });
+
+    await service.setPhones('c1', {
+      phones: [
+        { number: '70  222222 ', label: 'office', isActive: true },
+        { number: '03 111 111', label: 'mobile', isActive: true },
+      ],
+    });
+
+    expect(saved()).toEqual([
+      { number: '70 222222', label: 'office', isActive: true, dateAdded: '2026-01-02' },
+      { number: '03 111 111', label: 'mobile', isActive: true, dateAdded: '2026-01-01' },
+    ]);
+  });
+
+  it('rejects a number that is only a prefix like "+961 " and never writes', async () => {
+    await expect(
+      service.setPhones('c1', { phones: [{ number: '+961 ', label: 'mobile', isActive: true }] }),
+    ).rejects.toThrow(BadRequestException);
+    expect(mockPrisma.client.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects the same number listed twice', async () => {
+    await expect(
+      service.setPhones('c1', {
+        phones: [
+          { number: '03 123456', label: 'mobile', isActive: true },
+          { number: '03123456', label: 'office', isActive: true },
+        ],
+      }),
+    ).rejects.toThrow(BadRequestException);
   });
 });
 

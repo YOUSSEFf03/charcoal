@@ -186,6 +186,32 @@ export function useAddPhone() {
 }
 
 /**
+ * Save a client's whole phone list in one atomic request (Edit modal).
+ * Order matters: the first active number is the primary one. Numbers left
+ * out are kept server-side as inactive (CONSTRAINT 14 — never deleted).
+ * PUT /clients/:id/phones
+ */
+export function useSetPhones() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      id,
+      phones,
+    }: {
+      id: string
+      phones: Array<{ number: string; label: string; isActive: boolean }>
+    }) => {
+      const res = await api.put<Client>(`/clients/${id}/phones`, { phones })
+      return res.data
+    },
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ['clients', id] })
+      qc.invalidateQueries({ queryKey: ['clients'] })
+    },
+  })
+}
+
+/**
  * Mark a client's phone number inactive (record preserved).
  * @returns mutation accepting { id, body: DeactivateClientPhoneDto }
  * PATCH /clients/:id/phones/deactivate

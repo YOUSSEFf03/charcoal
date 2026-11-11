@@ -19,6 +19,7 @@ import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { AddPhoneDto } from './dto/add-phone.dto';
 import { DeactivatePhoneDto } from './dto/deactivate-phone.dto';
+import { SetPhonesDto } from './dto/set-phones.dto';
 import { CreateClientLocationDto } from './dto/create-client-location.dto';
 import { UpdateClientLocationDto } from './dto/update-client-location.dto';
 import { Roles } from '../auth/roles.decorator';
@@ -127,6 +128,23 @@ export class ClientsController {
     @Body() dto: AddPhoneDto,
   ) {
     return this.clientsService.addPhone(id, dto);
+  }
+
+  /**
+   * Save the whole phone list from the Edit modal in one atomic write.
+   * Numbers left out are kept as inactive (CONSTRAINT 14 — never deleted).
+   */
+  @ApiOperation({ summary: 'Replace a client\'s phone list (removed numbers are deactivated, never deleted)' })
+  @ApiResponse({ status: 200, description: 'OK' })
+  @ApiResponse({ status: 400, description: 'Invalid or duplicate number' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @Put(':id/phones')
+  @Roles('owner', 'sales_rep')
+  setPhones(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetPhonesDto,
+  ) {
+    return this.clientsService.setPhones(id, dto);
   }
 
   /**
