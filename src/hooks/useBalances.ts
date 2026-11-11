@@ -8,6 +8,8 @@ export interface ClientBalancesQuery {
   page?: number
   limit?: number
   type?: string
+  /** true = only clients that owe us (balance > 0), computed server-side. */
+  hasBalance?: boolean
 }
 
 const balancesKey = (params?: ClientBalancesQuery) =>

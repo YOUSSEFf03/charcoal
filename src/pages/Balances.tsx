@@ -32,18 +32,52 @@ const TYPE_COLORS: Record<string, string> = {
   walk_in:    '#86EFAC',
 }
 
+const typeLabel = (t: string) => t.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())
+
+type SortKey = 'name' | 'type' | 'currency' | 'lastOrder' | 'age' | 'balance'
+type SortDir = 'asc' | 'desc'
+
+/** Compare two balance rows by the chosen column. Clients with no order date always sort last. */
+export function compareBalanceRows(a: Client, b: Client, key: SortKey, dir: SortDir): number {
+  const m = dir === 'asc' ? 1 : -1
+  if (key === 'lastOrder' || key === 'age') {
+    const ta = a.lastOrderDate ? new Date(a.lastOrderDate).getTime() : NaN
+    const tb = b.lastOrderDate ? new Date(b.lastOrderDate).getTime() : NaN
+    if (Number.isNaN(ta) || Number.isNaN(tb)) return Number.isNaN(ta) === Number.isNaN(tb) ? 0 : Number.isNaN(ta) ? 1 : -1
+    // age = days since last order, so it runs opposite to the date itself
+    return (key === 'age' ? tb - ta : ta - tb) * m
+  }
+  if (key === 'balance') return (parseFloat(a.balance) - parseFloat(b.balance)) * m
+  const sa = key === 'name' ? a.name : key === 'type' ? a.type : a.currency
+  const sb = key === 'name' ? b.name : key === 'type' ? b.type : b.currency
+  return sa.localeCompare(sb, undefined, { sensitivity: 'base' }) * m
+}
+
 export default function Balances() {
   const navigate = useNavigate()
+  // 0 = all open, 1 = on account (not overdue), 2 = overdue
   const [selectedBucket, setSelectedBucket] = useState(0)
+  const [typeFilter, setTypeFilter] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  // Default keeps the old "oldest first" order.
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'age', dir: 'desc' })
+
+  function onSort(key: SortKey) {
+    setSort(s => s.key === key
+      ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      // text columns start A→Z; numbers/age start biggest first
+      : { key, dir: key === 'name' || key === 'type' || key === 'currency' ? 'asc' : 'desc' })
+  }
 
   // Live client balances (main table) + overdue/aging list.
+  // All clients that owe us, fetched once; search/type/bucket filter below
+  // only narrow the table, so the headline totals stay the real totals.
   const {
     data: balancesResp,
     isLoading: balLoading,
     isError: balError,
     refetch: refetchBalances,
-  } = useClientBalances({ search: search || undefined, limit: 100 })
+  } = useClientBalances({ hasBalance: true, limit: 100 })
   const {
     data: agingData,
     isLoading: agingLoading,
@@ -53,7 +87,11 @@ export default function Balances() {
 
   // Only clients that actually owe us money ("money clients owe us").
   const balanceClients: Client[] = (balancesResp?.data ?? []).filter(c => parseFloat(c.balance) > 0)
-  const overdueClients: Client[] = agingData ?? []
+  // Same rule as the server's /clients/overdue (owes us + last order > 30 days
+  // ago), taken from the table's own rows so bucket counts match the table.
+  const overdueClients: Client[] = balanceClients.filter(c => c.isOverdue)
+  // The aging list (API-sorted, most overdue first) only feeds "Oldest unpaid".
+  const agingList: Client[] = agingData ?? []
 
   // Headline / aging-bucket figures derived from live data.
   const totalOwed = balanceClients.reduce((s, c) => s + parseFloat(c.balance), 0)
@@ -83,9 +121,37 @@ export default function Balances() {
   ]
 
   // "Oldest unpaid" — the most-overdue clients (aging list is sorted by the API).
-  const oldest = overdueClients.slice(0, 3)
+  const oldest = agingList.slice(0, 3)
 
+  const q = search.trim().toLowerCase()
   const filtered = balanceClients
+    .filter(c => selectedBucket === 0 || (selectedBucket === 2 ? c.isOverdue : !c.isOverdue))
+    .filter(c => !typeFilter || c.type === typeFilter)
+    .filter(c => !q
+      || c.name.toLowerCase().includes(q)
+      || (c.nameAr ?? '').toLowerCase().includes(q)
+      || (c.phones ?? []).some(p => p.number.replace(/\s/g, '').includes(q.replace(/\s/g, ''))))
+    .sort((a, b) => compareBalanceRows(a, b, sort.key, sort.dir))
+  const filteredTotal = filtered.reduce((s, c) => s + parseFloat(c.balance), 0)
+  const isFiltered = selectedBucket !== 0 || typeFilter !== null || q !== ''
+
+  // Clickable column header (sort indicator ▲ asc / ▼ desc).
+  const sortHead = (label: string, key: SortKey, right = false) => (
+    <span
+      className={right ? 'right' : undefined}
+      role="button"
+      tabIndex={0}
+      aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      onClick={() => onSort(key)}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSort(key) } }}
+      style={{ cursor: 'pointer', userSelect: 'none', color: sort.key === key ? 'var(--text)' : undefined }}
+    >
+      {label}{sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+    </span>
+  )
+  const SORT_LABEL: Record<SortKey, string> = {
+    name: 'client', type: 'type', currency: 'currency', lastOrder: 'last order', age: 'days since order', balance: 'balance',
+  }
 
   return (
     <>
@@ -109,7 +175,7 @@ export default function Balances() {
             <div className="k">clients with balance</div>
           </div>
           <div className="headline-stat">
-            <div className="v red">{agingLoading ? '—' : fmtUsd0(String(overdueOwed))}</div>
+            <div className="v red">{balLoading ? '—' : fmtUsd0(String(overdueOwed))}</div>
             <div className="k">overdue · {overdueClients.length} clients</div>
           </div>
         </div>
@@ -118,7 +184,7 @@ export default function Balances() {
         <div className="card" style={{ marginBottom: 18 }}>
           <div className="card-head">
             <div className="card-title"><i className="ti ti-clock" /> Aging buckets · click to filter</div>
-            <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>days past invoice date</span>
+            <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>overdue = no order for 30+ days</span>
           </div>
           <div className="aging-row">
             {AGING.map((b, i) => (
@@ -201,26 +267,37 @@ export default function Balances() {
             <input type="text" placeholder="Search clients…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           <div className="seg">
-            <div className="seg-opt sel">All <span style={{ color: 'var(--text3)', marginLeft: 4 }}>{balanceClients.length}</span></div>
-            {BY_TYPE.map(t => (
-              <div key={t.name} className="seg-opt">
-                {t.name} <span style={{ color: 'var(--text3)', marginLeft: 4 }}>{balanceClients.filter(c => c.type.replace('_',' ').replace(/\b\w/g, l => l.toUpperCase()) === t.name).length}</span>
+            <div className={`seg-opt ${typeFilter === null ? 'sel' : ''}`} role="button" onClick={() => setTypeFilter(null)}>
+              All <span style={{ color: 'var(--text3)', marginLeft: 4 }}>{balanceClients.length}</span>
+            </div>
+            {Array.from(byTypeMap.keys()).sort((a, b) => (byTypeMap.get(b) ?? 0) - (byTypeMap.get(a) ?? 0)).map(type => (
+              <div key={type} className={`seg-opt ${typeFilter === type ? 'sel' : ''}`} role="button" onClick={() => setTypeFilter(f => f === type ? null : type)}>
+                {typeLabel(type)} <span style={{ color: 'var(--text3)', marginLeft: 4 }}>{balanceClients.filter(c => c.type === type).length}</span>
               </div>
             ))}
           </div>
-          <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>sort: oldest first</span>
+          {isFiltered && (
+            <button className="btn" style={{ fontSize: 12 }} onClick={() => { setSelectedBucket(0); setTypeFilter(null); setSearch('') }}>
+              <i className="ti ti-x" style={{ fontSize: 13 }} /> Clear filters
+            </button>
+          )}
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>
+            sort: {SORT_LABEL[sort.key]} {sort.dir === 'asc' ? '▲' : '▼'} · click a column
+          </span>
         </div>
 
         {/* Table */}
         <div className="card">
           <div className="bal-row head">
             <span />
-            <span>Client</span>
-            <span>Type</span>
-            <span className="right">Currency</span>
-            <span className="right">Last payment</span>
-            <span className="right">Oldest invoice</span>
-            <span className="right">Balance</span>
+            {sortHead('Client', 'name')}
+            {sortHead('Type', 'type')}
+            {sortHead('Currency', 'currency', true)}
+            {/* These two columns show the last ORDER date (the old headers
+                said "Last payment" / "Oldest invoice", which was wrong). */}
+            {sortHead('Last order', 'lastOrder', true)}
+            {sortHead('Days since order', 'age', true)}
+            {sortHead('Balance', 'balance', true)}
             <span className="right">Actions</span>
           </div>
 
@@ -249,7 +326,7 @@ export default function Balances() {
 
           {!balLoading && !balError && filtered.length === 0 && (
             <div style={{ padding: '36px 18px', textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
-              No clients with an outstanding balance.
+              {isFiltered ? 'No clients match these filters.' : 'No clients with an outstanding balance.'}
             </div>
           )}
 
@@ -286,12 +363,12 @@ export default function Balances() {
           {!balLoading && !balError && filtered.length > 0 && (
             <div className="bal-foot">
               <span />
-              <span>{filtered.length} clients with balance</span>
+              <span>{filtered.length} {isFiltered ? `of ${balanceClients.length} ` : ''}clients with balance</span>
               <span />
               <span className="num" style={{ textAlign: 'right' }}>{filtered.filter(c => c.currency === 'USD').length} USD · {filtered.filter(c => c.currency === 'LBP').length} LBP</span>
               <span />
-              <span style={{ textAlign: 'right' }}>overdue {overdueClients.length}</span>
-              <span className="total">{fmtUsd0(String(totalOwed))}</span>
+              <span style={{ textAlign: 'right' }}>overdue {filtered.filter(c => c.isOverdue).length}</span>
+              <span className="total">{fmtUsd0(String(filteredTotal))}</span>
               <span />
             </div>
           )}
