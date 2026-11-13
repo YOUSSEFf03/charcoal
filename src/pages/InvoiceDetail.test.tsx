@@ -148,7 +148,7 @@ describe('InvoiceDetail page', () => {
 
     await user.click(screen.getByRole('button', { name: /Print \/ PDF/ }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Share' }))
-    expect(within(screen.getByRole('dialog')).getByRole('radio', { name: /Mobile/ })).toBeInTheDocument()
+    expect(within(screen.getByRole('dialog')).getByRole('radio', { name: /Acme Trading/ })).toBeInTheDocument()
   })
 
   it('shows "Cancel invoice" for an unpaid, non-cancelled invoice', () => {

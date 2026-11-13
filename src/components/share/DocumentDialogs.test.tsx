@@ -83,7 +83,7 @@ describe('DeliveryReceiptActionDialog', () => {
     const dialog = screen.getByRole('dialog')
     await user.click(within(dialog).getByRole('radio', { name: 'العربية' }))
     await user.click(within(dialog).getByRole('button', { name: 'Share' }))
-    await user.click(await within(dialog).findByRole('radio', { name: /Mobile/ }))
+    await user.click(await within(dialog).findByRole('radio', { name: /70 000003/ }))
     const send = within(dialog).getByRole('button', { name: 'Send on WhatsApp' })
     await waitFor(() => expect(send).toBeEnabled())
     await user.click(send)

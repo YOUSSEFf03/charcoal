@@ -93,13 +93,13 @@ describe('contact helpers', () => {
     expect(supplierContacts(null)).toEqual([])
   })
 
-  it('clientPhoneContacts prefixes the client name when given', () => {
+  it('clientPhoneContacts labels each number with the client name when given', () => {
     expect(clientPhoneContacts([
       { number: '+961 70 000003', label: 'mobile', isActive: true },
       { number: '03 111 222', label: 'office', isActive: false },
     ], ' Ahmad ')).toEqual([
-      { label: 'Ahmad · Mobile', phone: '+961 70 000003' },
-      { label: 'Ahmad · Office (inactive)', phone: '03 111 222' },
+      { label: 'Ahmad', phone: '+961 70 000003' },
+      { label: 'Ahmad (inactive)', phone: '03 111 222' },
     ])
   })
 

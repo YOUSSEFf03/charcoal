@@ -251,8 +251,8 @@ function DialogBody({
                           checked={checked}
                           onChange={() => { setSelectedPhone(c.phone); setTyped('') }}
                         />
-                        <span className="flex-1">{c.label}</span>
-                        <bdi dir="ltr" className="text-gray-500">{c.phone}</bdi>
+                        <span className="font-medium">{c.label}</span>
+                        <bdi dir="ltr" className="ms-2 text-gray-600">{c.phone}</bdi>
                       </label>
                     )
                   })}

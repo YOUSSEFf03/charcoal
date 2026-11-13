@@ -9,8 +9,8 @@ const PHONE_LABEL: Record<ClientPhone['label'], string> = {
 
 /**
  * Maps a client / fill-client's stored phones to dialog contacts, e.g.
- * { label: 'Ahmad · Mobile', phone: '+961 70 000003' } (the client's name is
- * prefixed when given, since stored phones carry no name). Active numbers come first;
+ * { label: 'Ahmad', phone: '+961 70 000003' } — labelled with the client's name
+ * when given (stored phones carry no name), else the phone type. Active numbers come first;
  * deactivated ones stay selectable but are marked "(inactive)". Blank
  * numbers are dropped and duplicates collapsed.
  */
@@ -26,7 +26,7 @@ export function clientPhoneContacts(
     .map((p) => ({
       active: p.isActive !== false,
       contact: {
-        label: `${name ? `${name} · ` : ''}${PHONE_LABEL[p.label] ?? 'Phone'}${p.isActive === false ? ' (inactive)' : ''}`,
+        label: `${name || (PHONE_LABEL[p.label] ?? 'Phone')}${p.isActive === false ? ' (inactive)' : ''}`,
         phone: p.number.trim(),
       },
     }))
