@@ -11,6 +11,9 @@
 
 export const WA_CHANNEL = 'farah-wa'
 
+/** Zip of apps/whatsapp-extension, served by the site (vite-plugins/whatsapp-extension-zip.mjs). */
+export const EXTENSION_DOWNLOAD_URL = '/downloads/farah-whatsapp-extension.zip'
+
 export type WaExtensionStatus =
   | 'accepted'
   | 'opening_whatsapp'

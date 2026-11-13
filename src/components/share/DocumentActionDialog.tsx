@@ -4,7 +4,7 @@ import type { DocLang, ReceiptLang } from '../../lib/i18n/docLang'
 import { t, type DocLabelKey } from '../../lib/i18n/docLabels'
 import { toWhatsAppDigits } from '../../lib/phone'
 import { canShareFiles, downloadFile, whatsappUrl } from '../../lib/share'
-import { pingExtension, WhatsAppShareError } from '../../lib/share/whatsappExtension'
+import { EXTENSION_DOWNLOAD_URL, pingExtension, WhatsAppShareError } from '../../lib/share/whatsappExtension'
 import {
   shareDocumentViaWhatsApp,
   type WhatsAppShareProgress,
@@ -400,7 +400,13 @@ function DialogBody({
               </button>
               <p className="m-0 text-[12px] text-gray-500">{L('share.whatsappHint')}</p>
               {whatsappTarget && extState === 'missing' && (
-                <p className="m-0 text-[12px] text-gray-500" data-testid="wa-ext-missing">{L('share.extMissing')}</p>
+                <div className="text-[12px] text-gray-500" data-testid="wa-ext-missing">
+                  <p className="m-0">{L('share.extMissing')}</p>
+                  <a className="font-semibold underline" href={EXTENSION_DOWNLOAD_URL} download>
+                    {L('share.extDownload')}
+                  </a>
+                  <p className="m-0 mt-1">{L('share.extSteps')}</p>
+                </div>
               )}
             </div>
           </>

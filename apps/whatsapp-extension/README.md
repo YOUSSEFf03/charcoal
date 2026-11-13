@@ -15,10 +15,13 @@ anything that looks like a Send button. A message is sent only when you press Se
 
 ## Install (once per computer)
 
-1. Copy the folder `apps/whatsapp-extension` to the computer (or use the repo checkout).
+1. Download **http://100.121.85.63:5173/downloads/farah-whatsapp-extension.zip**.
+   The share window also links to it when the extension is missing. The site builds the zip
+   from this folder, so it's always the deployed version.
+   Right-click the zip → **Extract All…**, and keep the extracted folder somewhere permanent.
 2. In Chrome open `chrome://extensions`.
 3. Turn on **Developer mode** (top right).
-4. Click **Load unpacked** and choose the `whatsapp-extension` folder (the one with `manifest.json`).
+4. Click **Load unpacked** and choose the extracted folder (the one with `manifest.json`).
 5. Open (or refresh) the Farah app at `http://100.121.85.63:5173`.
 6. Open `https://web.whatsapp.com` once and log in by scanning the QR code with your phone
    (WhatsApp → Linked devices). The extension never sees or stores your WhatsApp login.

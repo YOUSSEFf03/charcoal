@@ -120,6 +120,7 @@ describe('DocumentActionDialog — WhatsApp extension', () => {
     setup()
     await openShare(user)
     expect(await screen.findByTestId('wa-ext-missing')).toHaveTextContent('install the Farah WhatsApp extension')
+    expect(screen.getByRole('link', { name: 'Download the extension (.zip)' })).toHaveAttribute('href', '/downloads/farah-whatsapp-extension.zip')
     expect(screen.queryByRole('button', { name: 'Prepare in WhatsApp (PDF attached)' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Send on WhatsApp' })).toBeInTheDocument()
   })
