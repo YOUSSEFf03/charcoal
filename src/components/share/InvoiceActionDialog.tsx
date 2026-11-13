@@ -56,6 +56,7 @@ function Body({ open, onClose, invoiceId, displayId }: InvoiceActionDialogProps)
       languages={['en', 'ar']}
       defaultLang="en"
       contacts={clientPhoneContacts(data?.client.phones, data?.client.name)}
+      whatsappTarget={data?.client.id ? { documentType: 'invoice', documentId: invoiceId, customerId: data.client.id } : null}
       shareMessage={(l) => t(toDocLang(l), 'msg.invoice', { ref, company: t(toDocLang(l), 'common.company') })}
       actions={{
         print: (l) => openPrintRoute(`/invoice/${invoiceId}`, toDocLang(l)),

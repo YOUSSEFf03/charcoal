@@ -2150,6 +2150,7 @@ export default function ClientDetail() {
         partyName={client.name}
         buildConfig={statementPdfConfig}
         contacts={clientPhoneContacts(c?.phones, client.name)}
+        whatsappTarget={c ? { documentType: 'client_statement', documentId: c.id, customerId: c.id } : null}
         printPageInEnglish
       />
       <InvoiceActionDialog

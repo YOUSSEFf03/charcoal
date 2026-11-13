@@ -123,6 +123,7 @@ export default function FillClientStatement() {
           partyName={client.name}
           buildConfig={() => buildStatementConfig(client)}
           contacts={clientPhoneContacts(client.phones, client.name)}
+          whatsappTarget={{ documentType: 'client_statement', documentId: client.id, customerId: client.id }}
         />
       )}
       <div className="content">

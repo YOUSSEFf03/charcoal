@@ -938,6 +938,7 @@ export default function SupplierDetail() {
         partyName={supplier?.name ?? 'Supplier'}
         buildConfig={statementPdfConfig}
         contacts={supplierContacts(supplier?.contactPersons)}
+        whatsappTarget={supplier ? { documentType: 'supplier_statement', documentId: supplier.id, customerId: supplier.id } : null}
         printPageInEnglish
       />
 

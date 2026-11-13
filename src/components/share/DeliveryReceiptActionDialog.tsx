@@ -60,6 +60,7 @@ function Body({ open, onClose, order, bagTypes }: DeliveryReceiptActionDialogPro
       languages={['bilingual', 'en', 'ar']}
       defaultLang="bilingual"
       contacts={clientPhoneContacts(client?.phones, client?.name ?? order.client.name)}
+      whatsappTarget={{ documentType: 'delivery_receipt', documentId: order.id, customerId: order.client.id }}
       shareMessage={(l) => {
         const msgLang = l === 'ar' ? 'ar' : 'en'
         return t(msgLang, 'msg.receipt', { ref: display, company: t(msgLang, 'common.company') })

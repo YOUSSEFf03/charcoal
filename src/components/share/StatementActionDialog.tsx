@@ -4,6 +4,7 @@ import { buildStatementPdfFile, exportStatementPdf, type StatementPdfConfig } fr
 import { t } from '../../lib/i18n/docLabels'
 import type { DocLang, ReceiptLang } from '../../lib/i18n/docLang'
 import { openPdfInNewTab, printCurrentPage } from '../../lib/share/printRoute'
+import type { WhatsAppShareTarget } from '../../lib/share/whatsappShare'
 
 export interface StatementActionDialogProps {
   open: boolean
@@ -21,6 +22,8 @@ export interface StatementActionDialogProps {
    * page without an on-screen statement, prints the generated PDF instead.
    */
   printPageInEnglish?: boolean
+  /** Enables "Prepare in WhatsApp" (Farah WhatsApp extension) for this statement. */
+  whatsappTarget?: WhatsAppShareTarget | null
 }
 
 const toDocLang = (l: ReceiptLang): DocLang => (l === 'ar' ? 'ar' : 'en')
@@ -30,7 +33,7 @@ const toDocLang = (l: ReceiptLang): DocLang => (l === 'ar' ? 'ar' : 'en')
  * supplier or fill client). The statement is only offered in English or Arabic.
  */
 export function StatementActionDialog({
-  open, onClose, title, partyName, buildConfig, contacts, printPageInEnglish = false,
+  open, onClose, title, partyName, buildConfig, contacts, printPageInEnglish = false, whatsappTarget,
 }: StatementActionDialogProps) {
   const withLang = useCallback((l: ReceiptLang): StatementPdfConfig => ({ ...buildConfig(), lang: toDocLang(l) }), [buildConfig])
 
@@ -42,6 +45,7 @@ export function StatementActionDialog({
       languages={['en', 'ar']}
       defaultLang="en"
       contacts={contacts}
+      whatsappTarget={whatsappTarget}
       shareMessage={(l) => t(toDocLang(l), 'msg.statement', { name: partyName })}
       actions={{
         print: (l) => {

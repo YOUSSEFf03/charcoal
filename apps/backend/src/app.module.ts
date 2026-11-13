@@ -43,6 +43,7 @@ import { TraqoAccountsModule } from './traqo-accounts/traqo-accounts.module';
 import { TranslationModule } from './translation/translation.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { MobileModule } from './mobile/mobile.module';
+import { WhatsAppShareModule } from './whatsapp-share/whatsapp-share.module';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { MobileModule } from './mobile/mobile.module';
     TranslationModule,
     NotificationsModule,
     MobileModule,
+    WhatsAppShareModule,
   ],
   controllers: [HealthController],
   providers: [

@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Farah Charcoal – WhatsApp Share",
+  "version": "1.0.0",
+  "description": "Prepares Farah Charcoal PDFs in WhatsApp Web (chat + attachment + caption). You always press Send yourself.",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage"],
+  "host_permissions": ["https://web.whatsapp.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://100.121.85.63/*", "http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["config.js", "protocol.js", "app-bridge.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["config.js", "protocol.js", "whatsapp-content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

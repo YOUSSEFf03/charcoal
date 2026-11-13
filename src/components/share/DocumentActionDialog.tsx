@@ -4,6 +4,13 @@ import type { DocLang, ReceiptLang } from '../../lib/i18n/docLang'
 import { t, type DocLabelKey } from '../../lib/i18n/docLabels'
 import { toWhatsAppDigits } from '../../lib/phone'
 import { canShareFiles, downloadFile, whatsappUrl } from '../../lib/share'
+import { pingExtension, WhatsAppShareError } from '../../lib/share/whatsappExtension'
+import {
+  shareDocumentViaWhatsApp,
+  type WhatsAppShareProgress,
+  type WhatsAppShareResult,
+  type WhatsAppShareTarget,
+} from '../../lib/share/whatsappShare'
 
 export interface DocumentActionContact {
   /** Display label, e.g. "Ahmad (mobile)". */
@@ -37,7 +44,19 @@ export interface DocumentActionDialogProps {
   shareMessage: (lang: ReceiptLang) => string
   /** Language of the dialog's own UI text. Default 'en'. */
   uiLang?: DocLang
+  /**
+   * Which document this is, for the Farah WhatsApp extension (attaches the PDF
+   * in WhatsApp Web; the user presses Send). Omit to offer only the chat link.
+   */
+  whatsappTarget?: WhatsAppShareTarget | null
 }
+
+const WA_ERROR_CODES = new Set([
+  'EXTENSION_NOT_FOUND', 'EXTENSION_DISCONNECTED', 'INVALID_PHONE', 'BUSY', 'NOT_LOGGED_IN', 'CHAT_UNAVAILABLE',
+  'ATTACH_FAILED', 'TAB_CLOSED', 'WHATSAPP_TIMEOUT', 'FILE_TOO_LARGE', 'PDF_FAILED',
+])
+
+type ExtState = 'unknown' | 'checking' | 'available' | 'missing'
 
 const LANG_LABEL_KEY: Record<ReceiptLang, DocLabelKey> = {
   en: 'share.langEn',
@@ -68,7 +87,7 @@ export function DocumentActionDialog(props: DocumentActionDialogProps) {
 }
 
 function DialogBody({
-  onClose, title, languages, defaultLang, actions, contacts, shareMessage, uiLang = 'en',
+  onClose, title, languages, defaultLang, actions, contacts, shareMessage, uiLang = 'en', whatsappTarget,
 }: DocumentActionDialogProps) {
   const L = useCallback((key: DocLabelKey, vars?: Record<string, string | number>) => t(uiLang, key, vars), [uiLang])
   const uid = useId()
@@ -84,6 +103,12 @@ function DialogBody({
   const [file, setFile] = useState<File | null>(null)
   const [selectedPhone, setSelectedPhone] = useState('')
   const [typed, setTyped] = useState('')
+  const [message, setMessage] = useState('')
+  const [extState, setExtState] = useState<ExtState>('unknown')
+  const [waRunning, setWaRunning] = useState(false)
+  const [waProgress, setWaProgress] = useState<WhatsAppShareProgress | null>(null)
+  const [waResult, setWaResult] = useState<WhatsAppShareResult | null>(null)
+  const waRunningRef = useRef(false)
   const buildToken = useRef(0)
 
   // Focus the first control on open; Esc closes unless a job is running.
@@ -133,6 +158,13 @@ function DialogBody({
   const goShare = () => {
     setStep('share')
     setNotice(null)
+    setMessage(shareMessage(lang))
+    setWaProgress(null)
+    setWaResult(null)
+    if (whatsappTarget && extState !== 'available') {
+      setExtState('checking')
+      void pingExtension().then((v) => setExtState(v ? 'available' : 'missing'))
+    }
     void prepareFile()
   }
   const goBack = () => {
@@ -142,6 +174,8 @@ function DialogBody({
     setFile(null)
     setError(null)
     setNotice(null)
+    setWaProgress(null)
+    setWaResult(null)
   }
 
   const phone = typed.trim() || selectedPhone
@@ -154,7 +188,7 @@ function DialogBody({
     if (!file) return
     setError(null)
     try {
-      await navigator.share({ files: [file], title, text: shareMessage(lang) })
+      await navigator.share({ files: [file], title, text: message })
       setNotice(L('share.shared'))
     } catch (e) {
       // Dismissing the share sheet is not an error.
@@ -166,7 +200,7 @@ function DialogBody({
 
   const sendWhatsApp = () => {
     if (!file || !phoneValid) return
-    const url = whatsappUrl(phone, shareMessage(lang))
+    const url = whatsappUrl(phone, message)
     if (!url) return
     // The file is already built, so both calls stay inside the click gesture.
     downloadFile(file)
@@ -174,9 +208,45 @@ function DialogBody({
     setNotice(L('share.downloaded'))
   }
 
+  const waErrorText = (e: unknown) =>
+    e instanceof WhatsAppShareError && WA_ERROR_CODES.has(e.code)
+      ? L(`share.waErr.${e.code}` as DocLabelKey)
+      : L('share.error', { message: errorMessage(e) })
+
+  /** Extension path: PDF attached + caption typed in WhatsApp Web; the user presses Send there. */
+  const prepareInWhatsApp = async () => {
+    if (!whatsappTarget || !file || !phoneValid || waRunningRef.current) return
+    waRunningRef.current = true
+    setWaRunning(true)
+    setError(null)
+    setNotice(null)
+    setWaResult(null)
+    try {
+      const result = await shareDocumentViaWhatsApp(
+        { ...whatsappTarget, phoneNumber: phone, message, getFile: () => file },
+        setWaProgress,
+      )
+      setWaResult(result)
+    } catch (e) {
+      setWaProgress(null)
+      if (e instanceof WhatsAppShareError && e.code === 'EXTENSION_NOT_FOUND') setExtState('missing')
+      setError(waErrorText(e))
+    } finally {
+      waRunningRef.current = false
+      setWaRunning(false)
+    }
+  }
+
+  const waProgressText = (p: WhatsAppShareProgress | null): string | null => {
+    if (!p || p.status === 'error' || p.status === 'ready') return null
+    const name = ('chatTitle' in p && p.chatTitle) || `+${toWhatsAppDigits(phone)}`
+    return L(`share.wa.${p.status}` as DocLabelKey, { name })
+  }
+  const extensionMode = !!whatsappTarget && extState === 'available'
+
   const footer = step === 'share' ? (
     <>
-      <button type="button" className="btn" onClick={goBack}>{L('share.back')}</button>
+      <button type="button" className="btn" onClick={goBack} disabled={waRunning}>{L('share.back')}</button>
       <button type="button" className="btn" onClick={onClose}>{L('share.close')}</button>
     </>
   ) : (
@@ -276,21 +346,62 @@ function DialogBody({
               {showInvalid && <div id={`${uid}-err`} className="field-err">{L('share.invalidNumber')}</div>}
             </fieldset>
 
+            <div>
+              <label className="block text-[12px] font-medium text-gray-600" htmlFor={`${uid}-msg`}>{L('share.message')}</label>
+              <textarea
+                id={`${uid}-msg`}
+                className="form-input mt-1"
+                rows={3}
+                maxLength={1000}
+                dir="auto"
+                value={message}
+                disabled={waRunning}
+                onChange={(e) => setMessage(e.target.value)}
+              />
+            </div>
+
             <div className="flex flex-col gap-2">
+              {extensionMode && (
+                <>
+                  <button
+                    type="button"
+                    className="btn green justify-center"
+                    disabled={working || waRunning || !file || !phoneValid}
+                    onClick={() => void prepareInWhatsApp()}
+                  >
+                    {busy === 'prepare' ? L('share.preparing') : waRunning ? L('share.working') : L('share.prepareWhatsapp')}
+                  </button>
+                  <p className="m-0 text-[12px] text-gray-500">{L('share.prepareHint')}</p>
+                  {waRunning && waProgressText(waProgress) && (
+                    <p className="m-0 text-[13px] text-gray-700" data-testid="wa-progress">{waProgressText(waProgress)}</p>
+                  )}
+                  {waResult && (
+                    <div className="rounded-lg border border-green-600 bg-green-50 px-3 py-2 text-[13px]" data-testid="wa-ready">
+                      <div className="font-semibold">{L('share.wa.ready', { name: waResult.chatTitle || `+${waResult.phoneDigits}` })}</div>
+                      <div>{L('share.wa.notSent')}</div>
+                      {!waResult.captionInserted && <div>{L('share.wa.captionCopied')}</div>}
+                      {!waResult.attachmentVerified && <div>{L('share.wa.checkAttachment')}</div>}
+                    </div>
+                  )}
+                </>
+              )}
               {nativeShareAvailable && (
-                <button type="button" className="btn justify-center" disabled={working} onClick={() => void nativeShare()}>
+                <button type="button" className="btn justify-center" disabled={working || waRunning} onClick={() => void nativeShare()}>
                   {L('share.nativeShare')}
                 </button>
               )}
               <button
                 type="button"
-                className="btn green justify-center"
-                disabled={working || !file || !phoneValid}
+                className={`btn justify-center${extensionMode ? '' : ' green'}`}
+                disabled={working || waRunning || !file || !phoneValid}
                 onClick={sendWhatsApp}
               >
-                {busy === 'prepare' ? L('share.preparing') : L('share.whatsapp')}
+                {busy === 'prepare' && !extensionMode ? L('share.preparing') : extensionMode ? L('share.linkOnly') : L('share.whatsapp')}
               </button>
               <p className="m-0 text-[12px] text-gray-500">{L('share.whatsappHint')}</p>
+              {whatsappTarget && extState === 'missing' && (
+                <p className="m-0 text-[12px] text-gray-500" data-testid="wa-ext-missing">{L('share.extMissing')}</p>
+              )}
             </div>
           </>
         )}
