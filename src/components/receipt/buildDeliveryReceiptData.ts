@@ -101,7 +101,6 @@ export function buildDeliveryReceiptData(
     order.shipments[0]?.address,
     order.location?.address,
     order.client.address,
-    order.location?.name,
   ) ?? '—'
 
   return {
@@ -110,6 +109,7 @@ export function buildDeliveryReceiptData(
     customerName: order.client.name,
     customerNameAr: order.client.nameAr,
     address,
+    location: order.location?.name?.trim() || null,
     currency: order.currency,
     items,
     totalItems: items.length,

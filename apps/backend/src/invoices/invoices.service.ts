@@ -168,7 +168,9 @@ export class InvoicesService {
         // Source reference for an ORDER invoice (null for WAREHOUSE_SALE — see
         // Invoice.source). Minimal projection — just enough to link back to
         // the order, not the full order/shipment graph.
-        order: { select: { id: true, displayId: true, status: true } },
+        // location: the client branch the order was for (null for
+        // single-location clients) — printed on the invoice.
+        order: { select: { id: true, displayId: true, status: true, location: { select: { id: true, name: true } } } },
         payments: {
           include: { loggedBy: { select: { id: true, name: true } } },
         },

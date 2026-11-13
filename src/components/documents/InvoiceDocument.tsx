@@ -39,6 +39,9 @@ export function InvoiceDocument({ invoice, lang }: { invoice: InvoiceDetail; lan
       <div className="receipt-row"><span>{t(lang, 'common.date')}</span><span>{fmtDate(issuedDate)}</span></div>
       {invoice.dueDate && <div className="receipt-row"><span>{t(lang, 'invoice.due')}</span><span>{fmtDate(invoice.dueDate)}</span></div>}
       <div className="receipt-row"><span>{t(lang, 'common.client')}</span><span>{invoice.client.name}</span></div>
+      {invoice.order?.location?.name && (
+        <div className="receipt-row"><span>{t(lang, 'common.location')}</span><span>{invoice.order.location.name}</span></div>
+      )}
       <hr className="receipt-divider" />
       {invoice.lines.map((line, i) => (
         <div className="receipt-row" key={i}>
@@ -100,6 +103,9 @@ function InvoiceDocumentAr({ invoice }: { invoice: InvoiceDetail }) {
       <div className="receipt-row"><span>{t(lang, 'common.date')}</span><span><Ltr lang={lang}>{fmtDate(invoice.issuedAt ?? invoice.createdAt)}</Ltr></span></div>
       {invoice.dueDate && <div className="receipt-row"><span>{t(lang, 'invoice.due')}</span><span><Ltr lang={lang}>{fmtDate(invoice.dueDate)}</Ltr></span></div>}
       <div className="receipt-row inv-client"><span>{t(lang, 'common.client')}</span><span>{clientName}</span></div>
+      {invoice.order?.location?.name && (
+        <div className="receipt-row"><span>{t(lang, 'common.location')}</span><span><bdi>{invoice.order.location.name}</bdi></span></div>
+      )}
       {phone && <div className="receipt-row"><span>{t(lang, 'common.phone')}</span><span><Ltr lang={lang}>{phone}</Ltr></span></div>}
       <hr className="receipt-divider" />
 

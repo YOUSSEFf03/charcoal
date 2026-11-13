@@ -1254,7 +1254,7 @@ export interface InvoiceDetail extends Invoice {
   client: Pick<Client, 'id' | 'name' | 'type' | 'currency' | 'phones'>;
   /** Source reference — null for a WAREHOUSE_SALE invoice (Invoice.source);
    * present for an ORDER invoice. Minimal projection, not the full order. */
-  order: { id: string; displayId?: string; status: string } | null;
+  order: { id: string; displayId?: string; status: string; location?: { id: string; name: string } | null } | null;
   /** Only payments directly linked to this invoice at creation time (Payment.invoiceId). */
   payments: Payment[];
   /** Complete picture of what's actually been applied to this invoice, including

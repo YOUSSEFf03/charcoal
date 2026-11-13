@@ -30,6 +30,8 @@ export interface DeliveryReceiptData {
   /** Client.nameAr — real stored Arabic name, never machine-translated. */
   customerNameAr?: string | null
   address: string
+  /** Order.location.name — the client branch this delivery is for; null/absent for single-location clients. */
+  location?: string | null
   currency: string
   items: DeliveryReceiptItem[]
   totalItems: number
@@ -124,6 +126,12 @@ export function DeliveryReceiptDocument({
         {showEn && <div className="dr-field"><span className="dr-label">{en('receipt.customer')}</span><span className="dr-colon">:</span><span className="dr-value">{data.customerName}</span></div>}
         {showAr && <div className="dr-field dr-ar"><span className="dr-label">{ar('receipt.customer')}</span><span className="dr-colon">:</span><span className="dr-value">{pickName('ar', data.customerName, data.customerNameAr)}</span></div>}
       </div>
+      {data.location && (
+        <div className="dr-bi-row">
+          {showEn && <div className="dr-field"><span className="dr-label">{en('common.location')}</span><span className="dr-colon">:</span><span className="dr-value">{data.location}</span></div>}
+          {showAr && <div className="dr-field dr-ar"><span className="dr-label">{ar('common.location')}</span><span className="dr-colon">:</span><span className="dr-value"><bdi>{data.location}</bdi></span></div>}
+        </div>
+      )}
       <div className="dr-bi-row">
         {showEn && <div className="dr-field"><span className="dr-label">{en('common.address')}</span><span className="dr-colon">:</span><span className="dr-value">{data.address}</span></div>}
         {showAr && <div className="dr-field dr-ar"><span className="dr-label">{ar('common.address')}</span><span className="dr-colon">:</span><span className="dr-value">{data.address}</span></div>}

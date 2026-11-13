@@ -325,7 +325,7 @@ describe('InvoicesService', () => {
       await service.findOne('inv-1');
 
       const call = mockPrisma.invoice.findUnique.mock.calls[0][0];
-      expect(call.include.order).toEqual({ select: { id: true, displayId: true, status: true } });
+      expect(call.include.order).toEqual({ select: { id: true, displayId: true, status: true, location: { select: { id: true, name: true } } } });
     });
 
     it('a WAREHOUSE_SALE invoice (order: null) still resolves without throwing', async () => {

@@ -21,6 +21,7 @@ const DOC_LABELS_EN = {
   'common.supplier': 'Supplier',
   'common.name': 'Name',
   'common.address': 'Address',
+  'common.location': 'Location',
   'common.phone': 'Phone',
   'common.currency': 'Currency',
   'common.description': 'Description',
@@ -247,6 +248,7 @@ const DOC_LABELS_AR: Record<DocLabelKey, string> = {
   'common.supplier': 'المورّد',
   'common.name': 'الاسم',
   'common.address': 'العنوان', // (existing)
+  'common.location': 'الفرع',
   'common.phone': 'الهاتف',
   'common.currency': 'العملة',
   'common.description': 'الوصف',
