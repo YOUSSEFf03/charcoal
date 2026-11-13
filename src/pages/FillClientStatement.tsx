@@ -122,7 +122,7 @@ export default function FillClientStatement() {
           title={`Statement of account — ${client.name}`}
           partyName={client.name}
           buildConfig={() => buildStatementConfig(client)}
-          contacts={clientPhoneContacts(client.phones)}
+          contacts={clientPhoneContacts(client.phones, client.name)}
         />
       )}
       <div className="content">

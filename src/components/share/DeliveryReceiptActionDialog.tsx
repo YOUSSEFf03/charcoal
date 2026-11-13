@@ -59,7 +59,7 @@ function Body({ open, onClose, order, bagTypes }: DeliveryReceiptActionDialogPro
       title={`Delivery receipt ${display}`}
       languages={['bilingual', 'en', 'ar']}
       defaultLang="bilingual"
-      contacts={clientPhoneContacts(client?.phones)}
+      contacts={clientPhoneContacts(client?.phones, client?.name ?? order.client.name)}
       shareMessage={(l) => {
         const msgLang = l === 'ar' ? 'ar' : 'en'
         return t(msgLang, 'msg.receipt', { ref: display, company: t(msgLang, 'common.company') })

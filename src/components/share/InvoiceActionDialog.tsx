@@ -55,7 +55,7 @@ function Body({ open, onClose, invoiceId, displayId }: InvoiceActionDialogProps)
       title={`Invoice ${ref}`}
       languages={['en', 'ar']}
       defaultLang="en"
-      contacts={clientPhoneContacts(data?.client.phones)}
+      contacts={clientPhoneContacts(data?.client.phones, data?.client.name)}
       shareMessage={(l) => t(toDocLang(l), 'msg.invoice', { ref, company: t(toDocLang(l), 'common.company') })}
       actions={{
         print: (l) => openPrintRoute(`/invoice/${invoiceId}`, toDocLang(l)),

@@ -308,7 +308,7 @@ describe('ClientDetail — Statement of Account: Print / PDF / Share dialog', ()
     await user.click(within(dialog).getByRole('radio', { name: 'العربية' }))
     await user.click(within(dialog).getByRole('button', { name: 'Share' }))
 
-    expect(within(dialog).getByText('Mobile')).toBeInTheDocument()
+    expect(within(dialog).getByText('GLOBAL CONSTRUCTION GROUP SAL · Mobile')).toBeInTheDocument()
     await user.click(within(dialog).getByRole('radio', { name: /Mobile/ }))
     const send = within(dialog).getByRole('button', { name: 'Send on WhatsApp' })
     await waitFor(() => expect(send).toBeEnabled())

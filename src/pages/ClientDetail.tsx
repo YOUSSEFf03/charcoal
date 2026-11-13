@@ -2149,7 +2149,7 @@ export default function ClientDetail() {
         title={`Statement of account — ${client.name}`}
         partyName={client.name}
         buildConfig={statementPdfConfig}
-        contacts={clientPhoneContacts(c?.phones)}
+        contacts={clientPhoneContacts(c?.phones, client.name)}
         printPageInEnglish
       />
       <InvoiceActionDialog
