@@ -128,6 +128,19 @@ export class StockExitsService {
           // invoice-linked walk-ins, whose own `amount` column stays null
           // (see StockExit.invoiceId doc comment in schema.prisma).
           invoice: { select: { id: true, displayId: true, lines: true, currency: true } },
+          // Display-only — lets the Warehouse lot panel show who bought it
+          // (order exits / invoiced sales never fill the free-text `recipient`),
+          // price order exits (their own `amount` is null) and link to the order.
+          client: { select: { id: true, name: true } },
+          order: {
+            select: {
+              id: true,
+              displayId: true,
+              pricePerBag: true,
+              currency: true,
+              client: { select: { id: true, name: true } },
+            },
+          },
         },
       }),
       this.prisma.stockExit.count({ where }),

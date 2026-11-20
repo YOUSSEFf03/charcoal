@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Topbar from '../components/layout/Topbar'
 import { useStockLots, usePackedStockSummary, useWarehouseSummary, useStockAdjustments, useCreateStockAdjustment, useUpdateStockAdjustment, useDeleteStockAdjustment, useApproveStockAdjustment, useRejectStockAdjustment, useStockExits, useLotMaterialFlow, useAvailableStockLots, usePackedStock, useWasteSummary, useWasteLedger, useCreateWasteDisposal, useDeleteStockLot } from '../hooks/useWarehouse'
 import type { StockLot } from '../types/api'
@@ -29,7 +30,52 @@ interface LotVM {
 
 function fmtDate(iso?: string | null) { return formatDate(iso) }
 
+// Who received a lot exit: the linked client (invoiced sale / order), else the
+// free-text recipient typed on an anonymous sale.
+function exitClientName(e: any): string | null {
+  return e.client?.name ?? e.order?.client?.name ?? e.invoice?.client?.name ?? e.recipient ?? null
+}
+
+// Money value of a lot exit, in its own currency. Anonymous sales carry
+// `amount` directly; invoiced sales keep amount=null and are priced from the
+// invoice line; order exits are priced from the order's unit price
+// (pricePerBag — per kg for KG orders, see InvoicesService order invoice).
+function exitAmount(e: any): { value: number; currency: string } | null {
+  const qty = e.lotId ? (parseFloat(e.kgQuantity ?? '0') || 0) : (e.quantity ?? 0)
+  if (e.amount != null) return { value: parseFloat(e.amount), currency: e.currency ?? 'USD' }
+  if (e.invoice) {
+    const lines: any[] = Array.isArray(e.invoice.lines) ? e.invoice.lines : []
+    const line = e.lotId
+      ? (lines.find(l => l.saleUnit === 'KG' && e.lot && l.description === `${e.lot.charcoalType} Grade ${e.lot.grade}`)
+        ?? lines.find(l => l.saleUnit === 'KG'))
+      : lines.find(l => l.bagTypeId === e.bagTypeId)
+    if (line) {
+      const unit = parseFloat((e.lotId ? line.pricePerKg : line.pricePerBag) ?? '0') || 0
+      return { value: qty * unit, currency: e.invoice.currency ?? 'USD' }
+    }
+  }
+  if (e.order?.pricePerBag != null) {
+    return { value: qty * (parseFloat(e.order.pricePerBag) || 0), currency: e.order.currency ?? 'USD' }
+  }
+  return null
+}
+
+function fmtMoney(value: number, currency: string) {
+  return currency === 'LBP'
+    ? `${Math.round(value).toLocaleString()} LBP`
+    : `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+// Where clicking a lot-exit row goes: the order, else the invoice, else the client.
+function exitLink(e: any): string | null {
+  if (e.orderId) return `/orders/${e.orderId}`
+  if (e.invoiceId) return `/invoices/${e.invoiceId}`
+  if (e.clientId) return `/clients/${e.clientId}`
+  return null
+}
+
 export default function Warehouse() {
+  const navigate = useNavigate()
   const [tab, setTab] = useState<WTab>('raw')
   const [lotPanelOpen, setLotPanelOpen] = useState(false)
   const [selectedLot, setSelectedLot] = useState<LotVM | null>(null)
@@ -1270,8 +1316,16 @@ export default function Warehouse() {
                             internal: 'Internal',
                             client_bags_fill: 'Fill client',
                           } as Record<string, string>)[e.exitType] ?? e.exitType
+                          const clientName = exitClientName(e)
+                          const money = exitAmount(e)
+                          const link = exitLink(e)
                           return (
-                            <tr key={e.id}>
+                            <tr
+                              key={e.id}
+                              style={link ? { cursor: 'pointer' } : undefined}
+                              title={link ? (e.orderId ? 'Open order' : e.invoiceId ? 'Open invoice' : 'Open client') : undefined}
+                              onClick={link ? () => navigate(link) : undefined}
+                            >
                               <td style={{ fontFamily: "'IBM Plex Mono',monospace", color: 'var(--text2)' }}>
                                 {fmtDate(e.date)}
                               </td>
@@ -1280,11 +1334,19 @@ export default function Warehouse() {
                                   {typeLabel}
                                 </span>
                               </td>
-                              <td style={{ color: 'var(--text2)' }}>{e.recipient ?? '—'}</td>
+                              <td style={{ color: 'var(--text2)' }}>
+                                {clientName ?? '—'}
+                                {e.order?.displayId && (
+                                  <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>{e.order.displayId}</div>
+                                )}
+                                {!e.order && e.invoice?.displayId && (
+                                  <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: "'IBM Plex Mono',monospace" }}>{e.invoice.displayId}</div>
+                                )}
+                              </td>
                               <td style={{ color: 'var(--text2)' }}>{isRaw ? <span className="badge badge-gray">By kg</span> : (e.bagType?.name ?? '—')}</td>
                               <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", fontWeight: 500 }}>{qty}</td>
-                              <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: e.amount ? 'var(--accent)' : 'var(--text3)' }}>
-                                {e.amount ? `$${parseFloat(e.amount).toFixed(2)}` : '—'}
+                              <td className="right" style={{ fontFamily: "'IBM Plex Mono',monospace", color: money ? 'var(--accent)' : 'var(--text3)' }}>
+                                {money ? fmtMoney(money.value, money.currency) : '—'}
                               </td>
                               <td style={{ fontSize: 12, color: 'var(--text3)' }}>{e.loggedBy?.name ?? '—'}</td>
                             </tr>
@@ -1307,8 +1369,21 @@ export default function Warehouse() {
                           </td>
                           <td className="right" style={{ padding: '10px 18px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: 'var(--accent)' }}>
                             {(() => {
-                              const total = parseFloat(lotFlowQ.data?.totalExitAmount ?? '0')
-                              return total > 0 ? `$${total.toFixed(2)}` : '—'
+                              // Sum of the Amount column (per currency) when every exit
+                              // is loaded; for very large lots (>200 exits, list capped)
+                              // fall back to the server's amount-only total.
+                              const rows: any[] = lotExitsQ.data?.data ?? []
+                              if ((lotExitsQ.data?.total ?? 0) > rows.length) {
+                                const total = parseFloat(lotFlowQ.data?.totalExitAmount ?? '0')
+                                return total > 0 ? `$${total.toFixed(2)}` : '—'
+                              }
+                              const byCcy = new Map<string, number>()
+                              for (const r of rows) {
+                                const m = exitAmount(r)
+                                if (m) byCcy.set(m.currency, (byCcy.get(m.currency) ?? 0) + m.value)
+                              }
+                              const parts = [...byCcy.entries()].filter(([, v]) => v > 0).map(([c, v]) => fmtMoney(v, c))
+                              return parts.length ? parts.join(' + ') : '—'
                             })()}
                           </td>
                           <td />

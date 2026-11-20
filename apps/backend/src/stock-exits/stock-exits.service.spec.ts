@@ -1091,6 +1091,16 @@ describe('StockExitsService', () => {
           },
         },
         invoice: { select: { id: true, displayId: true, lines: true, currency: true } },
+        client: { select: { id: true, name: true } },
+        order: {
+          select: {
+            id: true,
+            displayId: true,
+            pricePerBag: true,
+            currency: true,
+            client: { select: { id: true, name: true } },
+          },
+        },
       });
     });
 

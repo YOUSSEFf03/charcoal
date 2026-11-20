@@ -118,6 +118,8 @@ vi.mock('../hooks/useMe', () => ({ useMe: () => mockUseMe() }))
 vi.mock('../hooks/useSuppliers', () => ({ useSuppliers: () => mockUseSuppliers() }))
 vi.mock('react-router-dom', () => ({
   Link: ({ children, to }: { children?: ReactNode; to: string }) => <a href={to}>{children}</a>,
+  // Lot-exit rows navigate to their order/invoice.
+  useNavigate: () => vi.fn(),
 }))
 
 vi.mock('../hooks/usePacking', () => ({
