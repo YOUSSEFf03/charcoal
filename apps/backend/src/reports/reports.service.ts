@@ -666,10 +666,19 @@ export class ReportsService {
    * grouped by charcoal type instead of summed to one total or bucketed by day.
    *
    * Three sources, an exact split of getProfitLoss()'s two revenue sources:
-   *   1. ORDER invoices — attributed via ClientOrder.charcoalType. An order
-   *      (and therefore its invoice — createFromOrder always writes exactly
-   *      one line, from the order's own charcoalType) is always a single
-   *      type, so this is exact, not an apportionment.
+   *   1. ORDER invoices — attributed to the charcoal type of the lots the
+   *      order ACTUALLY drew stock from (its exitType='order' StockExits: raw
+   *      lot, or the packed stock's source lot), split in proportion to kg
+   *      drawn (raw kgQuantity, or bags × BagType.nominalKg). This is the same
+   *      lot chain getCogsByCharcoalType() uses, so revenue and COGS of a type
+   *      always describe the same charcoal. Previously this used the type
+   *      picked on the order (ClientOrder.charcoalType), which put e.g. bags
+   *      packed from "ayin blue bag" under "BBQ Hardwood" revenue while their
+   *      COGS stayed on "ayin blue bag" — one type showed a loss, the other a
+   *      100 % margin (2026-11-20). An order with no stock drawn yet (invoice
+   *      issued before delivery) falls back to ClientOrder.charcoalType. The
+   *      split shares of one invoice always sum to its full total, so the
+   *      grand total is unchanged.
    *   2. WAREHOUSE_SALE invoices (registered-client walk-in sales) — attributed
    *      per line, reading the charcoalType WalkInSalesService now stamps onto
    *      each enriched line at creation time (see walk-in-sales.service.ts).
@@ -699,24 +708,53 @@ export class ReportsService {
 
     const [orderRows, warehouseLineRows, anonWalkInRows] = await Promise.all([
       // Source 1 — same status filter/currency CASE as getProfitLoss's
-      // invoice_revenue, restricted to source='ORDER', grouped by the order's
-      // single charcoal type.
+      // invoice_revenue, restricted to source='ORDER', split across the
+      // charcoal types of the lots the order actually drew from (by kg).
       this.prisma.$queryRaw<{ charcoal_type: string; revenue: string }[]>(Prisma.sql`
-        SELECT co."charcoalType" AS charcoal_type,
+        WITH ord_inv AS (
+          SELECT inv."orderId" AS order_id,
+                 co."charcoalType" AS order_type,
+                 CASE WHEN inv."currency" = 'LBP'
+                      THEN inv."total"::numeric
+                           / NULLIF(COALESCE(inv."exchangeRateSnapshot", ${rate}::numeric), 0)
+                      ELSE inv."total"::numeric
+                 END AS usd_total
+          FROM "invoices" inv
+          JOIN "client_orders" co ON inv."orderId" = co."id"
+          WHERE inv."status" IN ('issued', 'partially_paid', 'paid')
+            AND inv."source" = 'ORDER'
+            ${dateFilter.businessGte ? Prisma.sql`AND inv."issuedAt" >= ${dateFilter.businessGte}` : Prisma.empty}
+            ${dateFilter.businessLt  ? Prisma.sql`AND inv."issuedAt" <  ${dateFilter.businessLt}`  : Prisma.empty}
+        ),
+        exit_kg AS (
+          SELECT se."orderId" AS order_id,
+                 COALESCE(l."charcoalType", ps_lot."charcoalType") AS charcoal_type,
+                 SUM(CASE
+                       WHEN se."lotId" IS NOT NULL THEN COALESCE(se."kgQuantity", 0)
+                       ELSE COALESCE(se."quantity", 0)::numeric * COALESCE(bt."nominalKg", 0)
+                     END) AS kg
+          FROM "stock_exits" se
+          LEFT JOIN "stock_lots"    l      ON se."lotId"         = l."id"
+          LEFT JOIN "packed_stocks" ps     ON se."packedStockId" = ps."id"
+          LEFT JOIN "stock_lots"    ps_lot ON ps."lotId"         = ps_lot."id"
+          LEFT JOIN "bag_types"     bt     ON se."bagTypeId"     = bt."id"
+          WHERE se."exitType" = 'order'
+            AND se."orderId" IN (SELECT order_id FROM ord_inv)
+          GROUP BY se."orderId", COALESCE(l."charcoalType", ps_lot."charcoalType")
+        ),
+        order_kg AS (
+          SELECT order_id, SUM(kg) AS total_kg FROM exit_kg GROUP BY order_id
+        )
+        SELECT COALESCE(ek.charcoal_type, oi.order_type) AS charcoal_type,
           COALESCE(SUM(
-            CASE WHEN inv."currency" = 'LBP'
-                 THEN inv."total"::numeric
-                      / NULLIF(COALESCE(inv."exchangeRateSnapshot", ${rate}::numeric), 0)
-                 ELSE inv."total"::numeric
+            CASE WHEN ok.total_kg > 0 THEN oi.usd_total * ek.kg / ok.total_kg
+                 ELSE oi.usd_total
             END
           ), 0::numeric)::text AS revenue
-        FROM "invoices" inv
-        JOIN "client_orders" co ON inv."orderId" = co."id"
-        WHERE inv."status" IN ('issued', 'partially_paid', 'paid')
-          AND inv."source" = 'ORDER'
-          ${dateFilter.businessGte ? Prisma.sql`AND inv."issuedAt" >= ${dateFilter.businessGte}` : Prisma.empty}
-          ${dateFilter.businessLt  ? Prisma.sql`AND inv."issuedAt" <  ${dateFilter.businessLt}`  : Prisma.empty}
-        GROUP BY co."charcoalType"
+        FROM ord_inv oi
+        LEFT JOIN order_kg ok ON ok.order_id = oi.order_id
+        LEFT JOIN exit_kg  ek ON ek.order_id = oi.order_id AND ok.total_kg > 0
+        GROUP BY COALESCE(ek.charcoal_type, oi.order_type)
       `),
 
       // Source 2 — same status filter/currency CASE, applied per line
